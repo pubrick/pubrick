@@ -112,4 +112,100 @@ describe("PublishService.handle", () => {
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
     expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", expect.stringContaining("vk"));
   });
+
+  it("does NOT rethrow when markPublished keeps failing after a successful send — the post already went out, retrying would duplicate it", async () => {
+    const { repo } = fixture();
+    repo.markPublished = vi.fn().mockRejectedValue(new Error("connection reset"));
+    const publish = vi
+      .fn()
+      .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+      0, // no backoff delay — keep the test fast and deterministic
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(repo.markPublished).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails permanently when credentials cannot be loaded (channel not found / decrypt failure) — never sends, never retries", async () => {
+    const { repo } = fixture();
+    repo.credentials = vi.fn().mockRejectedValue(new Error("Channel c1 not found for org o1"));
+    const publish = vi.fn();
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("Channel c1 not found"),
+    );
+    expect(repo.recordTransient).not.toHaveBeenCalled();
+  });
+
+  it("does not rethrow when markFailed itself fails while recording a permanent error", async () => {
+    const { repo } = fixture();
+    repo.markFailed = vi.fn().mockRejectedValue(new Error("db down"));
+    const publish = vi.fn().mockRejectedValue(new PermanentPublishError("Forbidden", 403));
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+  });
+});
+
+describe("PublishService.markExhausted", () => {
+  it("marks the adaptation failed with a retries-exhausted reason", async () => {
+    const { repo } = fixture({ status: "publishing" });
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Retries exhausted");
+  });
+
+  it("is idempotent: a no-op when the adaptation already failed", async () => {
+    const { repo } = fixture({ status: "failed" });
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent: a no-op when the adaptation already published", async () => {
+    const { repo } = fixture({ status: "published" });
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the adaptation no longer exists", async () => {
+    const { repo } = fixture();
+    repo.load = vi.fn().mockResolvedValue(undefined);
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("does not rethrow when markFailed itself fails", async () => {
+    const { repo } = fixture({ status: "publishing" });
+    repo.markFailed = vi.fn().mockRejectedValue(new Error("db down"));
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await expect(
+      service.markExhausted({ adaptationId: "a1", orgId: "o1" }),
+    ).resolves.toBeUndefined();
+  });
 });
