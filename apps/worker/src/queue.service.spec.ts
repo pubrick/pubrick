@@ -8,7 +8,8 @@ describe("QueueService.registerHeartbeat", () => {
       schedule: vi.fn().mockResolvedValue(undefined),
       work: vi.fn().mockResolvedValue("worker-id"),
     };
-    const service = new QueueService();
+    const publish = { handle: vi.fn(), markExhausted: vi.fn() };
+    const service = new QueueService(publish as never);
     await service.registerHeartbeat(boss as never);
     expect(boss.createQueue).toHaveBeenCalledWith("heartbeat");
     expect(boss.schedule).toHaveBeenCalledWith("heartbeat", "* * * * *");

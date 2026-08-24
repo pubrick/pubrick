@@ -11,7 +11,10 @@
   "dependencies": {
     "@nestjs/common": "^11.2.1",
     "@nestjs/core": "^11.2.1",
+    "@pubrick/db": "workspace:*",
+    "@pubrick/integrations": "workspace:*",
     "@pubrick/shared": "workspace:*",
+    "drizzle-orm": "^0.45.2",
     "pg-boss": "^12.28.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",

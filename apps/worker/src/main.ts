@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { PgBoss } from "pg-boss";
+import { pool } from "./db";
 import { env } from "./env";
 import { QueueService } from "./queue.service";
 import { WorkerModule } from "./worker.module";
@@ -10,12 +11,13 @@ async function bootstrap(): Promise<void> {
   const boss = new PgBoss(env.DATABASE_URL);
   boss.on("error", (err: Error) => console.error("pg-boss error", err));
   await boss.start();
-  await app.get(QueueService).registerHeartbeat(boss);
+  await app.get(QueueService).registerAll(boss);
   console.log("worker started");
 
   const shutdown = async (): Promise<void> => {
     await boss.stop({ graceful: true });
     await app.close();
+    await pool.end();
     process.exit(0);
   };
   process.on("SIGTERM", () => void shutdown());

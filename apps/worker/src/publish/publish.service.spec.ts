@@ -1,0 +1,115 @@
+import { PermanentPublishError, TransientPublishError } from "@pubrick/integrations";
+import { describe, expect, it, vi } from "vitest";
+import { PublishService } from "./publish.service";
+
+function fixture(overrides: Record<string, unknown> = {}) {
+  const adaptation = {
+    id: "a1",
+    orgId: "o1",
+    channelId: "c1",
+    status: "queued",
+    body: null,
+    itemBody: "Hello",
+    platform: "telegram",
+    attemptCount: 0,
+    ...overrides,
+  };
+  const repo = {
+    load: vi.fn().mockResolvedValue(adaptation),
+    credentials: vi.fn().mockResolvedValue({ botToken: "1:a", chatId: "-100" }),
+    markPublishing: vi.fn().mockResolvedValue(undefined),
+    markPublished: vi.fn().mockResolvedValue(undefined),
+    markFailed: vi.fn().mockResolvedValue(undefined),
+    recordTransient: vi.fn().mockResolvedValue(undefined),
+  };
+  return { adaptation, repo };
+}
+
+describe("PublishService.handle", () => {
+  it("publishes the item body and records the result", async () => {
+    const { repo } = fixture();
+    const publish = vi
+      .fn()
+      .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+
+    expect(publish).toHaveBeenCalledWith(
+      { botToken: "1:a", chatId: "-100" },
+      { text: "Hello" },
+      expect.anything(),
+    );
+    expect(repo.markPublished).toHaveBeenCalledWith("o1", "a1", {
+      externalId: "77",
+      externalUrl: "https://t.me/x/77",
+    });
+  });
+
+  it("prefers the per-channel body override", async () => {
+    const { repo } = fixture({ body: "Channel text" });
+    const publish = vi.fn().mockResolvedValue({ externalId: "1", externalUrl: null });
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish.mock.calls[0]?.[1]).toEqual({ text: "Channel text" });
+  });
+
+  it("is idempotent: a published adaptation is not sent again", async () => {
+    const { repo } = fixture({ status: "published" });
+    const publish = vi.fn();
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("does NOT rethrow permanent errors — the job must not be retried", async () => {
+    const { repo } = fixture();
+    const publish = vi.fn().mockRejectedValue(new PermanentPublishError("Forbidden", 403));
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Forbidden");
+  });
+
+  it("rethrows transient errors so pg-boss retries", async () => {
+    const { repo } = fixture();
+    const publish = vi.fn().mockRejectedValue(new TransientPublishError("Too Many Requests", 30));
+    const service = new PublishService(
+      repo as never,
+      () => ({ platform: "telegram", publish }) as never,
+      "https://api",
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).rejects.toBeInstanceOf(
+      TransientPublishError,
+    );
+    expect(repo.recordTransient).toHaveBeenCalled();
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("fails permanently when the platform has no adapter", async () => {
+    const { repo } = fixture({ platform: "vk" });
+    const service = new PublishService(repo as never, () => undefined, "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", expect.stringContaining("vk"));
+  });
+});
