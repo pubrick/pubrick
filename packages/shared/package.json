@@ -1,0 +1,31 @@
+{
+  "name": "@pubrick/shared",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=dot"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "rollup-plugin-dts": "^6.5.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.11"
+  }
+}
