@@ -1,0 +1,14 @@
+.git/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+.turbo/
+**/.turbo/
+*.tsbuildinfo
+coverage/
+.superpowers/
+.env
+.env.local
