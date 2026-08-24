@@ -79,4 +79,14 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("creates the publishing tables with org scoping", async () => {
+    await runMigrations(url as string);
+    const { db, pool } = createDb(url as string);
+    const cols = await db.execute(
+      "SELECT table_name FROM information_schema.columns WHERE table_name IN ('content_items','adaptations','publications') AND column_name = 'org_id'",
+    );
+    await pool.end();
+    expect(cols.rows).toHaveLength(3);
+  });
 });

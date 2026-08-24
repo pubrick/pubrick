@@ -2,3 +2,4 @@
 // This file must exist for drizzle-kit; keep exports here as tables are added.
 export * from "./auth.js";
 export * from "./content.js";
+export * from "./content-items.js";
