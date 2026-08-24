@@ -11,13 +11,13 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - Lint/format: `pnpm lint` / `pnpm format` (Biome; formatting is hook-enforced, don't hand-format)
 - Test all: `pnpm test`; single package: `pnpm --filter @pubrick/db test`;
   single file: `pnpm --filter @pubrick/db exec vitest run src/migrate.test.ts --reporter=dot`
-- DB integration tests need `TEST_DATABASE_URL` (see docker compose); they skip when it is unset.
+- DB integration tests need `TEST_DATABASE_URL` (any Postgres with pgvector, e.g. a throwaway docker container); the variable is declared in turbo.json's test env — declare any new env-gated test vars there too.
 - Dev stack: `./init.sh` (starts postgres via docker, runs migrations, boots web+api+worker)
 
 ## Architecture
 
 - `apps/web` — Next.js UI only (next-intl, EN source of truth + es/ru/pt).
-- `apps/api` — NestJS: one module per domain; runs DB migrations on boot; OpenAPI.
+- `apps/api` — NestJS: one module per domain; runs DB migrations on boot.
 - `apps/worker` — NestJS standalone context: pg-boss consumers (jobs, cron). No HTTP.
 - `packages/db` — Drizzle schema + SQL migrations (applied programmatically; never edit applied migrations).
 - `packages/shared` — zod schemas, env parsing, types. No runtime deps beyond zod.

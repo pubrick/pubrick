@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-docker compose up -d postgres
+# 127.0.0.1:5432 will collide with a host Postgres if one is already running.
+docker compose up -d --wait postgres
 export DATABASE_URL=${DATABASE_URL:-postgres://pubrick:pubrick@localhost:5432/pubrick}
 pnpm install
 pnpm build

@@ -11,4 +11,7 @@ async function bootstrap(): Promise<void> {
   console.log(`api listening on :${env.API_PORT}`);
 }
 
-void bootstrap();
+bootstrap().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

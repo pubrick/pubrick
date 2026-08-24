@@ -28,6 +28,7 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@types/node": "^22",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.10",
     "tsup": "^8.5.1",
