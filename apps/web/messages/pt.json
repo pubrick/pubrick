@@ -23,5 +23,16 @@
     "signOut": "Sair",
     "login": "Entrar",
     "signup": "Cadastrar"
+  },
+  "Brands": {
+    "title": "Marcas",
+    "namePlaceholder": "Nome da nova marca",
+    "create": "Criar marca"
+  },
+  "Channels": {
+    "title": "Canais",
+    "namePlaceholder": "Nome do canal",
+    "remove": "Remover",
+    "add": "Adicionar canal"
   }
 }

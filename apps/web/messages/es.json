@@ -23,5 +23,16 @@
     "signOut": "Cerrar sesión",
     "login": "Iniciar sesión",
     "signup": "Registrarse"
+  },
+  "Brands": {
+    "title": "Marcas",
+    "namePlaceholder": "Nombre de la nueva marca",
+    "create": "Crear marca"
+  },
+  "Channels": {
+    "title": "Canales",
+    "namePlaceholder": "Nombre del canal",
+    "remove": "Eliminar",
+    "add": "Añadir canal"
   }
 }

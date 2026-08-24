@@ -23,5 +23,16 @@
     "signOut": "Sign out",
     "login": "Log in",
     "signup": "Sign up"
+  },
+  "Brands": {
+    "title": "Brands",
+    "namePlaceholder": "New brand name",
+    "create": "Create brand"
+  },
+  "Channels": {
+    "title": "Channels",
+    "namePlaceholder": "Channel name",
+    "remove": "Remove",
+    "add": "Add channel"
   }
 }
