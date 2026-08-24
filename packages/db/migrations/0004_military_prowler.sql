@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "publications_one_published_per_adaptation" ON "publications" USING btree ("adaptation_id") WHERE "publications"."status" = 'published';

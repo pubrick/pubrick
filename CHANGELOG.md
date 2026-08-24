@@ -15,6 +15,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Publishing: a Telegram adapter and a pg-boss-backed worker that publishes approved adaptations, classifying platform errors as permanent (recorded as `failed`, job completes) or transient (rethrown for pg-boss to retry), plus a DLQ consumer that terminates adaptations whose retries are exhausted.
 - Env wiring for auth/crypto/publishing through turbo, CI, docker compose, and `init.sh`; self-hosting docs for `BETTER_AUTH_SECRET` / `APP_ENCRYPTION_KEY` / `PUBLIC_ORIGIN` and connecting a Telegram channel.
 - Brand identity: wordmark (light/dark), brick mark and 1280×640 social card in `assets/`; README header with scheme-aware logo and badges; web favicon (`app/icon.svg`), inline `Logo` component on the landing page, and the palette as CSS custom properties in `app/globals.css`.
+- Navigation between brands and the content queue (the landing page links to both), so the review-and-publish flow is reachable without typing a URL.
 
 ### Changed
 - Migrations run under a Postgres advisory lock, so parallel test workers and multiple api replicas can no longer race each other on a fresh database.
@@ -23,3 +24,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Channel form asks for each platform's real credential fields (all 8 platforms), masks secrets, and clears entered values when the platform changes.
 - Organization slugs handle non-Latin names; onboarding stops on a failed `setActive`.
 - API errors surfaced by the web app no longer leak raw Nest JSON; a 403 with no active organization sends the user to onboarding.
+- Rejecting an approved item now actually cancels delivery: every queued or scheduled adaptation goes back to `pending` and its pg-boss job is cancelled in the same transaction, and the worker refuses to publish a job whose content item is rejected.
+- A scheduled post can be rescheduled or published immediately: approving an already-scheduled item cancels the outstanding job and enqueues a fresh one at the new time instead of returning 200 and changing nothing.
+- The publish queue contract (names, options, job payload) lives in `@pubrick/shared` and is imported by both the api and the worker, instead of being duplicated in each.
+- The publish queue sets `heartbeatSeconds`, and its expiry is a bound on a whole attempt rather than a liveness check, so a live handler is no longer reclaimed and re-run (a duplicate post).
+- The worker validates stored credentials against the adapter's schema before sending, so a malformed channel gives a named field error instead of an opaque platform 400.
+- `PATCH /content/:id` rejects an empty body with 400 instead of 500, and `scheduledAt` must be in the future.
+
+### Fixed
+- "Never post twice" is enforced by the database: a partial unique index allows at most one `published` publication per adaptation, and the worker checks for one before sending.
+- A late dead-letter delivery no longer clobbers a re-approved adaptation — `markExhausted` acts only on an adaptation still in `publishing`.
+- `getPublisher` no longer returns inherited `Object.prototype` members (`getPublisher("constructor")` was truthy but not a publisher).

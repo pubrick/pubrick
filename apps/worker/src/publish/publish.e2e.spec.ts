@@ -28,6 +28,18 @@ type FakeTelegramResponse = { status: number; body: unknown };
  * (org/brand/channel/content item/adaptation in "queued"), and the job is enqueued in
  * the same shape "{ adaptationId, orgId }" the api's QueueService.enqueuePublish sends.
  */
+/**
+ * This spec registers a LIVE consumer, so it must never share a queue with the
+ * api's e2e suite: turbo runs both packages' `test` tasks concurrently against
+ * the same TEST_DATABASE_URL, and a consumer on the real `publish` queue
+ * happily fetches the jobs `content.e2e.spec.ts` enqueues there — publishing
+ * them to this file's fake Telegram and mutating that suite's rows underneath
+ * it. Own queue pair, own dead letter queue, no interference in either
+ * direction.
+ */
+const TEST_PUBLISH_QUEUE = "publish-worker-e2e";
+const TEST_PUBLISH_DLQ = "publish-worker-e2e-dlq";
+
 describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", () => {
   let db: Db;
   let pool: Pool;
@@ -38,7 +50,6 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   let server: http.Server;
   let orgId: string;
   let brandId: string;
-  let PUBLISH_QUEUE: string;
   const fakeResponses = new Map<string, FakeTelegramResponse>();
 
   beforeAll(async () => {
@@ -107,13 +118,14 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     };
     const queueModule = (await import("../queue.service")) as {
       QueueService: QueueServiceCtor;
-      PUBLISH_QUEUE: string;
     };
     const repo = new PublishRepository();
     const service = new PublishService(repo);
     const queueService = new queueModule.QueueService(service);
-    await queueService.registerAll(boss);
-    PUBLISH_QUEUE = queueModule.PUBLISH_QUEUE;
+    await queueService.registerAll(boss, {
+      publish: TEST_PUBLISH_QUEUE,
+      deadLetter: TEST_PUBLISH_DLQ,
+    });
 
     // "../db" is the worker's own module-level pool (imported transitively by
     // PublishRepository above); grab a handle so afterAll can close it too.
@@ -145,6 +157,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   // fresh, disposable database, never a long-lived shared one.
   async function seedQueuedAdaptation(
     chatId: string,
+    itemStatus: "approved" | "rejected" = "approved",
   ): Promise<{ channelId: string; adaptationId: string }> {
     const { encryptJson } = await import("@pubrick/shared");
     const [channel] = await db
@@ -164,7 +177,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
 
     const [item] = await db
       .insert(schema.contentItems)
-      .values({ orgId, brandId, body: "Hello from the publish e2e test" })
+      .values({ orgId, brandId, body: "Hello from the publish e2e test", status: itemStatus })
       .returning({ id: schema.contentItems.id });
     const itemId = item?.id as string;
 
@@ -215,7 +228,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   async function waitForJobState(jobId: string) {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
-      const job = await boss.getJobById(PUBLISH_QUEUE, jobId);
+      const job = await boss.getJobById(TEST_PUBLISH_QUEUE, jobId);
       if (job && job.state !== "created" && job.state !== "active") return job;
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -234,7 +247,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     const { adaptationId } = await seedQueuedAdaptation(chatId);
 
     // Same job shape the api's QueueService.enqueuePublish sends.
-    const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
     if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
     const adaptation = await waitUntilLeftQueued(adaptationId);
@@ -252,6 +265,39 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     expect(job.state).toBe("completed");
   }, 25_000);
 
+  it("never delivers a job whose content item was rejected", async () => {
+    // The api cancels the pg-boss job when an approved item is rejected, but a
+    // job that was already fetched (or one that outlived the cancel) reaches
+    // this handler anyway. The fake Telegram below is deliberately configured
+    // to ACCEPT the post: if the worker sent it, the adaptation would go
+    // "published" and a publications row would appear. Both must stay absent.
+    const chatId = `-100${Date.now()}3`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: {
+        ok: true,
+        result: { message_id: 999, chat: { id: Number(chatId), username: "rejectedchannel" } },
+      },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId, "rejected");
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+    // The job itself must COMPLETE (nothing to retry — the user said no), so
+    // wait on the job rather than on a row change that will never come.
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+
+    const [adaptation] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(adaptation?.status).toBe("queued"); // untouched: never claimed, never failed
+    expect(adaptation?.attemptCount).toBe(0);
+    expect(await publicationFor(adaptationId)).toBeUndefined();
+  }, 25_000);
+
   it("marks a permanently rejected post failed without retrying", async () => {
     const chatId = `-100${Date.now()}2`;
     fakeResponses.set(chatId, {
@@ -260,7 +306,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     });
     const { adaptationId } = await seedQueuedAdaptation(chatId);
 
-    const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
     if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
     const adaptation = await waitUntilLeftQueued(adaptationId);

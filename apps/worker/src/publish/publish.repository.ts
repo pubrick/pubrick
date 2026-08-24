@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { PublishResult } from "@pubrick/integrations";
 import { decryptJson } from "@pubrick/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -13,9 +13,14 @@ export type LoadedAdaptation = {
   status: (typeof schema.ADAPTATION_STATUSES)[number];
   body: string | null;
   itemBody: string;
+  /** Parent content item's status: `rejected` means do not deliver. */
+  itemStatus: (typeof schema.CONTENT_STATUSES)[number];
   platform: (typeof schema.PLATFORMS)[number];
   attemptCount: number;
 };
+
+/** Statuses an adaptation may be in and still be legitimately publishable. */
+const CLAIMABLE_STATUSES = ["queued", "scheduled", "publishing"] as const;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -41,7 +46,11 @@ const FAILED_ATTEMPT_COUNT = sql`case when ${schema.adaptations.status} = 'publi
 
 @Injectable()
 export class PublishRepository {
-  /** Org-scoped load: adaptation joined to its content item (body) and channel (platform). */
+  /**
+   * Org-scoped load: adaptation joined to its content item (body AND status)
+   * and channel (platform). The item's status is selected because a job for a
+   * REJECTED item must never be delivered — see `PublishService.handle`.
+   */
   async load(orgId: string, adaptationId: string): Promise<LoadedAdaptation | undefined> {
     const rows = await db
       .select({
@@ -51,6 +60,7 @@ export class PublishRepository {
         status: schema.adaptations.status,
         body: schema.adaptations.body,
         itemBody: schema.contentItems.body,
+        itemStatus: schema.contentItems.status,
         platform: schema.channels.platform,
         attemptCount: schema.adaptations.attemptCount,
       })
@@ -74,12 +84,60 @@ export class PublishRepository {
     return decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
   }
 
-  /** Marks the start of an attempt: one attempt, one increment. */
-  async markPublishing(orgId: string, adaptationId: string): Promise<void> {
-    await db
+  /**
+   * Has this adaptation already been delivered, according to the durable
+   * record rather than the adaptation's own status column?
+   *
+   * `adaptation.status` is not enough on its own: it can be moved back by the
+   * api (re-approve, reject) or left stale by a crash between the send and the
+   * bookkeeping, whereas a `published` `publications` row means a platform
+   * genuinely accepted a post for this adaptation. Paired with the partial
+   * unique index `publications_one_published_per_adaptation`, this is what
+   * makes "never post twice" more than a convention.
+   */
+  async hasPublished(orgId: string, adaptationId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: schema.publications.id })
+      .from(schema.publications)
+      .where(
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.adaptationId, adaptationId),
+          eq(schema.publications.status, "published"),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  /**
+   * Claims the attempt: marks the start of one attempt, one increment.
+   *
+   * Conditional on the adaptation still being in a publishable status, and
+   * returns whether the claim succeeded. The condition closes the race between
+   * this worker and the api's `reject()`/re-approve: both take the same row
+   * lock (the api SELECTs `FOR UPDATE`), so either the api sees `publishing`
+   * and leaves the in-flight attempt alone, or the api's status write lands
+   * first and this UPDATE matches zero rows — at which point the caller must
+   * not send. Without the condition, a reject that committed a moment after
+   * `load()` read the row would still be published.
+   *
+   * `publishing` is claimable so that a pg-boss retry of a transiently failed
+   * attempt (which leaves the status alone) can proceed.
+   */
+  async markPublishing(orgId: string, adaptationId: string): Promise<boolean> {
+    const rows = await db
       .update(schema.adaptations)
       .set({ status: "publishing", attemptCount: sql`${schema.adaptations.attemptCount} + 1` })
-      .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.id, adaptationId),
+          inArray(schema.adaptations.status, [...CLAIMABLE_STATUSES]),
+        ),
+      )
+      .returning({ id: schema.adaptations.id });
+    return rows.length > 0;
   }
 
   /**

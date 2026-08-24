@@ -29,6 +29,13 @@
       "when": 1787603230414,
       "tag": "0003_serious_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787614510482,
+      "tag": "0004_military_prowler",
+      "breakpoints": true
     }
   ]
 }

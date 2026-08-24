@@ -1,4 +1,5 @@
-import { index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands, channels } from "./content.js";
 
@@ -102,5 +103,17 @@ export const publications = pgTable(
   (t) => [
     index("publications_org_id_idx").on(t.orgId),
     index("publications_adaptation_id_idx").on(t.adaptationId),
+    /**
+     * "Never post twice" as a database invariant rather than a convention.
+     * Application code already avoids a second send (the worker checks for an
+     * existing published publication before publishing, and completes the job
+     * rather than retrying once a platform has accepted a post), but every one
+     * of those guards is a read-then-write that two workers can interleave.
+     * Partial, so the many `failed` rows one adaptation may accumulate across
+     * retries are unaffected.
+     */
+    uniqueIndex("publications_one_published_per_adaptation")
+      .on(t.adaptationId)
+      .where(sql`${t.status} = 'published'`),
   ],
 );

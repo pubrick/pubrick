@@ -22,7 +22,6 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@grammyjs/types": "^4.0.0",
     "tsup": "^8.5.1",
     "vitest": "^4.1.11"
   }

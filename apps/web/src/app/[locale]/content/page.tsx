@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
+import { AppNav } from "@/components/AppNav";
 import { ApiError, api } from "@/lib/api";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
@@ -95,6 +96,7 @@ export default function ContentQueuePage() {
 
   return (
     <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
+      <AppNav current="content" />
       <h1>{t("title")}</h1>
       {error && <p role="alert">{error}</p>}
       <p>

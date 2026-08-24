@@ -247,6 +247,102 @@ describe.skipIf(!url)("content e2e", () => {
     expect(fetched.body.adaptations[0]).toMatchObject({ status: "pending", externalUrl: null });
   });
 
+  it('400s an empty PATCH instead of 500ing on drizzle\'s "No values to set"', async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Something", channelIds: [channelId] })
+      .expect(201);
+
+    await agent.patch(`/api/content/${created.body.id}`).send({}).expect(400);
+  });
+
+  it('400s a scheduledAt in the past — pg-boss would treat it as "publish immediately"', async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Yesterday", channelIds: [channelId] })
+      .expect(201);
+
+    await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: new Date(Date.now() - 60_000).toISOString() })
+      .expect(400);
+
+    const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(fetched.body.status).toBe("draft");
+    expect(fetched.body.adaptations[0].status).toBe("pending");
+  });
+
+  it("rescheduling: approving an already-scheduled item cancels the old job and enqueues a new one at the new time", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Move me", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${created.body.id}/approve`).send({ scheduledAt: first });
+
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    const rescheduled = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: second })
+      .expect(200);
+    expect(new Date(rescheduled.body.adaptations[0].scheduledAt).toISOString()).toBe(second);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT state, start_after FROM pgboss.job WHERE name = 'publish'
+         AND data->>'adaptationId' = '${adaptationId}' ORDER BY created_on`,
+    );
+    await pool.end();
+
+    // Two rows: the original, now cancelled, and a live one at the NEW time.
+    // Before the fix, "scheduled" was excluded from approve()'s targets, so the
+    // request returned 200 with nothing enqueued and the post still fired at
+    // the ORIGINAL time — the UI reported a reschedule that never happened.
+    const rows = jobs.rows as { state: string; start_after: string }[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.state).toBe("cancelled");
+    expect(rows[1]?.state).toBe("created");
+    expect(new Date(rows[1]?.start_after as string).toISOString()).toBe(second);
+  });
+
+  it("approve now on a scheduled item actually publishes now: the old job is cancelled and a fresh one is queued", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Now instead", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 24 * 3_600_000).toISOString() })
+      .expect(200);
+
+    const now = await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+    expect(now.body.adaptations[0].status).toBe("queued");
+    expect(now.body.adaptations[0].scheduledAt).toBeNull();
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT state FROM pgboss.job WHERE name = 'publish'
+         AND data->>'adaptationId' = '${adaptationId}' ORDER BY created_on`,
+    );
+    await pool.end();
+    const states = (jobs.rows as { state: string }[]).map((r) => r.state);
+    expect(states).toEqual(["cancelled", "created"]);
+  });
+
   it("rejects a draft", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -259,6 +355,94 @@ describe.skipIf(!url)("content e2e", () => {
       .send({})
       .expect(200);
     expect(rejected.body.status).toBe("rejected");
+  });
+
+  it("rejecting an approved item cancels delivery: adaptations go back to pending and the job is cancelled", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Do not send this", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    // Approve with a schedule, exactly as a user would before changing their mind.
+    await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 24 * 3_600_000).toISOString() })
+      .expect(200);
+
+    const rejected = await agent
+      .post(`/api/content/${created.body.id}/reject`)
+      .send({})
+      .expect(200);
+
+    expect(rejected.body.status).toBe("rejected");
+    // Before the fix this stayed "scheduled" with a live pg-boss job, so the
+    // post went out the next day despite having been rejected.
+    expect(rejected.body.adaptations[0].status).toBe("pending");
+    expect(rejected.body.adaptations[0].scheduledAt).toBeNull();
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT state FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+    );
+    await pool.end();
+    const states = (jobs.rows as { state: string }[]).map((r) => r.state);
+    // No job left that can still be fetched by a worker.
+    expect(states).toEqual(["cancelled"]);
+  });
+
+  it("an item rejected after approval can be approved again and genuinely re-enqueues", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Changed my mind twice", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+    await agent.post(`/api/content/${created.body.id}/reject`).send({}).expect(200);
+
+    // A cancelled pg-boss job keeps its id, so without reject() advancing
+    // attempt_count this re-approve would derive the same job id, send() would
+    // suppress it as a duplicate and the request would 409 forever.
+    const reApproved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(200);
+    expect(reApproved.body.status).toBe("approved");
+    expect(reApproved.body.adaptations[0].status).toBe("queued");
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT state FROM pgboss.job WHERE name = 'publish'
+         AND data->>'adaptationId' = '${adaptationId}' ORDER BY created_on`,
+    );
+    await pool.end();
+    expect((jobs.rows as { state: string }[]).map((r) => r.state)).toEqual([
+      "cancelled",
+      "created",
+    ]);
+  });
+
+  it("rejecting a draft leaves its pending adaptations alone (nothing was ever enqueued)", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Never approved", channelIds: [channelId] })
+      .expect(201);
+
+    const rejected = await agent
+      .post(`/api/content/${created.body.id}/reject`)
+      .send({})
+      .expect(200);
+    expect(rejected.body.adaptations[0].status).toBe("pending");
+    expect(rejected.body.adaptations[0].attemptCount).toBe(0);
   });
 
   it("isolates content between organizations", async () => {

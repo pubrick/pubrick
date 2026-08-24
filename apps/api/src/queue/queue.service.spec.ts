@@ -28,6 +28,35 @@ describe.skipIf(!url)("QueueService.enqueuePublish", () => {
     await service.onModuleDestroy();
   });
 
+  it("creates the publish queue with the shared contract's options, heartbeat included", async () => {
+    const { PUBLISH_DLQ, PUBLISH_QUEUE, PUBLISH_QUEUE_OPTIONS } = await import("@pubrick/shared");
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db.execute(
+      `SELECT expire_seconds, heartbeat_seconds, retry_limit, retry_delay, dead_letter
+         FROM pgboss.queue WHERE name = '${PUBLISH_QUEUE}'`,
+    );
+    await pool.end();
+
+    // Asserted against the real pgboss.queue row, not against the constants
+    // being passed: createQueue is an ON CONFLICT DO NOTHING insert, so the
+    // options only actually land because onModuleInit follows it with
+    // updateQueue. Without heartbeat_seconds, a live handler is failed out at
+    // the expiry and its job re-run — a duplicate post.
+    const queue = rows.rows[0] as {
+      expire_seconds: number;
+      heartbeat_seconds: number | null;
+      retry_limit: number;
+      retry_delay: number;
+      dead_letter: string;
+    };
+    expect(queue.expire_seconds).toBe(PUBLISH_QUEUE_OPTIONS.expireInSeconds);
+    expect(queue.heartbeat_seconds).toBe(PUBLISH_QUEUE_OPTIONS.heartbeatSeconds);
+    expect(queue.retry_limit).toBe(PUBLISH_QUEUE_OPTIONS.retryLimit);
+    expect(queue.retry_delay).toBe(PUBLISH_QUEUE_OPTIONS.retryDelay);
+    expect(queue.dead_letter).toBe(PUBLISH_DLQ);
+  });
+
   it("throws ConflictException (never silently no-ops) when send() returns null for a duplicate (adaptationId, attemptCount) id", async () => {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);

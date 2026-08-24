@@ -22,7 +22,13 @@
     "goToBrands": "Ir a marcas",
     "signOut": "Cerrar sesión",
     "login": "Iniciar sesión",
-    "signup": "Registrarse"
+    "signup": "Registrarse",
+    "goToContent": "Ir a contenido"
+  },
+  "Nav": {
+    "label": "Secciones",
+    "brands": "Marcas",
+    "content": "Contenido"
   },
   "Brands": {
     "title": "Marcas",

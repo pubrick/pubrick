@@ -18,7 +18,8 @@ export default function LandingPage() {
       <p>{t("tagline")}</p>
       {isPending ? null : session ? (
         <p>
-          <Link href={`/${locale}/brands`}>{t("goToBrands")}</Link>{" "}
+          <Link href={`/${locale}/brands`}>{t("goToBrands")}</Link> ·{" "}
+          <Link href={`/${locale}/content`}>{t("goToContent")}</Link>{" "}
           <button type="button" onClick={() => authClient.signOut()}>
             {t("signOut")}
           </button>

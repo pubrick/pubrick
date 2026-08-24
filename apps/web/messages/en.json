@@ -22,7 +22,13 @@
     "goToBrands": "Go to brands",
     "signOut": "Sign out",
     "login": "Log in",
-    "signup": "Sign up"
+    "signup": "Sign up",
+    "goToContent": "Go to content"
+  },
+  "Nav": {
+    "label": "Sections",
+    "brands": "Brands",
+    "content": "Content"
   },
   "Brands": {
     "title": "Brands",

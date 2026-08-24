@@ -5,10 +5,12 @@ import {
   type Publisher,
   type PublishResult,
 } from "@pubrick/integrations";
+import type { PublishJob } from "@pubrick/shared";
 import { env } from "../env";
 import { PublishRepository } from "./publish.repository";
 
-export type PublishJob = { adaptationId: string; orgId: string };
+export type { PublishJob } from "@pubrick/shared";
+
 type PublisherLookup = (platform: string) => Publisher<never> | undefined;
 
 /** Bounded — this is riding out a transient DB hiccup, not retrying forever. */
@@ -49,6 +51,30 @@ export class PublishService {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation || adaptation.status === "published") return;
 
+    // Defense in depth against a delivered rejection. The api cancels the
+    // pg-boss job when an approved item is rejected, but a job that was
+    // already fetched, or one that outlived the cancel for any reason, must
+    // still not go out: the parent item's status is the user's decision and
+    // this handler is the last place that can honour it. Returning normally
+    // completes the job — there is nothing to retry, the user said no.
+    if (adaptation.itemStatus === "rejected") {
+      this.logger.log(
+        `Skipping publish for adaptation ${job.adaptationId}: content item was rejected`,
+      );
+      return;
+    }
+
+    // The durable "already delivered" check, independent of the adaptation's
+    // own status column (which the api can move back on a re-approve). Backed
+    // by the partial unique index on publications, so even a lost race here
+    // cannot produce two `published` rows for one adaptation.
+    if (await this.repo.hasPublished(job.orgId, job.adaptationId)) {
+      this.logger.warn(
+        `Skipping publish for adaptation ${job.adaptationId}: a published publication already exists`,
+      );
+      return;
+    }
+
     const publisher = this.lookup(adaptation.platform);
     if (!publisher) {
       await this.safeMarkFailed(
@@ -59,7 +85,16 @@ export class PublishService {
       return;
     }
 
-    await this.repo.markPublishing(job.orgId, job.adaptationId);
+    // Claiming is conditional on the adaptation still being publishable. A
+    // lost claim means the api changed the row (rejected, re-approved) between
+    // load() and here, under the row lock — do not send, and do not fail the
+    // adaptation either: its new status is the truth now.
+    if (!(await this.repo.markPublishing(job.orgId, job.adaptationId))) {
+      this.logger.log(
+        `Skipping publish for adaptation ${job.adaptationId}: no longer in a publishable status`,
+      );
+      return;
+    }
     const text = adaptation.body ?? adaptation.itemBody;
 
     // Everything that can still be safely retried lives in this try — nothing
@@ -88,7 +123,23 @@ export class PublishService {
           credentialsError instanceof Error ? credentialsError.message : String(credentialsError);
         throw new PermanentPublishError(`Could not load credentials: ${message}`);
       }
-      result = await publisher.publish(credentials as never, { text }, { baseUrl: this.baseUrl });
+      // Validate against the adapter's own schema before sending, the same way
+      // the api's connection test does. Stored credentials can be malformed
+      // (saved before a schema change, hand-edited, wrong platform), and
+      // without this the adapter sends them anyway and the operator sees an
+      // opaque platform error ("Telegram 400: Bad Request") instead of being
+      // told which field is wrong. Deterministic, so it is permanent: no
+      // amount of retrying fixes a missing chatId.
+      const parsed = publisher.credentialsSchema.safeParse(credentials);
+      if (!parsed.success) {
+        const detail = parsed.error.issues
+          .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+          .join("; ");
+        throw new PermanentPublishError(
+          `Stored credentials are not valid for platform ${adaptation.platform}: ${detail}`,
+        );
+      }
+      result = await publisher.publish(parsed.data, { text }, { baseUrl: this.baseUrl });
     } catch (error) {
       const message = (error as Error).message;
       if (error instanceof PermanentPublishError) {
@@ -123,11 +174,19 @@ export class PublishService {
    * delivery for the same job must not re-fail an adaptation that a later,
    * unrelated re-approve has already moved on from, and must not insert a
    * second `publications` row for the same terminal outcome.
+   *
+   * Guarded on `publishing`, the ONLY status this is ever legitimately called
+   * for, rather than on "not published and not failed". The old guard let
+   * every other status through — and by the time a dead-letter copy is
+   * delivered, the adaptation may well have been re-approved (`queued` /
+   * `scheduled`) or rejected back to `pending`. Failing it then would clobber
+   * a live job's adaptation with the corpse of an attempt that is already
+   * over.
    */
   async markExhausted(job: PublishJob): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation) return;
-    if (adaptation.status === "published" || adaptation.status === "failed") return;
+    if (adaptation.status !== "publishing") return;
 
     await this.safeMarkFailed(job.orgId, job.adaptationId, "Retries exhausted");
   }

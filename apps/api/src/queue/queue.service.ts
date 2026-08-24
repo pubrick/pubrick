@@ -4,13 +4,14 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { PUBLISH_DLQ, PUBLISH_QUEUE, PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 import { v5 as uuidv5 } from "uuid";
 import { env } from "../env";
 
-export const PUBLISH_QUEUE = "publish";
-export const PUBLISH_DLQ = "publish-dlq";
+export { PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
+
 /** Stable namespace so a job id is a pure function of (adaptation id, attempt count). */
 const JOB_NAMESPACE = "1b671a64-40d5-491e-99b0-da01ff1f3341";
 
@@ -30,9 +31,13 @@ const JOB_NAMESPACE = "1b671a64-40d5-491e-99b0-da01ff1f3341";
  * still-pending adaptation (same attemptCount) compute the same id and
  * correctly dedupe to a single job.
  *
- * Exported because Task 5 (the worker) must derive this same id to report
- * progress/completion against the job it is actually processing — keep the
- * derivation here as the single source of truth rather than duplicating it.
+ * The same reasoning applies to `cancelPublish` below: a cancelled job row
+ * ALSO survives under its id, so every caller that cancels an outstanding job
+ * must advance `attempt_count` before the adaptation can be enqueued again.
+ *
+ * Not exported beyond this app: the worker never derives job ids (it is handed
+ * the job it is processing by pg-boss), so this stays a single source of truth
+ * on the producer side rather than becoming part of the shared contract.
  */
 export function publishJobId(adaptationId: string, attemptCount: number): string {
   return uuidv5(`${adaptationId}:${attemptCount}`, JOB_NAMESPACE);
@@ -49,15 +54,14 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     boss.on("error", (err) => console.error("pg-boss error", err));
     await boss.start();
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
+    // Names/options come from @pubrick/shared so the worker cannot drift from them.
     await boss.createQueue(PUBLISH_DLQ);
-    await boss.createQueue(PUBLISH_QUEUE, {
-      retryLimit: 5,
-      retryDelay: 30,
-      retryBackoff: true,
-      retryDelayMax: 3600,
-      expireInSeconds: 120,
-      deadLetter: PUBLISH_DLQ,
-    });
+    await boss.createQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
+    // createQueue is an ON CONFLICT DO NOTHING insert: on a database where the
+    // queue already exists (any dev box or environment that ran an earlier
+    // build) it silently keeps the OLD options, so a change to
+    // PUBLISH_QUEUE_OPTIONS would never take effect. updateQueue converges it.
+    await boss.updateQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
     this.boss = boss;
   }
 
@@ -99,5 +103,35 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     if (jobId === null) {
       throw new ConflictException("A publish job for this adaptation is already queued");
     }
+  }
+
+  /**
+   * Cancels the outstanding publish job for `(adaptationId, attemptCount)`,
+   * inside the caller's transaction: the adaptation's status change and the
+   * cancellation either both land or neither does. Without this, rejecting or
+   * rescheduling an already-approved item leaves a live job that still
+   * delivers the post at the original time.
+   *
+   * `cancel` accepts pg-boss's `ConnectionOptions` (`{ db }`) in the installed
+   * v12 typings, so it genuinely runs on the caller's transaction — verified
+   * against pg-boss/dist/manager.d.ts:
+   * `cancel(name, id, options?: types.ConnectionOptions)`.
+   *
+   * Deliberately tolerant of "no such job": cancelling is a best-effort
+   * cleanup of a job that may legitimately be gone (already completed,
+   * already cancelled, aged out of retention). What must NOT happen is the
+   * adaptation staying deliverable, and that is decided by the status write
+   * this shares a transaction with — plus the worker's own check that the
+   * parent item is not rejected.
+   *
+   * The caller must advance `attempt_count` afterwards: the cancelled job row
+   * keeps its id, so re-enqueueing at the same attempt count would be
+   * suppressed by `send()`'s ON CONFLICT DO NOTHING (see `publishJobId`).
+   */
+  async cancelPublish(tx: Tx, adaptationId: string, attemptCount: number): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    await this.boss.cancel(PUBLISH_QUEUE, publishJobId(adaptationId, attemptCount), {
+      db: fromDrizzle(tx, sql),
+    });
   }
 }
