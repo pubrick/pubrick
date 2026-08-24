@@ -33,6 +33,63 @@
     "title": "Canais",
     "namePlaceholder": "Nome do canal",
     "remove": "Remover",
-    "add": "Adicionar canal"
+    "add": "Adicionar canal",
+    "test": "Testar conexão",
+    "testOk": "OK — conectado como {account}, pode publicar em {target}"
+  },
+  "Content": {
+    "title": "Conteúdo",
+    "newAction": "Novo conteúdo",
+    "empty": "Ainda não há conteúdo.",
+    "filterLabel": "Status",
+    "filterAll": "Todos",
+    "untitled": "(sem título)",
+    "status": {
+      "draft": "Rascunho",
+      "approved": "Aprovado",
+      "rejected": "Rejeitado",
+      "published": "Publicado",
+      "failed": "Falhou"
+    },
+    "adaptationStatus": {
+      "pending": "Pendente",
+      "scheduled": "Agendado",
+      "queued": "Na fila",
+      "publishing": "Publicando",
+      "published": "Publicado",
+      "failed": "Falhou"
+    }
+  },
+  "ContentNew": {
+    "title": "Novo conteúdo",
+    "brand": "Marca",
+    "selectBrand": "Selecione uma marca",
+    "channels": "Canais",
+    "selectBrandFirst": "Selecione uma marca para ver seus canais.",
+    "noChannels": "Esta marca ainda não tem canais.",
+    "noChannelsSelected": "Escolha pelo menos um canal.",
+    "titleLabel": "Título",
+    "titlePlaceholder": "Título (opcional)",
+    "body": "Texto",
+    "bodyPlaceholder": "Escreva a publicação…",
+    "submit": "Criar rascunho",
+    "genericError": "Algo deu errado. Tente novamente."
+  },
+  "Publish": {
+    "backToQueue": "Voltar à fila",
+    "bodyLabel": "Texto",
+    "saveBody": "Salvar texto",
+    "overridesTitle": "Ajustes por canal",
+    "overridePlaceholder": "Deixe em branco para usar o texto acima",
+    "saveOverride": "Salvar ajuste",
+    "approveNow": "Publicar agora",
+    "scheduleLabel": "Ou agendar para",
+    "approveScheduled": "Aprovar com agendamento",
+    "reject": "Rejeitar",
+    "resultsTitle": "Resultados",
+    "linkUnavailable": "publicado — link indisponível",
+    "viewPost": "Ver publicação",
+    "scheduledFor": "Agendado para",
+    "genericError": "Algo deu errado. Tente novamente."
   }
 }

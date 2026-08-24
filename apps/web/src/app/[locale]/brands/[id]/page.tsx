@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 
 type Channel = { id: string; platform: string; name: string };
 type Brand = { id: string; name: string };
+type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
 
 /**
  * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
@@ -38,6 +39,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, VerifyResult | "loading">>({});
 
   const load = useCallback(() => {
     api<Brand>(`/api/brands/${id}`)
@@ -71,6 +73,19 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     load();
   }
 
+  async function testConnection(channelId: string) {
+    setTestResults((prev) => ({ ...prev, [channelId]: "loading" }));
+    try {
+      const result = await api<VerifyResult>(`/api/channels/${channelId}/test`, { method: "POST" });
+      setTestResults((prev) => ({ ...prev, [channelId]: result }));
+    } catch (err) {
+      setTestResults((prev) => ({
+        ...prev,
+        [channelId]: { ok: false, reason: (err as Error).message },
+      }));
+    }
+  }
+
   const fields = PLATFORM_FIELDS[platform];
 
   return (
@@ -79,14 +94,27 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <h2>{t("title")}</h2>
       {error && <p role="alert">{error}</p>}
       <ul>
-        {channels.map((c) => (
-          <li key={c.id}>
-            [{c.platform}] {c.name}{" "}
-            <button type="button" onClick={() => remove(c.id)}>
-              {t("remove")}
-            </button>
-          </li>
-        ))}
+        {channels.map((c) => {
+          const result = testResults[c.id];
+          return (
+            <li key={c.id}>
+              [{c.platform}] {c.name}{" "}
+              <button type="button" onClick={() => remove(c.id)}>
+                {t("remove")}
+              </button>{" "}
+              <button type="button" onClick={() => testConnection(c.id)}>
+                {t("test")}
+              </button>
+              {result === "loading" && <span> …</span>}
+              {result && result !== "loading" && result.ok && (
+                <span> {t("testOk", { account: result.account, target: result.target })}</span>
+              )}
+              {result && result !== "loading" && !result.ok && (
+                <span role="alert"> {result.reason}</span>
+              )}
+            </li>
+          );
+        })}
       </ul>
       <form onSubmit={addChannel}>
         <select

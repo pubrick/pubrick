@@ -200,6 +200,53 @@ describe.skipIf(!url)("content e2e", () => {
     expect((jobs.rows[0] as { n: number }).n).toBe(2);
   });
 
+  it("surfaces the published link once the worker logs a publications row", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Went out", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    // Simulate what the worker's markPublished does: flip the adaptation to
+    // "published" and log the terminal publications row with the link. The
+    // api never writes here itself — this is the worker's write path
+    // (apps/worker/src/publish/publish.repository.ts) — so seed it directly.
+    // org_id is read back off the adaptation row rather than hardcoded: it's
+    // a NOT NULL FK to organization(id), and the agent helpers above never
+    // hand the test the org id they generated internally.
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`))
+      .rows as { org_id: string }[];
+    const orgId = row?.org_id;
+    await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${adaptationId}'`);
+    await db.execute(
+      `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+       VALUES ('${orgId}', '${adaptationId}', '${channelId}', 'published', '4711', 'https://t.me/mychannel/4711', 1)`,
+    );
+    await pool.end();
+
+    const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(fetched.body.adaptations[0]).toMatchObject({
+      status: "published",
+      externalUrl: "https://t.me/mychannel/4711",
+    });
+  });
+
+  it("reports link unavailable (null) for a failed adaptation, not a stale link", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Never went out", channelIds: [channelId] })
+      .expect(201);
+
+    const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(fetched.body.adaptations[0]).toMatchObject({ status: "pending", externalUrl: null });
+  });
+
   it("rejects a draft", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

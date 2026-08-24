@@ -222,68 +222,60 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     throw new Error(`Timed out after 20s waiting for job ${jobId} to leave created/active`);
   }
 
-  it(
-    "publishes a queued adaptation and stores the message link",
-    async () => {
-      const chatId = `-100${Date.now()}1`;
-      fakeResponses.set(chatId, {
-        status: 200,
-        body: {
-          ok: true,
-          result: { message_id: 4711, chat: { id: Number(chatId), username: "mychannel" } },
-        },
-      });
-      const { adaptationId } = await seedQueuedAdaptation(chatId);
+  it("publishes a queued adaptation and stores the message link", async () => {
+    const chatId = `-100${Date.now()}1`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: {
+        ok: true,
+        result: { message_id: 4711, chat: { id: Number(chatId), username: "mychannel" } },
+      },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
 
-      // Same job shape the api's QueueService.enqueuePublish sends.
-      const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
-      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+    // Same job shape the api's QueueService.enqueuePublish sends.
+    const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
-      const adaptation = await waitUntilLeftQueued(adaptationId);
-      expect(adaptation.status).toBe("published");
+    const adaptation = await waitUntilLeftQueued(adaptationId);
+    expect(adaptation.status).toBe("published");
 
-      const publication = await publicationFor(adaptationId);
-      expect(publication).toMatchObject({ status: "published", externalId: "4711" });
-      expect(publication?.externalUrl).toBe("https://t.me/mychannel/4711");
+    const publication = await publicationFor(adaptationId);
+    expect(publication).toMatchObject({ status: "published", externalId: "4711" });
+    expect(publication?.externalUrl).toBe("https://t.me/mychannel/4711");
 
-      // A delivered post whose pg-boss job ended up in "retry" instead of
-      // "completed" would resend on the next delivery — exactly the
-      // duplicate-post scenario Task 5's recordPublished/handle() were
-      // hardened against. Assert the job itself, not just the row.
-      const job = await waitForJobState(jobId);
-      expect(job.state).toBe("completed");
-    },
-    25_000,
-  );
+    // A delivered post whose pg-boss job ended up in "retry" instead of
+    // "completed" would resend on the next delivery — exactly the
+    // duplicate-post scenario Task 5's recordPublished/handle() were
+    // hardened against. Assert the job itself, not just the row.
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+  }, 25_000);
 
-  it(
-    "marks a permanently rejected post failed without retrying",
-    async () => {
-      const chatId = `-100${Date.now()}2`;
-      fakeResponses.set(chatId, {
-        status: 403,
-        body: { ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" },
-      });
-      const { adaptationId } = await seedQueuedAdaptation(chatId);
+  it("marks a permanently rejected post failed without retrying", async () => {
+    const chatId = `-100${Date.now()}2`;
+    fakeResponses.set(chatId, {
+      status: 403,
+      body: { ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
 
-      const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
-      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+    const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
-      const adaptation = await waitUntilLeftQueued(adaptationId);
-      expect(adaptation.status).toBe("failed");
-      // markPublishing bumped attempt_count to 1 before the send; the 403 is
-      // permanent, so PublishService returns normally instead of throwing, and
-      // pg-boss never retries the job — attempt_count must stay at exactly 1.
-      expect(adaptation.attemptCount).toBe(1);
+    const adaptation = await waitUntilLeftQueued(adaptationId);
+    expect(adaptation.status).toBe("failed");
+    // markPublishing bumped attempt_count to 1 before the send; the 403 is
+    // permanent, so PublishService returns normally instead of throwing, and
+    // pg-boss never retries the job — attempt_count must stay at exactly 1.
+    expect(adaptation.attemptCount).toBe(1);
 
-      // The row alone can't prove "no retry happened": it only shows what
-      // markFailed wrote, and pg-boss's retry (if handle() had rethrown after
-      // safeMarkFailed) lands ~30s+ later — far past this test's poll window.
-      // Assert the JOB's own terminal state directly instead: "completed"
-      // (handle() returned normally) never "retry" (handle() rethrew).
-      const job = await waitForJobState(jobId);
-      expect(job.state).toBe("completed");
-    },
-    25_000,
-  );
+    // The row alone can't prove "no retry happened": it only shows what
+    // markFailed wrote, and pg-boss's retry (if handle() had rethrown after
+    // safeMarkFailed) lands ~30s+ later — far past this test's poll window.
+    // Assert the JOB's own terminal state directly instead: "completed"
+    // (handle() returned normally) never "retry" (handle() rethrew).
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+  }, 25_000);
 });

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { AdaptationUpdate, ContentCreate, ContentUpdate } from "@pubrick/shared";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 
@@ -27,6 +27,25 @@ const ADAPTATION_COLUMNS = {
   scheduledAt: schema.adaptations.scheduledAt,
   attemptCount: schema.adaptations.attemptCount,
   lastError: schema.adaptations.lastError,
+  /**
+   * The worker logs one `publications` row per delivery attempt
+   * (apps/worker/src/publish/publish.repository.ts markPublished/markFailed)
+   * but never writes back to the adaptation row itself, so the link the web
+   * UI needs to render "published -> link" has to be pulled in here. A
+   * correlated subquery on the most recent `published` publication for this
+   * adaptation (verified to work inside both SELECT and RETURNING via a
+   * standalone psql check). Plain SQL text rather than embedded table/column
+   * objects in the template, since drizzle's `sql` tag interpolation of a
+   * bare Table for a subquery FROM isn't exercised anywhere else in this
+   * codebase — the literal column/table names here are the actual db names
+   * from packages/db/src/schema/content-items.ts, not TS property names.
+   */
+  externalUrl: sql<string | null>`(
+    select external_url from publications
+    where adaptation_id = adaptations.id and status = 'published'
+    order by created_at desc
+    limit 1
+  )`,
 };
 
 @Injectable()

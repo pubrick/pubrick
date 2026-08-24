@@ -33,6 +33,63 @@
     "title": "Canales",
     "namePlaceholder": "Nombre del canal",
     "remove": "Eliminar",
-    "add": "Añadir canal"
+    "add": "Añadir canal",
+    "test": "Probar conexión",
+    "testOk": "OK — conectado como {account}, puede publicar en {target}"
+  },
+  "Content": {
+    "title": "Contenido",
+    "newAction": "Nuevo contenido",
+    "empty": "Todavía no hay contenido.",
+    "filterLabel": "Estado",
+    "filterAll": "Todos",
+    "untitled": "(sin título)",
+    "status": {
+      "draft": "Borrador",
+      "approved": "Aprobado",
+      "rejected": "Rechazado",
+      "published": "Publicado",
+      "failed": "Fallido"
+    },
+    "adaptationStatus": {
+      "pending": "Pendiente",
+      "scheduled": "Programado",
+      "queued": "En cola",
+      "publishing": "Publicando",
+      "published": "Publicado",
+      "failed": "Fallido"
+    }
+  },
+  "ContentNew": {
+    "title": "Nuevo contenido",
+    "brand": "Marca",
+    "selectBrand": "Selecciona una marca",
+    "channels": "Canales",
+    "selectBrandFirst": "Selecciona una marca para ver sus canales.",
+    "noChannels": "Esta marca todavía no tiene canales.",
+    "noChannelsSelected": "Elige al menos un canal.",
+    "titleLabel": "Título",
+    "titlePlaceholder": "Título (opcional)",
+    "body": "Texto",
+    "bodyPlaceholder": "Escribe la publicación…",
+    "submit": "Crear borrador",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
+  },
+  "Publish": {
+    "backToQueue": "Volver a la cola",
+    "bodyLabel": "Texto",
+    "saveBody": "Guardar texto",
+    "overridesTitle": "Ajustes por canal",
+    "overridePlaceholder": "Déjalo vacío para usar el texto de arriba",
+    "saveOverride": "Guardar ajuste",
+    "approveNow": "Publicar ahora",
+    "scheduleLabel": "O programar para",
+    "approveScheduled": "Aprobar con horario",
+    "reject": "Rechazar",
+    "resultsTitle": "Resultados",
+    "linkUnavailable": "publicado — enlace no disponible",
+    "viewPost": "Ver publicación",
+    "scheduledFor": "Programado para",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
   }
 }

@@ -33,6 +33,63 @@
     "title": "Каналы",
     "namePlaceholder": "Название канала",
     "remove": "Удалить",
-    "add": "Добавить канал"
+    "add": "Добавить канал",
+    "test": "Проверить подключение",
+    "testOk": "Готово — подключено как {account}, может публиковать в {target}"
+  },
+  "Content": {
+    "title": "Контент",
+    "newAction": "Новый контент",
+    "empty": "Контента пока нет.",
+    "filterLabel": "Статус",
+    "filterAll": "Все",
+    "untitled": "(без названия)",
+    "status": {
+      "draft": "Черновик",
+      "approved": "Одобрено",
+      "rejected": "Отклонено",
+      "published": "Опубликовано",
+      "failed": "Ошибка"
+    },
+    "adaptationStatus": {
+      "pending": "Ожидает",
+      "scheduled": "Запланировано",
+      "queued": "В очереди",
+      "publishing": "Публикуется",
+      "published": "Опубликовано",
+      "failed": "Ошибка"
+    }
+  },
+  "ContentNew": {
+    "title": "Новый контент",
+    "brand": "Бренд",
+    "selectBrand": "Выберите бренд",
+    "channels": "Каналы",
+    "selectBrandFirst": "Выберите бренд, чтобы увидеть его каналы.",
+    "noChannels": "У этого бренда пока нет каналов.",
+    "noChannelsSelected": "Выберите хотя бы один канал.",
+    "titleLabel": "Заголовок",
+    "titlePlaceholder": "Заголовок (необязательно)",
+    "body": "Текст",
+    "bodyPlaceholder": "Напишите текст поста…",
+    "submit": "Создать черновик",
+    "genericError": "Что-то пошло не так. Попробуйте ещё раз."
+  },
+  "Publish": {
+    "backToQueue": "Назад к очереди",
+    "bodyLabel": "Текст",
+    "saveBody": "Сохранить текст",
+    "overridesTitle": "Настройки по каналам",
+    "overridePlaceholder": "Оставьте пустым, чтобы использовать текст выше",
+    "saveOverride": "Сохранить",
+    "approveNow": "Опубликовать сейчас",
+    "scheduleLabel": "Или запланировать на",
+    "approveScheduled": "Одобрить с расписанием",
+    "reject": "Отклонить",
+    "resultsTitle": "Результаты",
+    "linkUnavailable": "опубликовано — ссылка недоступна",
+    "viewPost": "Открыть публикацию",
+    "scheduledFor": "Запланировано на",
+    "genericError": "Что-то пошло не так. Попробуйте ещё раз."
   }
 }

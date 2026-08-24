@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   getPublisher,
   PermanentPublishError,
@@ -22,12 +22,27 @@ function sleep(ms: number): Promise<void> {
 export class PublishService {
   private readonly logger = new Logger(PublishService.name);
 
+  /**
+   * The three parameters after `repo` are seams for tests (`publish.service.spec.ts`
+   * constructs this with `new PublishService(repo, fakeLookup, ...)` directly, never
+   * through Nest), not real providers — `PublisherLookup` reflects as bare `Object`
+   * and `string`/`number` reflect as `String`/`Number`, none of which have a
+   * registered provider in `WorkerModule`. Nest's real DI path (`main.ts` ->
+   * `NestFactory.createApplicationContext(WorkerModule)`) resolves every
+   * constructor parameter through the container by its reflected type and throws
+   * `UnknownDependenciesException` for an unresolvable one UNLESS it's `@Optional()`
+   * — without it the worker process cannot boot at all (confirmed by actually
+   * running `dist/main.cjs`, not just the vitest specs, which all bypass Nest's
+   * injector for this class). `@Optional()` makes Nest pass `undefined` for these
+   * three instead of throwing, which is exactly what lets the TS default values
+   * below apply, same as a plain `new PublishService(repo)` call would.
+   */
   constructor(
     private readonly repo: PublishRepository,
-    private readonly lookup: PublisherLookup = getPublisher,
-    private readonly baseUrl: string = env.TELEGRAM_API_BASE_URL,
+    @Optional() private readonly lookup: PublisherLookup = getPublisher,
+    @Optional() private readonly baseUrl: string = env.TELEGRAM_API_BASE_URL,
     /** Backoff unit between markPublished retries; 0 in tests for determinism. */
-    private readonly markPublishedRetryDelayMs: number = 200,
+    @Optional() private readonly markPublishedRetryDelayMs: number = 200,
   ) {}
 
   async handle(job: PublishJob): Promise<void> {

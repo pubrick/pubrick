@@ -33,6 +33,63 @@
     "title": "Channels",
     "namePlaceholder": "Channel name",
     "remove": "Remove",
-    "add": "Add channel"
+    "add": "Add channel",
+    "test": "Test connection",
+    "testOk": "OK — connected as {account}, can post to {target}"
+  },
+  "Content": {
+    "title": "Content",
+    "newAction": "New content",
+    "empty": "No content yet.",
+    "filterLabel": "Status",
+    "filterAll": "All",
+    "untitled": "(untitled)",
+    "status": {
+      "draft": "Draft",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "published": "Published",
+      "failed": "Failed"
+    },
+    "adaptationStatus": {
+      "pending": "Pending",
+      "scheduled": "Scheduled",
+      "queued": "Queued",
+      "publishing": "Publishing",
+      "published": "Published",
+      "failed": "Failed"
+    }
+  },
+  "ContentNew": {
+    "title": "New content",
+    "brand": "Brand",
+    "selectBrand": "Select a brand",
+    "channels": "Channels",
+    "selectBrandFirst": "Select a brand to see its channels.",
+    "noChannels": "This brand has no channels yet.",
+    "noChannelsSelected": "Pick at least one channel.",
+    "titleLabel": "Title",
+    "titlePlaceholder": "Title (optional)",
+    "body": "Body",
+    "bodyPlaceholder": "Write the post…",
+    "submit": "Create draft",
+    "genericError": "Something went wrong. Please try again."
+  },
+  "Publish": {
+    "backToQueue": "Back to queue",
+    "bodyLabel": "Body",
+    "saveBody": "Save body",
+    "overridesTitle": "Per-channel overrides",
+    "overridePlaceholder": "Leave empty to use the item body above",
+    "saveOverride": "Save override",
+    "approveNow": "Publish now",
+    "scheduleLabel": "Or schedule for",
+    "approveScheduled": "Approve with schedule",
+    "reject": "Reject",
+    "resultsTitle": "Results",
+    "linkUnavailable": "published — link unavailable",
+    "viewPost": "View post",
+    "scheduledFor": "Scheduled for",
+    "genericError": "Something went wrong. Please try again."
   }
 }
