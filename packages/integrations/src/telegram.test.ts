@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { telegramPublisher } from "./telegram.js";
-import { PermanentPublishError, TransientPublishError } from "./types.js";
+import { PermanentPublishError, type PublishInput, TransientPublishError } from "./types.js";
 
 const CREDS = { botToken: "123:abc", chatId: "-1001234567890" };
 
@@ -188,6 +188,63 @@ describe("telegramPublisher.publish", () => {
 
     expect(caught).toBeInstanceOf(TransientPublishError);
     expect((caught as Error).message).not.toContain(CREDS.botToken);
+  });
+
+  it("resolves to a linkless success, not a throw, when ok:true carries a null result", async () => {
+    const fetchImpl = fetchReturning({ ok: true, result: null });
+    await expect(telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl })).resolves.toEqual({
+      externalId: null,
+      externalUrl: null,
+    });
+  });
+
+  it("resolves to a linkless success, not a throw, when ok:true's result has no chat", async () => {
+    const fetchImpl = fetchReturning({ ok: true, result: { message_id: 123 } });
+    await expect(telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl })).resolves.toEqual({
+      externalId: null,
+      externalUrl: null,
+    });
+  });
+
+  it("throws PermanentPublishError when the body is the JSON literal null on HTTP 200", async () => {
+    const fetchImpl = fetchReturning(null, 200);
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+  });
+
+  it("throws TransientPublishError when the body is the JSON literal null on HTTP 503", async () => {
+    const fetchImpl = fetchReturning(null, 503);
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+  });
+
+  it("classifies a bare JSON string body instead of crashing", async () => {
+    const fetchImpl = fetchReturning("just a string, not an envelope", 200);
+
+    let caught: unknown;
+    try {
+      await telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught instanceof PermanentPublishError || caught instanceof TransientPublishError).toBe(
+      true,
+    );
+  });
+
+  it("throws PermanentPublishError, without calling the API, when the request body cannot be JSON-serialized", async () => {
+    const fetchImpl = vi.fn();
+    // A real caller can't construct this through the PublishInput type, but a
+    // JS (non-TS) consumer can pass anything at runtime.
+    const unserializableInput = { text: 10n } as unknown as PublishInput;
+
+    await expect(
+      telegramPublisher.publish(CREDS, unserializableInput, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("throws PermanentPublishError on 403 and 401", async () => {

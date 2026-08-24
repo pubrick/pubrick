@@ -1,4 +1,4 @@
-import type { Chat, ChatMember, Message, User } from "@grammyjs/types";
+import type { Chat, ChatMember, User } from "@grammyjs/types";
 import { z } from "zod";
 import {
   PermanentPublishError,
@@ -19,12 +19,34 @@ const credentialsSchema = z.object({
 });
 type TelegramCredentials = z.infer<typeof credentialsSchema>;
 
-type TelegramError = {
-  ok: false;
-  error_code: number;
-  description: string;
-  parameters?: { retry_after?: number; migrate_to_chat_id?: number };
-};
+/**
+ * Telegram's two envelope shapes. `result`/`parameters` are deliberately
+ * `z.unknown()`/loose — this layer only confirms "this is Telegram's
+ * envelope", not the payload inside it. A shape that satisfies neither
+ * schema (including `null`, a bare string/number/array, or an object with
+ * neither `ok:true` nor a well-formed `ok:false`) is not this envelope at
+ * all — see `parseTelegramEnvelope`.
+ */
+const okEnvelopeSchema = z.object({ ok: z.literal(true), result: z.unknown() });
+const errorEnvelopeSchema = z.object({
+  ok: z.literal(false),
+  error_code: z.number(),
+  description: z.string(),
+  parameters: z
+    .object({ retry_after: z.number().optional(), migrate_to_chat_id: z.number().optional() })
+    .optional(),
+});
+
+/**
+ * The shape `messageLink` needs out of a `sendMessage` result. Deliberately
+ * minimal (not the full grammY `Message` type) so that any extra or missing
+ * fields Telegram might add or omit don't turn into a crash — only these two
+ * fields are load-bearing for deriving a link.
+ */
+const messageLinkResultSchema = z.object({
+  message_id: z.number(),
+  chat: z.object({ id: z.number(), username: z.string().optional() }),
+});
 
 const SNIPPET_MAX_LENGTH = 200;
 
@@ -48,16 +70,54 @@ function redactToken(message: string, credentials: TelegramCredentials): string 
 /**
  * Internal signal, thrown only inside `call()`'s guarded region and caught by
  * its single catch: "the request completed with an HTTP status, but the body
- * wasn't Telegram's JSON envelope." Carries what the catch needs to classify
- * by status instead of `error_code`. Never crosses the boundary of `call()`.
+ * was not Telegram's envelope" — either not JSON at all, or JSON that matches
+ * neither `okEnvelopeSchema` nor `errorEnvelopeSchema` (e.g. `null`, a bare
+ * string, an array). Carries what the catch needs to classify by HTTP status
+ * instead of `error_code`. Never crosses the boundary of `call()`.
  */
-class NonJsonTelegramResponse extends Error {
+class UnrecognizedTelegramResponse extends Error {
   constructor(
     readonly status: number,
     readonly bodySnippet: string,
   ) {
-    super(`Telegram returned a non-JSON response (HTTP ${status})`);
+    super(`Telegram returned an unrecognized response (HTTP ${status})`);
   }
+}
+
+type TelegramEnvelope =
+  | { kind: "ok"; result: unknown }
+  | { kind: "error"; code: number; description: string; retryAfterSeconds?: number }
+  | { kind: "unrecognized" };
+
+/**
+ * Pure classification, never throws: parses `rawBody` as JSON and matches it
+ * against Telegram's two envelope shapes. A JSON syntax error and a
+ * well-formed-JSON-but-wrong-shape value both fall out as `"unrecognized"` —
+ * the caller classifies that case by HTTP status, since there is no
+ * `ok`/`error_code` to key on either way.
+ */
+function parseTelegramEnvelope(rawBody: string): TelegramEnvelope {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return { kind: "unrecognized" };
+  }
+
+  const ok = okEnvelopeSchema.safeParse(parsed);
+  if (ok.success) return { kind: "ok", result: ok.data.result };
+
+  const error = errorEnvelopeSchema.safeParse(parsed);
+  if (error.success) {
+    return {
+      kind: "error",
+      code: error.data.error_code,
+      description: error.data.description,
+      retryAfterSeconds: error.data.parameters?.retry_after,
+    };
+  }
+
+  return { kind: "unrecognized" };
 }
 
 /**
@@ -66,12 +126,14 @@ class NonJsonTelegramResponse extends Error {
  * refines, because Telegram does not guarantee its wording.
  *
  * Invariant: every exit from this function is a PermanentPublishError or a
- * TransientPublishError. The fetch, the body read, and the JSON parse all
- * live inside ONE guarded region below with a single catch after it — a
- * connection reset mid-transfer, `AbortSignal.timeout` firing while the body
- * is still streaming, a non-JSON body (proxy/gateway in front of
- * api.telegram.org), or a fetchImpl that rejects with a non-Error value can
- * none of them escape as a raw TypeError / DOMException / SyntaxError.
+ * TransientPublishError. Serializing the request body, the fetch, the body
+ * read, and the envelope parse/validation all live inside ONE guarded region
+ * below with a single catch after it — a body that cannot be JSON-serialized,
+ * a connection reset mid-transfer, `AbortSignal.timeout` firing while the
+ * body is still streaming, a non-JSON body, a JSON body that isn't either of
+ * Telegram's envelope shapes (proxy/gateway in front of api.telegram.org), or
+ * a fetchImpl that rejects with a non-Error value — none of them can escape
+ * as a raw TypeError / DOMException / SyntaxError.
  */
 async function call<T>(
   method: string,
@@ -82,31 +144,46 @@ async function call<T>(
   const doFetch = options?.fetchImpl ?? fetch;
   const baseUrl = options?.baseUrl ?? DEFAULT_BASE_URL;
 
-  let payload: { ok: true; result: T } | TelegramError;
+  let envelope: TelegramEnvelope;
   try {
-    // fetch -> read the body -> parse JSON: one guarded region. Nothing
-    // between "send the request" and "have a parsed envelope" runs outside
-    // this try, so nothing in that path can escape unclassified.
+    // serialize -> fetch -> read the body -> parse+validate the envelope:
+    // one guarded region. Nothing between "have a request body" and "have a
+    // classified envelope" runs outside this try, so nothing in that path
+    // can escape unclassified.
+    let requestBody: string;
+    try {
+      requestBody = JSON.stringify(body);
+    } catch (cause) {
+      // Will never succeed on retry either — a payload that can't be
+      // serialized today can't be serialized tomorrow.
+      throw new PermanentPublishError(
+        redactToken(
+          `Telegram request body could not be serialized to JSON: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          credentials,
+        ),
+      );
+    }
+
     const response = await doFetch(`${baseUrl}/bot${credentials.botToken}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: AbortSignal.timeout(30_000),
     });
     const rawBody = await response.text();
-    try {
-      payload = JSON.parse(rawBody) as { ok: true; result: T } | TelegramError;
-    } catch {
-      // Not Telegram's own envelope. Signal it inward so the outer catch —
-      // the only place classification happens — can use the HTTP status,
-      // since there is no `ok`/`error_code` to key on.
-      throw new NonJsonTelegramResponse(response.status, truncateSnippet(rawBody));
+
+    const parsedEnvelope = parseTelegramEnvelope(rawBody);
+    if (parsedEnvelope.kind === "unrecognized") {
+      throw new UnrecognizedTelegramResponse(response.status, truncateSnippet(rawBody));
     }
+    envelope = parsedEnvelope;
   } catch (cause) {
     if (cause instanceof PermanentPublishError || cause instanceof TransientPublishError) {
       throw cause;
     }
-    if (cause instanceof NonJsonTelegramResponse) {
+    if (cause instanceof UnrecognizedTelegramResponse) {
       const message = redactToken(`${cause.message}: ${cause.bodySnippet}`, credentials);
       if (cause.status === 429 || cause.status >= 500) {
         throw new TransientPublishError(message);
@@ -121,27 +198,38 @@ async function call<T>(
     );
   }
 
-  if (payload.ok) return payload.result;
+  if (envelope.kind === "ok") return envelope.result as T;
 
-  const { error_code: code, description, parameters } = payload;
-  const message = redactToken(description, credentials);
-  if (code === 429) {
-    throw new TransientPublishError(message, parameters?.retry_after);
+  const message = redactToken(envelope.description, credentials);
+  if (envelope.code === 429) {
+    throw new TransientPublishError(message, envelope.retryAfterSeconds);
   }
-  if (code >= 500) {
+  if (envelope.code >= 500) {
     throw new TransientPublishError(message);
   }
-  throw new PermanentPublishError(message, code);
+  throw new PermanentPublishError(message, envelope.code);
 }
 
-function messageLink(message: Message): PublishResult {
-  if (!message.message_id) {
+/**
+ * `ok:true` means Telegram already accepted the message — the post happened.
+ * If `rawResult` doesn't match the shape we need to build a link (missing,
+ * `null`, no `chat`, ...), that is never grounds to throw: a caller that
+ * treats "not a PermanentPublishError" as retryable would resend an already
+ * -accepted post. Degrade to "published, link unavailable" instead.
+ */
+function messageLink(rawResult: unknown): PublishResult {
+  const parsed = messageLinkResultSchema.safeParse(rawResult);
+  if (!parsed.success) {
+    return { externalId: null, externalUrl: null };
+  }
+
+  const { message_id: messageId, chat } = parsed.data;
+  if (!messageId) {
     // 0 means ephemeral or server-scheduled: published, but no stable link.
     return { externalId: null, externalUrl: null };
   }
-  const externalId = String(message.message_id);
-  const chat = message.chat as Chat;
-  if ("username" in chat && chat.username) {
+  const externalId = String(messageId);
+  if (chat.username) {
     return { externalId, externalUrl: `https://t.me/${chat.username}/${externalId}` };
   }
   const internal = String(chat.id).replace(/^-100/, "");
@@ -171,7 +259,7 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
     if (input.format === "html") payload.parse_mode = "HTML";
 
     try {
-      return messageLink(await call<Message>("sendMessage", credentials, payload, options));
+      return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
     } catch (error) {
       // A post delivered as plain text beats a post that never goes out.
       const parseFailed =
@@ -182,7 +270,7 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       if (!parseFailed) throw error;
 
       payload.parse_mode = undefined;
-      return messageLink(await call<Message>("sendMessage", credentials, payload, options));
+      return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
     }
   },
 
