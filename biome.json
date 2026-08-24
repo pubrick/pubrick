@@ -7,5 +7,11 @@
   "javascript": {
     "formatter": { "quoteStyle": "double" },
     "parser": { "unsafeParameterDecoratorsEnabled": true }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/api/src/**/*.ts", "apps/worker/src/**/*.ts"],
+      "linter": { "rules": { "style": { "useImportType": "off" } } }
+    }
+  ]
 }
