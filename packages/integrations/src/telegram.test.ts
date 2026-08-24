@@ -338,4 +338,57 @@ describe("telegramPublisher.verify", () => {
     const result = await telegramPublisher.verify(CREDS, { fetchImpl });
     expect(result).toEqual({ ok: false, reason: "Unauthorized" });
   });
+
+  it("reports the reason instead of throwing when getMe's result is malformed", async () => {
+    const fetchImpl = fetchReturning({ ok: true, result: null });
+    const result = await telegramPublisher.verify(CREDS, { fetchImpl });
+    expect(result).toEqual({ ok: false, reason: "Telegram returned an unexpected getMe response" });
+  });
+
+  it("reports the reason instead of throwing when getChat's result is malformed", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: { id: 42, username: "my_bot" } }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: null }), { status: 200 }),
+      );
+
+    const result = await telegramPublisher.verify(CREDS, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      reason: "Telegram returned an unexpected getChat response",
+    });
+  });
+
+  it("reports the reason instead of throwing when getChatMember's result is malformed", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: { id: 42, username: "my_bot" } }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: { id: -1001234567890, type: "channel", title: "My Channel" },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, result: null }), { status: 200 }),
+      );
+
+    const result = await telegramPublisher.verify(CREDS, { fetchImpl });
+    expect(result).toEqual({
+      ok: false,
+      reason: "Telegram returned an unexpected getChatMember response",
+    });
+  });
 });

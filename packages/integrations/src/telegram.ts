@@ -1,4 +1,3 @@
-import type { Chat, ChatMember, User } from "@grammyjs/types";
 import { z } from "zod";
 import {
   PermanentPublishError,
@@ -46,6 +45,29 @@ const errorEnvelopeSchema = z.object({
 const messageLinkResultSchema = z.object({
   message_id: z.number(),
   chat: z.object({ id: z.number(), username: z.string().optional() }),
+});
+
+/**
+ * The shapes `verify` needs out of `getMe`/`getChat`/`getChatMember`.
+ * Deliberately minimal, same reasoning as `messageLinkResultSchema`: `verify`
+ * is the first live caller of these three calls, and an envelope with
+ * `ok:true` only promises "this is Telegram's success envelope" — not that
+ * `result` has any particular shape (a proxy/gateway in front of
+ * api.telegram.org, or an unexpected Telegram response, could still send
+ * `result: null` or similar). A mismatch here must degrade to
+ * `{ ok: false, reason }`, never throw — a failed connection check is a
+ * result, not a server error.
+ */
+const getMeResultSchema = z.object({ id: z.number(), username: z.string().optional() });
+const getChatResultSchema = z.object({
+  id: z.number(),
+  type: z.string().optional(),
+  title: z.string().optional(),
+  username: z.string().optional(),
+});
+const getChatMemberResultSchema = z.object({
+  status: z.string(),
+  can_post_messages: z.boolean().optional(),
 });
 
 const SNIPPET_MAX_LENGTH = 200;
@@ -276,31 +298,45 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
 
   async verify(credentials, options): Promise<VerifyResult> {
     try {
-      const me = await call<User>("getMe", credentials, {}, options);
-      const chat = await call<Chat>(
+      const meRaw = await call<unknown>("getMe", credentials, {}, options);
+      const me = getMeResultSchema.safeParse(meRaw);
+      if (!me.success) {
+        return { ok: false, reason: "Telegram returned an unexpected getMe response" };
+      }
+
+      const chatRaw = await call<unknown>(
         "getChat",
         credentials,
         { chat_id: credentials.chatId },
         options,
       );
-      const member = await call<ChatMember>(
+      const chat = getChatResultSchema.safeParse(chatRaw);
+      if (!chat.success) {
+        return { ok: false, reason: "Telegram returned an unexpected getChat response" };
+      }
+
+      const memberRaw = await call<unknown>(
         "getChatMember",
         credentials,
-        { chat_id: credentials.chatId, user_id: me.id },
+        { chat_id: credentials.chatId, user_id: me.data.id },
         options,
       );
+      const member = getChatMemberResultSchema.safeParse(memberRaw);
+      if (!member.success) {
+        return { ok: false, reason: "Telegram returned an unexpected getChatMember response" };
+      }
 
       const canPost =
-        member.status === "creator" ||
-        (member.status === "administrator" && member.can_post_messages === true);
-      const target = "title" in chat && chat.title ? chat.title : String(chat.id);
+        member.data.status === "creator" ||
+        (member.data.status === "administrator" && member.data.can_post_messages === true);
+      const target = chat.data.title ? chat.data.title : String(chat.data.id);
       if (!canPost) {
         return {
           ok: false,
           reason: `The bot cannot post to ${target}: make it an admin with "Post Messages"`,
         };
       }
-      return { ok: true, account: `@${me.username ?? me.id}`, target };
+      return { ok: true, account: `@${me.data.username ?? me.data.id}`, target };
     } catch (error) {
       if (error instanceof PermanentPublishError || error instanceof TransientPublishError) {
         return { ok: false, reason: error.message };

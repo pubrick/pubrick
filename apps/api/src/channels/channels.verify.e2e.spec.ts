@@ -11,21 +11,41 @@ describe.skipIf(!url)("channels verify e2e", () => {
   let telegram: Server;
   const telegramCalls: string[] = [];
 
+  // Sentinel chat id that makes the fake server return a malformed (but
+  // envelope-valid) getChat response, so a single test can exercise the
+  // "adapter misbehaves" path without disturbing the default fixtures used
+  // by every other test.
+  const MALFORMED_GET_CHAT_CHAT_ID = "-999999999999";
+
   beforeAll(async () => {
     telegram = createServer((req, res) => {
       telegramCalls.push(req.url ?? "");
       const method = (req.url ?? "").split("/").pop();
-      const bodies: Record<string, unknown> = {
-        getMe: { ok: true, result: { id: 42, username: "my_bot" } },
-        getChat: { ok: true, result: { id: -1001234567890, type: "channel", title: "My Channel" } },
-        getChatMember: { ok: true, result: { status: "administrator", can_post_messages: true } },
-      };
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify(
-          bodies[method ?? ""] ?? { ok: false, error_code: 400, description: "unknown" },
-        ),
-      );
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        let chatId: string | undefined;
+        try {
+          chatId = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}").chat_id;
+        } catch {
+          chatId = undefined;
+        }
+
+        const bodies: Record<string, unknown> = {
+          getMe: { ok: true, result: { id: 42, username: "my_bot" } },
+          getChat:
+            chatId === MALFORMED_GET_CHAT_CHAT_ID
+              ? { ok: true, result: null }
+              : { ok: true, result: { id: -1001234567890, type: "channel", title: "My Channel" } },
+          getChatMember: { ok: true, result: { status: "administrator", can_post_messages: true } },
+        };
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify(
+            bodies[method ?? ""] ?? { ok: false, error_code: 400, description: "unknown" },
+          ),
+        );
+      });
     });
     await new Promise<void>((resolve) => telegram.listen(0, resolve));
     const port = (telegram.address() as { port: number }).port;
@@ -83,6 +103,25 @@ describe.skipIf(!url)("channels verify e2e", () => {
     expect(result.body).toEqual({ ok: true, account: "@my_bot", target: "My Channel" });
     expect(JSON.stringify(result.body)).not.toContain("123:abc");
     expect(telegramCalls.some((u) => u.includes("getChatMember"))).toBe(true);
+  });
+
+  it("answers 200 with ok:false, not a 500, when the adapter gets a malformed platform response", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Malformed",
+        credentials: { botToken: "123:abc", chatId: MALFORMED_GET_CHAT_CHAT_ID },
+      })
+      .expect(201);
+
+    const result = await agent.post(`/api/channels/${channel.body.id}/test`).send({}).expect(200);
+    expect(result.body.ok).toBe(false);
+    expect(typeof result.body.reason).toBe("string");
+    expect(JSON.stringify(result.body)).not.toContain("123:abc");
   });
 
   it("404s for another organization's channel", async () => {

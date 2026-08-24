@@ -81,6 +81,16 @@ export class ChannelsRepository {
     if (!parsed.success)
       return { ok: false, reason: "Stored credentials are missing required fields" };
 
-    return publisher.verify(parsed.data, { baseUrl: env.TELEGRAM_API_BASE_URL });
+    // Defense in depth: a failed connection test is a result, never a 5xx.
+    // The adapter (e.g. `telegramPublisher.verify`) is expected to classify
+    // every failure itself and never throw, but this endpoint is the first
+    // live caller of `publisher.verify()` for any given platform, so an
+    // adapter bug or an unanticipated response shape must not escape as a
+    // raw exception and become an HTTP 500 here.
+    try {
+      return await publisher.verify(parsed.data, { baseUrl: env.TELEGRAM_API_BASE_URL });
+    } catch {
+      return { ok: false, reason: "Connection test failed unexpectedly" };
+    }
   }
 }
