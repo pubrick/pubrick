@@ -1,6 +1,7 @@
 /**
- * Pubrick wordmark, inlined so the ink follows `currentColor` and the two
- * knock-out slivers follow the page ground — one file works on light and dark.
+ * Pubrick wordmark, inlined so the ink follows `currentColor` — one component
+ * works on light and dark. Only two colours are ever painted (ink and brick),
+ * so the wordmark is background-independent.
  * Source of truth for the artwork: /assets/logo.svg at the repo root.
  */
 export function Logo({ width = 260, title = "Pubrick" }: { width?: number; title?: string }) {
@@ -61,14 +62,6 @@ export function Logo({ width = 260, title = "Pubrick" }: { width?: number; title
       <path
         fill="currentColor"
         d="M1761.93 469.201C1792.7 468.564 1825.81 469.181 1856.78 469.251C1856.75 482.874 1859.02 545.657 1856.34 554.643C1824.74 554.831 1793.13 554.858 1761.53 554.722L1761.18 501.619C1761.13 492.941 1760.71 477.271 1761.93 469.201Z"
-      />
-      <path
-        fill="var(--color-bg, #F5F6F7)"
-        d="M1609.44 737.692C1611.57 744.755 1609.04 781.181 1609.07 792.232C1609.16 827.657 1609.21 863.317 1609.51 898.784C1609.56 904.839 1610.55 930.582 1608.95 933.971C1608.15 934.221 1606.72 934.731 1605.95 934.835C1604.29 923.624 1604.5 884.461 1605.16 873.114C1607.45 833.685 1599.64 774.513 1609.44 737.692Z"
-      />
-      <path
-        fill="var(--color-bg, #F5F6F7)"
-        d="M354.943 1065.67C353.561 1060.23 354.23 1034.68 354.295 1027.27L354.79 956.847C354.868 938.338 354.69 919.226 354.966 900.696C354.996 898.67 355.107 899.047 356.395 897.976L359.295 899.146C357.816 904.488 358.403 933.139 358.412 940.42L358.484 1027.56C358.456 1036.03 357.384 1057.2 357.915 1064.01C356.107 1065.63 357.108 1065.18 354.943 1065.67Z"
       />
     </svg>
   );
