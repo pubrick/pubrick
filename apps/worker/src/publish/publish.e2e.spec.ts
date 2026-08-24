@@ -1,0 +1,247 @@
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const url = process.env.TEST_DATABASE_URL;
+
+// Type-only: avoids importing anything under "./publish.repository" / "../queue.service"
+// (both eventually import "../env", validated/connected eagerly at module load) before
+// beforeAll() below has set DATABASE_URL/TELEGRAM_API_BASE_URL. Same reasoning as
+// "./publish.repository.spec.ts" and "apps/api/src/queue/queue.service.spec.ts".
+type PublishRepositoryCtor = typeof import("./publish.repository").PublishRepository;
+type PublishServiceCtor = typeof import("./publish.service").PublishService;
+type QueueServiceCtor = typeof import("../queue.service").QueueService;
+type PgBossCtor = typeof import("pg-boss").PgBoss;
+type PgBossInstance = InstanceType<PgBossCtor>;
+type Schema = typeof import("@pubrick/db").schema;
+type Db = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"];
+type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
+
+type FakeTelegramResponse = { status: number; body: unknown };
+
+/**
+ * Task 5's own unit tests mock PublishRepository entirely, so nothing before this
+ * spec ever drove a job through the REAL machinery: a real pg-boss queue created by
+ * QueueService.registerAll(), a real PublishRepository hitting Postgres, and a real
+ * (fake, but HTTP) Telegram on the other end of publisher.publish()'s fetch. Data is
+ * seeded directly through the db, exactly like the api's own approve() would leave it
+ * (org/brand/channel/content item/adaptation in "queued"), and the job is enqueued in
+ * the same shape "{ adaptationId, orgId }" the api's QueueService.enqueuePublish sends.
+ */
+describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", () => {
+  let db: Db;
+  let pool: Pool;
+  let workerPool: Pool;
+  let schema: Schema;
+  let eq: typeof import("drizzle-orm").eq;
+  let boss: PgBossInstance;
+  let server: http.Server;
+  let orgId: string;
+  let brandId: string;
+  const fakeResponses = new Map<string, FakeTelegramResponse>();
+
+  beforeAll(async () => {
+    // Fake Telegram: a real HTTP server (not a mocked fetch) so the worker's own
+    // network call — env.TELEGRAM_API_BASE_URL, set below — is genuinely exercised.
+    // Keyed by chat_id so the two scenarios below (different channels, different
+    // chat ids) can share one server instance for the whole describe block.
+    server = http.createServer((req, res) => {
+      if (req.method !== "POST" || !req.url?.endsWith("/sendMessage")) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error_code: 404, description: "not found" }));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        let chatId = "";
+        try {
+          const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            chat_id?: unknown;
+          };
+          chatId = String(payload.chat_id);
+        } catch {
+          // Falls through to "no fake response configured" below.
+        }
+        const response = fakeResponses.get(chatId) ?? {
+          status: 500,
+          body: {
+            ok: false,
+            error_code: 500,
+            description: `fake telegram: no response configured for chat ${chatId}`,
+          },
+        };
+        res.writeHead(response.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(response.body));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+
+    // Env + migrations BEFORE any dynamic import that reads env at module load.
+    process.env.DATABASE_URL = url as string;
+    process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    process.env.TELEGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
+
+    const dbModule = await import("@pubrick/db");
+    schema = dbModule.schema;
+    await dbModule.runMigrations(url as string);
+    ({ db, pool } = dbModule.createDb(url as string));
+    ({ eq } = await import("drizzle-orm"));
+
+    const { PgBoss } = await import("pg-boss");
+    boss = new (PgBoss as PgBossCtor)(url as string);
+    boss.on("error", (err: Error) => console.error("pg-boss error (publish.e2e.spec)", err));
+    await boss.start();
+
+    // The real worker wiring: PublishRepository -> real Postgres, PublishService with
+    // its DEFAULT publisher lookup (getPublisher, so "telegram" resolves to the real
+    // telegramPublisher adapter) and its DEFAULT baseUrl (env.TELEGRAM_API_BASE_URL,
+    // which now points at the fake server above), registered the same way main.ts does.
+    const { PublishRepository } = (await import("./publish.repository")) as {
+      PublishRepository: PublishRepositoryCtor;
+    };
+    const { PublishService } = (await import("./publish.service")) as {
+      PublishService: PublishServiceCtor;
+    };
+    const { QueueService } = (await import("../queue.service")) as {
+      QueueService: QueueServiceCtor;
+    };
+    const repo = new PublishRepository();
+    const service = new PublishService(repo);
+    const queueService = new QueueService(service);
+    await queueService.registerAll(boss);
+
+    // "../db" is the worker's own module-level pool (imported transitively by
+    // PublishRepository above); grab a handle so afterAll can close it too.
+    workerPool = ((await import("../db")) as { pool: Pool }).pool;
+
+    orgId = `publish-e2e-org-${Date.now()}`;
+    await db.insert(schema.organization).values({
+      id: orgId,
+      name: "Publish E2E Org",
+      slug: `publish-e2e-${Date.now()}`,
+      createdAt: new Date(),
+    });
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Brand" })
+      .returning({ id: schema.brands.id });
+    brandId = brand?.id as string;
+  }, 30_000);
+
+  afterAll(async () => {
+    await boss?.stop({ graceful: false, timeout: 5_000 });
+    await pool?.end();
+    await workerPool?.end();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  async function seedQueuedAdaptation(
+    chatId: string,
+  ): Promise<{ channelId: string; adaptationId: string }> {
+    const { encryptJson } = await import("@pubrick/shared");
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name: "Chan",
+        credentialsEncrypted: encryptJson(
+          { botToken: "123:abc", chatId },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    const channelId = channel?.id as string;
+
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Hello from the publish e2e test" })
+      .returning({ id: schema.contentItems.id });
+    const itemId = item?.id as string;
+
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({ orgId, contentItemId: itemId, channelId, status: "queued" })
+      .returning({ id: schema.adaptations.id });
+    return { channelId, adaptationId: adaptation?.id as string };
+  }
+
+  /** Hard 20s timeout: a hang here must fail loudly, never block the suite. */
+  async function waitUntilLeftQueued(
+    adaptationId: string,
+  ): Promise<typeof schema.adaptations.$inferSelect> {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      if (row && row.status !== "queued" && row.status !== "publishing") return row;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error(
+      `Timed out after 20s waiting for adaptation ${adaptationId} to leave queued/publishing`,
+    );
+  }
+
+  async function publicationFor(adaptationId: string) {
+    const [row] = await db
+      .select()
+      .from(schema.publications)
+      .where(eq(schema.publications.adaptationId, adaptationId));
+    return row;
+  }
+
+  it(
+    "publishes a queued adaptation and stores the message link",
+    async () => {
+      const chatId = `-100${Date.now()}1`;
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: 4711, chat: { id: Number(chatId), username: "mychannel" } },
+        },
+      });
+      const { adaptationId } = await seedQueuedAdaptation(chatId);
+
+      // Same job shape the api's QueueService.enqueuePublish sends.
+      const { PUBLISH_QUEUE } = await import("../queue.service");
+      await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+
+      const adaptation = await waitUntilLeftQueued(adaptationId);
+      expect(adaptation.status).toBe("published");
+
+      const publication = await publicationFor(adaptationId);
+      expect(publication).toMatchObject({ status: "published", externalId: "4711" });
+      expect(publication?.externalUrl).toBe("https://t.me/mychannel/4711");
+    },
+    25_000,
+  );
+
+  it(
+    "marks a permanently rejected post failed without retrying",
+    async () => {
+      const chatId = `-100${Date.now()}2`;
+      fakeResponses.set(chatId, {
+        status: 403,
+        body: { ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" },
+      });
+      const { adaptationId } = await seedQueuedAdaptation(chatId);
+
+      const { PUBLISH_QUEUE } = await import("../queue.service");
+      await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+
+      const adaptation = await waitUntilLeftQueued(adaptationId);
+      expect(adaptation.status).toBe("failed");
+      // markPublishing bumped attempt_count to 1 before the send; the 403 is
+      // permanent, so PublishService returns normally instead of throwing, and
+      // pg-boss never retries the job — attempt_count must stay at exactly 1.
+      expect(adaptation.attemptCount).toBe(1);
+    },
+    25_000,
+  );
+});
