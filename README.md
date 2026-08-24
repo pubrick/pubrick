@@ -44,16 +44,17 @@ Requires Docker with Compose v2.
 git clone https://github.com/pubrick/pubrick && cd pubrick
 cp .env.example .env
 
-# Generate both secrets BEFORE starting — compose has no fallback defaults and
-# refuses to boot without them. Use a fresh value for each:
-echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)" >> .env
-echo "APP_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
+# Generate two separate secrets and paste them into .env, replacing the
+# placeholder values of BETTER_AUTH_SECRET and APP_ENCRYPTION_KEY:
+openssl rand -base64 32
+openssl rand -base64 32
 
-# Then edit .env: drop the two REPLACE_ME_… placeholder lines that came from
-# .env.example, and set a real POSTGRES_PASSWORD.
-
+# Set POSTGRES_PASSWORD in .env too, then start:
 docker compose up -d
 ```
+
+Compose ships no fallback secrets: it refuses to start until those values are
+real, rather than booting with a key that is public in this repository.
 
 Web: http://localhost:3000 · API health: http://localhost:3001/api/health
 

@@ -11,13 +11,13 @@
 git clone https://github.com/pubrick/pubrick && cd pubrick
 cp .env.example .env
 
-# Generate the two secrets BEFORE starting anything — compose refuses to start
-# without them (there are no fallback defaults). Use a fresh value for each:
-echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)" >> .env
-echo "APP_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
-# then remove the REPLACE_ME_… placeholder lines copied from .env.example,
-# and set a real POSTGRES_PASSWORD.
+# Generate two separate secrets and paste each into .env, replacing the
+# placeholder values of BETTER_AUTH_SECRET and APP_ENCRYPTION_KEY.
+# Compose has no fallback defaults and refuses to start until both are real.
+openssl rand -base64 32
+openssl rand -base64 32
 
+# Set POSTGRES_PASSWORD in .env as well, then start:
 docker compose up -d
 ```
 
