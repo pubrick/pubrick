@@ -38,6 +38,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   let server: http.Server;
   let orgId: string;
   let brandId: string;
+  let PUBLISH_QUEUE: string;
   const fakeResponses = new Map<string, FakeTelegramResponse>();
 
   beforeAll(async () => {
@@ -104,13 +105,15 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     const { PublishService } = (await import("./publish.service")) as {
       PublishService: PublishServiceCtor;
     };
-    const { QueueService } = (await import("../queue.service")) as {
+    const queueModule = (await import("../queue.service")) as {
       QueueService: QueueServiceCtor;
+      PUBLISH_QUEUE: string;
     };
     const repo = new PublishRepository();
     const service = new PublishService(repo);
-    const queueService = new QueueService(service);
+    const queueService = new queueModule.QueueService(service);
     await queueService.registerAll(boss);
+    PUBLISH_QUEUE = queueModule.PUBLISH_QUEUE;
 
     // "../db" is the worker's own module-level pool (imported transitively by
     // PublishRepository above); grab a handle so afterAll can close it too.
@@ -137,6 +140,9 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  // Rows seeded below are never cleaned up — safe by convention, same as the sibling
+  // specs (publish.repository.spec.ts, queue.service.spec.ts): every run targets a
+  // fresh, disposable database, never a long-lived shared one.
   async function seedQueuedAdaptation(
     chatId: string,
   ): Promise<{ channelId: string; adaptationId: string }> {
@@ -195,6 +201,27 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     return row;
   }
 
+  /**
+   * Asserts the pg-boss JOB's own terminal state, not just the adaptation row.
+   * markFailed's write and a rethrow that schedules a pg-boss retry can both
+   * happen before the row is ever read as "failed" — the retry itself lands
+   * ~30s+ later (retryDelay 30, backoff on), far past any reasonable row-poll
+   * deadline, so a row-only assertion can NEVER observe whether a retry was
+   * scheduled. The job's `state` flips out of "created"/"active" into either
+   * "completed" or "retry" the instant pg-boss's work() wrapper sees the
+   * handler's promise settle — no need to wait out the retry delay itself.
+   * Hard 20s timeout: a hang here must fail loudly, never block the suite.
+   */
+  async function waitForJobState(jobId: string) {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const job = await boss.getJobById(PUBLISH_QUEUE, jobId);
+      if (job && job.state !== "created" && job.state !== "active") return job;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error(`Timed out after 20s waiting for job ${jobId} to leave created/active`);
+  }
+
   it(
     "publishes a queued adaptation and stores the message link",
     async () => {
@@ -209,8 +236,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       const { adaptationId } = await seedQueuedAdaptation(chatId);
 
       // Same job shape the api's QueueService.enqueuePublish sends.
-      const { PUBLISH_QUEUE } = await import("../queue.service");
-      await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+      const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
       const adaptation = await waitUntilLeftQueued(adaptationId);
       expect(adaptation.status).toBe("published");
@@ -218,6 +245,13 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       const publication = await publicationFor(adaptationId);
       expect(publication).toMatchObject({ status: "published", externalId: "4711" });
       expect(publication?.externalUrl).toBe("https://t.me/mychannel/4711");
+
+      // A delivered post whose pg-boss job ended up in "retry" instead of
+      // "completed" would resend on the next delivery — exactly the
+      // duplicate-post scenario Task 5's recordPublished/handle() were
+      // hardened against. Assert the job itself, not just the row.
+      const job = await waitForJobState(jobId);
+      expect(job.state).toBe("completed");
     },
     25_000,
   );
@@ -232,8 +266,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       });
       const { adaptationId } = await seedQueuedAdaptation(chatId);
 
-      const { PUBLISH_QUEUE } = await import("../queue.service");
-      await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+      const jobId = await boss.send(PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
 
       const adaptation = await waitUntilLeftQueued(adaptationId);
       expect(adaptation.status).toBe("failed");
@@ -241,6 +275,14 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       // permanent, so PublishService returns normally instead of throwing, and
       // pg-boss never retries the job — attempt_count must stay at exactly 1.
       expect(adaptation.attemptCount).toBe(1);
+
+      // The row alone can't prove "no retry happened": it only shows what
+      // markFailed wrote, and pg-boss's retry (if handle() had rethrown after
+      // safeMarkFailed) lands ~30s+ later — far past this test's poll window.
+      // Assert the JOB's own terminal state directly instead: "completed"
+      // (handle() returned normally) never "retry" (handle() rethrew).
+      const job = await waitForJobState(jobId);
+      expect(job.state).toBe("completed");
     },
     25_000,
   );
