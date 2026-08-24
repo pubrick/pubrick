@@ -1,0 +1,180 @@
+import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const url = process.env.TEST_DATABASE_URL;
+
+describe.skipIf(!url)("content e2e", () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    process.env.DATABASE_URL = url as string;
+    process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
+    process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    const { runMigrations } = await import("@pubrick/db");
+    await runMigrations(url as string);
+    const { AppModule } = await import("../app.module");
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication({ bodyParser: false });
+    app.setGlobalPrefix("api");
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  async function orgAgent(): Promise<request.Agent> {
+    const agent = request.agent(app.getHttpServer());
+    const uniq = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+    await agent
+      .post("/api/auth/sign-up/email")
+      .send({ email: `u${uniq}@example.com`, password: "password1234", name: "U" })
+      .expect(200);
+    const created = await agent
+      .post("/api/auth/organization/create")
+      .send({ name: `Org ${uniq}`, slug: `org-${uniq}` })
+      .expect(200);
+    await agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: created.body.id })
+      .expect(200);
+    return agent;
+  }
+
+  async function brandWithChannel(agent: request.Agent) {
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    return { brandId: brand.body.id as string, channelId: channel.body.id as string };
+  }
+
+  it("creates a draft with one adaptation per channel", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Hello world", channelIds: [channelId] })
+      .expect(201);
+
+    expect(created.body.status).toBe("draft");
+    expect(created.body.adaptations).toHaveLength(1);
+    expect(created.body.adaptations[0]).toMatchObject({ channelId, status: "pending" });
+  });
+
+  it("rejects a channel that belongs to another brand", async () => {
+    const agent = await orgAgent();
+    const { channelId } = await brandWithChannel(agent);
+    const other = await agent.post("/api/brands").send({ name: "Other" }).expect(201);
+    await agent
+      .post("/api/content")
+      .send({ brandId: other.body.id, body: "x", channelIds: [channelId] })
+      .expect(404);
+  });
+
+  it("edits the item body and a per-channel override", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Original", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id;
+
+    await agent.patch(`/api/content/${created.body.id}`).send({ body: "Edited" }).expect(200);
+    const updated = await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+      .send({ body: "Channel-specific" })
+      .expect(200);
+    expect(updated.body.body).toBe("Channel-specific");
+  });
+
+  it("approves immediately: item approved, adaptation queued", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Ship it", channelIds: [channelId] })
+      .expect(201);
+
+    const approved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(200);
+    expect(approved.body.status).toBe("approved");
+    expect(approved.body.adaptations[0].status).toBe("queued");
+  });
+
+  it("approves with a schedule: adaptation scheduled with the timestamp", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Later", channelIds: [channelId] })
+      .expect(201);
+    const when = new Date(Date.now() + 3_600_000).toISOString();
+
+    const approved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: when })
+      .expect(200);
+    expect(approved.body.adaptations[0].status).toBe("scheduled");
+    expect(new Date(approved.body.adaptations[0].scheduledAt).toISOString()).toBe(when);
+  });
+
+  it("enqueues exactly one publish job per adaptation, even when approve is called twice", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Once", channelIds: [channelId] })
+      .expect(201);
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${created.body.adaptations[0].id}'`,
+    );
+    await pool.end();
+    expect((jobs.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("rejects a draft", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "No", channelIds: [channelId] })
+      .expect(201);
+    const rejected = await agent
+      .post(`/api/content/${created.body.id}/reject`)
+      .send({})
+      .expect(200);
+    expect(rejected.body.status).toBe("rejected");
+  });
+
+  it("isolates content between organizations", async () => {
+    const a = await orgAgent();
+    const b = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(a);
+    const created = await a
+      .post("/api/content")
+      .send({ brandId, body: "Mine", channelIds: [channelId] })
+      .expect(201);
+
+    expect((await b.get("/api/content").expect(200)).body).toHaveLength(0);
+    await b.get(`/api/content/${created.body.id}`).expect(404);
+    await b.post(`/api/content/${created.body.id}/approve`).send({}).expect(404);
+  });
+});
