@@ -42,6 +42,9 @@ services:
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
+      # Same value as the api's — it decrypts channel credentials the api encrypted.
+      # No fallback on purpose, same reasoning as the api's: see that service above.
+      APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:?set it in .env - generate one with `openssl rand -base64 32`, see .env.example}"
     depends_on:
       postgres: { condition: service_healthy }
       api: { condition: service_healthy }   # api healthcheck passes only after migrations ran (listen comes after runMigrations)

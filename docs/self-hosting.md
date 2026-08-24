@@ -36,6 +36,26 @@ origin.
 
 Database migrations run automatically when the api container starts.
 
+## Connect a Telegram channel
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, and
+   follow the prompts. BotFather gives you a bot token — a string like
+   `123456789:AAH...`.
+2. Add the bot to the Telegram channel you want to publish to, then promote it
+   to admin with the **Post Messages** permission (Channel settings →
+   Administrators → Add Admin).
+3. Get the channel's chat id. The simplest way: forward any message from the
+   channel to [@userinfobot](https://t.me/userinfobot) — for public channels
+   you can also use `@channelusername` directly as the chat id.
+4. In Pubrick, open a brand → add a channel → platform **telegram** — paste
+   the bot token and the chat id.
+5. Press **Test connection**. It calls Telegram's `getMe`/`getChat`/
+   `getChatMember` to confirm the token is valid and the bot can post to that
+   chat, without sending any message. A failure here (bad token, bot not an
+   admin) is reported inline — fix it before approving content for that
+   channel, since the same failure will otherwise surface later as a `failed`
+   adaptation once the worker attempts the real publish.
+
 ## Upgrade
 
 ```bash

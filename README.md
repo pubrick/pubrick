@@ -23,9 +23,10 @@ articles with a team of AI agents — text and images — queues everything for
 **your** approval, publishes on schedule, and learns from what performs.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
-brands, and channels with credentials encrypted at rest. Next up: the publishing
-pipeline (sources → drafts → approval → scheduled delivery). Features land phase
-by phase — see [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
+brands, and channels with credentials encrypted at rest, plus content drafts,
+a review queue with approval/rejection/overrides, and publishing to Telegram.
+Next up: AI-drafted content from watched sources. Features land phase by
+phase — see [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
 ## Why Pubrick
 

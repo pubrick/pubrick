@@ -12,7 +12,12 @@
     "typecheck": { "dependsOn": ["^build"] },
     "test": {
       "dependsOn": ["^build"],
-      "env": ["TEST_DATABASE_URL", "BETTER_AUTH_SECRET", "APP_ENCRYPTION_KEY"]
+      "env": [
+        "TEST_DATABASE_URL",
+        "BETTER_AUTH_SECRET",
+        "APP_ENCRYPTION_KEY",
+        "TELEGRAM_API_BASE_URL"
+      ]
     }
   }
 }

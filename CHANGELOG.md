@@ -10,7 +10,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Organizations: create/set-active, org-scoped tenancy (`org_id` on every tenant table).
 - Brands: org-scoped CRUD with zod validation.
 - Channels: org-scoped CRUD with AES-GCM encrypted credentials (`encryptJson`/`decryptJson`), never returned by any endpoint.
-- Env wiring for auth/crypto through turbo, CI, docker compose, and `init.sh`; self-hosting docs for `BETTER_AUTH_SECRET` / `APP_ENCRYPTION_KEY` / `PUBLIC_ORIGIN`.
+- Channel connection test endpoint: verifies Telegram credentials (`getMe`/`getChat`/`getChatMember`) without publishing anything.
+- Content: drafts with per-channel adaptations, a review queue (approve/reject, immediate or scheduled), and body/adaptation overrides.
+- Publishing: a Telegram adapter and a pg-boss-backed worker that publishes approved adaptations, classifying platform errors as permanent (recorded as `failed`, job completes) or transient (rethrown for pg-boss to retry), plus a DLQ consumer that terminates adaptations whose retries are exhausted.
+- Env wiring for auth/crypto/publishing through turbo, CI, docker compose, and `init.sh`; self-hosting docs for `BETTER_AUTH_SECRET` / `APP_ENCRYPTION_KEY` / `PUBLIC_ORIGIN` and connecting a Telegram channel.
 - Brand identity: wordmark (light/dark), brick mark and 1280×640 social card in `assets/`; README header with scheme-aware logo and badges; web favicon (`app/icon.svg`), inline `Logo` component on the landing page, and the palette as CSS custom properties in `app/globals.css`.
 
 ### Changed

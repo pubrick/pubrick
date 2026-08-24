@@ -33,6 +33,13 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
   `@OrgId()`. Channel credentials only via `encryptJson`/`decryptJson` — never
   returned by any endpoint.
 - Enqueue jobs in the same transaction as the domain write.
+- Publishing: a permanent platform error (bad credentials, content rejected by
+  the platform, no adapter for the platform) is recorded on the adaptation and
+  the job completes — it must never be rethrown, or pg-boss will retry a job
+  that can never succeed. Only a transient error (rate limit, timeout, 5xx) is
+  rethrown so pg-boss retries it; once a publish call has actually succeeded,
+  the handler must never throw again, since a retry at that point would post a
+  duplicate.
 - Conventional commits. One logical change per commit.
 - TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.
 
