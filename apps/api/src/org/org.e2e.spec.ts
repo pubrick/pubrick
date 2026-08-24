@@ -1,5 +1,7 @@
 import { Controller, Get, type INestApplication, UseGuards } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { createDb, schema } from "@pubrick/db";
+import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -74,5 +76,26 @@ describe.skipIf(!url)("org scoping e2e", () => {
 
   it("401s without a session", async () => {
     await request(app.getHttpServer()).get("/api/org-probe").expect(401);
+  });
+
+  it("403s again once membership is revoked, even though activeOrganizationId is still set", async () => {
+    const agent = await signUpAgent();
+    const slug = `acme-${Date.now()}-revoke`;
+    const created = await agent
+      .post("/api/auth/organization/create")
+      .send({ name: "Acme Revoke", slug })
+      .expect(200);
+    const orgId = created.body.id as string;
+    await agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: orgId })
+      .expect(200);
+    await agent.get("/api/org-probe").expect(200);
+
+    const { db, pool } = createDb(url as string);
+    await db.delete(schema.member).where(eq(schema.member.organizationId, orgId));
+    await pool.end();
+
+    await agent.get("/api/org-probe").expect(403);
   });
 });
