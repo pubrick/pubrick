@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { AdaptationUpdate, ContentCreate, ContentUpdate } from "@pubrick/shared";
 import { and, eq, inArray } from "drizzle-orm";
@@ -14,6 +14,9 @@ const ITEM_COLUMNS = {
   createdAt: schema.contentItems.createdAt,
   updatedAt: schema.contentItems.updatedAt,
 };
+
+/** Validated (not `as never`-cast) against this at the API boundary in `list()`. */
+type ContentStatusValue = (typeof schema.CONTENT_STATUSES)[number];
 
 const ADAPTATION_COLUMNS = {
   id: schema.adaptations.id,
@@ -43,8 +46,18 @@ export class ContentRepository {
   }
 
   async list(orgId: string, status?: string) {
+    if (status !== undefined && !(schema.CONTENT_STATUSES as readonly string[]).includes(status)) {
+      throw new BadRequestException(
+        `Unknown status: ${status}. Expected one of: ${schema.CONTENT_STATUSES.join(", ")}`,
+      );
+    }
     const where = status
-      ? and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.status, status as never))
+      ? and(
+          eq(schema.contentItems.orgId, orgId),
+          // Safe: membership just verified above, so the widened `string` really is one
+          // of the literal statuses drizzle's column type expects.
+          eq(schema.contentItems.status, status as ContentStatusValue),
+        )
       : eq(schema.contentItems.orgId, orgId);
     const items = await db.select(ITEM_COLUMNS).from(schema.contentItems).where(where);
     return Promise.all(
@@ -149,7 +162,13 @@ export class ContentRepository {
           );
         await this.queue.enqueuePublish(
           tx,
-          { id: adaptation.id, orgId, channelId: adaptation.channelId },
+          {
+            id: adaptation.id,
+            orgId,
+            channelId: adaptation.channelId,
+            // CURRENT attempt count (before this attempt) — see publishJobId's contract.
+            attemptCount: adaptation.attemptCount,
+          },
           scheduledAt,
         );
       }

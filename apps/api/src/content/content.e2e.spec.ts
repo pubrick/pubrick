@@ -148,6 +148,56 @@ describe.skipIf(!url)("content e2e", () => {
     );
     await pool.end();
     expect((jobs.rows[0] as { n: number }).n).toBe(1);
+    // Note: this does NOT exercise the pg-boss id-collision/dedup path. After the
+    // first approve the adaptation's status is "queued", so approve()'s own
+    // `status === "pending" || status === "failed"` filter excludes it from
+    // `targets` on the second call — enqueuePublish() is simply never invoked
+    // again. The count staying at 1 here is a consequence of that filter, not
+    // of publishJobId producing the same id twice. The re-approve-after-failure
+    // test below is what actually drives two calls into enqueuePublish() for
+    // the same adaptation and checks the id derivation.
+  });
+
+  it("re-approves a failed adaptation: attemptCount makes the retry's job id fresh, so it actually enqueues", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Retry me", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    // First approve: attemptCount is 0, enqueues job id uuidv5(`${id}:0`, ...).
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    // Simulate what the worker does after a failed publish attempt: bump
+    // attemptCount and flip the adaptation back to "failed" so approve()'s
+    // targets filter picks it up again.
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', attempt_count = 1 WHERE id = '${adaptationId}'`,
+      );
+      await pool.end();
+    }
+
+    // Second approve: attemptCount is now 1, so publishJobId derives a DIFFERENT
+    // id than the first attempt — send() must not be suppressed as a duplicate.
+    const reApproved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(200);
+    expect(reApproved.body.adaptations[0].status).toBe("queued");
+
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+    );
+    await pool.end();
+    // Two distinct job rows: one per attempt, proving the retry was not silently
+    // swallowed by pg-boss's ON CONFLICT DO NOTHING on a stale job id.
+    expect((jobs.rows[0] as { n: number }).n).toBe(2);
   });
 
   it("rejects a draft", async () => {
