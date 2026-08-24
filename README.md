@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The open-source AI content factory.</strong></p>
 
-<p align="center"><em>Postiz schedules your content. Pubrick manufactures it.</em></p>
+<p align="center"><em>From your sources to published posts — with you in the loop.</em></p>
 
 <p align="center">
   <a href="https://github.com/pubrick/pubrick/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pubrick/pubrick/actions/workflows/ci.yml/badge.svg"></a>

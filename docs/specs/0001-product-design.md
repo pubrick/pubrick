@@ -3,7 +3,7 @@
 **Date:** 2026-08-24
 **Status:** Living product design (imported from the origin repo at bootstrap)
 **Origin:** Extraction of the Content Factory module from Ozon-tools (atools) into a
-standalone open-source product. Full rewrite (inspired by) — the atools module
+standalone open-source product. Full rewrite — the atools module
 (~18k LOC backend, 101 endpoints, 22 `cf_*` tables, 14 screens) serves as a
 functional reference only. No data migration; atools drops the module entirely.
 
@@ -16,11 +16,13 @@ Telegram channels), drafts on-brand posts and articles with a team of AI agents
 (text + images), queues everything for human approval, publishes on schedule,
 and learns from what performs.
 
-- **Positioning:** *"Postiz schedules your content; Pubrick manufactures it."*
-  The closed loop — monitoring → multi-agent generation → human review →
-  publishing → analytics feedback — exists in no open-source product today
-  (verified against Postiz, Mixpost, Buffer, Hootsuite, SocialBee, Typefully,
-  Jasper, Copy.ai, SocialFlow, RSSHub/Huginn, SMMplanner/NovaPress).
+- **Positioning:** *"From your sources to published posts — with you in the
+  loop."* The closed loop — monitoring → multi-agent generation → human review
+  → publishing → analytics feedback — is what Pubrick delivers as one product.
+  A market survey (August 2026) of open-source and commercial tools in the
+  three adjacent categories — social schedulers, AI writing assistants, and
+  feed-monitoring infrastructure — found each covering one stage of that loop,
+  none the whole of it.
 - **Anti-slop stance is the brand:** nothing is published without a human
   decision (review queue, approval workflows) unless the owner explicitly
   enables autopilot. Brand knowledge (RAG) keeps output on-voice.
@@ -61,7 +63,7 @@ and learns from what performs.
 |---|---|---|
 | Monorepo | pnpm workspaces + Turborepo | apps: web / api / worker |
 | Frontend | Next.js 16 (UI only) | New design, Apple-style, user-friendly; advanced settings tucked away. **UI design is a separate brainstorming track.** |
-| API | **NestJS 11** | Owner's choice (Postiz/Twenty pattern): modular structure, DI, OpenAPI out of the box |
+| API | **NestJS 11** | Owner's choice: modular structure, DI, OpenAPI out of the box |
 | Worker | NestJS standalone app | Same DI context, separate container |
 | Queue | **pg-boss v12** (Postgres-only) | cron, delayed jobs, retries, singletons; behind a thin `packages/jobs` abstraction (upgrade path: Trigger.dev v4). Self-host = 4 containers, **no Redis required** |
 | DB | PostgreSQL 16 + pgvector, **Drizzle ORM** | native `vector` type, SQL migrations applied on container boot |
@@ -163,7 +165,7 @@ admin/settings (runtime flags, budget → usage ledger); notifications
    AI video generation (Veo) is roadmap-only. Early phase.
 3. **Roles + client approval links** — author/editor/admin roles per org;
    public share link for a draft so an external client can Approve/Comment
-   without an account (the Planable feature agencies pay for). P1/P3.
+   without an account — the approval workflow agencies pay for today. P1/P3.
 4. **Public API + webhooks + MCP server** — API keys, OpenAPI (free with
    NestJS), outgoing webhooks, MCP server over the public API ("my n8n/agent
    posts via Pubrick"). P3.
@@ -174,7 +176,7 @@ admin/settings (runtime flags, budget → usage ledger); notifications
 
 6. Bluesky + Mastodon + X adapters early (P1–P2 for Bluesky/Mastodon, X after).
 7. Brand onboarding wizard: website/social URL → AI derives voice, audience,
-   topics (Jasper-style time-to-value).
+   topics, to shorten time-to-value.
 8. Slot-based queue + best-time suggestions + per-channel timezones.
 9. Evergreen recycling (categories + scheduled re-publishing).
 10. Telegram approval bot (approve/reject/edit from phone) — showcase feature,
@@ -212,8 +214,9 @@ Mastra (Apache-2.0) is the documented fallback if requirements outgrow this.
 
 ## 6. Cloud vs self-host
 
-One repo, one image. Cloud mode activates by **presence of env keys** (Postiz
-pattern): no billing keys → self-hosted install runs unlimited, no plan gating.
+One repo, one image. Cloud mode activates by **presence of env keys** (a common
+open-core pattern): no billing keys → self-hosted install runs unlimited, no
+plan gating.
 `packages/billing` exposes a driver interface and no-ops cleanly when disabled.
 
 ⚠️ **Open question (jurisdiction, not tech):** Stripe/Polar do not serve
