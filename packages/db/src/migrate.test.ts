@@ -22,4 +22,14 @@ describe.skipIf(!url)("runMigrations", () => {
     await pool.end();
     expect(rows.rows).toHaveLength(7);
   });
+
+  it("creates brands and channels with org scoping columns", async () => {
+    await runMigrations(url as string);
+    const { db, pool } = createDb(url as string);
+    const cols = await db.execute(
+      "SELECT table_name, column_name FROM information_schema.columns WHERE table_name IN ('brands','channels') AND column_name = 'org_id'",
+    );
+    await pool.end();
+    expect(cols.rows).toHaveLength(2);
+  });
 });
