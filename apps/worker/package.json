@@ -1,0 +1,28 @@
+{
+  "name": "@pubrick/worker",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=dot",
+    "start": "node dist/main.cjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.1",
+    "@nestjs/core": "^11.2.1",
+    "@pubrick/shared": "workspace:*",
+    "pg-boss": "^12.28.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.1",
+    "@swc/core": "^1.16.1",
+    "@types/node": "^22.20.1",
+    "tsup": "^8.5.1",
+    "unplugin-swc": "^1.5.11",
+    "vitest": "^4.1.11"
+  }
+}
