@@ -1,6 +1,27 @@
 {
+  "Auth": {
+    "loginTitle": "Iniciar sesión",
+    "signupTitle": "Crea tu cuenta",
+    "name": "Nombre",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "loginAction": "Iniciar sesión",
+    "signupAction": "Registrarse",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
+  },
+  "Onboarding": {
+    "title": "Crea tu organización",
+    "subtitle": "Las marcas y los canales viven dentro de una organización. Podrás invitar a tu equipo más adelante.",
+    "orgName": "Nombre de la organización",
+    "create": "Crear organización",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
+  },
   "Landing": {
     "title": "Pubrick",
-    "tagline": "La fábrica de contenido con IA de código abierto: vigila tus fuentes, redacta contenido fiel a tu marca, espera tu aprobación y publica en todas partes."
+    "tagline": "La fábrica de contenido con IA de código abierto: vigila tus fuentes, redacta contenido fiel a tu marca, espera tu aprobación y publica en todas partes.",
+    "goToBrands": "Ir a marcas",
+    "signOut": "Cerrar sesión",
+    "login": "Iniciar sesión",
+    "signup": "Registrarse"
   }
 }

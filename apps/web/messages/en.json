@@ -1,6 +1,27 @@
 {
+  "Auth": {
+    "loginTitle": "Log in",
+    "signupTitle": "Create your account",
+    "name": "Name",
+    "email": "Email",
+    "password": "Password",
+    "loginAction": "Log in",
+    "signupAction": "Sign up",
+    "genericError": "Something went wrong. Please try again."
+  },
+  "Onboarding": {
+    "title": "Create your organization",
+    "subtitle": "Brands and channels live inside an organization. You can invite teammates later.",
+    "orgName": "Organization name",
+    "create": "Create organization",
+    "genericError": "Something went wrong. Please try again."
+  },
   "Landing": {
     "title": "Pubrick",
-    "tagline": "The open-source AI content factory: it watches your sources, drafts on-brand content, waits for your approval, and publishes everywhere."
+    "tagline": "The open-source AI content factory: it watches your sources, drafts on-brand content, waits for your approval, and publishes everywhere.",
+    "goToBrands": "Go to brands",
+    "signOut": "Sign out",
+    "login": "Log in",
+    "signup": "Sign up"
   }
 }
