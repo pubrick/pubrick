@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
+import { Logo } from "@/components/Logo";
 import { authClient } from "@/lib/auth-client";
 
 export default function LandingPage() {
@@ -11,7 +12,9 @@ export default function LandingPage() {
 
   return (
     <main style={{ fontFamily: "system-ui", padding: "4rem", maxWidth: 640 }}>
-      <h1>{t("title")}</h1>
+      <h1 style={{ margin: "0 0 1rem" }}>
+        <Logo width={280} title={t("title")} />
+      </h1>
       <p>{t("tagline")}</p>
       {isPending ? null : session ? (
         <p>

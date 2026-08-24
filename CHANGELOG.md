@@ -11,6 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Brands: org-scoped CRUD with zod validation.
 - Channels: org-scoped CRUD with AES-GCM encrypted credentials (`encryptJson`/`decryptJson`), never returned by any endpoint.
 - Env wiring for auth/crypto through turbo, CI, docker compose, and `init.sh`; self-hosting docs for `BETTER_AUTH_SECRET` / `APP_ENCRYPTION_KEY` / `PUBLIC_ORIGIN`.
+- Brand identity: wordmark (light/dark), brick mark and 1280×640 social card in `assets/`; README header with scheme-aware logo and badges; web favicon (`app/icon.svg`), inline `Logo` component on the landing page, and the palette as CSS custom properties in `app/globals.css`.
 
 ### Changed
 - Migrations run under a Postgres advisory lock, so parallel test workers and multiple api replicas can no longer race each other on a fresh database.

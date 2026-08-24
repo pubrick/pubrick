@@ -1,0 +1,33 @@
+/*
+ * Pubrick brand palette. Deliberately just tokens plus a readable default
+ * ground — the design system is a separate track and will build on these.
+ */
+:root {
+  --color-ink: #0f0f0f;
+  --color-brick: #e67131;
+  --color-paper: #f5f6f7;
+
+  /* Page ground, flipped by the OS colour scheme. */
+  --color-bg: var(--color-paper);
+  --color-fg: var(--color-ink);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: var(--color-ink);
+    --color-fg: var(--color-paper);
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* The UA default link blue fails contrast on the ink ground. */
+a {
+  color: var(--color-brick);
+}
