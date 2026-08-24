@@ -30,6 +30,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
   through package-level repositories (never inline SQL in controllers).
 - Enqueue jobs in the same transaction as the domain write.
 - Conventional commits. One logical change per commit.
+- TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.
 
 ## Verifying your work
 
