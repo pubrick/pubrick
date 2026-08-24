@@ -79,4 +79,19 @@ describe.skipIf(!url)("brands e2e", () => {
     await b.get(`/api/brands/${created.body.id}`).expect(404);
     await b.delete(`/api/brands/${created.body.id}`).expect(404);
   });
+
+  it("blocks cross-org PATCH and leaves the brand untouched", async () => {
+    const a = await orgAgent();
+    const b = await orgAgent();
+    const created = await a.post("/api/brands").send({ name: "Only A", voice: "calm" }).expect(201);
+
+    await b
+      .patch(`/api/brands/${created.body.id}`)
+      .send({ name: "Hijacked", voice: "loud" })
+      .expect(404);
+
+    const stillA = await a.get(`/api/brands/${created.body.id}`).expect(200);
+    expect(stillA.body.name).toBe("Only A");
+    expect(stillA.body.voice).toBe("calm");
+  });
 });

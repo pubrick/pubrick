@@ -25,3 +25,20 @@ into `import type { BrandsRepository }` in a Nest controller; with
 `overrides` scoped to `apps/api/src/**/*.ts` and `apps/worker/src/**/*.ts`
 (the two Nest apps with `emitDecoratorMetadata` on) — never let biome
 auto-fix touch import styles in those trees.
+
+## 2026-08-24 — integration suites must be verified against a FRESH database
+
+`pnpm test` was green locally and red on CI for anyone starting from an empty
+volume: four api e2e specs run in separate vitest workers and each calls
+`runMigrations()`, so on a database with nothing applied yet they raced on
+`CREATE EXTENSION vector` / `CREATE SCHEMA drizzle` / the migrations table and
+died with `duplicate key value violates unique constraint
+"pg_extension_name_index"`. On a warm database every migration is a no-op, so
+the race has no window and the suite passes — which is exactly why every
+per-task verification during the plan missed it. Root cause: concurrent
+migrators with no mutual exclusion (the same hazard as two api replicas booting
+together in production). Fixed at the root with `pg_advisory_lock` around
+`migrate()` in `packages/db/src/migrate.ts`. Rules: (1) any migration runner
+must hold an advisory lock; (2) verify integration suites against a database
+created moments ago, not the one left over from the last run — "it passed
+locally" is not evidence until the DB was fresh.

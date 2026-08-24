@@ -26,9 +26,12 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 ## Conventions
 
 - TS strict; no `any` without a comment explaining why.
-- Every tenant-owned table will carry `org_id NOT NULL`; all DB access goes
-  through package-level repositories (never inline SQL in controllers).
-- Org scoping: every tenant table has org_id; all access via repositories taking orgId first; controllers never touch db. Channel credentials only via encryptJson/decryptJson — never returned by any endpoint.
+- Org scoping: every tenant-owned table carries `org_id NOT NULL`; all DB access
+  goes through repositories whose every method takes `orgId` first (controllers
+  never touch `db`, never inline SQL). Repositories select an explicit column
+  allowlist, not `select()`. Org-scoped controllers use `ActiveOrgGuard` +
+  `@OrgId()`. Channel credentials only via `encryptJson`/`decryptJson` — never
+  returned by any endpoint.
 - Enqueue jobs in the same transaction as the domain write.
 - Conventional commits. One logical change per commit.
 - TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.

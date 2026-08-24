@@ -1,7 +1,14 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
-    "build": { "dependsOn": ["^build"], "outputs": ["dist/**", ".next/**"] },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**"],
+      // API_INTERNAL_URL is baked into the web build's /api rewrite; turbo's strict env
+      // mode strips anything not declared here, silently producing a localhost:3001
+      // destination inside the docker image.
+      "env": ["API_INTERNAL_URL"]
+    },
     "typecheck": { "dependsOn": ["^build"] },
     "test": {
       "dependsOn": ["^build"],

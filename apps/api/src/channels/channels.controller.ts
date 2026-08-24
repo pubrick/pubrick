@@ -21,7 +21,10 @@ export class ChannelsController {
   constructor(private readonly channels: ChannelsRepository) {}
 
   @Get()
-  list(@OrgId() orgId: string, @Query("brandId") brandId?: string) {
+  list(
+    @OrgId() orgId: string,
+    @Query("brandId", new ParseUUIDPipe({ optional: true })) brandId?: string,
+  ) {
     return this.channels.list(orgId, brandId);
   }
 

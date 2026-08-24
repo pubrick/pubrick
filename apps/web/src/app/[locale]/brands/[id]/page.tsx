@@ -8,14 +8,33 @@ import { api } from "@/lib/api";
 type Channel = { id: string; platform: string; name: string };
 type Brand = { id: string; name: string };
 
-const TELEGRAM_FIELDS = ["botToken", "chatId"] as const;
+/**
+ * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
+ * form asks for the right keys instead of a generic "token" for seven of eight
+ * platforms. Keep in sync with the publishers added in later plans.
+ */
+const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
+  telegram: ["botToken", "chatId"],
+  vk: ["accessToken", "groupId"],
+  dzen: ["token"],
+  vc_ru: ["token"],
+  max: ["token"],
+  bluesky: ["handle", "appPassword"],
+  mastodon: ["instanceUrl", "accessToken"],
+  x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],
+};
+
+/** Fields that are not secrets — everything else renders as type="password". */
+const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
+
+type PlatformId = (typeof PLATFORM_IDS)[number];
 
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
   const [brand, setBrand] = useState<Brand | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [platform, setPlatform] = useState<string>("telegram");
+  const [platform, setPlatform] = useState<PlatformId>("telegram");
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +71,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     load();
   }
 
-  const fields = platform === "telegram" ? TELEGRAM_FIELDS : ["token"];
+  const fields = PLATFORM_FIELDS[platform];
 
   return (
     <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
@@ -70,7 +89,15 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         ))}
       </ul>
       <form onSubmit={addChannel}>
-        <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
+        <select
+          value={platform}
+          onChange={(e) => {
+            setPlatform(e.target.value as PlatformId);
+            // Drop the previous platform's values: leftover keys would be submitted
+            // and encrypted alongside (or instead of) the ones this platform needs.
+            setCreds({});
+          }}
+        >
           {PLATFORM_IDS.map((p) => (
             <option key={p} value={p}>
               {p}
@@ -86,6 +113,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         {fields.map((f) => (
           <input
             key={f}
+            type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
+            autoComplete="off"
             value={creds[f] ?? ""}
             onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
             placeholder={f}

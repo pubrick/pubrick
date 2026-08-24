@@ -1,24 +1,37 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 
 type Brand = { id: string; name: string; contentLanguage: string };
 
 export default function BrandsPage() {
   const t = useTranslations("Brands");
   const locale = useLocale();
+  const router = useRouter();
   const [brands, setBrands] = useState<Brand[] | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // A 403 from ActiveOrgGuard means the account has no organization yet — that is an
+  // onboarding step, not an error to show the user.
+  const handleError = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && err.noActiveOrg) {
+        router.replace(`/${locale}/onboarding`);
+        return;
+      }
+      setError(err instanceof Error ? err.message : String(err));
+    },
+    [router, locale],
+  );
+
   const load = useCallback(() => {
-    api<Brand[]>("/api/brands")
-      .then(setBrands)
-      .catch((e) => setError(String(e.message)));
-  }, []);
+    api<Brand[]>("/api/brands").then(setBrands).catch(handleError);
+  }, [handleError]);
 
   useEffect(load, [load]);
 
@@ -30,7 +43,7 @@ export default function BrandsPage() {
       setName("");
       load();
     } catch (err) {
-      setError(String((err as Error).message));
+      handleError(err);
     }
   }
 
