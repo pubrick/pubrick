@@ -5,7 +5,9 @@ WORKDIR /repo
 FROM base AS build
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @pubrick/web build
+ARG API_INTERNAL_URL=http://api:3001
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
+RUN pnpm --filter @pubrick/web... build
 
 FROM node:22-slim
 WORKDIR /app

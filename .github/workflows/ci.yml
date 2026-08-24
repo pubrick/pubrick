@@ -36,3 +36,5 @@ jobs:
       - run: pnpm test
         env:
           TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
+          BETTER_AUTH_SECRET: pubrick-test-secret
+          APP_ENCRYPTION_KEY: 6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=

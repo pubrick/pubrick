@@ -9,9 +9,21 @@
 
 ```bash
 git clone https://github.com/pubrick/pubrick && cd pubrick
-cp .env.example .env    # set POSTGRES_PASSWORD
+cp .env.example .env    # set POSTGRES_PASSWORD, BETTER_AUTH_SECRET, APP_ENCRYPTION_KEY
 docker compose up -d
 ```
+
+Before exposing the app, set real values for `BETTER_AUTH_SECRET` and
+`APP_ENCRYPTION_KEY` in `.env` — compose falls back to weak dev-only defaults
+if they're unset. Generate each with:
+
+```bash
+openssl rand -base64 32
+```
+
+If the app is reachable at a public URL, also set `PUBLIC_ORIGIN` (e.g.
+`https://your-domain.example`) so auth cookies and redirects use the right
+origin.
 
 Database migrations run automatically when the api container starts.
 

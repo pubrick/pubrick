@@ -20,6 +20,10 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
       API_PORT: "3001"
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-only-secret-change-me}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=}
+      BETTER_AUTH_URL: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      WEB_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
     ports: ["3001:3001"]
     depends_on:
       postgres: { condition: service_healthy }

@@ -6,6 +6,8 @@ cd "$(dirname "$0")"
 # 127.0.0.1:5432 will collide with a host Postgres if one is already running.
 docker compose up -d --wait postgres
 export DATABASE_URL=${DATABASE_URL:-postgres://pubrick:pubrick@localhost:5432/pubrick}
+export BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-dev-only-secret-change-me}
+export APP_ENCRYPTION_KEY=${APP_ENCRYPTION_KEY:-6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=}
 pnpm install
 pnpm build
 echo "Starting api (:3001), worker, web (:3000). Ctrl-C stops all."

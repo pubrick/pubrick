@@ -11,7 +11,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - Lint/format: `pnpm lint` / `pnpm format` (Biome; formatting is hook-enforced, don't hand-format)
 - Test all: `pnpm test`; single package: `pnpm --filter @pubrick/db test`;
   single file: `pnpm --filter @pubrick/db exec vitest run src/migrate.test.ts --reporter=dot`
-- DB integration tests need `TEST_DATABASE_URL` (any Postgres with pgvector, e.g. a throwaway docker container); the variable is declared in turbo.json's test env — declare any new env-gated test vars there too.
+- DB integration tests need `TEST_DATABASE_URL` (any Postgres with pgvector, e.g. a throwaway docker container), plus `BETTER_AUTH_SECRET` and `APP_ENCRYPTION_KEY` (auth/crypto e2e specs); all three are declared in turbo.json's test env — declare any new env-gated test vars there too.
 - Dev stack: `./init.sh` (starts postgres via docker, runs migrations, boots web+api+worker)
 
 ## Architecture
@@ -28,6 +28,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - TS strict; no `any` without a comment explaining why.
 - Every tenant-owned table will carry `org_id NOT NULL`; all DB access goes
   through package-level repositories (never inline SQL in controllers).
+- Org scoping: every tenant table has org_id; all access via repositories taking orgId first; controllers never touch db. Channel credentials only via encryptJson/decryptJson — never returned by any endpoint.
 - Enqueue jobs in the same transaction as the domain write.
 - Conventional commits. One logical change per commit.
 - TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.
