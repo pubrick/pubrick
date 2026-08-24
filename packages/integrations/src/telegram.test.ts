@@ -146,6 +146,30 @@ describe("telegramPublisher.publish", () => {
     ).rejects.toBeInstanceOf(TransientPublishError);
   });
 
+  it("throws TransientPublishError, not a raw TypeError, when the body stream errors mid-read", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError("terminated"));
+      },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(stream, { status: 502 }));
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+  });
+
+  it("throws TransientPublishError, not a raw DOMException, when the body read is aborted", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.error(new DOMException("The operation was aborted.", "AbortError"));
+      },
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(stream, { status: 200 }));
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+  });
+
   it("never leaks the bot token into a thrown error message", async () => {
     const fetchImpl = vi
       .fn()

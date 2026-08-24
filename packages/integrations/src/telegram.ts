@@ -46,14 +46,32 @@ function redactToken(message: string, credentials: TelegramCredentials): string 
 }
 
 /**
+ * Internal signal, thrown only inside `call()`'s guarded region and caught by
+ * its single catch: "the request completed with an HTTP status, but the body
+ * wasn't Telegram's JSON envelope." Carries what the catch needs to classify
+ * by status instead of `error_code`. Never crosses the boundary of `call()`.
+ */
+class NonJsonTelegramResponse extends Error {
+  constructor(
+    readonly status: number,
+    readonly bodySnippet: string,
+  ) {
+    super(`Telegram returned a non-JSON response (HTTP ${status})`);
+  }
+}
+
+/**
  * Telegram answers with its envelope on 4xx/5xx too, so the HTTP status is not
  * the signal — `ok` is. Classification keys on `error_code`; `description` only
  * refines, because Telegram does not guarantee its wording.
  *
- * Every exit from this function is a PermanentPublishError or a
- * TransientPublishError — never a raw SyntaxError (non-JSON body, e.g. from a
- * proxy/gateway in front of api.telegram.org) or a raw TypeError (fetchImpl
- * rejecting with a non-Error value).
+ * Invariant: every exit from this function is a PermanentPublishError or a
+ * TransientPublishError. The fetch, the body read, and the JSON parse all
+ * live inside ONE guarded region below with a single catch after it — a
+ * connection reset mid-transfer, `AbortSignal.timeout` firing while the body
+ * is still streaming, a non-JSON body (proxy/gateway in front of
+ * api.telegram.org), or a fetchImpl that rejects with a non-Error value can
+ * none of them escape as a raw TypeError / DOMException / SyntaxError.
  */
 async function call<T>(
   method: string,
@@ -64,38 +82,45 @@ async function call<T>(
   const doFetch = options?.fetchImpl ?? fetch;
   const baseUrl = options?.baseUrl ?? DEFAULT_BASE_URL;
 
-  let response: Response;
+  let payload: { ok: true; result: T } | TelegramError;
   try {
-    response = await doFetch(`${baseUrl}/bot${credentials.botToken}/${method}`, {
+    // fetch -> read the body -> parse JSON: one guarded region. Nothing
+    // between "send the request" and "have a parsed envelope" runs outside
+    // this try, so nothing in that path can escape unclassified.
+    const response = await doFetch(`${baseUrl}/bot${credentials.botToken}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
+    const rawBody = await response.text();
+    try {
+      payload = JSON.parse(rawBody) as { ok: true; result: T } | TelegramError;
+    } catch {
+      // Not Telegram's own envelope. Signal it inward so the outer catch —
+      // the only place classification happens — can use the HTTP status,
+      // since there is no `ok`/`error_code` to key on.
+      throw new NonJsonTelegramResponse(response.status, truncateSnippet(rawBody));
+    }
   } catch (cause) {
+    if (cause instanceof PermanentPublishError || cause instanceof TransientPublishError) {
+      throw cause;
+    }
+    if (cause instanceof NonJsonTelegramResponse) {
+      const message = redactToken(`${cause.message}: ${cause.bodySnippet}`, credentials);
+      if (cause.status === 429 || cause.status >= 500) {
+        throw new TransientPublishError(message);
+      }
+      throw new PermanentPublishError(message, cause.status);
+    }
+    // Network failure, aborted/reset body read, or any other unclassified
+    // rejection (including a fetchImpl that rejects with a non-Error value).
     const causeMessage = cause instanceof Error ? cause.message : String(cause);
     throw new TransientPublishError(
       redactToken(`Telegram request failed: ${causeMessage}`, credentials),
     );
   }
 
-  const rawBody = await response.text();
-  let payload: { ok: true; result: T } | TelegramError;
-  try {
-    payload = JSON.parse(rawBody) as { ok: true; result: T } | TelegramError;
-  } catch {
-    // Not Telegram's own envelope — most likely a proxy/gateway in front of
-    // api.telegram.org returning HTML or plain text. Classify by HTTP status
-    // since there is no `ok`/`error_code` to key on.
-    const message = redactToken(
-      `Telegram returned a non-JSON response (HTTP ${response.status}): ${truncateSnippet(rawBody)}`,
-      credentials,
-    );
-    if (response.status === 429 || response.status >= 500) {
-      throw new TransientPublishError(message);
-    }
-    throw new PermanentPublishError(message, response.status);
-  }
   if (payload.ok) return payload.result;
 
   const { error_code: code, description, parameters } = payload;
