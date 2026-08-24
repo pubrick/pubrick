@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
+import { getPublisher, type VerifyResult } from "@pubrick/integrations";
 import { type ChannelCreate, decryptJson, encryptJson } from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
@@ -60,5 +61,26 @@ export class ChannelsRepository {
       .limit(1);
     if (rows.length === 0) throw new NotFoundException("Channel not found");
     return decryptJson(rows[0]?.credentialsEncrypted as string, env.APP_ENCRYPTION_KEY);
+  }
+
+  /** Verifies stored credentials against the platform. Never returns them. */
+  async verify(orgId: string, id: string): Promise<VerifyResult> {
+    const rows = await db
+      .select({ platform: schema.channels.platform })
+      .from(schema.channels)
+      .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
+      .limit(1);
+    const channel = rows[0];
+    if (!channel) throw new NotFoundException("Channel not found");
+
+    const publisher = getPublisher(channel.platform);
+    if (!publisher) return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
+
+    const credentials = await this.getDecryptedCredentials(orgId, id);
+    const parsed = publisher.credentialsSchema.safeParse(credentials);
+    if (!parsed.success)
+      return { ok: false, reason: "Stored credentials are missing required fields" };
+
+    return publisher.verify(parsed.data, { baseUrl: env.TELEGRAM_API_BASE_URL });
   }
 }

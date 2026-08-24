@@ -32,6 +32,9 @@ importers:
       '@pubrick/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@pubrick/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@pubrick/shared':
         specifier: workspace:*
         version: link:../../packages/shared

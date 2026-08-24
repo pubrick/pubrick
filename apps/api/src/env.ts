@@ -14,4 +14,5 @@ export const env = parseEnv({
     ),
   BETTER_AUTH_URL: z.string().default("http://localhost:3000"),
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
+  TELEGRAM_API_BASE_URL: z.string().default("https://api.telegram.org"),
 });

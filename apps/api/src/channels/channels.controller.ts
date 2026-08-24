@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
@@ -39,5 +40,11 @@ export class ChannelsController {
   @Delete(":id")
   delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.channels.delete(orgId, id);
+  }
+
+  @Post(":id/test")
+  @HttpCode(200)
+  test(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.channels.verify(orgId, id);
   }
 }
