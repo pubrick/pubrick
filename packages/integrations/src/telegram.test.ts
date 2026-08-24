@@ -120,6 +120,52 @@ describe("telegramPublisher.publish", () => {
     ).rejects.toBeInstanceOf(TransientPublishError);
   });
 
+  it("throws TransientPublishError, not a raw SyntaxError, when a 502 returns an HTML body", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 502,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+  });
+
+  it("throws PermanentPublishError when a 400 returns a non-JSON body", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("not json", { status: 400 }));
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+  });
+
+  it("throws TransientPublishError, not a raw TypeError, when fetchImpl rejects with undefined", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(undefined);
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+  });
+
+  it("never leaks the bot token into a thrown error message", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new TypeError(
+          `fetch failed: request to https://api.telegram.org/bot${CREDS.botToken}/sendMessage`,
+        ),
+      );
+
+    let caught: unknown;
+    try {
+      await telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(TransientPublishError);
+    expect((caught as Error).message).not.toContain(CREDS.botToken);
+  });
+
   it("throws PermanentPublishError on 403 and 401", async () => {
     for (const code of [401, 403]) {
       const fetchImpl = fetchReturning({ ok: false, error_code: code, description: "nope" }, code);

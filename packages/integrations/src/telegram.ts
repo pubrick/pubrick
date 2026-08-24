@@ -26,10 +26,34 @@ type TelegramError = {
   parameters?: { retry_after?: number; migrate_to_chat_id?: number };
 };
 
+const SNIPPET_MAX_LENGTH = 200;
+
+function truncateSnippet(text: string, maxLength = SNIPPET_MAX_LENGTH): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`;
+}
+
+/**
+ * The bot token rides in the request URL, so any message assembled from a raw
+ * fetch error, a proxy's response body, or similar could echo it back. Strip
+ * the exact token plus the generic `/bot<...>/` URL shape as defense in depth
+ * before a message ever reaches a thrown error.
+ */
+function redactToken(message: string, credentials: TelegramCredentials): string {
+  const withoutLiteralToken = credentials.botToken
+    ? message.split(credentials.botToken).join("***")
+    : message;
+  return withoutLiteralToken.replace(/\/bot[^/]+\//g, "/bot***/");
+}
+
 /**
  * Telegram answers with its envelope on 4xx/5xx too, so the HTTP status is not
  * the signal — `ok` is. Classification keys on `error_code`; `description` only
  * refines, because Telegram does not guarantee its wording.
+ *
+ * Every exit from this function is a PermanentPublishError or a
+ * TransientPublishError — never a raw SyntaxError (non-JSON body, e.g. from a
+ * proxy/gateway in front of api.telegram.org) or a raw TypeError (fetchImpl
+ * rejecting with a non-Error value).
  */
 async function call<T>(
   method: string,
@@ -49,20 +73,40 @@ async function call<T>(
       signal: AbortSignal.timeout(30_000),
     });
   } catch (cause) {
-    throw new TransientPublishError(`Telegram request failed: ${(cause as Error).message}`);
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    throw new TransientPublishError(
+      redactToken(`Telegram request failed: ${causeMessage}`, credentials),
+    );
   }
 
-  const payload = (await response.json()) as { ok: true; result: T } | TelegramError;
+  const rawBody = await response.text();
+  let payload: { ok: true; result: T } | TelegramError;
+  try {
+    payload = JSON.parse(rawBody) as { ok: true; result: T } | TelegramError;
+  } catch {
+    // Not Telegram's own envelope — most likely a proxy/gateway in front of
+    // api.telegram.org returning HTML or plain text. Classify by HTTP status
+    // since there is no `ok`/`error_code` to key on.
+    const message = redactToken(
+      `Telegram returned a non-JSON response (HTTP ${response.status}): ${truncateSnippet(rawBody)}`,
+      credentials,
+    );
+    if (response.status === 429 || response.status >= 500) {
+      throw new TransientPublishError(message);
+    }
+    throw new PermanentPublishError(message, response.status);
+  }
   if (payload.ok) return payload.result;
 
   const { error_code: code, description, parameters } = payload;
+  const message = redactToken(description, credentials);
   if (code === 429) {
-    throw new TransientPublishError(description, parameters?.retry_after);
+    throw new TransientPublishError(message, parameters?.retry_after);
   }
   if (code >= 500) {
-    throw new TransientPublishError(description);
+    throw new TransientPublishError(message);
   }
-  throw new PermanentPublishError(description, code);
+  throw new PermanentPublishError(message, code);
 }
 
 function messageLink(message: Message): PublishResult {
