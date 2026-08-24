@@ -5,7 +5,7 @@ import { env } from "./env";
 
 async function bootstrap(): Promise<void> {
   await runMigrations(env.DATABASE_URL);
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   app.setGlobalPrefix("api");
   await app.listen(env.API_PORT);
   console.log(`api listening on :${env.API_PORT}`);
