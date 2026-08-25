@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 // This Next version (16.3.2) still ships this API under its middleware-era
 // name; `unstable_doesProxyMatch` isn't exported yet (checked against
 // node_modules/next/dist/experimental/testing/server) — using the available
@@ -7,28 +5,23 @@ import { join } from "node:path";
 // the same matcher-matching machinery Next evaluates at request time.
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { describe, expect, it } from "vitest";
+import { PROXY_MATCHER } from "./proxy-matcher";
 
-/**
- * `import { config } from "./proxy"` would be the direct way to get the real
- * matcher, but executing proxy.ts pulls in next-intl's middleware, which
- * eagerly does `import "next/server"` — that fails to resolve under
- * vitest's ESM loader in this pnpm workspace ("Cannot find module
- * .../next-intl/node_modules/next/server"). It is NOT a problem with the
- * matcher or with proxy.ts itself: the production build and a running
- * `next start` both exercise proxy.ts fine (verified separately). Reading
- * the `matcher` literal out of the real source file — rather than
- * hardcoding a copy — keeps this test tied to proxy.ts, so it still fails
- * if that file's matcher ever changes.
- */
-function readMatcherFromProxySource(): string[] {
-  const source = readFileSync(join(process.cwd(), "src/proxy.ts"), "utf8");
-  const match = source.match(/matcher:\s*(\[[^\]]*\])/);
-  const literal = match?.[1];
-  if (!literal) throw new Error("could not find `config.matcher` in proxy.ts");
-  return JSON.parse(literal);
-}
-
-const config = { matcher: readMatcherFromProxySource() };
+// Importing this constant directly (instead of `import { config } from
+// "./proxy"`) is what avoids executing proxy.ts, which would pull in
+// next-intl's middleware and crash under vitest's ESM resolver — see
+// proxy-matcher.ts for why that module stays import-free.
+//
+// proxy.ts can't import PROXY_MATCHER itself as a value: Next statically
+// parses `config.matcher` at build time and requires an inline literal
+// there (confirmed by two real Turbopack build failures — neither an
+// imported identifier nor a local variable survive its "static string or
+// array of static strings" check). So proxy.ts keeps its own inline copy
+// of this array, type-annotated with proxy-matcher.ts's `ProxyMatcher`
+// type (a type-only import, erased before Next's bundling) so the two
+// arrays can't silently drift apart — a mismatch fails `tsc --noEmit` /
+// `next build`'s TypeScript pass instead.
+const config = { matcher: PROXY_MATCHER };
 
 function matches(url: string): boolean {
   return unstable_doesMiddlewareMatch({ config, url });
