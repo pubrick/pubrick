@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string; contentLanguage: string };
 
@@ -25,9 +25,9 @@ export default function BrandsPage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err, t("genericError")));
     },
-    [router, locale],
+    [router, locale, t],
   );
 
   const load = useCallback(() => {

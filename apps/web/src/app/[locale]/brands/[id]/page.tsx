@@ -1,9 +1,10 @@
 "use client";
 
 import { PLATFORM_IDS } from "@pubrick/shared";
-import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Channel = { id: string; platform: string; name: string };
 type Brand = { id: string; name: string };
@@ -33,6 +34,8 @@ type PlatformId = (typeof PLATFORM_IDS)[number];
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
+  const locale = useLocale();
+  const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [platform, setPlatform] = useState<PlatformId>("telegram");
@@ -41,14 +44,27 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, VerifyResult | "loading">>({});
 
+  // A 403 from ActiveOrgGuard means the account has no organization yet — that is
+  // an onboarding step, not an error to show the user. Every other failure
+  // (including a network failure, which api() now wraps as ApiError(0, ...))
+  // renders through errorMessage() so nobody sees a raw browser error string.
+  const handleError = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && err.noActiveOrg) {
+        router.replace(`/${locale}/onboarding`);
+        return;
+      }
+      setError(errorMessage(err, t("genericError")));
+    },
+    [router, locale, t],
+  );
+
   const load = useCallback(() => {
-    api<Brand>(`/api/brands/${id}`)
-      .then(setBrand)
-      .catch((e) => setError(String(e.message)));
+    api<Brand>(`/api/brands/${id}`).then(setBrand).catch(handleError);
     api<Channel[]>(`/api/channels?brandId=${id}`)
       .then(setChannels)
       .catch(() => {});
-  }, [id]);
+  }, [id, handleError]);
 
   useEffect(load, [load]);
 
@@ -64,13 +80,18 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       setCreds({});
       load();
     } catch (err) {
-      setError(String((err as Error).message));
+      handleError(err);
     }
   }
 
   async function remove(channelId: string) {
-    await api(`/api/channels/${channelId}`, { method: "DELETE" });
-    load();
+    setError(null);
+    try {
+      await api(`/api/channels/${channelId}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      handleError(err);
+    }
   }
 
   async function testConnection(channelId: string) {
@@ -79,9 +100,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       const result = await api<VerifyResult>(`/api/channels/${channelId}/test`, { method: "POST" });
       setTestResults((prev) => ({ ...prev, [channelId]: result }));
     } catch (err) {
+      // errorMessage() keeps a specific 4xx verdict from the verify endpoint
+      // ("wrong bot token", etc.) but swaps a network/5xx failure for the
+      // translated generic text instead of a raw browser error string.
       setTestResults((prev) => ({
         ...prev,
-        [channelId]: { ok: false, reason: (err as Error).message },
+        [channelId]: { ok: false, reason: errorMessage(err, t("genericError")) },
       }));
     }
   }

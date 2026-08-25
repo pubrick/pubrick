@@ -22,10 +22,12 @@ export class ApiError extends Error {
  * A 5xx, or a failure with no HTTP status at all (network down, DNS, a proxy's
  * own error page), says nothing the user can act on and was never written for
  * them. Those collapse into the caller's translated fallback, which is the
- * point of the per-screen `genericError` keys.
+ * point of the per-screen `genericError` keys. A network failure that never
+ * reached the server is wrapped as `ApiError(0, ...)` (see `api()` below) and
+ * must land here too — hence the lower bound, not just `< 500`.
  */
 export function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof ApiError && err.status < 500 ? err.message : fallback;
+  return err instanceof ApiError && err.status >= 400 && err.status < 500 ? err.message : fallback;
 }
 
 /** Nest error bodies are `{ statusCode, message, error }`; message may be a string[]. */
@@ -41,10 +43,20 @@ function serverMessage(raw: string): string | undefined {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: { "content-type": "application/json", ...init?.headers },
+    });
+  } catch (err) {
+    // fetch() itself rejected: network down, DNS, CORS, an aborted request —
+    // the request never got an HTTP status at all. Wrapping it keeps every
+    // caller's failure handling to one shape (catch ApiError, call
+    // errorMessage()) instead of every call site needing its own branch for
+    // "the promise rejected with something that isn't an ApiError".
+    throw new ApiError(0, err instanceof Error ? err.message : String(err));
+  }
   if (!res.ok) {
     const raw = await res.text();
     const detail = serverMessage(raw);

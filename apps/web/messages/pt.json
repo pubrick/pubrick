@@ -33,7 +33,8 @@
   "Brands": {
     "title": "Marcas",
     "namePlaceholder": "Nome da nova marca",
-    "create": "Criar marca"
+    "create": "Criar marca",
+    "genericError": "Algo deu errado. Tente novamente."
   },
   "Channels": {
     "title": "Canais",
@@ -41,7 +42,8 @@
     "remove": "Remover",
     "add": "Adicionar canal",
     "test": "Testar conexão",
-    "testOk": "OK — conectado como {account}, pode publicar em {target}"
+    "testOk": "OK — conectado como {account}, pode publicar em {target}",
+    "genericError": "Algo deu errado. Tente novamente."
   },
   "Content": {
     "title": "Conteúdo",

@@ -33,7 +33,8 @@
   "Brands": {
     "title": "Brands",
     "namePlaceholder": "New brand name",
-    "create": "Create brand"
+    "create": "Create brand",
+    "genericError": "Something went wrong. Please try again."
   },
   "Channels": {
     "title": "Channels",
@@ -41,7 +42,8 @@
     "remove": "Remove",
     "add": "Add channel",
     "test": "Test connection",
-    "testOk": "OK — connected as {account}, can post to {target}"
+    "testOk": "OK — connected as {account}, can post to {target}",
+    "genericError": "Something went wrong. Please try again."
   },
   "Content": {
     "title": "Content",

@@ -61,11 +61,24 @@ describe("api", () => {
     expect(errorMessage(error, "Something went wrong")).toBe("Something went wrong");
   });
 
-  it("propagates a status-less network failure as-is (not wrapped in ApiError)", async () => {
+  it("wraps a network failure in an ApiError with sentinel status 0", async () => {
     const networkError = new TypeError("Failed to fetch");
     vi.mocked(fetch).mockRejectedValue(networkError);
 
-    await expect(api("/orgs")).rejects.toBe(networkError);
+    const error = await api("/orgs").catch((e) => e as ApiError);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(0);
+  });
+
+  it("maps a network failure to the caller's translated generic fallback, not a raw browser message", async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const error = await api("/orgs").catch((e) => e as ApiError);
+
+    expect(errorMessage(error, "Something went wrong. Please try again.")).toBe(
+      "Something went wrong. Please try again.",
+    );
   });
 
   it("marks a 403 with the 'no active organization' detail as noActiveOrg", async () => {
