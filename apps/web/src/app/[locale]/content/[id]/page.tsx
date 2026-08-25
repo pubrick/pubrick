@@ -62,7 +62,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   );
 
   const load = useCallback(() => {
-    api<ContentItem>(`/api/content/${id}`)
+    return api<ContentItem>(`/api/content/${id}`)
       .then((it) => {
         setItem(it);
         setBodyDraft(it.body);
@@ -72,7 +72,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       .catch(handleError);
   }, [id, handleError]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    // load() now returns its promise (see below) so the four mutation
+    // handlers can await the reload instead of firing it and moving on.
+    // useEffect requires void | (() => void), so the promise is discarded
+    // here rather than returned directly — otherwise React treats it as an
+    // attempted cleanup function and throws on unmount ("destroy is not a
+    // function").
+    load();
+  }, [load]);
 
   async function saveBody() {
     setError(null);
@@ -81,7 +89,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         method: "PATCH",
         body: JSON.stringify({ body: bodyDraft }),
       });
-      load();
+      await load();
     } catch (err) {
       handleError(err);
     }
@@ -95,7 +103,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         method: "PATCH",
         body: JSON.stringify({ body: value.trim() === "" ? null : value }),
       });
-      load();
+      await load();
     } catch (err) {
       handleError(err);
     }
@@ -110,7 +118,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           withSchedule && scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {},
         ),
       });
-      load();
+      await load();
     } catch (err) {
       handleError(err);
     }
@@ -120,7 +128,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     setError(null);
     try {
       await api(`/api/content/${id}/reject`, { method: "POST", body: JSON.stringify({}) });
-      load();
+      await load();
     } catch (err) {
       handleError(err);
     }

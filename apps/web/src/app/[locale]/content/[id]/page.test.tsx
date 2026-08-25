@@ -190,6 +190,36 @@ describe("approve now (Step 2)", () => {
     expect(approveCall?.method).toBe("POST");
     expect(approveCall?.body).toBe(JSON.stringify({}));
   });
+
+  it("sends no scheduledAt when clicking Publish now, even with a schedule value already chosen", async () => {
+    // "Publish now" is wired to approve(false); the schedule field's value
+    // must never leak into that request just because the user happened to
+    // fill it in before changing their mind and clicking the immediate
+    // button instead of "Approve with schedule".
+    const served = { current: makeItem({ status: "draft" }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/approve") {
+        served.current = { ...served.current, status: "approved" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+
+    fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+      target: { value: "2026-09-01T10:30" },
+    });
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.approveNow }));
+
+    await screen.findByText(en.Content.status.approved);
+
+    const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
+    expect(approveCall?.body).toBe(JSON.stringify({}));
+  });
 });
 
 describe("approve with a schedule (Step 3)", () => {
@@ -311,6 +341,38 @@ describe("per-channel override (Step 6)", () => {
     expect(patchCall?.body).toBe(JSON.stringify({ body: "Custom text for this channel" }));
 
     expect(calls.some((c) => c.method === "PATCH" && c.path === "/api/content/c1")).toBe(false);
+  });
+
+  it("clears the override back to the item default (PATCHes body: null) when typed-in text is emptied", async () => {
+    const adaptation = makeAdaptation({ id: "a1", channelId: "ch1", body: null });
+    const served = { current: makeItem({ adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "PATCH" && path === "/api/content/c1/adaptations/a1") {
+        return { ...adaptation, body: null };
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const textarea = screen.getByPlaceholderText(en.Publish.overridePlaceholder);
+    fireEvent.change(textarea, { target: { value: "Temporary override text" } });
+    fireEvent.change(textarea, { target: { value: "" } });
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+
+    await waitFor(() => {
+      expect(
+        calls.some((c) => c.method === "PATCH" && c.path === "/api/content/c1/adaptations/a1"),
+      ).toBe(true);
+    });
+
+    const patchCall = calls.find(
+      (c) => c.method === "PATCH" && c.path === "/api/content/c1/adaptations/a1",
+    );
+    expect(patchCall?.body).toBe(JSON.stringify({ body: null }));
   });
 });
 
