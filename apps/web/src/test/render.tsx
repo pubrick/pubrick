@@ -1,6 +1,12 @@
-import { type RenderOptions, render as rtlRender } from "@testing-library/react";
+// `act` comes from RTL, not from React: RTL's re-export is the wrapper that
+// sets IS_REACT_ACT_ENVIRONMENT around the callback. Importing `act` straight
+// from "react" runs the same updates outside that flag, and React answers with
+// "The current testing environment is not configured to support act(...)" for
+// every flush — 50 stderr lines that look like an inherent cost of testing
+// Suspense and are really this one import.
+import { act, type RenderOptions, render as rtlRender } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
-import { act, type ReactElement, type ReactNode, Suspense } from "react";
+import { type ReactElement, type ReactNode, Suspense } from "react";
 import messages from "../../messages/en.json";
 
 function Providers({ children }: { children: ReactNode }) {

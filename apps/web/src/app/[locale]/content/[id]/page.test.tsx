@@ -1,5 +1,7 @@
+import { adaptationUpdateSchema, contentApproveSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { routerMock } from "@/test/next-navigation.stub";
 import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import ContentItemPage from "./page";
@@ -138,6 +140,33 @@ describe("rendering by adaptation status (Step 1)", () => {
     expect(container.querySelector("a[target='_blank']")).toBeNull();
   });
 
+  // The call site, not `isLinkableUrl` itself (unit-tested in
+  // lib/external-url.test.ts). `https://…` and `null` behave identically
+  // whether the guard is the real scheme check or a plain truthy test, so a
+  // fixture with a NON-https URL is the only one that can tell the two apart —
+  // without it, replacing `isLinkableUrl(a.externalUrl)` with
+  // `a.externalUrl` here keeps the whole suite green while shipping an
+  // href that runs script in the app's own origin.
+  it.each([
+    ["a javascript: URL", "javascript:alert(1)"],
+    ["a plain http:// URL", "http://t.me/main/42"],
+  ])("renders %s as inert text, never as an href", async (_label, externalUrl) => {
+    const item = makeItem({
+      adaptations: [makeAdaptation({ status: "published", externalUrl })],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    const { container } = await renderAsync(
+      <ContentItemPage params={Promise.resolve({ id: "c1" })} />,
+    );
+
+    // The value is still shown — whoever reconciles a publication can read it.
+    await within(resultsList()).findByText(externalUrl, { exact: false });
+    // …but nothing in the document carries it as a destination.
+    expect(container.querySelector(`a[href="${externalUrl}"]`)).toBeNull();
+    expect(within(resultsList()).queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("renders lastError for a failed adaptation", async () => {
     const item = makeItem({
       adaptations: [makeAdaptation({ status: "failed", lastError: "Telegram: chat not found" })],
@@ -189,6 +218,10 @@ describe("approve now (Step 2)", () => {
     const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
     expect(approveCall?.method).toBe("POST");
     expect(approveCall?.body).toBe(JSON.stringify({}));
+    // The literal pins what this screen sends; the schema — the very one the
+    // API validates with — pins that the server will accept it, so a
+    // server-side field rename fails here instead of only in production.
+    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
   });
 
   it("sends no scheduledAt when clicking Publish now, even with a schedule value already chosen", async () => {
@@ -219,6 +252,7 @@ describe("approve now (Step 2)", () => {
 
     const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
     expect(approveCall?.body).toBe(JSON.stringify({}));
+    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
   });
 });
 
@@ -251,6 +285,47 @@ describe("approve with a schedule (Step 3)", () => {
     const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
     expect(approveCall?.method).toBe("POST");
     expect(approveCall?.body).toBe(JSON.stringify({ scheduledAt: new Date(chosen).toISOString() }));
+    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
+  });
+
+  /**
+   * The `!scheduledAt` half of the button's `disabled` is load-bearing and
+   * irreversible if lost: `approve(true)` with an empty date falls through to
+   * the `{}` body, which is the "publish immediately" request. Weakening the
+   * guard to `disabled={isPublished}` would turn "Approve with schedule" into
+   * "publish now" for anyone who clicks it before filling the field, and the
+   * post is live in the channel by the time anyone notices.
+   */
+  it("keeps the schedule button disabled until a date is chosen, and issues no request if clicked", async () => {
+    const served = { current: makeItem({ status: "draft" }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/approve") {
+        served.current = { ...served.current, status: "approved" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+
+    const scheduleButton = screen.getByRole("button", { name: en.Publish.approveScheduled });
+    expect(scheduleButton).toBeDisabled();
+
+    const callsBeforeClick = calls.length;
+    await userEvent.setup().click(scheduleButton);
+    expect(calls.length).toBe(callsBeforeClick);
+    expect(calls.some((c) => c.path === "/api/content/c1/approve")).toBe(false);
+
+    // Filling the date is what enables it — the button is not disabled for
+    // some unrelated reason (e.g. a status check) that happens to hold here.
+    fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+      target: { value: "2026-09-01T10:30" },
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeEnabled();
+    });
   });
 });
 
@@ -339,6 +414,7 @@ describe("per-channel override (Step 6)", () => {
       (c) => c.method === "PATCH" && c.path === "/api/content/c1/adaptations/a1",
     );
     expect(patchCall?.body).toBe(JSON.stringify({ body: "Custom text for this channel" }));
+    expect(adaptationUpdateSchema.safeParse(JSON.parse(patchCall?.body ?? "")).success).toBe(true);
 
     expect(calls.some((c) => c.method === "PATCH" && c.path === "/api/content/c1")).toBe(false);
   });
@@ -373,6 +449,7 @@ describe("per-channel override (Step 6)", () => {
       (c) => c.method === "PATCH" && c.path === "/api/content/c1/adaptations/a1",
     );
     expect(patchCall?.body).toBe(JSON.stringify({ body: null }));
+    expect(adaptationUpdateSchema.safeParse(JSON.parse(patchCall?.body ?? "")).success).toBe(true);
   });
 });
 
@@ -417,5 +494,29 @@ describe("error rendering (Step 7)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(en.Publish.genericError);
     expect(alert.textContent).not.toContain("TypeError");
+  });
+});
+
+/**
+ * The same four-line `noActiveOrg` branch is copied into five components
+ * (this page, the content queue, content/new, brands, brands/[id]). It is the
+ * only thing standing between "signed up, no organization yet" and a dead
+ * screen: without the redirect the page renders its empty shell, shows an
+ * error the user cannot act on, and offers no way to reach onboarding.
+ * Deleting the branch used to change nothing in this suite — hence one test
+ * per page.
+ */
+describe("no active organization redirects to onboarding", () => {
+  it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
+    mockApi.mockRejectedValue(
+      new ApiError(403, "No active organization — create or select one first.", true),
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await waitFor(() => {
+      expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

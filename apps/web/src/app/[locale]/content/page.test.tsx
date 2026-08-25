@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
 import ContentQueuePage from "./page";
@@ -9,7 +10,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
 
@@ -211,5 +212,47 @@ describe("adaptation rendering (Step 2)", () => {
       `[telegram] Main channel — ${en.Content.adaptationStatus.failed}`,
     );
     expect(within(rows[2] as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  // See the twin test on content/[id]: the guard here is a second call site of
+  // `isLinkableUrl`, and the fixtures above (https / null) cannot distinguish
+  // it from a bare truthy check. A non-https URL can.
+  it.each([
+    ["a javascript: URL", "javascript:alert(1)"],
+    ["a plain http:// URL", "http://t.me/main/42"],
+  ])("renders %s as inert text in the queue, never as an href", async (_label, externalUrl) => {
+    const calls: Call[] = [];
+    const channelList: Channel[] = [{ id: "ch1", platform: "telegram", name: "Main channel" }];
+    const adaptations: Adaptation[] = [
+      { id: "a1", channelId: "ch1", status: "published", externalUrl, lastError: null },
+    ];
+    installHandlers(calls, () => [item("c1", "Launch post", "draft", adaptations)], channelList);
+
+    const { container } = render(<ContentQueuePage />);
+
+    const itemLink = await screen.findByRole("link", { name: "Launch post" });
+    const itemLi = itemLink.closest("li");
+    if (!itemLi) throw new Error("content item <li> not found");
+    const row = within(itemLi).getAllByRole("listitem")[0] as HTMLElement;
+
+    expect(row).toHaveTextContent(externalUrl);
+    expect(container.querySelector(`a[href="${externalUrl}"]`)).toBeNull();
+    expect(within(row).queryByRole("link")).not.toBeInTheDocument();
+  });
+});
+
+/** See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page. */
+describe("no active organization redirects to onboarding", () => {
+  it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
+    mockApi.mockRejectedValue(
+      new ApiError(403, "No active organization — create or select one first.", true),
+    );
+
+    render(<ContentQueuePage />);
+
+    await waitFor(() => {
+      expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

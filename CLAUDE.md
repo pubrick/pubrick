@@ -50,10 +50,28 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 
 ## Testing apps/web
 
-- RTL, with `@/lib/api` mocked at the module boundary (`vi.mock("@/lib/api", ...)`
-  via `importOriginal` so the rest of the module's exports stay real).
-  `api.ts` itself is unit-tested directly against a stubbed `fetch` — it is
-  never left uncovered just because pages mock it away.
+- RTL. Most page tests mock `@/lib/api` at the module boundary
+  (`vi.mock("@/lib/api", ...)` via `importOriginal` so the rest of the
+  module's exports stay real). Two other boundaries are in use on purpose,
+  and neither is a mistake to "fix": `brands/[id]/page.test.tsx` stubs global
+  `fetch` and runs the REAL `api.ts`, which is what lets it assert the
+  page's behaviour on a genuine `ApiError` (status classification,
+  `noActiveOrg`) instead of one the test constructed; and the auth screens
+  (`[locale]/page`, `onboarding/page`, `AuthForm`) mock `@/lib/auth-client`,
+  since better-auth's client is the boundary there, not `api.ts`. Pick the
+  boundary the screen actually talks to. `api.ts` itself is unit-tested
+  directly against a stubbed `fetch` — never left uncovered because pages
+  mock it away.
+- Request bodies are pinned twice: a literal `toEqual`/`toBe` for what the
+  screen sends, plus `<schema>.safeParse(payload).success` against the
+  `@pubrick/shared` schema the API validates with (`contentCreateSchema`,
+  `contentApproveSchema`, `adaptationUpdateSchema`). The literal alone can't
+  see a server-side field rename — both stay green while production breaks.
+  Fixtures therefore use real UUIDs where a schema demands them.
+- `messages/*.json` key parity across `en`/`es`/`ru`/`pt` is enforced by
+  `src/test/messages-parity.test.ts` (full dotted paths). Add a key to `en`
+  only and three languages render the raw key path to users; the suite would
+  otherwise stay green.
 - Any page using `use(params)` (currently `content/[id]`, `brands/[id]`)
   MUST render with `renderAsync` (`src/test/render.tsx`), not `render`. The
   render call has to be inside the async `act()`; render-then-flush hangs
@@ -70,10 +88,12 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
   `vitest`. `proxy.test.ts` imports `proxy-matcher.ts` directly rather than
   executing `proxy.ts` (which pulls in next-intl's middleware and crashes
   under vitest's ESM resolver).
-- Known-benign `act()` warnings: `use(params)`'s suspended-root ping, and
-  fire-and-forget refetches. Safe here only because every assertion goes
-  through `findBy*`/`waitFor`, never a synchronous `getBy*` on async data —
-  don't assume all act warnings in this app are automatically cosmetic.
+- The suite runs with ZERO `act()` warnings — if you see one, it is a signal,
+  not background noise. `src/test/render.tsx` imports `act` from
+  `@testing-library/react` (RTL's wrapper sets `IS_REACT_ACT_ENVIRONMENT`);
+  importing it from `react` instead brings back ~50 "environment is not
+  configured to support act(...)" lines. Keep assertions on async data going
+  through `findBy*`/`waitFor`, never a synchronous `getBy*`.
 - `layout.tsx` and `i18n/*` are deliberately untested (server component
   unsupported by Vitest; i18n config is declaration-only).
 

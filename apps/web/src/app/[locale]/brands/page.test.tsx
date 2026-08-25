@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor } from "@/test/render";
 import en from "../../../../messages/en.json";
 import BrandsPage from "./page";
@@ -9,7 +10,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
 
@@ -119,5 +120,21 @@ describe("creating a brand (Step 4)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("A brand with this name already exists.");
     expect((input as HTMLInputElement).value).toBe("Acme");
+  });
+});
+
+/** See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page. */
+describe("no active organization redirects to onboarding", () => {
+  it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
+    mockApi.mockRejectedValue(
+      new ApiError(403, "No active organization — create or select one first.", true),
+    );
+
+    render(<BrandsPage />);
+
+    await waitFor(() => {
+      expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { MAX_BODY_LENGTH } from "@pubrick/shared";
+import { contentCreateSchema, MAX_BODY_LENGTH } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { routerMock } from "@/test/next-navigation.stub";
@@ -11,24 +11,36 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
+
+/**
+ * Real UUIDs, not "b1"/"ch1": the submitted payload is checked against
+ * `contentCreateSchema` from @pubrick/shared (the same schema the API
+ * validates with), and that schema requires `brandId`/`channelIds` to be
+ * uuids. Placeholder ids would make the contract assertion vacuous.
+ */
+const B1 = "11111111-1111-4111-8111-111111111111";
+const B2 = "22222222-2222-4222-8222-222222222222";
+const CH1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+const CH2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+const CH9 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 
 const brands: Brand[] = [
-  { id: "b1", name: "Acme" },
-  { id: "b2", name: "Widgets" },
+  { id: B1, name: "Acme" },
+  { id: B2, name: "Widgets" },
 ];
 
 const acmeChannels: Channel[] = [
-  { id: "ch1", platform: "telegram", name: "Main channel" },
-  { id: "ch2", platform: "vk", name: "VK group" },
+  { id: CH1, platform: "telegram", name: "Main channel" },
+  { id: CH2, platform: "vk", name: "VK group" },
 ];
 
-const widgetsChannels: Channel[] = [{ id: "ch9", platform: "dzen", name: "Dzen blog" }];
+const widgetsChannels: Channel[] = [{ id: CH9, platform: "dzen", name: "Dzen blog" }];
 
 type Call = { path: string; method: string; body?: string };
 
@@ -58,8 +70,8 @@ function installHandlers(
     }
 
     if (method === "GET" && path === "/api/brands") return brands;
-    if (method === "GET" && path === "/api/channels?brandId=b1") return acmeChannels;
-    if (method === "GET" && path === "/api/channels?brandId=b2") return widgetsChannels;
+    if (method === "GET" && path === `/api/channels?brandId=${B1}`) return acmeChannels;
+    if (method === "GET" && path === `/api/channels?brandId=${B2}`) return widgetsChannels;
     throw new Error(`unhandled request in test: ${method} ${path}`);
   });
 }
@@ -89,19 +101,19 @@ describe("selecting a brand loads its channels (Step 1)", () => {
 
     const user = userEvent.setup();
     const brandSelect = screen.getByLabelText(en.ContentNew.brand);
-    await user.selectOptions(brandSelect, "b1");
+    await user.selectOptions(brandSelect, B1);
 
     await screen.findByLabelText(/Main channel/);
     expect(screen.getByLabelText(/VK group/)).toBeInTheDocument();
-    expect(calls.some((c) => c.path === "/api/channels?brandId=b1")).toBe(true);
+    expect(calls.some((c) => c.path === `/api/channels?brandId=${B1}`)).toBe(true);
 
     // Switching brands must re-query with the NEW id, not reuse the first
     // brand's channel list.
-    await user.selectOptions(brandSelect, "b2");
+    await user.selectOptions(brandSelect, B2);
 
     await screen.findByLabelText(/Dzen blog/);
     expect(screen.queryByLabelText(/Main channel/)).not.toBeInTheDocument();
-    expect(calls.some((c) => c.path === "/api/channels?brandId=b2")).toBe(true);
+    expect(calls.some((c) => c.path === `/api/channels?brandId=${B2}`)).toBe(true);
   });
 });
 
@@ -155,7 +167,7 @@ describe("submitting (Step 1)", () => {
     await screen.findByRole("option", { name: "Acme" });
 
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), "b1");
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await screen.findByLabelText(/Main channel/);
 
     await user.click(screen.getByLabelText(/Main channel/));
@@ -170,11 +182,15 @@ describe("submitting (Step 1)", () => {
 
     const postCall = calls.find((c) => c.method === "POST" && c.path === "/api/content");
     expect(parsedBody(postCall)).toEqual({
-      brandId: "b1",
+      brandId: B1,
       title: "Launch day",
       body: "Hello world",
-      channelIds: ["ch1"],
+      channelIds: [CH1],
     });
+    // The literal above pins what this screen sends; the schema pins that the
+    // API will accept it. Without this line a server-side field rename leaves
+    // every web test green and breaks only in production.
+    expect(contentCreateSchema.safeParse(parsedBody(postCall)).success).toBe(true);
   });
 
   it("omits title entirely (not an empty string) when the title field is left blank", async () => {
@@ -188,7 +204,7 @@ describe("submitting (Step 1)", () => {
     await screen.findByRole("option", { name: "Acme" });
 
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), "b1");
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await screen.findByLabelText(/Main channel/);
     await user.click(screen.getByLabelText(/Main channel/));
     await user.type(screen.getByLabelText(en.ContentNew.body), "No title here");
@@ -199,6 +215,8 @@ describe("submitting (Step 1)", () => {
 
     const postCall = calls.find((c) => c.method === "POST" && c.path === "/api/content");
     expect("title" in parsedBody(postCall)).toBe(false);
+    // An omitted optional field must still leave a valid body.
+    expect(contentCreateSchema.safeParse(parsedBody(postCall)).success).toBe(true);
   });
 
   it("blocks submission with a visible error and issues no request when no channel is selected", async () => {
@@ -209,7 +227,7 @@ describe("submitting (Step 1)", () => {
     await screen.findByRole("option", { name: "Acme" });
 
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), "b1");
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await screen.findByLabelText(/Main channel/);
     await user.type(screen.getByLabelText(en.ContentNew.body), "Nobody will see this");
 
@@ -218,5 +236,21 @@ describe("submitting (Step 1)", () => {
     expect(await screen.findByText(en.ContentNew.noChannelsSelected)).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     expect(routerMock.push).not.toHaveBeenCalled();
+  });
+});
+
+/** See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page. */
+describe("no active organization redirects to onboarding", () => {
+  it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
+    mockApi.mockRejectedValue(
+      new ApiError(403, "No active organization — create or select one first.", true),
+    );
+
+    render(<NewContentPage />);
+
+    await waitFor(() => {
+      expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

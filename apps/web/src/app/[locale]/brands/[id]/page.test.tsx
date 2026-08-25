@@ -1,6 +1,7 @@
 import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import BrandPage from "./page";
@@ -239,5 +240,30 @@ describe("Test connection (Step 3)", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Invalid bot token");
+  });
+});
+
+/**
+ * See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page.
+ * This page runs the REAL `api.ts` against a stubbed `fetch`, so the 403 has
+ * to arrive the way the server sends it — the "no active organization"
+ * message is what `api()` matches on to set `ApiError.noActiveOrg`.
+ */
+describe("no active organization redirects to onboarding", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
+    vi.mocked(fetch).mockImplementation(async () =>
+      jsonResponse(403, { statusCode: 403, message: "No active organization", error: "Forbidden" }),
+    );
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+
+    await waitFor(() => {
+      expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
