@@ -15,7 +15,7 @@ type VerifyResult = { ok: true; account: string; target: string } | { ok: false;
  * form asks for the right keys instead of a generic "token" for seven of eight
  * platforms. Keep in sync with the publishers added in later plans.
  */
-const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
+export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
   telegram: ["botToken", "chatId"],
   vk: ["accessToken", "groupId"],
   dzen: ["token"],
@@ -27,7 +27,7 @@ const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> 
 };
 
 /** Fields that are not secrets — everything else renders as type="password". */
-const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
+export const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
 
 type PlatformId = (typeof PLATFORM_IDS)[number];
 
