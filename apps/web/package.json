@@ -6,7 +6,8 @@
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "dev": "next dev",
-    "start": "next start"
+    "start": "next start",
+    "test": "vitest run --reporter=dot"
   },
   "dependencies": {
     "@pubrick/shared": "workspace:*",
@@ -17,8 +18,16 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.6",
     "@types/node": "^22",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5"
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.0",
+    "jsdom": "^30.0.1",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.11"
   }
 }

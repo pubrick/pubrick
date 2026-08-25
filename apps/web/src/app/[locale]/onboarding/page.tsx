@@ -4,21 +4,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
-
-/**
- * Slugs must be url-safe ascii. NFKD + diacritic strip keeps "Cafés Peña" usable
- * ("cafes-pena"); fully non-Latin names (ru, zh, ...) clean down to empty, so fall
- * back to "org-<suffix>" rather than emitting a leading-hyphen slug like "-k2f9x".
- */
-export function orgSlug(name: string, suffix: string): string {
-  const cleaned = name
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned.length > 0 ? `${cleaned}-${suffix}` : `org-${suffix}`;
-}
+import { orgSlug } from "@/lib/slug";
 
 export default function OnboardingPage() {
   const t = useTranslations("Onboarding");
@@ -30,7 +16,7 @@ export default function OnboardingPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const slug = orgSlug(name, Date.now().toString(36));
+    const slug = orgSlug(name);
     const created = await authClient.organization.create({ name, slug });
     if (created.error) {
       setError(created.error.message ?? t("genericError"));
