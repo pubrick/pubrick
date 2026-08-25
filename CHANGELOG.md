@@ -16,6 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Env wiring for auth/crypto/publishing through turbo, CI, docker compose, and `init.sh`; self-hosting docs for `BETTER_AUTH_SECRET` / `APP_ENCRYPTION_KEY` / `PUBLIC_ORIGIN` and connecting a Telegram channel.
 - Brand identity: wordmark (light/dark), brick mark and 1280×640 social card in `assets/`; README header with scheme-aware logo and badges; web favicon (`app/icon.svg`), inline `Logo` component on the landing page, and the palette as CSS custom properties in `app/globals.css`.
 - Navigation between brands and the content queue (the landing page links to both), so the review-and-publish flow is reachable without typing a URL.
+- Test coverage for `apps/web` (77 tests, from none): RTL pages/components against a mocked `@/lib/api`, `api.ts` and `orgSlug` unit-tested directly, and the proxy route matcher, all wired into `pnpm test` via turbo.
 
 ### Changed
 - Migrations run under a Postgres advisory lock, so parallel test workers and multiple api replicas can no longer race each other on a fresh database.

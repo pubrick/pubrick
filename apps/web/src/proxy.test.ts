@@ -23,6 +23,12 @@ import { PROXY_MATCHER } from "./proxy-matcher";
 // `next build`'s TypeScript pass instead.
 const config = { matcher: PROXY_MATCHER };
 
+// Note: the guard against proxy.ts's inline literal drifting from
+// PROXY_MATCHER is the `ProxyMatcher` type annotation on `config` in
+// proxy.ts, checked by `tsc`/`next build` — not by this file. `pnpm test`
+// alone would false-green a divergence between the two arrays; CI runs
+// typecheck before test, so it's covered end to end.
+
 function matches(url: string): boolean {
   return unstable_doesMiddlewareMatch({ config, url });
 }
