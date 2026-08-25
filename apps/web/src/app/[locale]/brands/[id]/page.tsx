@@ -1,6 +1,6 @@
 "use client";
 
-import { PLATFORM_IDS } from "@pubrick/shared";
+import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
@@ -9,25 +9,6 @@ import { ApiError, api, errorMessage } from "@/lib/api";
 type Channel = { id: string; platform: string; name: string };
 type Brand = { id: string; name: string };
 type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
-
-/**
- * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
- * form asks for the right keys instead of a generic "token" for seven of eight
- * platforms. Keep in sync with the publishers added in later plans.
- */
-export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
-  telegram: ["botToken", "chatId"],
-  vk: ["accessToken", "groupId"],
-  dzen: ["token"],
-  vc_ru: ["token"],
-  max: ["token"],
-  bluesky: ["handle", "appPassword"],
-  mastodon: ["instanceUrl", "accessToken"],
-  x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],
-};
-
-/** Fields that are not secrets — everything else renders as type="password". */
-export const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
 
 type PlatformId = (typeof PLATFORM_IDS)[number];
 

@@ -1,9 +1,9 @@
-import { PLATFORM_IDS } from "@pubrick/shared";
+import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
-import BrandPage, { NON_SECRET_FIELDS, PLATFORM_FIELDS } from "./page";
+import BrandPage from "./page";
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -71,6 +71,63 @@ describe("BrandPage remove()", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/something went wrong/i);
+    });
+  });
+});
+
+/**
+ * The most consequential action on this page: adding a channel carries the
+ * user's bot token / API secret to the server. Field NAMES here are
+ * hardcoded to the known-correct telegram values ("botToken", "chatId") —
+ * NOT read from PLATFORM_FIELDS — precisely so this test is an independent
+ * check against the production table, not a mirror of it. The
+ * PLATFORM_FIELDS-driven test above proves the page's render logic tracks
+ * whatever the table says; this one proves the table (and the submit path)
+ * says the right thing for a real platform.
+ */
+describe("addChannel POST body (Step 3, Critical)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("submits credentials keyed and valued exactly as typed, alongside brandId/platform/name", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET", body: init?.body as string | undefined });
+      if (init?.method === "POST" && url.includes("/api/channels")) {
+        return jsonResponse(201, { id: "new-ch" });
+      }
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+
+    // Platform stays at its default ("telegram"): botToken + chatId.
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(en.Channels.namePlaceholder), "Main channel");
+    await user.type(screen.getByPlaceholderText("botToken"), "123456:ABC-DEF-token");
+    await user.type(screen.getByPlaceholderText("chatId"), "-1001234567890");
+
+    await user.click(screen.getByRole("button", { name: en.Channels.add }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === "POST" && c.url.includes("/api/channels"))).toBe(true);
+    });
+
+    const postCall = calls.find((c) => c.method === "POST" && c.url.includes("/api/channels"));
+    if (!postCall || postCall.body === undefined) throw new Error("no POST body captured");
+    expect(JSON.parse(postCall.body)).toEqual({
+      brandId: "b1",
+      platform: "telegram",
+      name: "Main channel",
+      credentials: {
+        botToken: "123456:ABC-DEF-token",
+        chatId: "-1001234567890",
+      },
     });
   });
 });

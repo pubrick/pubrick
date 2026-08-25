@@ -11,6 +11,25 @@ export const PLATFORM_IDS = [
   "x",
 ] as const;
 
+/**
+ * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
+ * form asks for the right keys instead of a generic "token" for seven of eight
+ * platforms. Keep in sync with the publishers added in later plans.
+ */
+export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
+  telegram: ["botToken", "chatId"],
+  vk: ["accessToken", "groupId"],
+  dzen: ["token"],
+  vc_ru: ["token"],
+  max: ["token"],
+  bluesky: ["handle", "appPassword"],
+  mastodon: ["instanceUrl", "accessToken"],
+  x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],
+};
+
+/** Fields that are not secrets — everything else renders as type="password". */
+export const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
+
 export const channelCreateSchema = z.object({
   brandId: z.string().uuid(),
   platform: z.enum(PLATFORM_IDS),

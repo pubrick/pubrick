@@ -14,35 +14,56 @@ import { api } from "@/lib/api";
 const mockApi = vi.mocked(api);
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
+type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
+
+type Adaptation = {
+  id: string;
+  channelId: string;
+  status: AdaptationStatus;
+  externalUrl: string | null;
+  lastError: string | null;
+};
+
+type Channel = { id: string; platform: string; name: string };
 
 type ContentItem = {
   id: string;
   title: string | null;
   status: ContentStatus;
-  adaptations: [];
+  adaptations: Adaptation[];
 };
 
-function item(id: string, title: string, status: ContentStatus): ContentItem {
-  return { id, title, status, adaptations: [] };
+function item(
+  id: string,
+  title: string,
+  status: ContentStatus,
+  adaptations: Adaptation[] = [],
+): ContentItem {
+  return { id, title, status, adaptations };
 }
 
-const channels: unknown[] = [];
+const noChannels: Channel[] = [];
 
 type Call = { path: string; method: string };
 
 /**
  * `respond` decides what GET /api/content(?status=...) returns for a given
- * query string; the channels GET is answered with a fixed empty list, which
- * is all this page's grouping/filter/link behaviour needs.
+ * query string; `channelList` answers GET /api/channels (empty by default —
+ * only the adaptation-rendering tests need real channels for channelLabel()
+ * to resolve).
  */
-function installHandlers(calls: Call[], respond: (query: string) => ContentItem[]) {
+function installHandlers(
+  calls: Call[],
+  respond: (query: string) => ContentItem[],
+  channelList: Channel[] = noChannels,
+) {
   mockApi.mockImplementation(async (...args: unknown[]) => {
     const path = args[0] as string;
     const init = args[1] as RequestInit | undefined;
     const method = init?.method ?? "GET";
     calls.push({ path, method });
 
-    if (method === "GET" && path === "/api/channels") return channels;
+    if (method === "GET" && path === "/api/channels") return channelList;
     if (method === "GET" && path.startsWith("/api/content")) {
       const query = path.includes("?") ? path.slice(path.indexOf("?")) : "";
       return respond(query);
@@ -132,5 +153,63 @@ describe("row links (Step 2)", () => {
     const link2 = await screen.findByRole("link", { name: "Second post" });
     expect(link1).toHaveAttribute("href", "/en/content/c1");
     expect(link2).toHaveAttribute("href", "/en/content/c2");
+  });
+});
+
+describe("adaptation rendering (Step 2)", () => {
+  it("resolves each adaptation's channel via channelLabel() and links only a published adaptation with a linkable externalUrl", async () => {
+    const calls: Call[] = [];
+    const channelList: Channel[] = [
+      { id: "ch1", platform: "telegram", name: "Main channel" },
+      { id: "ch2", platform: "vk", name: "VK group" },
+    ];
+    const adaptations: Adaptation[] = [
+      {
+        id: "a1",
+        channelId: "ch1",
+        status: "published",
+        externalUrl: "https://t.me/main/42",
+        lastError: null,
+      },
+      { id: "a2", channelId: "ch2", status: "published", externalUrl: null, lastError: null },
+      {
+        id: "a3",
+        channelId: "ch1",
+        status: "failed",
+        externalUrl: null,
+        lastError: "Telegram: chat not found",
+      },
+    ];
+    const items = [item("c1", "Launch post", "draft", adaptations)];
+    installHandlers(calls, () => items, channelList);
+
+    render(<ContentQueuePage />);
+
+    const itemLink = await screen.findByRole("link", { name: "Launch post" });
+    const itemLi = itemLink.closest("li");
+    if (!itemLi) throw new Error("content item <li> not found");
+
+    // The adaptation rows are the only nested <li>s under the item's own <li>.
+    const rows = within(itemLi).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+
+    // a1: published + https:// externalUrl -> real channel label + a real link.
+    expect(rows[0]).toHaveTextContent(
+      `[telegram] Main channel — ${en.Content.adaptationStatus.published}`,
+    );
+    const link = within(rows[0] as HTMLElement).getByRole("link", {
+      name: "https://t.me/main/42",
+    });
+    expect(link).toHaveAttribute("href", "https://t.me/main/42");
+
+    // a2: published but externalUrl is null -> different channel's label, no link.
+    expect(rows[1]).toHaveTextContent(`[vk] VK group — ${en.Content.adaptationStatus.published}`);
+    expect(within(rows[1] as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+
+    // a3: failed -> same channel as a1 (proves the label isn't just "whatever a1 showed"), no link.
+    expect(rows[2]).toHaveTextContent(
+      `[telegram] Main channel — ${en.Content.adaptationStatus.failed}`,
+    );
+    expect(within(rows[2] as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
   });
 });
