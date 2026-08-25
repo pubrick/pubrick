@@ -23,6 +23,8 @@ const ITEM_COLUMNS = {
 /** Validated (not `as never`-cast) against this at the API boundary in `list()`. */
 type ContentStatusValue = (typeof schema.CONTENT_STATUSES)[number];
 
+type AdaptationStatusValue = (typeof schema.ADAPTATION_STATUSES)[number];
+
 /**
  * Item statuses in which the text is still the author's to change.
  *
@@ -34,14 +36,76 @@ type ContentStatusValue = (typeof schema.CONTENT_STATUSES)[number];
  * than silently resetting it to `draft`: taking an approval back is a decision,
  * and the reviewer makes it explicitly (reject, edit, approve again).
  *
- * `failed` is deliberately outside the set too — reject it first, which is one
- * click and leaves an honest trail, instead of letting a half-delivered
- * fan-out be rewritten underneath its surviving adaptations.
+ * `failed` IS in the set, and deliberately so. Nothing is pinned by it:
+ * `recomputeItemStatus` only writes `failed` once EVERY adaptation has failed,
+ * so no delivery is outstanding, no post is live, and no approval is being
+ * revoked — and a late dead-letter delivery cannot resurrect one either, since
+ * `markExhausted` acts only on an adaptation still in `publishing`. Excluding
+ * it was also incoherent with `approve`, which re-targets `failed` adaptations:
+ * the same failed text could be re-sent in one click but not CORRECTED without
+ * a reject first, even though the most common permanent failure IS the content
+ * (Telegram 400: too long, bad entities). Fixing the text is the entire point
+ * of that screen.
+ *
+ * `as const satisfies` rather than a `readonly ContentStatusValue[]`
+ * annotation: both make a typo a compile error, but this one also keeps the
+ * literal member types, which is what lets `PINNED_ITEM_MESSAGE` below be
+ * exhaustive by construction.
  */
-const EDITABLE_ITEM_STATUSES: readonly string[] = ["draft", "rejected"];
+const EDITABLE_ITEM_STATUSES = [
+  "draft",
+  "rejected",
+  "failed",
+] as const satisfies readonly ContentStatusValue[];
 
-/** Adaptation statuses with no delivery in flight, so an override is still safe to change. */
-const EDITABLE_ADAPTATION_STATUSES: readonly string[] = ["pending", "failed"];
+type EditableItemStatus = (typeof EDITABLE_ITEM_STATUSES)[number];
+/** The complement: every status in which the text is pinned. */
+type PinnedItemStatus = Exclude<ContentStatusValue, EditableItemStatus>;
+
+/**
+ * The 409 body, in the words of the status the user is actually looking at.
+ *
+ * A single sentence could not tell the truth here: "Approved content cannot be
+ * edited" is a lie about an item the UI labels "Published", and was one about
+ * "Failed" until that became editable. Keying the message off the status keeps
+ * the two in step, and typing the record over `PinnedItemStatus` means adding a
+ * status to `CONTENT_STATUSES` without deciding what it means for editing is a
+ * compile error here rather than a confident wrong sentence in the UI.
+ */
+const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
+  approved: "Approved content cannot be edited; reject it first",
+  published: "This content has already been published and can no longer be edited",
+};
+
+/**
+ * Adaptation statuses with no delivery in flight, so an override is still safe
+ * to change. Same shape, same reasoning as the item set above.
+ */
+const EDITABLE_ADAPTATION_STATUSES = [
+  "pending",
+  "failed",
+] as const satisfies readonly AdaptationStatusValue[];
+
+type EditableAdaptationStatus = (typeof EDITABLE_ADAPTATION_STATUSES)[number];
+type PinnedAdaptationStatus = Exclude<AdaptationStatusValue, EditableAdaptationStatus>;
+
+/** Per-status 409 body for one channel's override — exhaustive, as above. */
+const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
+  scheduled: "A scheduled post cannot be edited; reject the content first",
+  queued: "A post already queued for publishing cannot be edited; reject the content first",
+  publishing: "A post that is being published right now cannot be edited; reject the content first",
+  published: "This channel's post has already been published and can no longer be edited",
+};
+
+function isEditableItemStatus(status: ContentStatusValue): status is EditableItemStatus {
+  return EDITABLE_ITEM_STATUSES.some((editable) => editable === status);
+}
+
+function isEditableAdaptationStatus(
+  status: AdaptationStatusValue,
+): status is EditableAdaptationStatus {
+  return EDITABLE_ADAPTATION_STATUSES.some((editable) => editable === status);
+}
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -177,12 +241,8 @@ export class ContentRepository {
       .for("update");
     const item = rows[0];
     if (!item) throw new NotFoundException("Content item not found");
-    if (EDITABLE_ITEM_STATUSES.includes(item.status)) return;
-    throw new ConflictException(
-      item.status === "published"
-        ? "This content has already been published and can no longer be edited"
-        : "Approved content cannot be edited; reject it first",
-    );
+    if (isEditableItemStatus(item.status)) return;
+    throw new ConflictException(PINNED_ITEM_MESSAGE[item.status]);
   }
 
   async update(orgId: string, id: string, data: ContentUpdate) {
@@ -230,12 +290,8 @@ export class ContentRepository {
       if (!current) throw new NotFoundException("Adaptation not found");
 
       await this.requireEditableItem(tx, orgId, contentItemId);
-      if (!EDITABLE_ADAPTATION_STATUSES.includes(current.status)) {
-        throw new ConflictException(
-          current.status === "published"
-            ? "This channel's post has already been published and can no longer be edited"
-            : "A post already queued for publishing cannot be edited; reject it first",
-        );
+      if (!isEditableAdaptationStatus(current.status)) {
+        throw new ConflictException(PINNED_ADAPTATION_MESSAGE[current.status]);
       }
 
       const rows = await tx

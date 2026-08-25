@@ -118,6 +118,149 @@ describe.skipIf(!url)("content e2e", () => {
       .expect(200);
   });
 
+  it("edits a FAILED item: correcting the text the platform rejected is the whole point", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Far too long for Telegram", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    // What markFailed + recomputeItemStatus leave behind when the only
+    // adaptation fails permanently: nothing outstanding, nothing live, and no
+    // approval left to revoke.
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', attempt_count = 1,
+           last_error = 'Telegram 400: message is too long' WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `UPDATE content_items SET status = 'failed' WHERE id = '${created.body.id}'`,
+      );
+      await pool.end();
+    }
+
+    await agent
+      .patch(`/api/content/${created.body.id}`)
+      .send({ body: "Short enough now" })
+      .expect(200);
+    await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+      .send({ body: "Short enough for this channel" })
+      .expect(200);
+
+    // ...and the correction is genuinely re-sendable. approve() already
+    // re-targets a `failed` adaptation, which is exactly why refusing the edit
+    // was incoherent: the same rejected text could be re-sent in one click,
+    // but fixing it first demanded a reject.
+    const reApproved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(200);
+    expect(reApproved.body.body).toBe("Short enough now");
+    expect(reApproved.body.adaptations[0]).toMatchObject({
+      status: "queued",
+      body: "Short enough for this channel",
+    });
+  });
+
+  it("409s with the message for the status on screen, not one sentence for every state", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Reviewed", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+    const approvedDenial = await agent
+      .patch(`/api/content/${created.body.id}`)
+      .send({ body: "nope" })
+      .expect(409);
+    expect(approvedDenial.body.message).toBe("Approved content cannot be edited; reject it first");
+
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${adaptationId}'`);
+      await db.execute(
+        `UPDATE content_items SET status = 'published' WHERE id = '${created.body.id}'`,
+      );
+      await pool.end();
+    }
+
+    // The old single sentence called this "Approved content" on a screen
+    // labelled "Published" — and said the same about "Failed" until that
+    // became editable.
+    const publishedDenial = await agent
+      .patch(`/api/content/${created.body.id}`)
+      .send({ body: "nope" })
+      .expect(409);
+    expect(publishedDenial.body.message).toBe(
+      "This content has already been published and can no longer be edited",
+    );
+  });
+
+  it("a rejected partial fan-out is editable, except the channel that already published", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const second = await agent
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "telegram",
+        name: "Second",
+        credentials: { botToken: "456:def", chatId: "-1009876543210" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Two channels", channelIds: [channelId, second.body.id] })
+      .expect(201);
+    const sent = (created.body.adaptations as { id: string; channelId: string }[]).find(
+      (a) => a.channelId === channelId,
+    );
+    const other = (created.body.adaptations as { id: string; channelId: string }[]).find(
+      (a) => a.channelId === second.body.id,
+    );
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    // Partial fan-out: one channel delivered, the other still queued. The item
+    // stays `approved` — recomputeItemStatus only promotes on a clean sweep.
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${sent?.id}'`);
+      await pool.end();
+    }
+
+    // Rejecting stops the channel that has not gone out yet and hands the text
+    // back — but it cannot un-send the one that has.
+    await agent.post(`/api/content/${created.body.id}/reject`).send({}).expect(200);
+    await agent.patch(`/api/content/${created.body.id}`).send({ body: "Revised" }).expect(200);
+    await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${other?.id}`)
+      .send({ body: "Revised for the channel still waiting" })
+      .expect(200);
+
+    // This is why the adaptation's own status is checked and not just the
+    // item's: the item is `rejected` and editable, and this row is neither.
+    const denial = await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${sent?.id}`)
+      .send({ body: "Rewriting history" })
+      .expect(409);
+    expect(denial.body.message).toBe(
+      "This channel's post has already been published and can no longer be edited",
+    );
+  });
+
   it("409s an edit to an APPROVED item and leaves the reviewed body in place", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
