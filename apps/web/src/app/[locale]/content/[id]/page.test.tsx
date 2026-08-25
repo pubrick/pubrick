@@ -221,7 +221,16 @@ describe("approve now (Step 2)", () => {
     // The literal pins what this screen sends; the schema — the very one the
     // API validates with — pins that the server will accept it, so a
     // server-side field rename fails here instead of only in production.
-    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
+    //
+    // Round trip, NOT safeParse().success: every field in contentApproveSchema
+    // is optional and z.object() STRIPS unknown keys, so renaming `scheduledAt`
+    // server-side leaves `{scheduledAt: "…"}` parsing happily — into `{}`.
+    // Comparing the parse result back to the payload is what catches the
+    // silent strip. (The other two schemas have required fields, so a rename
+    // fails their parse outright.)
+    expect(contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""))).toEqual(
+      JSON.parse(approveCall?.body ?? ""),
+    );
   });
 
   it("sends no scheduledAt when clicking Publish now, even with a schedule value already chosen", async () => {
@@ -252,7 +261,9 @@ describe("approve now (Step 2)", () => {
 
     const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
     expect(approveCall?.body).toBe(JSON.stringify({}));
-    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
+    expect(contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""))).toEqual(
+      JSON.parse(approveCall?.body ?? ""),
+    );
   });
 });
 
@@ -285,7 +296,9 @@ describe("approve with a schedule (Step 3)", () => {
     const approveCall = calls.find((c) => c.path === "/api/content/c1/approve");
     expect(approveCall?.method).toBe("POST");
     expect(approveCall?.body).toBe(JSON.stringify({ scheduledAt: new Date(chosen).toISOString() }));
-    expect(contentApproveSchema.safeParse(JSON.parse(approveCall?.body ?? "")).success).toBe(true);
+    expect(contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""))).toEqual(
+      JSON.parse(approveCall?.body ?? ""),
+    );
   });
 
   /**

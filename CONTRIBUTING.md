@@ -41,14 +41,28 @@ Never edit an applied migration. See `.claude/skills/db-migrations/SKILL.md`.
   mocking it away in page tests never leaves its own logic (error
   classification, `ApiError` construction) uncovered.
 - A request body gets **two** assertions: the literal one (`toEqual` /
-  `toBe`) pinning what the screen sends, and
-  `expect(<schema>.safeParse(payload).success).toBe(true)` against the
+  `toBe`) pinning what the screen sends, and a parse against the
   `@pubrick/shared` schema the API validates that endpoint with —
   `contentCreateSchema`, `contentApproveSchema`, `adaptationUpdateSchema`.
   The literal is written by hand and cannot notice a field being renamed
   server-side: without the schema line, a rename leaves every web test green
   and fails only in production. Fixtures use real UUIDs wherever a schema
-  requires them, or the parse is vacuous.
+  requires them, or the parse is vacuous. Two things to get right:
+  - `expect(schema.safeParse(payload).success).toBe(true)` is enough only
+    when the schema has a **required** field, which is what a rename then
+    breaks. For a schema whose fields are all optional —
+    `contentApproveSchema` is one — assert the round trip instead:
+    `expect(schema.parse(payload)).toEqual(payload)`. `z.object()` strips
+    unknown keys, so after a rename `{scheduledAt: "…"}` still parses
+    successfully, just into `{}`; only comparing the parse result back
+    against the payload notices the field vanished.
+  - **The schema assertion reads `packages/shared/dist`, not `src`.** Turbo's
+    `test` task declares `dependsOn: ["^build"]`, so the root `pnpm test` and
+    CI always parse against a freshly built schema. A bare
+    `pnpm --filter @pubrick/web test` does not: it validates against whatever
+    `dist` happens to hold, so a schema change you just made in `src` is
+    invisible and the suite stays green. Run `pnpm --filter @pubrick/shared
+    build` first, or use the root `pnpm test`, whenever a schema is in play.
 - Message-file key parity across `en`/`es`/`ru`/`pt` is enforced by
   `src/test/messages-parity.test.ts`, comparing full dotted key paths. Adding
   a key to `en.json` alone would ship as the raw key path rendered on screen

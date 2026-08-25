@@ -63,11 +63,22 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
   directly against a stubbed `fetch` — never left uncovered because pages
   mock it away.
 - Request bodies are pinned twice: a literal `toEqual`/`toBe` for what the
-  screen sends, plus `<schema>.safeParse(payload).success` against the
-  `@pubrick/shared` schema the API validates with (`contentCreateSchema`,
-  `contentApproveSchema`, `adaptationUpdateSchema`). The literal alone can't
-  see a server-side field rename — both stay green while production breaks.
-  Fixtures therefore use real UUIDs where a schema demands them.
+  screen sends, plus a parse against the `@pubrick/shared` schema the API
+  validates with (`contentCreateSchema`, `contentApproveSchema`,
+  `adaptationUpdateSchema`). The literal alone can't see a server-side field
+  rename — both stay green while production breaks. Fixtures therefore use
+  real UUIDs where a schema demands them.
+  - Where every field of a schema is optional (`contentApproveSchema`), assert
+    the ROUND TRIP — `expect(schema.parse(body)).toEqual(body)` — not
+    `safeParse(...).success`. `z.object()` strips unknown keys, so a renamed
+    optional field parses happily and silently yields `{}`; only comparing the
+    result back to the payload catches it.
+  - ⚠ This only bites after `@pubrick/shared` is rebuilt: web resolves the
+    package from `dist`, not `src`. `pnpm test` and CI are fine (turbo's
+    `test` task `dependsOn: ["^build"]`), but a bare
+    `pnpm --filter @pubrick/web test` against a stale `dist` validates the
+    OLD schema and stays green through a rename. Rebuild shared, or run the
+    root `pnpm test`, before trusting a schema assertion.
 - `messages/*.json` key parity across `en`/`es`/`ru`/`pt` is enforced by
   `src/test/messages-parity.test.ts` (full dotted paths). Add a key to `en`
   only and three languages render the raw key path to users; the suite would
