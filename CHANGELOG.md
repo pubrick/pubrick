@@ -32,6 +32,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - `PATCH /content/:id` rejects an empty body with 400 instead of 500, and `scheduledAt` must be in the future.
 
 ### Fixed
-- "Never post twice" is enforced by the database: a partial unique index allows at most one `published` publication per adaptation, and the worker checks for one before sending.
+- The database now bounds publication bookkeeping: a partial unique index allows at most one `published` publication row per adaptation, and the worker checks for one before sending. This makes a re-delivered or re-approved job a no-op; it does not make a duplicate *post* impossible, since the send happens between that check and the record (a process killed in between leaves no record and a later attempt sends again).
 - A late dead-letter delivery no longer clobbers a re-approved adaptation — `markExhausted` acts only on an adaptation still in `publishing`.
+- Rejecting an item whose delivery is mid-attempt (`publishing`, e.g. part-way through a transient retry chain) no longer strands it: the adaptation goes back to `pending` and its job is cancelled, so it can be approved again.
+- A publication that is already recorded no longer reports as a recording failure — the worker converges the adaptation's status instead of retrying a write that can only violate the unique index again.
 - `getPublisher` no longer returns inherited `Object.prototype` members (`getPublisher("constructor")` was truthy but not a publisher).

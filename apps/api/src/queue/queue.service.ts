@@ -106,32 +106,55 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Cancels the outstanding publish job for `(adaptationId, attemptCount)`,
-   * inside the caller's transaction: the adaptation's status change and the
-   * cancellation either both land or neither does. Without this, rejecting or
-   * rescheduling an already-approved item leaves a live job that still
-   * delivers the post at the original time.
+   * Cancels every still-live publish job for one adaptation, inside the
+   * caller's transaction: the adaptation's status change and the cancellation
+   * either both land or neither does. Without this, rejecting or rescheduling
+   * an already-approved item leaves a live job that still delivers the post at
+   * the original time.
    *
-   * `cancel` accepts pg-boss's `ConnectionOptions` (`{ db }`) in the installed
-   * v12 typings, so it genuinely runs on the caller's transaction — verified
-   * against pg-boss/dist/manager.d.ts:
-   * `cancel(name, id, options?: types.ConnectionOptions)`.
+   * Jobs are found by PAYLOAD, not by recomputing `publishJobId`. That is not
+   * a stylistic choice: the job id encodes the attempt count AT ENQUEUE TIME,
+   * and `markPublishing` bumps `attempt_count` on every attempt, so as soon as
+   * the worker has picked the job up even once the derived id no longer
+   * matches the live job. (Enqueued at count N -> id `<id>:N`; one attempt
+   * later the row says N+1, and `<id>:N+1` is an id that has never existed.)
+   * Deriving it would silently cancel nothing for exactly the case that needs
+   * it most — an adaptation stuck in `publishing` part-way through a transient
+   * retry chain.
+   *
+   * `findJobs` and `cancel` both accept pg-boss's `ConnectionOptions`
+   * (`{ db }`) in the installed v12 typings, so both genuinely run on the
+   * caller's transaction — verified against pg-boss/dist/manager.d.ts:
+   * `findJobs(name, options?: types.FindJobsOptions)` (which extends
+   * `ConnectionOptions`) and `cancel(name, id, options?: ConnectionOptions)`.
+   * The payload filter compiles to `data @> $1`, and it is org-scoped like
+   * every other query in this codebase.
    *
    * Deliberately tolerant of "no such job": cancelling is a best-effort
-   * cleanup of a job that may legitimately be gone (already completed,
-   * already cancelled, aged out of retention). What must NOT happen is the
-   * adaptation staying deliverable, and that is decided by the status write
-   * this shares a transaction with — plus the worker's own check that the
-   * parent item is not rejected.
+   * cleanup of a job that may legitimately be gone (already completed, already
+   * cancelled, aged out of retention). What must NOT happen is the adaptation
+   * staying deliverable, and that is decided by the status write this shares a
+   * transaction with — plus the worker's own check that the parent item is not
+   * rejected.
    *
-   * The caller must advance `attempt_count` afterwards: the cancelled job row
-   * keeps its id, so re-enqueueing at the same attempt count would be
-   * suppressed by `send()`'s ON CONFLICT DO NOTHING (see `publishJobId`).
+   * The caller must still advance `attempt_count` afterwards: a cancelled
+   * pg-boss row keeps its id, so re-enqueueing at the same attempt count would
+   * be suppressed by `send()`'s ON CONFLICT DO NOTHING (see `publishJobId`).
    */
-  async cancelPublish(tx: Tx, adaptationId: string, attemptCount: number): Promise<void> {
+  async cancelPublish(tx: Tx, adaptationId: string, orgId: string): Promise<void> {
     if (!this.boss) throw new Error("Queue is not started");
-    await this.boss.cancel(PUBLISH_QUEUE, publishJobId(adaptationId, attemptCount), {
-      db: fromDrizzle(tx, sql),
+    const db = fromDrizzle(tx, sql);
+    const jobs = await this.boss.findJobs(PUBLISH_QUEUE, {
+      data: { adaptationId, orgId },
+      db,
     });
+    // Terminal jobs are left alone: `cancel` ignores them anyway (its UPDATE is
+    // guarded by `state < completed`), but filtering keeps the id list to the
+    // handful of jobs that can actually still run.
+    const live = jobs
+      .filter((job) => job.state === "created" || job.state === "retry" || job.state === "active")
+      .map((job) => job.id);
+    if (live.length === 0) return;
+    await this.boss.cancel(PUBLISH_QUEUE, live, { db });
   }
 }

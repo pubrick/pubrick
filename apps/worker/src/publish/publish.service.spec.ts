@@ -34,6 +34,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     hasPublished: vi.fn().mockResolvedValue(false),
     markPublishing: vi.fn().mockResolvedValue(true),
     markPublished: vi.fn().mockResolvedValue(undefined),
+    markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
     markFailed: vi.fn().mockResolvedValue(undefined),
     recordTransient: vi.fn().mockResolvedValue(undefined),
   };
@@ -188,6 +189,92 @@ describe("PublishService.handle", () => {
     expect(publish).not.toHaveBeenCalled();
     // The row's new status is the truth now — do not overwrite it with "failed".
     expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  // A duplicate-record violation means the delivery is ALREADY on the record —
+  // the state markPublished was trying to reach. Retrying can only reproduce
+  // it, and the loud "manual reconciliation needed" log is simply wrong here.
+  it("treats a duplicate published-publication violation as already recorded: converges the status, no retries, no alarm", async () => {
+    const { repo } = fixture();
+    const duplicate = Object.assign(new Error("Failed query: insert into publications"), {
+      cause: { code: "23505", constraint: "publications_one_published_per_adaptation" },
+    });
+    repo.markPublished = vi.fn().mockRejectedValue(duplicate);
+    repo.markAlreadyPublished = vi.fn().mockResolvedValue(undefined);
+    const publish = vi
+      .fn()
+      .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
+    const service = new PublishService(
+      repo as never,
+      () => publisherStub(publish),
+      "https://api",
+      0,
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(repo.markPublished).toHaveBeenCalledTimes(1); // not 3 — no point retrying
+    expect(repo.markAlreadyPublished).toHaveBeenCalledWith("o1", "a1");
+  });
+
+  it("recognises the violation when the driver error is not wrapped by drizzle", async () => {
+    const { repo } = fixture();
+    repo.markPublished = vi.fn().mockRejectedValue(
+      Object.assign(new Error("duplicate key value violates unique constraint"), {
+        code: "23505",
+        constraint: "publications_one_published_per_adaptation",
+      }),
+    );
+    repo.markAlreadyPublished = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn().mockResolvedValue({ externalId: "77", externalUrl: null });
+    const service = new PublishService(
+      repo as never,
+      () => publisherStub(publish),
+      "https://api",
+      0,
+    );
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markAlreadyPublished).toHaveBeenCalledWith("o1", "a1");
+  });
+
+  it("does NOT treat a different unique violation as already recorded — that keeps its loud failure path", async () => {
+    const { repo } = fixture();
+    repo.markPublished = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Failed query"), {
+        cause: { code: "23505", constraint: "publications_pkey" },
+      }),
+    );
+    repo.markAlreadyPublished = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn().mockResolvedValue({ externalId: "77", externalUrl: null });
+    const service = new PublishService(
+      repo as never,
+      () => publisherStub(publish),
+      "https://api",
+      0,
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(repo.markAlreadyPublished).not.toHaveBeenCalled();
+    expect(repo.markPublished).toHaveBeenCalledTimes(3);
+  });
+
+  it("never rethrows when the convergence write itself fails — the post is live", async () => {
+    const { repo } = fixture();
+    repo.markPublished = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Failed query"), {
+        cause: { code: "23505", constraint: "publications_one_published_per_adaptation" },
+      }),
+    );
+    repo.markAlreadyPublished = vi.fn().mockRejectedValue(new Error("db down"));
+    const publish = vi.fn().mockResolvedValue({ externalId: "77", externalUrl: null });
+    const service = new PublishService(
+      repo as never,
+      () => publisherStub(publish),
+      "https://api",
+      0,
+    );
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
   });
 
   it("fails permanently (never sends) when stored credentials do not match the adapter's schema", async () => {

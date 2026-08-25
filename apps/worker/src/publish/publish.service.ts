@@ -20,6 +20,28 @@ function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
+/** Postgres unique_violation. */
+const UNIQUE_VIOLATION = "23505";
+const PUBLISHED_PUBLICATION_INDEX = "publications_one_published_per_adaptation";
+
+/**
+ * Is this the "a published publications row for this adaptation already
+ * exists" violation, as opposed to any other write failure?
+ *
+ * Checks the error and its `cause`: drizzle wraps the driver's error, but the
+ * `code`/`constraint` fields belong to node-postgres's `DatabaseError`
+ * underneath. Narrow on BOTH the SQLSTATE and the index name — a different
+ * unique violation is a real bug and must keep its loud failure path.
+ */
+function isDuplicatePublication(error: unknown): boolean {
+  type PgLike = { code?: unknown; constraint?: unknown; cause?: unknown };
+  const candidates = [error, (error as PgLike | undefined)?.cause];
+  return candidates.some((candidate) => {
+    const pg = candidate as PgLike | undefined;
+    return pg?.code === UNIQUE_VIOLATION && pg?.constraint === PUBLISHED_PUBLICATION_INDEX;
+  });
+}
+
 @Injectable()
 export class PublishService {
   private readonly logger = new Logger(PublishService.name);
@@ -67,7 +89,9 @@ export class PublishService {
     // The durable "already delivered" check, independent of the adaptation's
     // own status column (which the api can move back on a re-approve). Backed
     // by the partial unique index on publications, so even a lost race here
-    // cannot produce two `published` rows for one adaptation.
+    // cannot produce two `published` ROWS for one adaptation — note that this
+    // bounds the record, not the send: the window between this check and
+    // markPublished is real, and a crash inside it can still post twice.
     if (await this.repo.hasPublished(job.orgId, job.adaptationId)) {
       this.logger.warn(
         `Skipping publish for adaptation ${job.adaptationId}: a published publication already exists`,
@@ -211,6 +235,18 @@ export class PublishService {
         await this.repo.markPublished(orgId, adaptationId, result);
         return;
       } catch (error) {
+        // Not a failure: a `published` publications row for this adaptation
+        // already exists, which is exactly the state this method is trying to
+        // reach. Reachable through the residual duplicate-send window, and
+        // through an ambiguous commit (the transaction landed but the client
+        // saw the connection drop and retried). Retrying can only reproduce
+        // it, so converge the adaptation's status instead of burning all three
+        // attempts and then crying "manual reconciliation needed" about a post
+        // that is correctly recorded.
+        if (isDuplicatePublication(error)) {
+          await this.convergeAlreadyPublished(orgId, adaptationId);
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         if (attempt === MARK_PUBLISHED_MAX_ATTEMPTS) {
           this.logger.error(
@@ -223,6 +259,27 @@ export class PublishService {
         }
         await sleep(this.markPublishedRetryDelayMs * attempt);
       }
+    }
+  }
+
+  /**
+   * The delivery is already recorded; only the adaptation's own status is out
+   * of date. Same "must never throw" contract as `recordPublished` — the post
+   * is live, so a rethrow here would hand pg-boss a reason to re-send it.
+   */
+  private async convergeAlreadyPublished(orgId: string, adaptationId: string): Promise<void> {
+    try {
+      await this.repo.markAlreadyPublished(orgId, adaptationId);
+      this.logger.log(
+        `Publication already recorded for adaptation ${adaptationId}; converged status to published`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        "PUBLISH STATUS CONVERGENCE FAILED: the post was delivered AND recorded, but the " +
+          `adaptation's own status could not be updated — it may be stuck in "publishing". ` +
+          `orgId=${orgId} adaptationId=${adaptationId} error=${message}`,
+      );
     }
   }
 

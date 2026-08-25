@@ -198,6 +198,55 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(pubs.every((p) => p.status === "failed")).toBe(true);
   });
 
+  it("markAlreadyPublished converges a stranded row without writing a second publications record", async () => {
+    // The state the duplicate-record path leaves behind: a correct published
+    // publications row exists, but markPublished's transaction rolled back on
+    // the unique violation, so the adaptation itself is still "publishing".
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublished(orgId, adaptationId, { externalId: "5", externalUrl: "https://x/5" });
+    await db
+      .update(schema.adaptations)
+      .set({ status: "publishing", lastError: "connection reset" })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    await repo.markAlreadyPublished(orgId, adaptationId);
+
+    const [row] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(row?.status).toBe("published");
+    expect(row?.lastError).toBeNull();
+
+    // Exactly one record, still the original one — convergence must not invent
+    // a second delivery.
+    const pubs = await db
+      .select()
+      .from(schema.publications)
+      .where(eq(schema.publications.adaptationId, adaptationId));
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]?.externalId).toBe("5");
+
+    // The parent item is promoted too, exactly as markPublished would have.
+    const [item] = await db
+      .select()
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, row?.contentItemId as string));
+    expect(item?.status).toBe("published");
+  });
+
+  it("markAlreadyPublished is org-scoped and a no-op for an unknown adaptation", async () => {
+    const adaptationId = await seedAdaptation("publishing");
+    await repo.markAlreadyPublished("some-other-org", adaptationId);
+
+    const [row] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(row?.status).toBe("publishing");
+  });
+
   it("hasPublished reads the durable record, not the adaptation status column", async () => {
     const adaptationId = await seedAdaptation("queued");
     expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);

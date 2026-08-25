@@ -165,24 +165,6 @@ export class ContentRepository {
   }
 
   /**
-   * Locks the adaptations of one item that are in `statuses`, inside the
-   * caller's transaction.
-   *
-   * `FOR UPDATE` is load-bearing, not decoration: the worker claims an
-   * adaptation with an UPDATE (`markPublishing`), which takes the same row
-   * lock. Locking here serialises "is this still deliverable?" against "I am
-   * delivering it now" instead of letting both read a stale row — either we
-   * see `publishing` and leave the in-flight attempt alone, or the worker's
-   * claim waits for this transaction and then finds a status it must not
-   * publish from (see the worker's `markPublishing`).
-   *
-   * Callers must take this lock BEFORE writing `content_items`. The worker's
-   * `markPublished`/`markFailed` lock adaptations first and only then the
-   * parent item (`recomputeItemStatus`), so writing the item first here would
-   * give the two sides opposite lock orders — a genuine deadlock whenever a
-   * publish finishes at the same moment as an approve or reject.
-   */
-  /**
    * 404s an item that does not exist in this org, WITHOUT taking a row lock on
    * it — the lock on `content_items` must not be acquired before the one on
    * `adaptations` (see `lockAdaptations`). A concurrent delete between this
@@ -210,6 +192,24 @@ export class ContentRepository {
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
   }
 
+  /**
+   * Locks the adaptations of one item that are in `statuses`, inside the
+   * caller's transaction.
+   *
+   * `FOR UPDATE` is load-bearing, not decoration: the worker claims an
+   * adaptation with an UPDATE (`markPublishing`), which takes the same row
+   * lock. Locking here serialises "is this still deliverable?" against "I am
+   * delivering it now" instead of letting both read a stale row — either we
+   * see the worker's write, or the worker's claim waits for this transaction
+   * and then finds a status it must not publish from (see the worker's
+   * `markPublishing`).
+   *
+   * Callers must take this lock BEFORE writing `content_items`. The worker's
+   * `markPublished`/`markFailed` lock adaptations first and only then the
+   * parent item (`recomputeItemStatus`), so writing the item first here would
+   * give the two sides opposite lock orders — a genuine deadlock whenever a
+   * publish finishes at the same moment as an approve or reject.
+   */
   private lockAdaptations(
     tx: Tx,
     orgId: string,
@@ -244,11 +244,15 @@ export class ContentRepository {
    * adaptation is genuinely rescheduled here: its outstanding job is cancelled
    * and a fresh one is enqueued with the new `startAfter`.
    *
-   * `queued` is deliberately NOT a target. A queued adaptation is already on
-   * its way out with no delay to change; re-enqueueing it would cancel a job
-   * that pg-boss may be fetching at this very moment for no user-visible gain.
-   * (Rejecting still cancels a `queued` job — there the point is to stop the
-   * delivery, not to move it.)
+   * `queued` and `publishing` are deliberately NOT targets. A queued
+   * adaptation is already on its way out with no delay to change, and a
+   * `publishing` one is mid-attempt: re-enqueueing either would cancel a live
+   * job — for `publishing`, an entire transient-retry chain that may still
+   * succeed on its own — for no user-visible gain. An in-flight attempt
+   * records its own truth when it lands (`markPublished`/`markFailed` both
+   * write unconditionally), and a `failed` outcome is re-approvable.
+   * (Rejecting DOES act on both — there the point is to stop the delivery, not
+   * to move it.)
    */
   async approve(orgId: string, id: string, scheduledAt: Date | null) {
     await db.transaction(async (tx) => {
@@ -261,7 +265,7 @@ export class ContentRepository {
         if (adaptation.status === "scheduled") {
           // The cancelled job keeps its id, so the count must advance or the
           // re-enqueue would be swallowed by send()'s ON CONFLICT DO NOTHING.
-          await this.queue.cancelPublish(tx, adaptation.id, attemptCount);
+          await this.queue.cancelPublish(tx, adaptation.id, orgId);
           attemptCount += 1;
         }
         await tx
@@ -299,6 +303,17 @@ export class ContentRepository {
    * one transaction with the status write, so the queue can never disagree
    * with the database.
    *
+   * `publishing` counts as outstanding, and leaving it out stranded the row
+   * for good. A transient platform failure leaves the adaptation `publishing`
+   * for the whole retry chain (`recordTransient` deliberately does not move
+   * the status). A reject during that window used to match nothing: no job
+   * cancelled, no status reset — and then the next retry loaded the item, saw
+   * `rejected` and returned normally, which completes the job and ends the
+   * chain. That also removed the dead-letter delivery that would otherwise
+   * have terminated the row, so the adaptation sat in `publishing` forever
+   * with no job behind it, and re-approve (which skips `publishing`) silently
+   * did nothing.
+   *
    * `attempt_count` advances for each cancelled job: a cancelled pg-boss row
    * keeps its id, so without the bump a later re-approve would derive the same
    * id, `send()` would suppress it as a duplicate, and the re-approve would
@@ -307,10 +322,14 @@ export class ContentRepository {
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
-      const outstanding = await this.lockAdaptations(tx, orgId, id, ["queued", "scheduled"]);
+      const outstanding = await this.lockAdaptations(tx, orgId, id, [
+        "queued",
+        "scheduled",
+        "publishing",
+      ]);
 
       for (const adaptation of outstanding) {
-        await this.queue.cancelPublish(tx, adaptation.id, adaptation.attemptCount);
+        await this.queue.cancelPublish(tx, adaptation.id, orgId);
         await tx
           .update(schema.adaptations)
           .set({

@@ -91,9 +91,17 @@ export class PublishRepository {
    * `adaptation.status` is not enough on its own: it can be moved back by the
    * api (re-approve, reject) or left stale by a crash between the send and the
    * bookkeeping, whereas a `published` `publications` row means a platform
-   * genuinely accepted a post for this adaptation. Paired with the partial
-   * unique index `publications_one_published_per_adaptation`, this is what
-   * makes "never post twice" more than a convention.
+   * genuinely accepted a post for this adaptation.
+   *
+   * Note what this does and does not buy. It is a check BEFORE the send, and
+   * the row it looks for is written AFTER one; the partial unique index
+   * `publications_one_published_per_adaptation` likewise guarantees at most
+   * one published RECORD per adaptation. Neither prevents a duplicate SEND: a
+   * process killed between `publisher.publish()` returning and `markPublished`
+   * committing leaves no record, so a later attempt will post again. Closing
+   * that would need an idempotency key the platform honours. What this does
+   * eliminate is the common case — a re-delivered or re-approved job for an
+   * adaptation that was already published and recorded.
    */
   async hasPublished(orgId: string, adaptationId: string): Promise<boolean> {
     const rows = await db
@@ -169,6 +177,30 @@ export class PublishRepository {
         attempt: updated.attemptCount,
       });
 
+      await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+    });
+  }
+
+  /**
+   * Converges the adaptation to `published` when the delivery is ALREADY on
+   * the record — i.e. `markPublished`'s insert hit
+   * `publications_one_published_per_adaptation`.
+   *
+   * Deliberately writes no `publications` row: the whole point is that one
+   * already exists (either from the residual duplicate-send window, or from an
+   * ambiguous commit where the transaction landed but the client saw a dropped
+   * connection and retried). Without this the adaptation would be left in
+   * `publishing` with a correct published record sitting next to it.
+   */
+  async markAlreadyPublished(orgId: string, adaptationId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      const rows = await tx
+        .update(schema.adaptations)
+        .set({ status: "published", lastError: null })
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .returning({ contentItemId: schema.adaptations.contentItemId });
+      const updated = rows[0];
+      if (!updated) return;
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
     });
   }

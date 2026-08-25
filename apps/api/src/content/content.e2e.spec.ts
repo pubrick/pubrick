@@ -429,6 +429,75 @@ describe.skipIf(!url)("content e2e", () => {
     ]);
   });
 
+  it("rejecting an item stuck mid-attempt (publishing) unsticks it instead of stranding it forever", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Telegram is down", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    // Exactly what a transient platform failure leaves behind: the worker
+    // claimed the attempt (status "publishing", attempt_count bumped) and
+    // recordTransient stored the reason without moving the status, so the row
+    // stays like this for the whole retry chain. The pg-boss job is still the
+    // one enqueued at attempt_count 0 — its id does NOT track the bumped
+    // count, which is why cancellation has to find the job by payload.
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'publishing', attempt_count = 1,
+           last_error = 'Too Many Requests' WHERE id = '${adaptationId}'`,
+      );
+      await pool.end();
+    }
+
+    const rejected = await agent
+      .post(`/api/content/${created.body.id}/reject`)
+      .send({})
+      .expect(200);
+
+    // Before the fix "publishing" was in neither reject()'s lock set nor
+    // approve()'s target set: nothing matched, the row kept its "publishing"
+    // status, and the next retry saw the rejected item and completed the job —
+    // ending the chain AND the dead-letter rescue. The adaptation was then
+    // stuck in "publishing" forever with no job behind it, and re-approve
+    // silently did nothing.
+    expect(rejected.body.adaptations[0].status).toBe("pending");
+
+    {
+      const { db, pool } = createDb(url as string);
+      const jobs = await db.execute(
+        `SELECT state FROM pgboss.job WHERE name = 'publish'
+           AND data->>'adaptationId' = '${adaptationId}'`,
+      );
+      await pool.end();
+      expect((jobs.rows as { state: string }[]).map((r) => r.state)).toEqual(["cancelled"]);
+    }
+
+    // And the row is genuinely usable again, not just cosmetically reset.
+    const reApproved = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(200);
+    expect(reApproved.body.adaptations[0].status).toBe("queued");
+
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT state FROM pgboss.job WHERE name = 'publish'
+         AND data->>'adaptationId' = '${adaptationId}' ORDER BY created_on`,
+    );
+    await pool.end();
+    expect((jobs.rows as { state: string }[]).map((r) => r.state)).toEqual([
+      "cancelled",
+      "created",
+    ]);
+  });
+
   it("rejecting a draft leaves its pending adaptations alone (nothing was ever enqueued)", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -457,5 +526,13 @@ describe.skipIf(!url)("content e2e", () => {
     expect((await b.get("/api/content").expect(200)).body).toHaveLength(0);
     await b.get(`/api/content/${created.body.id}`).expect(404);
     await b.post(`/api/content/${created.body.id}/approve`).send({}).expect(404);
+    // reject is no longer a status flip — it cancels jobs and rewrites
+    // adaptations — so it needs the same isolation guarantee as approve.
+    await b.post(`/api/content/${created.body.id}/reject`).send({}).expect(404);
+
+    // ...and org A's item was not touched by any of that.
+    const mine = await a.get(`/api/content/${created.body.id}`).expect(200);
+    expect(mine.body.status).toBe("draft");
+    expect(mine.body.adaptations[0].status).toBe("pending");
   });
 });

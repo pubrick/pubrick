@@ -104,11 +104,18 @@ export const publications = pgTable(
     index("publications_org_id_idx").on(t.orgId),
     index("publications_adaptation_id_idx").on(t.adaptationId),
     /**
-     * "Never post twice" as a database invariant rather than a convention.
-     * Application code already avoids a second send (the worker checks for an
-     * existing published publication before publishing, and completes the job
-     * rather than retrying once a platform has accepted a post), but every one
-     * of those guards is a read-then-write that two workers can interleave.
+     * At most one PUBLISHED RECORD per adaptation, as a database invariant
+     * rather than a convention.
+     *
+     * This bounds the bookkeeping, not the sending. The worker's guards
+     * (checking for an existing published publication, completing rather than
+     * retrying a job once a platform accepted the post) are read-then-writes
+     * that two workers can interleave, and this index is what stops such a
+     * race from producing two contradictory `published` rows. It cannot stop a
+     * duplicate POST: the send happens between the check and the insert, so a
+     * process killed in that window leaves no record and a later attempt sends
+     * again. Preventing that needs a platform-side idempotency key.
+     *
      * Partial, so the many `failed` rows one adaptation may accumulate across
      * retries are unaffected.
      */
