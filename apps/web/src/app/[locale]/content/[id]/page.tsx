@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
+import { isLinkableUrl } from "@/lib/external-url";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -55,9 +56,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err, t("genericError")));
     },
-    [router, locale],
+    [router, locale, t],
   );
 
   const load = useCallback(() => {
@@ -138,6 +139,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     );
   }
 
+  const isPublished = item.status === "published";
+
   return (
     <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
       <p>
@@ -186,8 +189,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ))}
       </ul>
 
+      {/*
+        A published item has nothing left to decide: the post is live in the
+        channel, and the api answers both endpoints with a 409 (see
+        ContentRepository.requireNotPublished). Offering the buttons anyway is
+        offering a choice that no longer exists, so they are disabled and the
+        reason is spelled out rather than left to be discovered by clicking.
+      */}
       <div>
-        <button type="button" onClick={() => approve(false)}>
+        {isPublished && <p>{t("alreadyPublished")}</p>}
+        <button type="button" onClick={() => approve(false)} disabled={isPublished}>
           {t("approveNow")}
         </button>
         <div>
@@ -197,12 +208,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             type="datetime-local"
             value={scheduledAt}
             onChange={(e) => setScheduledAt(e.target.value)}
+            disabled={isPublished}
           />{" "}
-          <button type="button" onClick={() => approve(true)} disabled={!scheduledAt}>
+          <button
+            type="button"
+            onClick={() => approve(true)}
+            disabled={isPublished || !scheduledAt}
+          >
             {t("approveScheduled")}
           </button>
         </div>
-        <button type="button" onClick={reject}>
+        <button type="button" onClick={reject} disabled={isPublished}>
           {t("reject")}
         </button>
       </div>
@@ -213,7 +229,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <li key={a.id}>
             <strong>{channelLabel(a.channelId)}</strong> — {tc(`adaptationStatus.${a.status}`)}
             {a.status === "published" &&
-              (a.externalUrl ? (
+              (isLinkableUrl(a.externalUrl) ? (
                 <>
                   {" "}
                   <a href={a.externalUrl} target="_blank" rel="noreferrer">
@@ -221,7 +237,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   </a>
                 </>
               ) : (
-                <span> — {t("linkUnavailable")}</span>
+                // No link, or one whose scheme we will not put in an href:
+                // show what was recorded when there is something to show.
+                <span> — {a.externalUrl ?? t("linkUnavailable")}</span>
               ))}
             {a.status === "failed" && a.lastError && <p role="alert">{a.lastError}</p>}
             {a.status === "scheduled" && a.scheduledAt && (

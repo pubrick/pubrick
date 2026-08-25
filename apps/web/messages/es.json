@@ -64,7 +64,8 @@
       "publishing": "Publicando",
       "published": "Publicado",
       "failed": "Fallido"
-    }
+    },
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
   },
   "ContentNew": {
     "title": "Nuevo contenido",
@@ -92,6 +93,7 @@
     "scheduleLabel": "O programar para",
     "approveScheduled": "Aprobar con horario",
     "reject": "Rechazar",
+    "alreadyPublished": "Este contenido ya se ha publicado; ya no se puede aprobar ni rechazar.",
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — enlace no disponible",
     "viewPost": "Ver publicación",

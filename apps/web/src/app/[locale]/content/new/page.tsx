@@ -4,7 +4,7 @@ import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
@@ -30,9 +30,9 @@ export default function NewContentPage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err, t("genericError")));
     },
-    [router, locale],
+    [router, locale, t],
   );
 
   useEffect(() => {

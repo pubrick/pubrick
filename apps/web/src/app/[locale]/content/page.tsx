@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
+import { isLinkableUrl } from "@/lib/external-url";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -45,9 +46,9 @@ export default function ContentQueuePage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err, t("genericError")));
     },
-    [router, locale],
+    [router, locale, t],
   );
 
   useEffect(() => {
@@ -75,14 +76,18 @@ export default function ContentQueuePage() {
           {item.adaptations.map((a) => (
             <li key={a.id}>
               {channelLabel(a.channelId)} — {t(`adaptationStatus.${a.status}`)}
-              {a.status === "published" && a.externalUrl && (
-                <>
-                  {" "}
-                  <a href={a.externalUrl} target="_blank" rel="noreferrer">
-                    {a.externalUrl}
-                  </a>
-                </>
-              )}
+              {a.status === "published" &&
+                a.externalUrl &&
+                (isLinkableUrl(a.externalUrl) ? (
+                  <>
+                    {" "}
+                    <a href={a.externalUrl} target="_blank" rel="noreferrer">
+                      {a.externalUrl}
+                    </a>
+                  </>
+                ) : (
+                  <> {a.externalUrl}</>
+                ))}
             </li>
           ))}
         </ul>

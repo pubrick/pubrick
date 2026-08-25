@@ -26,10 +26,10 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * `attempt_count` must move by the end of ANY call that lands the adaptation
- * in `failed`, and it must do so exactly once per real attempt — see the
- * hard requirement from Task 3's review (api's `publishJobId` is a pure
- * function of `(adaptationId, attemptCount)`; a stale count makes a
- * legitimate re-approve 409 instead of re-publishing).
+ * in `failed`, and it must do so exactly once per real attempt. That is a hard
+ * requirement, not bookkeeping: the api's `publishJobId` is a pure function of
+ * `(adaptationId, attemptCount)`, so a stale count makes a legitimate
+ * re-approve 409 instead of re-publishing.
  *
  * `markPublishing` already bumps the count when an attempt starts. By the
  * time `markFailed` runs, that bump either already happened (the normal
@@ -96,12 +96,26 @@ export class PublishRepository {
    * Note what this does and does not buy. It is a check BEFORE the send, and
    * the row it looks for is written AFTER one; the partial unique index
    * `publications_one_published_per_adaptation` likewise guarantees at most
-   * one published RECORD per adaptation. Neither prevents a duplicate SEND: a
-   * process killed between `publisher.publish()` returning and `markPublished`
-   * committing leaves no record, so a later attempt will post again. Closing
-   * that would need an idempotency key the platform honours. What this does
-   * eliminate is the common case — a re-delivered or re-approved job for an
-   * adaptation that was already published and recorded.
+   * one published RECORD per adaptation. Neither prevents a duplicate SEND.
+   * There are two ways into that window, and NEITHER of them needs a crash:
+   *
+   * 1. A process killed between `publisher.publish()` returning and
+   *    `markPublished` committing leaves no record, so a later attempt posts
+   *    again.
+   * 2. A reject that lands while an attempt is `publishing`. The api cancels
+   *    the pg-boss job and resets the row, which also frees the channel's
+   *    group slot — but worker A's in-flight `publish()` call is a network
+   *    request already on its way to the platform and nothing can recall it.
+   *    A re-approve inside that window enqueues a fresh job that worker B
+   *    legitimately claims (the row says `queued`, no publication exists yet)
+   *    and sends a second time. Both posts land; the DB then converges,
+   *    because the second `markPublished` hits the unique index and
+   *    `markAlreadyPublished` takes over — one row, two posts.
+   *
+   * Closing either needs an idempotency key the platform honours, or a
+   * "claimed send" row written before the call and reconciled after. What this
+   * check does eliminate is the common case — a re-delivered or re-approved
+   * job for an adaptation that was already published and recorded.
    */
   async hasPublished(orgId: string, adaptationId: string): Promise<boolean> {
     const rows = await db

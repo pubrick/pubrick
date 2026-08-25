@@ -30,6 +30,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - The publish queue sets `heartbeatSeconds`, and its expiry is a bound on a whole attempt rather than a liveness check, so a live handler is no longer reclaimed and re-run (a duplicate post).
 - The worker validates stored credentials against the adapter's schema before sending, so a malformed channel gives a named field error instead of an opaque platform 400.
 - `PATCH /content/:id` rejects an empty body with 400 instead of 500, and `scheduledAt` must be in the future.
+- Errors on the content screens distinguish what the operator can act on: a 4xx is shown as the server phrased it, while a 5xx or a failure with no HTTP status at all (network, proxy error page) becomes a translated "something went wrong" instead of raw English.
+- A published link is rendered as a link only when it is `https://`; anything else is shown as inert plain text, since the URL comes from a platform adapter rather than from this app.
+- The approve/reject buttons are disabled, with the reason spelled out, on an item that has already been published.
 
 ### Fixed
 - The database now bounds publication bookkeeping: a partial unique index allows at most one `published` publication row per adaptation, and the worker checks for one before sending. This makes a re-delivered or re-approved job a no-op; it does not make a duplicate *post* impossible, since the send happens between that check and the record (a process killed in between leaves no record and a later attempt sends again).
@@ -37,3 +40,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Rejecting an item whose delivery is mid-attempt (`publishing`, e.g. part-way through a transient retry chain) no longer strands it: the adaptation goes back to `pending` and its job is cancelled, so it can be approved again.
 - A publication that is already recorded no longer reports as a recording failure — the worker converges the adaptation's status instead of retrying a write that can only violate the unique index again.
 - `getPublisher` no longer returns inherited `Object.prototype` members (`getPublisher("constructor")` was truthy but not a publisher).
+- Approval now pins the content. Editing an item's body or a per-channel override after approval returned 200 while the adaptation kept its live job, and the worker reads the body at execution time — so unreviewed text was what actually published. Both edits are refused with 409 ("reject it first") once the item leaves `draft`/`rejected`.
+- Approve and reject on an already-published item are refused with 409 instead of permanently storing `approved`/`rejected` over `published` — a status nothing repaired, since `recomputeItemStatus` only runs from the worker.
+- Rejecting an adaptation clears its `lastError`, so a rejected row no longer shows the previous attempt's platform failure.
+- `lockAdaptations` orders its `SELECT … FOR UPDATE` by id, so two concurrent approves of one multi-channel item cannot lock its rows in opposite orders and deadlock (a 500 on a merely duplicated request).

@@ -97,6 +97,132 @@ describe.skipIf(!url)("content e2e", () => {
     expect(updated.body.body).toBe("Channel-specific");
   });
 
+  it("edits a rejected item and its override: rejecting hands the text back to the author", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Original", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+    await agent.post(`/api/content/${created.body.id}/reject`).send({}).expect(200);
+
+    // The whole point of answering an edit-after-approval with 409 rather than
+    // silently reopening the draft: "reject it first" has to actually work.
+    await agent.patch(`/api/content/${created.body.id}`).send({ body: "Rewritten" }).expect(200);
+    await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+      .send({ body: "Rewritten for this channel" })
+      .expect(200);
+  });
+
+  it("409s an edit to an APPROVED item and leaves the reviewed body in place", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Reviewed and approved", channelIds: [channelId] })
+      .expect(201);
+
+    // Approved for an hour out — the post is scheduled, its job is live, and
+    // the worker will read content_items.body at EXECUTION time.
+    await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+      .expect(200);
+
+    // Before the fix this returned 200: the item stayed "approved", the
+    // adaptation stayed "scheduled" with its live job, and the UNREVIEWED text
+    // below is what would have gone out an hour later.
+    await agent
+      .patch(`/api/content/${created.body.id}`)
+      .send({ body: "UNREVIEWED REPLACEMENT" })
+      .expect(409);
+
+    const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(fetched.body.body).toBe("Reviewed and approved");
+    expect(fetched.body.status).toBe("approved");
+    expect(fetched.body.adaptations[0].status).toBe("scheduled");
+  });
+
+  it("409s an override edit on a SCHEDULED adaptation and leaves the reviewed override in place", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Item body", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+      .send({ body: "Reviewed override" })
+      .expect(200);
+    await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+      .expect(200);
+
+    await agent
+      .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+      .send({ body: "UNREVIEWED REPLACEMENT" })
+      .expect(409);
+
+    const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(fetched.body.adaptations[0]).toMatchObject({
+      body: "Reviewed override",
+      status: "scheduled",
+    });
+  });
+
+  it("409s approve AND reject on an already-published item, leaving its status alone", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Already out there", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+
+    // Exactly what the worker's markPublished + recomputeItemStatus leave
+    // behind once the only adaptation has been delivered (the api never writes
+    // these itself, so seed them the same way the link test above does).
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${adaptationId}'`);
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+         VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'published', '99', 'https://t.me/c/99', 1)`,
+      );
+      await db.execute(
+        `UPDATE content_items SET status = 'published' WHERE id = '${created.body.id}'`,
+      );
+      await pool.end();
+    }
+
+    // Before the fix both returned 200 and setItemStatus wrote unconditionally,
+    // so the item ended up stored as "rejected"/"approved" while the post was
+    // live in the channel — and nothing ever repaired it, since
+    // recomputeItemStatus only runs from the worker.
+    await agent.post(`/api/content/${created.body.id}/reject`).send({}).expect(409);
+    expect((await agent.get(`/api/content/${created.body.id}`).expect(200)).body.status).toBe(
+      "published",
+    );
+
+    await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(409);
+    expect((await agent.get(`/api/content/${created.body.id}`).expect(200)).body.status).toBe(
+      "published",
+    );
+  });
+
   it("approves immediately: item approved, adaptation queued", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

@@ -112,9 +112,14 @@ export const publications = pgTable(
      * retrying a job once a platform accepted the post) are read-then-writes
      * that two workers can interleave, and this index is what stops such a
      * race from producing two contradictory `published` rows. It cannot stop a
-     * duplicate POST: the send happens between the check and the insert, so a
-     * process killed in that window leaves no record and a later attempt sends
-     * again. Preventing that needs a platform-side idempotency key.
+     * duplicate POST: the send happens between the check and the insert, so
+     * anything that starts a second attempt inside that window posts twice and
+     * this index merely makes the two agree on one row afterwards. Two
+     * entrances, only one of which involves a crash — a process killed between
+     * the send and the insert, and a reject-then-re-approve while an attempt is
+     * still in flight (see `hasPublished` in
+     * apps/worker/src/publish/publish.repository.ts). Preventing either needs a
+     * platform-side idempotency key.
      *
      * Partial, so the many `failed` rows one adaptation may accumulate across
      * retries are unaffected.

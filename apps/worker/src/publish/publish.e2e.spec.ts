@@ -20,8 +20,8 @@ type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
 type FakeTelegramResponse = { status: number; body: unknown };
 
 /**
- * Task 5's own unit tests mock PublishRepository entirely, so nothing before this
- * spec ever drove a job through the REAL machinery: a real pg-boss queue created by
+ * The publish service's own unit tests mock PublishRepository entirely, so nothing
+ * else drives a job through the REAL machinery: a real pg-boss queue created by
  * QueueService.registerAll(), a real PublishRepository hitting Postgres, and a real
  * (fake, but HTTP) Telegram on the other end of publisher.publish()'s fetch. Data is
  * seeded directly through the db, exactly like the api's own approve() would leave it
@@ -259,8 +259,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
 
     // A delivered post whose pg-boss job ended up in "retry" instead of
     // "completed" would resend on the next delivery — exactly the
-    // duplicate-post scenario Task 5's recordPublished/handle() were
-    // hardened against. Assert the job itself, not just the row.
+    // duplicate-post scenario recordPublished/handle() are hardened
+    // against. Assert the job itself, not just the row.
     const job = await waitForJobState(jobId);
     expect(job.state).toBe("completed");
   }, 25_000);

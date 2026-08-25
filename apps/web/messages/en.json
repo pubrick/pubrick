@@ -64,7 +64,8 @@
       "publishing": "Publishing",
       "published": "Published",
       "failed": "Failed"
-    }
+    },
+    "genericError": "Something went wrong. Please try again."
   },
   "ContentNew": {
     "title": "New content",
@@ -92,6 +93,7 @@
     "scheduleLabel": "Or schedule for",
     "approveScheduled": "Approve with schedule",
     "reject": "Reject",
+    "alreadyPublished": "This content has already been published; it can no longer be approved or rejected.",
     "resultsTitle": "Results",
     "linkUnavailable": "published — link unavailable",
     "viewPost": "View post",

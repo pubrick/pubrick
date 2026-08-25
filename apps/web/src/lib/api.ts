@@ -9,6 +9,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * What to actually show the user for a failed request.
+ *
+ * A 4xx is the server saying something specific and actionable about THIS
+ * request — "Approved content cannot be edited; reject it first", "This
+ * content has already been published", "No active organization" — and the
+ * whole value of it is the detail. Collapsing that into a generic apology
+ * throws away the only thing that tells the operator what to do next, so a
+ * 4xx message is rendered as it came.
+ *
+ * A 5xx, or a failure with no HTTP status at all (network down, DNS, a proxy's
+ * own error page), says nothing the user can act on and was never written for
+ * them. Those collapse into the caller's translated fallback, which is the
+ * point of the per-screen `genericError` keys.
+ */
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError && err.status < 500 ? err.message : fallback;
+}
+
 /** Nest error bodies are `{ statusCode, message, error }`; message may be a string[]. */
 function serverMessage(raw: string): string | undefined {
   try {
