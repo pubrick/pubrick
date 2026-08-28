@@ -100,12 +100,14 @@ describe("telegramPublisher.publish", () => {
       },
       429,
     );
-    await expect(
-      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toMatchObject({
-      name: "TransientPublishError",
-      retryAfterSeconds: 32,
-    });
+    // Class identity, not `error.name`: the classes now live in @pubrick/shared
+    // and are re-exported under these names, so the label reads "TransientError"
+    // while `instanceof` — what the publish path actually branches on — holds.
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(TransientPublishError);
+    expect((caught as TransientPublishError).retryAfterSeconds).toBe(32);
   });
 
   it("throws TransientPublishError on 5xx and on network failure", async () => {

@@ -1,3 +1,4 @@
+import { PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
 import {
   PermanentPublishError,
@@ -10,7 +11,7 @@ import {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.telegram.org";
-const MAX_TEXT_LENGTH = 4096;
+const MAX_TEXT_LENGTH = PLATFORM_MAX_TEXT_LENGTH.telegram;
 
 const credentialsSchema = z.object({
   botToken: z.string().min(1),

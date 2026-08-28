@@ -19,6 +19,7 @@
     "test": "vitest run --reporter=dot"
   },
   "dependencies": {
+    "@pubrick/shared": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

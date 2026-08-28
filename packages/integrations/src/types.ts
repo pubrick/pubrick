@@ -31,24 +31,14 @@ export interface Publisher<C = Record<string, string>> {
   verify(credentials: C, options?: PublisherOptions): Promise<VerifyResult>;
 }
 
-/** The attempt will never succeed as-is: bad credentials, missing rights, invalid payload. */
-export class PermanentPublishError extends Error {
-  readonly name = "PermanentPublishError";
-  constructor(
-    message: string,
-    readonly code?: number,
-  ) {
-    super(message);
-  }
-}
-
-/** The attempt may succeed later: rate limit, platform outage, network failure. */
-export class TransientPublishError extends Error {
-  readonly name = "TransientPublishError";
-  constructor(
-    message: string,
-    readonly retryAfterSeconds?: number,
-  ) {
-    super(message);
-  }
-}
+// The classification is not publish-specific — the generation pipeline needs the
+// same permanent-vs-transient split — so the classes live in @pubrick/shared and
+// this package keeps exporting them under their original names.
+//
+// Note the `name` property now reads "PermanentError"/"TransientError". Nothing
+// branches on that string (the publish path routes on `instanceof`, which the
+// aliases preserve); assert class identity, never the label.
+export {
+  PermanentError as PermanentPublishError,
+  TransientError as TransientPublishError,
+} from "@pubrick/shared";
