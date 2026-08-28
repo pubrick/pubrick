@@ -42,7 +42,15 @@ function serverMessage(raw: string): string | undefined {
   return undefined;
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * One request, one error contract — everything except reading the body.
+ *
+ * Split out of `api()` so that a response with NO body (a 204) can be issued
+ * through exactly the same failure handling instead of a bespoke `fetch` at the
+ * call site. Both wrappers below therefore reject with an `ApiError` and
+ * nothing else, which is what every screen's `handleError` assumes.
+ */
+async function request(path: string, init?: RequestInit): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -75,5 +83,25 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(res.status, detail ?? res.statusText ?? `Request failed (${res.status})`);
   }
+  return res;
+}
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await request(path, init);
   return (await res.json()) as T;
+}
+
+/**
+ * A request whose response carries no body.
+ *
+ * `POST /api/content/:id/opened` answers 204 by design — there is nothing to
+ * say back, and nothing for a client to have to parse — and `res.json()` on an
+ * empty body throws a raw `SyntaxError`, which is neither an `ApiError` nor
+ * anything `errorMessage` can translate. That is a property of the endpoint,
+ * not of one call site, so it is handled here rather than by a `.catch(() => {})`
+ * wrapped around one caller: the next 204 endpoint gets the same treatment for
+ * free instead of rediscovering the same crash.
+ */
+export async function apiVoid(path: string, init?: RequestInit): Promise<void> {
+  await request(path, init);
 }

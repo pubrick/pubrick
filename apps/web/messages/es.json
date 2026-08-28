@@ -76,7 +76,12 @@
       "published": "Publicado",
       "failed": "Fallido"
     },
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "origin": {
+      "ai": "Redactado por IA",
+      "aiAdapted": "Adaptado por IA",
+      "human": "Escrito por una persona"
+    }
   },
   "ContentNew": {
     "title": "Nueva publicación",
@@ -91,7 +96,18 @@
     "body": "Texto",
     "bodyPlaceholder": "Escribe la publicación…",
     "submit": "Crear publicación",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "briefLabel": "Brief",
+    "briefPlaceholder": "¿De qué debería tratar esta publicación?",
+    "generate": "Generar",
+    "noBrandSelected": "Selecciona una marca primero.",
+    "briefRequired": "Escribe un brief primero.",
+    "aiNotConfigured": "Añade una clave de proveedor de IA para generar una publicación a partir de un brief.",
+    "aiSettingsLink": "Abrir Ajustes",
+    "discardTitle": "¿Descartar tu borrador?",
+    "discardBody": "Generar crea una publicación nueva a partir de tu brief. El texto que escribiste aquí no se guarda.",
+    "discardConfirm": "Descartar y generar",
+    "discardCancel": "Cancelar"
   },
   "Publish": {
     "backToQueue": "Volver a la cola",
@@ -142,5 +158,38 @@
     "aiTestFailRateLimited": "El proveedor está limitando las peticiones o no está disponible. Inténtalo de nuevo en un momento.",
     "aiTestFailRefused": "El proveedor rechazó la petición. Revisa la clave y el identificador de modelo.",
     "aiTestFailUnreadableKey": "No se pudo leer la clave guardada. Vuelve a guardarla."
+  },
+  "Runs": {
+    "title": "Generación",
+    "backToQueue": "Volver a la cola",
+    "briefLabel": "Brief",
+    "stepsTitle": "Pasos",
+    "step": {
+      "researcher": "Investigación",
+      "writer": "Redacción",
+      "editor": "Edición",
+      "factcheck": "Afirmaciones por verificar",
+      "adapter": "Adaptar a cada canal"
+    },
+    "stepState": {
+      "done": "Hecho",
+      "active": "En curso",
+      "failed": "Fallido",
+      "pending": "En espera"
+    },
+    "stepProgress": "{done} de {total} canales",
+    "status": {
+      "queued": "En cola",
+      "running": "En curso",
+      "succeeded": "Listo",
+      "failed": "Fallido",
+      "cancelled": "Cancelado"
+    },
+    "draftReady": "Borrador listo",
+    "cancel": "Cancelar",
+    "stripsTitle": "Generando",
+    "tryAgain": "Reintentar",
+    "dismiss": "Descartar",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
   }
 }

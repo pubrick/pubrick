@@ -25,6 +25,31 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   sm: "h-[30px] px-3 text-sm",
 };
 
+/**
+ * The button look, without the `<button>`.
+ *
+ * Exported for the one case that is genuinely a link and genuinely the screen's
+ * primary action — the run receipt's "Draft ready", which navigates to the
+ * finished draft and must stay a real anchor (middle-click, copy link) rather
+ * than an onClick that fakes one. Sharing the class list keeps that link from
+ * becoming a second, drifting definition of what a primary button looks like.
+ */
+export function buttonClasses(
+  variant: ButtonVariant = "primary",
+  size: ButtonSize = "md",
+  className?: string,
+): string {
+  return [
+    "inline-flex items-center justify-center gap-2 rounded-control font-semibold transition-colors",
+    "disabled:pointer-events-none disabled:opacity-50",
+    VARIANT_CLASSES[variant],
+    SIZE_CLASSES[size],
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function Button({
   variant = "primary",
   size = "md",
@@ -34,15 +59,7 @@ export function Button({
   children,
   ...rest
 }: ButtonProps) {
-  const classes = [
-    "inline-flex items-center justify-center gap-2 rounded-control font-semibold transition-colors",
-    "disabled:pointer-events-none disabled:opacity-50",
-    VARIANT_CLASSES[variant],
-    SIZE_CLASSES[size],
-    className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const classes = buttonClasses(variant, size, className);
 
   return (
     <button type={type} className={classes} disabled={disabled} {...rest}>

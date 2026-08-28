@@ -4,15 +4,17 @@ import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { OriginBadge } from "@/components/origin-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, api, errorMessage } from "@/lib/api";
+import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
+import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { channelLabel as platformChannelLabel } from "@/lib/platform";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
@@ -38,6 +40,7 @@ type Adaptation = {
   channelId: string;
   body: string | null;
   status: AdaptationStatus;
+  origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
   lastError: string | null;
@@ -50,6 +53,7 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
   adaptations: Adaptation[];
@@ -100,6 +104,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     // function").
     load();
   }, [load]);
+
+  /**
+   * The read receipt: the one signal that says a human looked at this draft.
+   *
+   * Its own effect, deliberately NOT chained onto the GET above. `markOpened`
+   * is what clears the publish gate for an AI-written draft, so it has to mean
+   * "a person had this on screen" and nothing else — a reload triggered by
+   * saving the body, or a future prefetch, must not stamp it again. The ref
+   * holds the id it was fired for, so it fires exactly once per item even
+   * through StrictMode's double-invoked effects, and again if this component is
+   * ever reused for a different id.
+   *
+   * A failure is swallowed on purpose: this is not a user action, and an alert
+   * about a receipt would be noise about something they did not do. The
+   * consequence of it failing is visible and specific anyway — approval says
+   * that nobody has read the draft yet.
+   */
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (openedFor.current === id) return;
+    openedFor.current = id;
+    apiVoid(`/api/content/${id}/opened`, { method: "POST" }).catch(() => {});
+  }, [id]);
 
   async function saveBody() {
     setError(null);
@@ -191,7 +218,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {t("backToQueue")}
         </Link>
       </p>
-      <p className="mb-4 text-sm font-medium text-fg-secondary">{tc(`status.${item.status}`)}</p>
+      <p className="mb-4 flex items-center gap-2 text-sm font-medium text-fg-secondary">
+        {tc(`status.${item.status}`)}
+        <OriginBadge origin={deriveOrigin(item)} />
+      </p>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}

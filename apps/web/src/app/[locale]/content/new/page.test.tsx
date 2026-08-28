@@ -1,4 +1,9 @@
-import { contentCreateSchema, MAX_BODY_LENGTH } from "@pubrick/shared";
+import {
+  type AiCredentialPublic,
+  contentCreateSchema,
+  MAX_BODY_LENGTH,
+  runCreateSchema,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -55,9 +60,15 @@ function parsedBody(call: Call | undefined): Record<string, unknown> {
  * data, and records every call the page makes. `extra` lets a test override
  * or add handling (e.g. the POST /api/content on submit).
  */
+const noCredentials: AiCredentialPublic[] = [];
+const googleKey: AiCredentialPublic[] = [
+  { provider: "google", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+];
+
 function installHandlers(
   calls: Call[],
   extra?: (path: string, method: string, init: RequestInit | undefined) => unknown | undefined,
+  credentials: AiCredentialPublic[] = noCredentials,
 ) {
   mockApi.mockImplementation(async (...args: unknown[]) => {
     const path = args[0] as string;
@@ -70,6 +81,7 @@ function installHandlers(
       if (result !== undefined) return result;
     }
 
+    if (method === "GET" && path === "/api/ai-credentials") return credentials;
     if (method === "GET" && path === "/api/brands") return brands;
     if (method === "GET" && path === `/api/channels?brandId=${B1}`) return acmeChannels;
     if (method === "GET" && path === `/api/channels?brandId=${B2}`) return widgetsChannels;
@@ -280,6 +292,155 @@ describe("native form validation on submit (F2)", () => {
     // other error path silently swallowing the click.
     const body = container.querySelector("#body") as HTMLTextAreaElement;
     expect(body.validity.valid).toBe(false);
+  });
+});
+
+describe("Generate (Task 10)", () => {
+  /** Selects a brand and its first channel — the preconditions both actions share. */
+  async function pickBrandAndChannel(user: ReturnType<typeof userEvent.setup>) {
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+  }
+
+  it("is absent with no AI key, and teaches the one next step instead", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, noCredentials);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+
+    // Not a disabled button that explains nothing: a line that says what to do.
+    expect(await screen.findByText(en.ContentNew.aiNotConfigured)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.ContentNew.aiSettingsLink })).toHaveAttribute(
+      "href",
+      "/en/settings",
+    );
+    expect(screen.queryByRole("button", { name: en.ContentNew.generate })).not.toBeInTheDocument();
+  });
+
+  it("is SECONDARY — 'Create post' stays this screen's only primary action", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    const generate = await screen.findByRole("button", { name: en.ContentNew.generate });
+    const submit = screen.getByRole("button", { name: en.ContentNew.submit });
+
+    // The constitution's one-primary-action rule, asserted on the thing that
+    // would actually break it: two accent-colored buttons on one screen.
+    expect(submit.className).toContain("bg-accent");
+    expect(generate.className).not.toContain("bg-accent");
+    // ...and the "add a key" line is gone once there is a key.
+    expect(screen.queryByText(en.ContentNew.aiNotConfigured)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["no brand", false, false, en.ContentNew.noBrandSelected],
+    ["no channel", true, false, en.ContentNew.noChannelsSelected],
+    ["no brief", true, true, en.ContentNew.briefRequired],
+  ])(
+    "refuses with %s, inline, and starts no run",
+    async (_label, withBrand, withChannel, message) => {
+      const calls: Call[] = [];
+      installHandlers(calls, undefined, googleKey);
+
+      render(<NewContentPage />);
+      await screen.findByRole("option", { name: "Acme" });
+      const user = userEvent.setup();
+
+      if (withBrand) {
+        await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+        await screen.findByLabelText(/Main channel/);
+      }
+      if (withChannel) await user.click(screen.getByLabelText(/Main channel/));
+
+      await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(calls.some((c) => c.method === "POST")).toBe(false);
+      expect(routerMock.push).not.toHaveBeenCalled();
+    },
+  );
+
+  it("posts {brandId, brief, channelIds} and goes to the run's receipt", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "run-1" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/run-1"));
+    const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
+    expect(parsedBody(post)).toEqual({
+      brandId: B1,
+      brief: "Announce the new pricing",
+      channelIds: [CH1],
+    });
+    // Pinned twice: the literal above, and the schema the API validates with.
+    expect(runCreateSchema.parse(parsedBody(post))).toEqual(parsedBody(post));
+  });
+
+  it("confirms before throwing a typed draft away", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "run-2" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
+    await user.type(screen.getByLabelText(en.ContentNew.body), "Text I typed myself");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    // Nothing has happened yet: Generate does not fill this form, it replaces
+    // the draft with a different item minutes later, and the text is not saved.
+    expect(await screen.findByRole("dialog")).toHaveTextContent(en.ContentNew.discardTitle);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.discardConfirm }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/run-2"));
+  });
+
+  it("keeps the draft when the confirmation is declined", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
+    await user.type(screen.getByLabelText(en.ContentNew.body), "Text I typed myself");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.discardCancel }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
   });
 });
 

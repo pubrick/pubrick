@@ -76,7 +76,12 @@
       "published": "Published",
       "failed": "Failed"
     },
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "origin": {
+      "ai": "AI-drafted",
+      "aiAdapted": "AI-adapted",
+      "human": "Human-written"
+    }
   },
   "ContentNew": {
     "title": "New post",
@@ -91,7 +96,18 @@
     "body": "Body",
     "bodyPlaceholder": "Write the post…",
     "submit": "Create post",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "briefLabel": "Brief",
+    "briefPlaceholder": "What should this post be about?",
+    "generate": "Generate",
+    "noBrandSelected": "Select a brand first.",
+    "briefRequired": "Write a brief first.",
+    "aiNotConfigured": "Add an AI provider key to generate a post from a brief.",
+    "aiSettingsLink": "Open Settings",
+    "discardTitle": "Discard your draft?",
+    "discardBody": "Generating starts a new post from your brief. The text you typed here is not saved.",
+    "discardConfirm": "Discard and generate",
+    "discardCancel": "Cancel"
   },
   "Publish": {
     "backToQueue": "Back to queue",
@@ -142,5 +158,38 @@
     "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",
     "aiTestFailRefused": "The provider refused the request. Check the key and the model id.",
     "aiTestFailUnreadableKey": "The stored key could not be read. Save it again."
+  },
+  "Runs": {
+    "title": "Generation",
+    "backToQueue": "Back to queue",
+    "briefLabel": "Brief",
+    "stepsTitle": "Steps",
+    "step": {
+      "researcher": "Research",
+      "writer": "Draft",
+      "editor": "Edit",
+      "factcheck": "Claims to verify",
+      "adapter": "Adapt for each channel"
+    },
+    "stepState": {
+      "done": "Done",
+      "active": "In progress",
+      "failed": "Failed",
+      "pending": "Waiting"
+    },
+    "stepProgress": "{done} of {total} channels",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Ready",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "draftReady": "Draft ready",
+    "cancel": "Cancel",
+    "stripsTitle": "Generating",
+    "tryAgain": "Try again",
+    "dismiss": "Dismiss",
+    "genericError": "Something went wrong. Please try again."
   }
 }

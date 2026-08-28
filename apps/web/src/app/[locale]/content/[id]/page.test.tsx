@@ -1,6 +1,7 @@
 import { adaptationUpdateSchema, contentApproveSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ContentOrigin } from "@/lib/origin";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
@@ -9,13 +10,14 @@ import ContentItemPage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: vi.fn() };
+  return { ...actual, api: vi.fn(), apiVoid: vi.fn() };
 });
 
 // Imported after the mock so this binding is the mocked export.
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, apiVoid } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
+const mockApiVoid = vi.mocked(apiVoid);
 
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
@@ -26,6 +28,7 @@ type Adaptation = {
   channelId: string;
   body: string | null;
   status: AdaptationStatus;
+  origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
   lastError: string | null;
@@ -38,6 +41,7 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
   adaptations: Adaptation[];
@@ -52,6 +56,7 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     channelId: "ch1",
     body: null,
     status: "pending",
+    origin: "human",
     scheduledAt: null,
     attemptCount: 0,
     lastError: null,
@@ -67,6 +72,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     title: "Launch post",
     body: "Hello world",
     status: "draft",
+    origin: "human",
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
     adaptations: [],
@@ -110,6 +116,8 @@ function resultsList(): HTMLElement {
 
 beforeEach(() => {
   mockApi.mockReset();
+  mockApiVoid.mockReset();
+  mockApiVoid.mockResolvedValue(undefined);
   // AppShell (now wrapping this page) reads a session for its sidebar user
   // block; the aliased auth-client stub defaults to signed-out, so a page
   // whose own tests don't care about that content still opts in explicitly.
@@ -533,6 +541,82 @@ describe("error rendering (Step 7)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(en.Publish.genericError);
     expect(alert.textContent).not.toContain("TypeError");
+  });
+});
+
+describe("the read receipt (Task 10)", () => {
+  it("stamps POST /opened exactly once, through the void variant", async () => {
+    const calls: Call[] = [];
+    installBaseHandlers({ current: makeItem() }, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await waitFor(() => expect(mockApiVoid).toHaveBeenCalledTimes(1));
+    expect(mockApiVoid).toHaveBeenCalledWith("/api/content/c1/opened", { method: "POST" });
+    // Through apiVoid, not api(): the endpoint answers 204, and res.json() on
+    // an empty body throws a SyntaxError that is not an ApiError at all.
+    expect(calls.some((c) => c.path.endsWith("/opened"))).toBe(false);
+  });
+
+  it("does not stamp it again when the item reloads after an edit", async () => {
+    const served = { current: makeItem() };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "PATCH" && path === "/api/content/c1") {
+        served.current = { ...served.current, body: "Edited" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await waitFor(() => expect(mockApiVoid).toHaveBeenCalledTimes(1));
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+
+    // The receipt says "a human had this on screen", not "this component
+    // fetched the item" — a reload must not re-stamp it.
+    expect(mockApiVoid).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent when the receipt itself fails", async () => {
+    installBaseHandlers({ current: makeItem() }, []);
+    mockApiVoid.mockRejectedValue(new ApiError(500, "boom"));
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByText(en.Content.status.draft);
+    // Not a user action, so not a user-facing error. What the user WILL see, if
+    // it mattered, is the approval refusal — which says exactly what is wrong.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("origin badge (Task 10)", () => {
+  it.each([
+    ["an AI-drafted item", "ai" as const, "human" as const, en.Content.origin.ai],
+    [
+      "a human item with an AI channel body",
+      "human" as const,
+      "ai" as const,
+      en.Content.origin.aiAdapted,
+    ],
+    ["a fully human item", "human" as const, "human" as const, en.Content.origin.human],
+  ])("labels %s", async (_label, itemOrigin, adaptationOrigin, expected) => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          origin: itemOrigin,
+          adaptations: [makeAdaptation({ origin: adaptationOrigin })],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 });
 

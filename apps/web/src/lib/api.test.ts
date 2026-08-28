@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, errorMessage } from "./api";
+import { ApiError, api, apiVoid, errorMessage } from "./api";
 
 function jsonResponse(status: number, body: unknown, statusText = ""): Response {
   return {
@@ -9,6 +9,19 @@ function jsonResponse(status: number, body: unknown, statusText = ""): Response 
     text: async () => JSON.stringify(body),
     json: async () => body,
   } as Response;
+}
+
+/** What a 204 actually is: no body at all, so `json()` throws rather than resolving. */
+function noContentResponse(): Response {
+  return {
+    ok: true,
+    status: 204,
+    statusText: "No Content",
+    text: async () => "",
+    json: async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    },
+  } as unknown as Response;
 }
 
 describe("api", () => {
@@ -110,6 +123,60 @@ describe("api", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).noActiveOrg).toBe(false);
     expect((error as ApiError).message).toBe("You don't have access to this.");
+  });
+});
+
+describe("apiVoid", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("resolves on a 204 without trying to parse a body", async () => {
+    const res = noContentResponse();
+    const parse = vi.spyOn(res, "json");
+    vi.mocked(fetch).mockResolvedValue(res);
+
+    await expect(apiVoid("/api/content/1/opened", { method: "POST" })).resolves.toBeUndefined();
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the same ApiError contract as api() on a 4xx", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(404, { statusCode: 404, message: "Content not found", error: "Not Found" }),
+    );
+
+    const error = await apiVoid("/api/content/1/opened", { method: "POST" }).catch(
+      (e) => e as ApiError,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+    expect((error as ApiError).message).toBe("Content not found");
+  });
+
+  it("wraps a network failure as ApiError(0), not a raw TypeError", async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const error = await apiVoid("/api/content/1/opened", { method: "POST" }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(0);
+  });
+
+  it("marks a 403 with no active organization, like api()", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(403, {
+        statusCode: 403,
+        message: "No active organization",
+        error: "Forbidden",
+      }),
+    );
+
+    const error = await apiVoid("/api/content/1/opened", { method: "POST" }).catch(
+      (e) => e as ApiError,
+    );
+
+    expect((error as ApiError).noActiveOrg).toBe(true);
   });
 });
 

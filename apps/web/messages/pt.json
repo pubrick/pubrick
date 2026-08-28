@@ -76,7 +76,12 @@
       "published": "Publicado",
       "failed": "Falhou"
     },
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "origin": {
+      "ai": "Rascunho de IA",
+      "aiAdapted": "Adaptado por IA",
+      "human": "Escrito por uma pessoa"
+    }
   },
   "ContentNew": {
     "title": "Nova publicação",
@@ -91,7 +96,18 @@
     "body": "Texto",
     "bodyPlaceholder": "Escreva a publicação…",
     "submit": "Criar publicação",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "briefLabel": "Briefing",
+    "briefPlaceholder": "Sobre o que deve ser esta publicação?",
+    "generate": "Gerar",
+    "noBrandSelected": "Selecione uma marca primeiro.",
+    "briefRequired": "Escreva um briefing primeiro.",
+    "aiNotConfigured": "Adicione uma chave de provedor de IA para gerar uma publicação a partir de um briefing.",
+    "aiSettingsLink": "Abrir Configurações",
+    "discardTitle": "Descartar seu rascunho?",
+    "discardBody": "Gerar cria uma nova publicação a partir do seu briefing. O texto digitado aqui não é salvo.",
+    "discardConfirm": "Descartar e gerar",
+    "discardCancel": "Cancelar"
   },
   "Publish": {
     "backToQueue": "Voltar à fila",
@@ -142,5 +158,38 @@
     "aiTestFailRateLimited": "O provedor está limitando as requisições ou está indisponível. Tente novamente em instantes.",
     "aiTestFailRefused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo.",
     "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente."
+  },
+  "Runs": {
+    "title": "Geração",
+    "backToQueue": "Voltar para a fila",
+    "briefLabel": "Briefing",
+    "stepsTitle": "Etapas",
+    "step": {
+      "researcher": "Pesquisa",
+      "writer": "Rascunho",
+      "editor": "Edição",
+      "factcheck": "Afirmações a verificar",
+      "adapter": "Adaptar para cada canal"
+    },
+    "stepState": {
+      "done": "Concluído",
+      "active": "Em andamento",
+      "failed": "Falhou",
+      "pending": "Aguardando"
+    },
+    "stepProgress": "{done} de {total} canais",
+    "status": {
+      "queued": "Na fila",
+      "running": "Em andamento",
+      "succeeded": "Pronto",
+      "failed": "Falhou",
+      "cancelled": "Cancelado"
+    },
+    "draftReady": "Rascunho pronto",
+    "cancel": "Cancelar",
+    "stripsTitle": "Gerando",
+    "tryAgain": "Tentar de novo",
+    "dismiss": "Dispensar",
+    "genericError": "Algo deu errado. Tente novamente."
   }
 }

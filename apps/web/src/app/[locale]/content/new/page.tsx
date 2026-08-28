@@ -1,6 +1,7 @@
 "use client";
 
-import { MAX_BODY_LENGTH } from "@pubrick/shared";
+import { type AiCredentialPublic, MAX_BODY_LENGTH, MAX_BRIEF_LENGTH } from "@pubrick/shared";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
@@ -8,10 +9,12 @@ import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel } from "@/lib/platform";
+import type { Run } from "@/lib/runs";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
@@ -30,6 +33,12 @@ export default function NewContentPage() {
   const [channelIds, setChannelIds] = useState<Set<string>>(new Set());
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [brief, setBrief] = useState("");
+  // `null` until the first answer: neither Generate nor the "add a key" hint
+  // should flash while we still do not know which of the two is true.
+  const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -47,6 +56,16 @@ export default function NewContentPage() {
   useEffect(() => {
     api<Brand[]>("/api/brands").then(setBrands).catch(handleError);
   }, [handleError]);
+
+  // Whether this org can generate at all. A failure answers "no": the empty
+  // state that teaches ("add a key in Settings") is a better wrong answer than
+  // a Generate button that starts a run the API will refuse — and it is the
+  // same thing the user has to do if the failure was real.
+  useEffect(() => {
+    api<AiCredentialPublic[]>("/api/ai-credentials")
+      .then(setCredentials)
+      .catch(() => setCredentials([]));
+  }, []);
 
   useEffect(() => {
     if (!brandId) {
@@ -106,6 +125,53 @@ export default function NewContentPage() {
   function onFormSubmit(e: React.FormEvent) {
     e.preventDefault();
     void createContent();
+  }
+
+  /**
+   * Generate is NOT a second way to fill this form.
+   *
+   * It throws the typed draft away and starts a run that lands a DIFFERENT
+   * content item minutes later, so a non-empty body is confirmed first — the
+   * text is not saved anywhere, and there is no undo. Everything else it
+   * enforces is what "Create post" enforces, inline and in the same words:
+   * without them the API answers 400/404 with a sentence about brands and
+   * channels that the person looking at this form cannot act on.
+   */
+  function onGenerate() {
+    setError(null);
+    if (!brandId) {
+      setError(t("noBrandSelected"));
+      return;
+    }
+    if (channelIds.size === 0) {
+      setError(t("noChannelsSelected"));
+      return;
+    }
+    if (brief.trim() === "") {
+      setError(t("briefRequired"));
+      return;
+    }
+    if (body.trim() !== "") {
+      setConfirmDiscard(true);
+      return;
+    }
+    void startRun();
+  }
+
+  async function startRun() {
+    setConfirmDiscard(false);
+    setGenerating(true);
+    try {
+      const run = await api<Run>("/api/runs", {
+        method: "POST",
+        body: JSON.stringify({ brandId, brief, channelIds: [...channelIds] }),
+      });
+      router.push(`/${locale}/content/runs/${run.id}`);
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setGenerating(false);
+    }
   }
 
   return (
@@ -174,6 +240,41 @@ export default function NewContentPage() {
             maxLength={300}
           />
 
+          {/*
+            The generation entry point. One primary action on this screen stays
+            "Create post" (top-right, in the header); Generate is secondary and
+            sits with the field it reads. With no AI key configured it is absent
+            entirely, replaced by a line that says what to do — not a disabled
+            control that explains nothing.
+          */}
+          <div className="flex flex-col gap-2">
+            <Textarea
+              id="brief"
+              label={t("briefLabel")}
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              placeholder={t("briefPlaceholder")}
+              maxLength={MAX_BRIEF_LENGTH}
+              showCount
+              rows={3}
+            />
+            {credentials !== null &&
+              (credentials.length > 0 ? (
+                <div>
+                  <Button variant="secondary" onClick={onGenerate} disabled={generating}>
+                    {t("generate")}
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-fg-tertiary">
+                  {t("aiNotConfigured")}{" "}
+                  <Link href={`/${locale}/settings`} className="text-accent hover:underline">
+                    {t("aiSettingsLink")}
+                  </Link>
+                </p>
+              ))}
+          </div>
+
           <Textarea
             id="body"
             label={t("body")}
@@ -187,6 +288,24 @@ export default function NewContentPage() {
           />
         </form>
       </Card>
+
+      <Modal
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        title={t("discardTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmDiscard(false)}>
+              {t("discardCancel")}
+            </Button>
+            <Button variant="danger" onClick={startRun} disabled={generating}>
+              {t("discardConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("discardBody")}</p>
+      </Modal>
     </AppShell>
   );
 }
