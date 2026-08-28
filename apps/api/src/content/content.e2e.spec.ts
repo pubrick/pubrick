@@ -1,6 +1,6 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -970,6 +970,117 @@ describe.skipIf(!url)("content e2e", () => {
       const bodies = (approved.body.adaptations as { body: string }[]).map((a) => a.body);
       expect(bodies).toContain(aiAdapted(0));
       expect(bodies).toContain(aiAdapted(1));
+    });
+
+    it("refuses after a cleared override: the channel then ships the item's own AI text", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const second = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "321:cba", chatId: "-1007777777777" },
+        })
+        .expect(201);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId, second.body.id]);
+
+      // Emptying an override textarea sends exactly this, and the shipped UI
+      // does it (content/[id]/page.tsx: `value.trim() === "" ? null : value`).
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationIds[0]}`)
+        .send({ body: null })
+        .expect(200);
+
+      // Clearing removed text; it wrote none. The channel now falls back to the
+      // item body, which is verbatim what the AI wrote — so EVERY character
+      // this item would publish is still unread AI, and the gate must hold.
+      // Comparing the fallback text against the ADAPTATION's AI version (a
+      // different string by construction — the adapter rewrites for the
+      // platform) reads this as a human edit and publishes the lot.
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+      expect(await publishJobCount(adaptationIds[1] as string)).toBe(0);
+    });
+
+    it("compares against the FIRST ai version — not the first version, and not the latest", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // The version history increment 2 will actually produce: a human draft,
+      // the AI's rewrite of it, and a later AI refinement. The item body is the
+      // AI's FIRST output, so the rule must refuse — and only the first `ai`
+      // row says so. Timestamps are explicit, not `defaultNow()`, so the order
+      // does not depend on the database's session timezone.
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+        .rows as { org_id: string }[];
+      const orgId = row?.org_id as string;
+      await db
+        .delete(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.contentItemId, itemId),
+            isNull(schema.contentVersions.adaptationId),
+          ),
+        );
+      await db.insert(schema.contentVersions).values([
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "The human's own first attempt.",
+          origin: "human",
+          createdAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: AI_BODY,
+          origin: "ai",
+          createdAt: new Date("2026-08-01T11:00:00Z"),
+        },
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "A later AI refinement.",
+          origin: "ai",
+          createdAt: new Date("2026-08-01T12:00:00Z"),
+        },
+      ]);
+      await pool.end();
+
+      // Taking the latest `ai` row, or the first row of any origin, compares
+      // the body against text it was never equal to and calls that a human.
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+    });
+
+    it("tells an AI draft that already published about the POST, not about reading it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // An AI item that went out (its human opened it once, long ago — the
+      // stamp is irrelevant here, and deliberately left NULL to make the point
+      // that BOTH refusals apply). Two 409s are available; the honest one is
+      // about the post that is live in someone's channel.
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'published' WHERE id = '${adaptationIds[0]}'`,
+      );
+      await db.execute(`UPDATE content_items SET status = 'published' WHERE id = '${itemId}'`);
+      await pool.end();
+
+      const denial = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(denial.body.message).toBe(
+        "This content has already been published; it can no longer be approved or rejected",
+      );
     });
 
     it("a GET does not stamp the read receipt — the public API and the MCP server issue GETs", async () => {

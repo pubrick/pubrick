@@ -488,9 +488,18 @@ export class ContentRepository {
     const nobodyOpened = item.firstOpenedAt === null;
     const bodyIsAi = stillAi(item.body, firstAiVersion.get(null));
     const everyChannelIsAi = adaptations.every((adaptation) =>
-      // `?? item.body` is the worker's own fallback: clearing an override does
-      // not make the channel stop shipping text.
-      stillAi(adaptation.body ?? item.body, firstAiVersion.get(adaptation.id)),
+      // The channel's text AND the version it is judged against, together.
+      // `adaptations.body ?? content_items.body` is the worker's own fallback,
+      // so a cleared override means this channel ships the ITEM's text — and it
+      // must then be compared with the ITEM's AI version. Giving the shipped
+      // text the fallback but not the reference compared the master body
+      // against the ADAPTATION's AI version, which the adapter rewrote for the
+      // platform and so never matches: clearing an override read as a human
+      // edit and published every channel's verbatim AI text. The shipped web UI
+      // sends exactly that null (content/[id]/page.tsx, an emptied textarea).
+      adaptation.body === null
+        ? stillAi(item.body, firstAiVersion.get(null))
+        : stillAi(adaptation.body, firstAiVersion.get(adaptation.id)),
     );
 
     if (nobodyOpened && bodyIsAi && everyChannelIsAi) {
