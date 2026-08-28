@@ -123,14 +123,17 @@ export class RunsRepository {
         isNull(schema.pipelineRuns.dismissedAt),
       ),
     );
-    const where =
-      state === "open"
-        ? and(eq(schema.pipelineRuns.orgId, orgId), open)
-        : eq(schema.pipelineRuns.orgId, orgId);
+    // The org filter sits OUTSIDE the state branch, and that is structural, not
+    // stylistic: written as a ternary between two `and(eq(orgId), …)` arms it
+    // was two independent copies of the tenancy predicate, and a test covering
+    // one arm proves nothing about the other. `and()` drops the `undefined`, so
+    // the unfiltered case is the same single `eq` rather than a second spelling
+    // of it. There is now exactly one place to delete, and a test on either
+    // branch catches it.
     return db
       .select(RUN_COLUMNS)
       .from(schema.pipelineRuns)
-      .where(where)
+      .where(and(eq(schema.pipelineRuns.orgId, orgId), state === "open" ? open : undefined))
       .orderBy(
         desc(sql`${schema.pipelineRuns.status} = 'failed'`),
         desc(schema.pipelineRuns.createdAt),

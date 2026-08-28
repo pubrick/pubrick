@@ -80,6 +80,33 @@ describe.skipIf(!url)("runs e2e", () => {
     return created.body as { id: string; status: string; input: { channelIds: string[] } };
   }
 
+  /** The org a brand belongs to. `orgAgent()` never exposes the id it created. */
+  async function orgIdOfBrand(brandId: string): Promise<string> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db.execute(`SELECT org_id FROM brands WHERE id = '${brandId}'`);
+    await pool.end();
+    return (rows.rows[0] as { org_id: string }).org_id;
+  }
+
+  /**
+   * Whether `promise` settles within `ms`. Used to assert that a request is
+   * genuinely BLOCKED, which no amount of assertion on its eventual result can
+   * show — the blocked and the unblocked case both end in a 201.
+   */
+  function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      promise.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
   it("queues a run and enqueues exactly one generate job for it", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -117,13 +144,27 @@ describe.skipIf(!url)("runs e2e", () => {
       .send({ brandId: emptyBrand.body.id, brief: "Anything", channelIds: [channelId] })
       .expect(400);
     expect(denied.body.message).toBe("This brand has no channels; add one before generating");
+  });
 
-    // And the request-shaped half of the same rule, matching
-    // contentCreateSchema's channelIds.min(1).
-    await agent
+  it("refuses an empty channelIds even on a brand that HAS channels: only the zod bound can say no", async () => {
+    const agent = await orgAgent();
+    // The brand is POPULATED on purpose. Sent against a channel-less brand this
+    // assertion is dead: the 400 comes from resolveChannels, so relaxing
+    // runCreateSchema to .min(0) stays green while `[]` on a real brand is
+    // admitted 201 — producing exactly the item with zero adaptations that
+    // spec §5 names as the reason the bound exists (approve marks it approved
+    // and enqueues nothing). Here the repository has no complaint to make, so
+    // the refusal can only come from channelIds.min(1).
+    const { brandId } = await brandWithChannel(agent);
+
+    const denied = await agent
       .post("/api/runs")
-      .send({ brandId: emptyBrand.body.id, brief: "Anything", channelIds: [] })
+      .send({ brandId, brief: "Anything", channelIds: [] })
       .expect(400);
+    expect(JSON.stringify(denied.body.message)).toContain("channelIds");
+
+    // ...and nothing was created by the refused request.
+    expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
   });
 
   it("refuses a fourth concurrent run (409) and names the limit", async () => {
@@ -148,6 +189,88 @@ describe.skipIf(!url)("runs e2e", () => {
     await setRunStatus(open.body[0].id, "succeeded");
     await startRun(agent, brandId, [channelId]);
   });
+
+  it("admits exactly the cap when the requests arrive at once, not one cap per racer", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+
+    // Sequential creates cannot see this defect at all: under READ COMMITTED
+    // ten simultaneous requests each read a count taken before any of the
+    // others committed, all ten pass `inFlight < 3`, and the org runs ten.
+    // That is why the count is taken under a per-org advisory lock, and this
+    // is the only test that can tell the lock is there — deleting it leaves
+    // every other test in this file green.
+    const attempts = 10;
+    const results = await Promise.all(
+      Array.from({ length: attempts }, () =>
+        agent.post("/api/runs").send({ brandId, brief: "concurrent", channelIds: [channelId] }),
+      ),
+    );
+
+    const admitted = results.filter((r) => r.status === 201);
+    const refused = results.filter((r) => r.status === 409);
+    expect(admitted).toHaveLength(MAX_CONCURRENT_RUNS);
+    // Every loser is a 409 and nothing else — no 500 from a lost race.
+    expect(refused).toHaveLength(attempts - MAX_CONCURRENT_RUNS);
+
+    // The database agrees: the cap is on ROWS, not just on response codes.
+    const open = await agent.get("/api/runs?state=open").expect(200);
+    expect(open.body).toHaveLength(MAX_CONCURRENT_RUNS);
+  }, 30_000);
+
+  it("takes the admission lock per ORG: one org's create never waits behind another's", async () => {
+    const held = await orgAgent();
+    const heldBrand = await brandWithChannel(held);
+    const free = await orgAgent();
+    const freeBrand = await brandWithChannel(free);
+    const heldOrgId = await orgIdOfBrand(heldBrand.brandId);
+
+    const { createDb } = await import("@pubrick/db");
+    const { pool } = createDb(url as string);
+    const holder = await pool.connect();
+    await holder.query("BEGIN");
+    // The key is spelled out here rather than imported from the repository ON
+    // PURPOSE. An imported key would mutate along with the code it is meant to
+    // pin, and the mutation that matters — `hashtext(orgId)` replaced by a
+    // constant, turning a per-org lock into a global one — is exactly the one
+    // it would hide. Two independent copies, the same reasoning as this
+    // codebase's rule about pinning request bodies twice. (The namespace
+    // matches ADMISSION_LOCK_NAMESPACE in runs.repository.ts; the two-argument
+    // advisory-lock space is disjoint from the one-argument space
+    // runMigrations uses.)
+    await holder.query("SELECT pg_advisory_xact_lock(0x7a11, hashtext($1))", [heldOrgId]);
+
+    try {
+      // A different org must sail straight through. Under a global lock this
+      // request waits for a transaction that is never going to commit.
+      const unrelated = Promise.resolve(
+        free.post("/api/runs").send({
+          brandId: freeBrand.brandId,
+          brief: "other org",
+          channelIds: [freeBrand.channelId],
+        }),
+      );
+      expect(await settlesWithin(unrelated, 8_000)).toBe(true);
+      expect((await unrelated).status).toBe(201);
+
+      // ...while the org whose lock we hold genuinely waits. Without this half
+      // the test would also pass if the repository took no lock at all.
+      const blocked = Promise.resolve(
+        held.post("/api/runs").send({
+          brandId: heldBrand.brandId,
+          brief: "same org",
+          channelIds: [heldBrand.channelId],
+        }),
+      );
+      expect(await settlesWithin(blocked, 1_500)).toBe(false);
+
+      await holder.query("ROLLBACK");
+      expect((await blocked).status).toBe(201);
+    } finally {
+      holder.release();
+      await pool.end();
+    }
+  }, 30_000);
 
   it("caps by org, not globally: another org is unaffected", async () => {
     const first = await orgAgent();
@@ -244,16 +367,29 @@ describe.skipIf(!url)("runs e2e", () => {
     await agent.get("/api/runs?state=open").expect(200);
   });
 
-  it("scopes every run to its org", async () => {
+  it("scopes every run to its org — on the open list the queue strip actually polls, too", async () => {
     const owner = await orgAgent();
-    const { brandId, channelId } = await brandWithChannel(owner);
-    const run = await startRun(owner, brandId, [channelId]);
+    const ownerBrand = await brandWithChannel(owner);
+    const theirs = await startRun(owner, ownerBrand.brandId, [ownerBrand.channelId]);
 
     const stranger = await orgAgent();
-    await stranger.get(`/api/runs/${run.id}`).expect(404);
-    await stranger.post(`/api/runs/${run.id}/cancel`).expect(404);
-    await stranger.post(`/api/runs/${run.id}/dismiss`).expect(404);
-    expect((await stranger.get("/api/runs").expect(200)).body).toEqual([]);
+    const strangerBrand = await brandWithChannel(stranger);
+    const own = await startRun(stranger, strangerBrand.brandId, [strangerBrand.channelId]);
+
+    await stranger.get(`/api/runs/${theirs.id}`).expect(404);
+    await stranger.post(`/api/runs/${theirs.id}/cancel`).expect(404);
+    await stranger.post(`/api/runs/${theirs.id}/dismiss`).expect(404);
+
+    // BOTH list paths, and `?state=open` above all: it is the one the queue
+    // strip polls on every tick, so an org filter that held only on the
+    // unfiltered branch would leak every tenant's runs onto the busiest screen
+    // in the app while a tenancy test that never sent `state` stayed green.
+    // Asserted positively — the stranger has a run of its own — so an empty
+    // result cannot pass for correct scoping.
+    for (const path of ["/api/runs", "/api/runs?state=open"]) {
+      const listed = (await stranger.get(path).expect(200)).body as { id: string }[];
+      expect(listed.map((run) => run.id)).toEqual([own.id]);
+    }
   });
 
   it("refuses a channel from another brand (404) and a duplicated channel (400)", async () => {

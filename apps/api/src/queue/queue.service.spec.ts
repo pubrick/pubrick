@@ -135,12 +135,34 @@ describe.skipIf(!url)("QueueService", () => {
     );
     await pool.end();
 
-    // Read back from the real pgboss.queue row, not from the constants being
-    // passed: createQueue is an ON CONFLICT DO NOTHING insert, so these values
-    // only land because onModuleInit follows it with updateQueue. `dead_letter`
-    // is asserted because the brief's snippet omitted it while spec §5 requires
-    // it — without it the DLQ consumer never runs and a run whose retries were
-    // exhausted sits at `running` on the queue strip forever.
+    // The contract itself, pinned as a VALUE — the row below cannot do it.
+    // `createQueue` is ON CONFLICT DO NOTHING, and `updateQueue` cannot CLEAR an
+    // option that is absent from the object it is handed: its SQL reads
+    // `dead_letter = CASE WHEN jsonb_exists(o.data, 'deadLetter') THEN … ELSE
+    // dead_letter END` (pg-boss/dist/plans.js updateQueue), and every other
+    // column is a COALESCE with the same effect. So on any runner that reuses a
+    // database — every dev box, and CI whenever the volume survives — DELETING
+    // an option leaves the row exactly as it was and the assertions below stay
+    // green. `deadLetter` is the one that hurts most (spec §5's DLQ consumer is
+    // what marks a run whose retries ran out; without it the run sits at
+    // `running` on the queue strip forever, and the brief's snippet omitted it),
+    // but the hole is the whole option set, so the whole option set is pinned.
+    // A change-detector on purpose: this is a wire contract between two
+    // separately deployable apps, pinned the way PLATFORMS and AI_PROVIDERS are.
+    expect(GENERATE_QUEUE_OPTIONS).toEqual({
+      retryLimit: 3,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 3600,
+      expireInSeconds: 1800,
+      heartbeatSeconds: 30,
+      deadLetter: GENERATE_DLQ,
+    });
+
+    // And the row, which is the other half: it proves the three-call
+    // create-DLQ / create / updateQueue dance actually converges the options
+    // onto the queue rather than passing them to an insert that silently did
+    // nothing.
     const queue = rows.rows[0] as {
       expire_seconds: number;
       heartbeat_seconds: number | null;
@@ -186,5 +208,33 @@ describe.skipIf(!url)("QueueService", () => {
     // pgboss.job.group_id, so a wrong group here would silently let one org
     // saturate every worker slot in the cluster.
     expect(row.group_id).toBe(run.orgId);
+  });
+
+  it("sends on the CALLER'S connection: a failure after send() leaves no orphan job", async () => {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const run = { id: crypto.randomUUID(), orgId: `test-org-${crypto.randomUUID()}` };
+
+    // Nothing else in this suite can see `db: fromDrizzle(tx, sql)` go missing.
+    // Without it `send()` takes its own connection from pg-boss's pool and
+    // COMMITS on its own, so every happy-path assertion — the job exists, it
+    // carries the right group — passes exactly as before. The single line that
+    // makes the enqueue transactional is only observable when the enclosing
+    // transaction rolls back: the job must roll back WITH it, or a run row that
+    // never existed has a job that will run against it (spec §5's terminal
+    // write then has no row to fence against).
+    await expect(
+      db.transaction(async (tx) => {
+        await service.enqueueGenerate(tx, run);
+        throw new Error("caller failed after the send");
+      }),
+    ).rejects.toThrow("caller failed after the send");
+
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n FROM pgboss.job
+         WHERE name = 'generate' AND data->>'runId' = '${run.id}'`,
+    );
+    await pool.end();
+    expect((jobs.rows[0] as { n: number }).n).toBe(0);
   });
 });
