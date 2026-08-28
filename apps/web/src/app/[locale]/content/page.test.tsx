@@ -250,6 +250,36 @@ describe("adaptation rendering (Step 2)", () => {
     expect(container.querySelector(`a[href="${externalUrl}"]`)).toBeNull();
     expect(within(row).queryByRole("link")).not.toBeInTheDocument();
   });
+
+  // F5: channelLabel() falls back to the raw channelId when no channel in
+  // `channels` matches — reachable in production whenever a channel was
+  // deleted after the adaptation was created, or GET /api/channels failed
+  // (that failure is swallowed by a bare `.catch(() => {})` above, so the
+  // page renders with `channels` still `[]`). Nothing else here exercises
+  // the unresolved branch: every other fixture's channelId has a match.
+  it("falls back to the raw channelId when it cannot be resolved against the loaded channels", async () => {
+    const calls: Call[] = [];
+    const channelList: Channel[] = [{ id: "ch1", platform: "telegram", name: "Main channel" }];
+    const adaptations: Adaptation[] = [
+      {
+        id: "a1",
+        channelId: "missing-channel-id",
+        status: "published",
+        externalUrl: null,
+        lastError: null,
+      },
+    ];
+    installHandlers(calls, () => [item("c1", "Launch post", "draft", adaptations)], channelList);
+
+    render(<ContentQueuePage />);
+
+    const itemLink = await screen.findByRole("link", { name: "Launch post" });
+    const itemLi = itemLink.closest("li");
+    if (!itemLi) throw new Error("content item <li> not found");
+    const row = within(itemLi).getAllByRole("listitem")[0] as HTMLElement;
+
+    expect(row).toHaveTextContent(`missing-channel-id — ${en.Content.adaptationStatus.published}`);
+  });
 });
 
 /** See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page. */

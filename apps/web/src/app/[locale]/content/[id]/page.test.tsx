@@ -201,6 +201,27 @@ describe("rendering by adaptation status (Step 1)", () => {
   });
 });
 
+// F5: channelLabel() falls back to the raw channelId when no channel in
+// `channels` matches — reachable whenever a channel was deleted after the
+// adaptation was created, or GET /api/channels?brandId=... failed (that
+// failure is swallowed by a bare `.catch(() => {})` in load(), so `channels`
+// stays `[]`). Every other fixture in this file uses "ch1", which always
+// resolves against the fixed `channel` const — so nothing else exercises
+// the unresolved branch.
+describe("channel label fallback (F5)", () => {
+  it("falls back to the raw channelId when it cannot be resolved against the loaded channels", async () => {
+    const item = makeItem({
+      adaptations: [makeAdaptation({ channelId: "missing-channel-id", status: "pending" })],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+    expect(within(resultsList()).getByText("missing-channel-id")).toBeInTheDocument();
+  });
+});
+
 describe("approve now (Step 2)", () => {
   it("POSTs approve with no scheduledAt and reflects the returned state", async () => {
     const served = { current: makeItem({ status: "draft" }) };

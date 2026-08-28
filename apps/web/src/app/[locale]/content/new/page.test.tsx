@@ -249,6 +249,40 @@ describe("submitting (Step 1)", () => {
   });
 });
 
+/**
+ * F2: the header's submit button used to be `type="button"` with its own
+ * onClick, living OUTSIDE `<form id={FORM_ID}>` — so it called createContent()
+ * directly and skipped the form's native constraint validation entirely. An
+ * empty required Textarea posted straight to the server. Wiring the button
+ * back to the form via `form={FORM_ID} type="submit"` restores that native
+ * validation without changing any click/submit behavior for a valid form.
+ */
+describe("native form validation on submit (F2)", () => {
+  it("blocks submission and issues no request when the required body is left empty", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls);
+
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    // Body left empty on purpose — Textarea's `required` attribute is what
+    // must stop this, not the channel-selection guard already covered above.
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    // Confirms the browser's own validity check is what stopped it, not some
+    // other error path silently swallowing the click.
+    const body = container.querySelector("#body") as HTMLTextAreaElement;
+    expect(body.validity.valid).toBe(false);
+  });
+});
+
 /** See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page. */
 describe("no active organization redirects to onboarding", () => {
   it("replaces to /<locale>/onboarding instead of rendering an error", async () => {

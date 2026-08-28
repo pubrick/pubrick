@@ -18,6 +18,12 @@ type Brand = { id: string; name: string; contentLanguage: string };
 // below can find and focus this field without lifting a ref just for that.
 const NAME_INPUT_ID = "brand-name";
 
+// The create form's id — the AppShell header's primary-action button lives
+// outside the <form> element (constitution: submit is top-right in the
+// toolbar, not at the bottom of the form) and is wired back to it via
+// `form={FORM_ID}` on a real type="submit" button.
+const FORM_ID = "brand-create-form";
+
 export default function BrandsPage() {
   const t = useTranslations("Brands");
   const locale = useLocale();
@@ -64,7 +70,14 @@ export default function BrandsPage() {
   const isEmpty = brands !== null && brands.length === 0;
 
   return (
-    <AppShell title={t("title")}>
+    <AppShell
+      title={t("title")}
+      primaryAction={
+        <Button type="submit" form={FORM_ID}>
+          {t("create")}
+        </Button>
+      }
+    >
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
@@ -72,7 +85,7 @@ export default function BrandsPage() {
       )}
 
       <Card className="mb-6">
-        <form onSubmit={createBrand} className="flex flex-wrap items-end gap-3">
+        <form id={FORM_ID} onSubmit={createBrand} className="flex flex-wrap items-end gap-3">
           <Input
             id={NAME_INPUT_ID}
             value={name}
@@ -82,7 +95,6 @@ export default function BrandsPage() {
             required
             className="min-w-[220px] flex-1"
           />
-          <Button type="submit">{t("create")}</Button>
         </form>
       </Card>
 
@@ -93,6 +105,7 @@ export default function BrandsPage() {
             title={t("empty")}
             action={
               <Button
+                variant="secondary"
                 size="sm"
                 type="button"
                 onClick={() => document.getElementById(NAME_INPUT_ID)?.focus()}
@@ -113,7 +126,7 @@ export default function BrandsPage() {
               className={[
                 "flex items-center justify-between gap-3 rounded-card border border-border bg-panel p-4 shadow-card transition-colors",
                 "hover:bg-bg-sunken",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2",
+                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
               ].join(" ")}
             >
               {/* Only b.name renders as text inside the link — its accessible

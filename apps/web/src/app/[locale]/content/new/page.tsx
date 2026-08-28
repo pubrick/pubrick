@@ -71,11 +71,13 @@ export default function NewContentPage() {
     });
   }
 
-  // Shared by the form's own submit (Enter in a field) and the
-  // AppShell header's primary-action button, which lives outside the
-  // <form> element (constitution: submit is the top-right primary
-  // action, not an in-flow button) and drives this directly by onClick
-  // rather than relying on the button/form association.
+  // Shared by the form's own submit (Enter in a field) and the AppShell
+  // header's primary-action button, which lives outside the <form> element
+  // (constitution: submit is the top-right primary action, not an in-flow
+  // button) but is wired back to it via `form={FORM_ID}` — a real
+  // type="submit" button associated with the form by id, so native
+  // constraint validation (the required Select/Textarea below) still runs
+  // before onFormSubmit fires, exactly as if the button sat inside the form.
   async function createContent() {
     setError(null);
     if (channelIds.size === 0) {
@@ -110,7 +112,7 @@ export default function NewContentPage() {
     <AppShell
       title={t("title")}
       primaryAction={
-        <Button type="button" onClick={() => void createContent()} disabled={submitting}>
+        <Button type="submit" form={FORM_ID} disabled={submitting}>
           {t("submit")}
         </Button>
       }
@@ -153,7 +155,7 @@ export default function NewContentPage() {
                         type="checkbox"
                         checked={channelIds.has(c.id)}
                         onChange={() => toggleChannel(c.id)}
-                        className="h-4 w-4 rounded border-border text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        className="h-4 w-4 rounded border-border text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                       />
                       {channelLabel(c.platform, c.name)}
                     </label>

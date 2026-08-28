@@ -168,7 +168,11 @@ export default function ContentQueuePage() {
           <EmptyState
             title={t("empty")}
             action={
-              <Button size="sm" onClick={() => router.push(`/${locale}/content/new`)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => router.push(`/${locale}/content/new`)}
+              >
                 {t("emptyCreateAction")}
               </Button>
             }

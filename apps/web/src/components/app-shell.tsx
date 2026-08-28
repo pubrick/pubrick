@@ -128,7 +128,22 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
           {(search || primaryAction) && (
             <div className="flex items-center gap-3">
               {search}
-              {primaryAction}
+              {/* Spec §3: touch targets ≥44px below 640px. Button's own `md`/`sm`
+                  sizes are 36px/30px tall — min-height (not height) is what a
+                  descendant selector can add without fighting Button's own `h-*`
+                  utility, since min-height always clamps the box's used height
+                  regardless of a smaller explicit `height` elsewhere in the
+                  cascade. Reset to min-h-0 at sm+ so desktop/rail sizing (the
+                  Button's own height) is unchanged — `min-h-11` mirrors the same
+                  44px token the mobile nav links already use above. Text labels
+                  stay: the item screen's header carries Approve + Reject, where
+                  round icon-only buttons would be cryptic — deliberate deviation
+                  from the spec's "round" 44px mobile primary-action wording. */}
+              {primaryAction && (
+                <div className="flex items-center gap-2 [&_button]:min-h-11 sm:[&_button]:min-h-0">
+                  {primaryAction}
+                </div>
+              )}
             </div>
           )}
         </header>

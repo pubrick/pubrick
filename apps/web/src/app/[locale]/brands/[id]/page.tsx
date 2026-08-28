@@ -19,6 +19,12 @@ type VerifyResult = { ok: true; account: string; target: string } | { ok: false;
 
 type PlatformId = (typeof PLATFORM_IDS)[number];
 
+// The add-channel form's id — the AppShell header's primary-action button
+// lives outside the <form> element (constitution: submit is top-right in
+// the toolbar, not at the bottom of the form) and is wired back to it via
+// `form={FORM_ID}` on a real type="submit" button.
+const FORM_ID = "channel-add-form";
+
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
@@ -101,7 +107,14 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const fields = PLATFORM_FIELDS[platform];
 
   return (
-    <AppShell title={brand?.name ?? ""}>
+    <AppShell
+      title={brand?.name ?? ""}
+      primaryAction={
+        <Button type="submit" form={FORM_ID}>
+          {t("add")}
+        </Button>
+      }
+    >
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
@@ -161,7 +174,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       )}
 
       <Card>
-        <form onSubmit={addChannel} className="flex flex-col gap-3">
+        <form id={FORM_ID} onSubmit={addChannel} className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-3">
             <Select
               label={t("platformLabel")}
@@ -204,9 +217,6 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 className="min-w-[200px] flex-1"
               />
             ))}
-          </div>
-          <div>
-            <Button type="submit">{t("add")}</Button>
           </div>
         </form>
       </Card>

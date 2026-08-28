@@ -24,7 +24,7 @@ export function Input({ label, id, className, ...rest }: InputProps) {
         className={[
           "h-9 rounded-control border border-border bg-panel px-3 text-sm text-fg",
           "placeholder:text-fg-tertiary",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
           "disabled:pointer-events-none disabled:opacity-50",
           className,
         ]
