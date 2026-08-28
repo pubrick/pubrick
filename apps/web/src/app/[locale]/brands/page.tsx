@@ -125,7 +125,6 @@ export default function BrandsPage() {
               className={[
                 "flex items-center justify-between gap-3 rounded-card border border-border bg-panel p-4 shadow-card transition-colors",
                 "hover:bg-bg-sunken",
-                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
               ].join(" ")}
             >
               {/* Only b.name renders as text inside the link — its accessible

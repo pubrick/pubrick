@@ -13,9 +13,9 @@ import { authClient } from "@/lib/auth-client";
 // pinned Landing tests assert on via href. If Button's own classes change —
 // color, focus ring, anything — these two constants need a manual re-sync.
 const primaryLinkClasses =
-  "inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-control border border-transparent bg-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  "inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-control border border-transparent bg-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover";
 const secondaryLinkClasses =
-  "inline-flex h-9 items-center justify-center gap-2 rounded-control border border-border bg-panel px-4 text-sm font-semibold text-fg transition-colors hover:bg-bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  "inline-flex h-9 items-center justify-center gap-2 rounded-control border border-border bg-panel px-4 text-sm font-semibold text-fg transition-colors hover:bg-bg-sunken";
 
 export default function LandingPage() {
   const t = useTranslations("Landing");

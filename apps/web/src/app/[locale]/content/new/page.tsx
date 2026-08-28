@@ -155,7 +155,7 @@ export default function NewContentPage() {
                         type="checkbox"
                         checked={channelIds.has(c.id)}
                         onChange={() => toggleChannel(c.id)}
-                        className="h-4 w-4 rounded border-border text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                        className="h-4 w-4 rounded border-border text-accent"
                       />
                       {channelLabel(c.platform, c.name)}
                     </label>

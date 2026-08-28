@@ -36,7 +36,6 @@ export function Button({
 }: ButtonProps) {
   const classes = [
     "inline-flex items-center justify-center gap-2 rounded-control font-semibold transition-colors",
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
     "disabled:pointer-events-none disabled:opacity-50",
     VARIANT_CLASSES[variant],
     SIZE_CLASSES[size],

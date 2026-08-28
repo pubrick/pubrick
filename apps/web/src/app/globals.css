@@ -211,6 +211,15 @@ body {
 @layer base {
   a { color: var(--color-accent); }
   a:hover { color: var(--color-accent-hover); }
+
+  /* One focus treatment for the whole app: outline (not ring) so the gap is
+     transparent and reads correctly on any surface in either theme. Declaring
+     it once here is what keeps a new focusable — a tab, a menu item, a
+     <summary> — from silently falling back to the browser's blue ring. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -44,7 +44,6 @@ export function Textarea({
         className={[
           "min-h-24 rounded-control border border-border bg-panel px-3 py-2 text-sm text-fg",
           "placeholder:text-fg-tertiary",
-          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
           "disabled:pointer-events-none disabled:opacity-50",
           className,
         ]
