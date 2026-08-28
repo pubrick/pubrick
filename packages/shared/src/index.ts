@@ -11,3 +11,9 @@ export {
   type PublishJob,
 } from "./jobs.js";
 export { PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
+export {
+  aiSentenceMask,
+  isUntouchedAi,
+  normalizeForComparison,
+  splitSentences,
+} from "./provenance.js";
