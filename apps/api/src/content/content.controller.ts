@@ -67,6 +67,18 @@ export class ContentController {
     return this.content.updateAdaptation(orgId, id, adaptationId, body);
   }
 
+  /**
+   * The read receipt. A POST, never the GET above: the public API and the MCP
+   * server will issue GETs with no human present, and stamping there would let
+   * a listing open the publish gate (see `markOpened`). 204 — there is nothing
+   * to say back, and nothing for a client to have to parse.
+   */
+  @Post(":id/opened")
+  @HttpCode(204)
+  async opened(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
+    await this.content.markOpened(orgId, id);
+  }
+
   @Post(":id/approve")
   @HttpCode(200)
   approve(

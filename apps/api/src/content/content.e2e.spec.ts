@@ -1,5 +1,6 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -57,6 +58,90 @@ describe.skipIf(!url)("content e2e", () => {
       })
       .expect(201);
     return { brandId: brand.body.id as string, channelId: channel.body.id as string };
+  }
+
+  /** The AI's own words, in both the item body and its first version row. */
+  const AI_BODY = "Café ouvert. Passez nous voir.";
+  const aiAdapted = (index: number) => `Channel ${index} version. The AI wrote this one too.`;
+
+  /**
+   * What Task 8's terminal write leaves behind, written directly.
+   *
+   * That write creates the item (`origin: "ai"`), its adaptations (each with
+   * the AI's adapted body), and the FIRST `content_versions` row for every one
+   * of them — item and adaptation alike. The worker does not exist yet, and the
+   * api never writes versions itself, so this seeds those rows the same way
+   * every other worker-shaped fixture in this file does. Drizzle's insert
+   * builder rather than raw SQL: the bodies are real prose with accents, and
+   * they must arrive byte-for-byte or the provenance comparison is testing the
+   * fixture's escaping instead of the rule.
+   */
+  async function aiDraft(agent: request.Agent, brandId: string, channelIds: string[]) {
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, title: "AI title", body: AI_BODY, channelIds })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+    // The API returns adaptations in insertion order, but nothing promises it;
+    // index by channel so the caller's `channelIds` order is what indexes them.
+    const ordered = channelIds.map(
+      (channelId) => adaptations.find((a) => a.channelId === channelId) as { id: string },
+    );
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+      .rows as { org_id: string }[];
+    const orgId = row?.org_id as string;
+
+    await db.execute(`UPDATE content_items SET origin = 'ai' WHERE id = '${itemId}'`);
+    for (const [index, adaptation] of ordered.entries()) {
+      await db
+        .update(schema.adaptations)
+        .set({ origin: "ai", body: aiAdapted(index) })
+        .where(eq(schema.adaptations.id, adaptation.id));
+    }
+    await db.insert(schema.contentVersions).values([
+      {
+        orgId,
+        contentItemId: itemId,
+        adaptationId: null,
+        body: AI_BODY,
+        title: "AI title",
+        origin: "ai",
+      },
+      ...ordered.map((adaptation, index) => ({
+        orgId,
+        contentItemId: itemId,
+        adaptationId: adaptation.id,
+        body: aiAdapted(index),
+        origin: "ai" as const,
+      })),
+    ]);
+    await pool.end();
+
+    return { itemId, adaptationIds: ordered.map((a) => a.id) };
+  }
+
+  async function publishJobCount(adaptationId: string): Promise<number> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+    );
+    await pool.end();
+    return (jobs.rows[0] as { n: number }).n;
+  }
+
+  async function firstOpenedAt(itemId: string): Promise<string | null> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = (
+      await db.execute(`SELECT first_opened_at FROM content_items WHERE id = '${itemId}'`)
+    ).rows as { first_opened_at: string | null }[];
+    await pool.end();
+    return rows[0]?.first_opened_at ?? null;
   }
 
   it("creates a draft with one adaptation per channel", async () => {
@@ -785,6 +870,207 @@ describe.skipIf(!url)("content e2e", () => {
     expect(rejected.body.adaptations[0].attemptCount).toBe(0);
   });
 
+  describe("the publish promise: nothing publishes that no human opened or touched", () => {
+    it("refuses to approve an AI draft nobody opened or touched, and enqueues nothing", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const res = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/no one has read/i);
+
+      // The refusal is the whole product promise, so it has to be a refusal and
+      // not a message: nothing queued, nothing scheduled, status untouched.
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("draft");
+      expect(after.body.adaptations[0].status).toBe("pending");
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("refuses the same draft when it is approved WITH A SCHEDULE", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // Scheduling is the same door to enqueuePublish, just later.
+      await agent
+        .post(`/api/content/${itemId}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+        .expect(409);
+    });
+
+    it("allows approval once a human opened it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(approved.body.adaptations[0].status).toBe("queued");
+    });
+
+    it("allows approval once a human edited the master body, even unopened", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      await agent.patch(`/api/content/${itemId}`).send({ body: "My own words." }).expect(200);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    });
+
+    it("allows approval when a human edited ONE channel's override, even unopened", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const second = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "456:def", chatId: "-1009876543210" },
+        })
+        .expect(201);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId, second.body.id]);
+
+      // Two channels, one edited: the item body is still verbatim AI, and so is
+      // the OTHER channel's text. A human has still been here, so approval
+      // proceeds — and with `some` in place of `every` this would 409.
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationIds[0]}`)
+        .send({ body: "My own words for this channel." })
+        .expect(200);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    });
+
+    it("asks whether a human was involved, not whether every channel was reviewed", async () => {
+      // Deliberately spelled out rather than left implicit: the rule asks
+      // whether a HUMAN HAS BEEN INVOLVED, not whether each channel's text was
+      // individually reviewed. Editing the master body of a two-channel item
+      // clears the refusal even though both channels still ship untouched AI
+      // adaptations (the adaptation body wins over the item body in the
+      // worker). Spec §6 defines the refusal as the conjunction of all three
+      // clauses, so this is the rule working, not a hole in it — but it is the
+      // rule's real reach, and a reader deserves to see it asserted.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const second = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "789:ghi", chatId: "-1005555555555" },
+        })
+        .expect(201);
+      const { itemId } = await aiDraft(agent, brandId, [channelId, second.body.id]);
+
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Rewritten master." }).expect(200);
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const bodies = (approved.body.adaptations as { body: string }[]).map((a) => a.body);
+      expect(bodies).toContain(aiAdapted(0));
+      expect(bodies).toContain(aiAdapted(1));
+    });
+
+    it("a GET does not stamp the read receipt — the public API and the MCP server issue GETs", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      await agent.get("/api/content").expect(200);
+      await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(await firstOpenedAt(itemId)).toBeNull();
+
+      // The point of the separate endpoint: reading the item over the API is
+      // not a human reading the draft, and must not open the publish gate.
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+    });
+
+    it("whitespace and Unicode composition are not a human touch — both sides normalise the same way", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // A reflow and a copy-paste that arrived decomposed. Raw string equality
+      // anywhere in the rule would read this as a human edit and let an
+      // untouched AI draft through.
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: `  ${AI_BODY.normalize("NFD").replace(". ", ".  ")} ` })
+        .expect(200);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+    });
+
+    it("refuses when the AI's version rows are missing: unprovable is not the same as touched", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // A terminal write that wrote the item and its adaptation but no version
+      // rows — the shape a worker bug leaves behind. There is then nothing to
+      // compare against, and `adaptations.origin` defaults to `human`, so a
+      // rule that inferred "touched" from missing evidence would publish an
+      // untouched AI draft.
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db
+        .delete(schema.contentVersions)
+        .where(eq(schema.contentVersions.contentItemId, itemId));
+      await pool.end();
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("stamps the read receipt once: a second POST is still 204 and does not move the timestamp", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      const first = await firstOpenedAt(itemId);
+      expect(first).not.toBeNull();
+
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      // `WHERE first_opened_at IS NULL`: the column answers "has anyone ever
+      // read this", so every later visit must leave the first answer alone.
+      expect(await firstOpenedAt(itemId)).toEqual(first);
+    });
+
+    it("404s an opened for an item that does not exist", async () => {
+      const agent = await orgAgent();
+      await agent.post("/api/content/00000000-0000-4000-8000-000000000000/opened").expect(404);
+    });
+
+    it("exposes origin on the list and on the item, for both levels", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.origin).toBe("ai");
+      expect(fetched.body.adaptations[0].origin).toBe("ai");
+
+      const listed = (await agent.get("/api/content").expect(200)).body as {
+        id: string;
+        origin: string;
+        adaptations: { origin: string }[];
+      }[];
+      const mine = listed.find((item) => item.id === itemId);
+      expect(mine?.origin).toBe("ai");
+      expect(mine?.adaptations[0]?.origin).toBe("ai");
+
+      // The badge's other branch: a human-composed draft, and the adaptations
+      // it created with it.
+      const human = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Mine", channelIds: [channelId] })
+        .expect(201);
+      expect(human.body.origin).toBe("human");
+      expect(human.body.adaptations[0].origin).toBe("human");
+    });
+  });
+
   it("isolates content between organizations", async () => {
     const a = await orgAgent();
     const b = await orgAgent();
@@ -800,6 +1086,9 @@ describe.skipIf(!url)("content e2e", () => {
     // reject is no longer a status flip — it cancels jobs and rewrites
     // adaptations — so it needs the same isolation guarantee as approve.
     await b.post(`/api/content/${created.body.id}/reject`).send({}).expect(404);
+    // ...and neither can org B stamp org A's read receipt, which would open
+    // org A's publish gate for a draft nobody in org A has seen.
+    await b.post(`/api/content/${created.body.id}/opened`).expect(404);
 
     // ...and org A's item was not touched by any of that.
     const mine = await a.get(`/api/content/${created.body.id}`).expect(200);

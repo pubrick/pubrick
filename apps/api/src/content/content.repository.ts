@@ -5,8 +5,13 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { AdaptationUpdate, ContentCreate, ContentUpdate } from "@pubrick/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import {
+  type AdaptationUpdate,
+  type ContentCreate,
+  type ContentUpdate,
+  isUntouchedAi,
+} from "@pubrick/shared";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 
@@ -16,6 +21,13 @@ const ITEM_COLUMNS = {
   title: schema.contentItems.title,
   body: schema.contentItems.body,
   status: schema.contentItems.status,
+  /**
+   * Who wrote this text. Exposed because the origin badge is DERIVED, not
+   * stored (spec §6): `human` reads human-written, `ai` reads AI-drafted or
+   * human-edited depending on whether the body still matches the AI's own
+   * first version.
+   */
+  origin: schema.contentItems.origin,
   createdAt: schema.contentItems.createdAt,
   updatedAt: schema.contentItems.updatedAt,
 };
@@ -97,6 +109,19 @@ const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
   published: "This channel's post has already been published and can no longer be edited",
 };
 
+/**
+ * The 409 for the product's headline promise: nothing publishes that no human
+ * opened or touched.
+ *
+ * Written for the operator, not the log: it names the two things that clear the
+ * refusal, because both are one act away and neither is discoverable from
+ * "409 Conflict". The web app effectively never sees this — its item page fires
+ * `POST /:id/opened` on render — which is exactly why it must read well for the
+ * callers that will: the public API, the MCP server, and a script.
+ */
+const UNREAD_AI_DRAFT_MESSAGE =
+  "No one has read this AI-written draft yet; open it, or edit it, before approving";
+
 function isEditableItemStatus(status: ContentStatusValue): status is EditableItemStatus {
   return EDITABLE_ITEM_STATUSES.some((editable) => editable === status);
 }
@@ -115,6 +140,12 @@ const ADAPTATION_COLUMNS = {
   channelId: schema.adaptations.channelId,
   body: schema.adaptations.body,
   status: schema.adaptations.status,
+  /**
+   * Tracked per channel because the adaptation body is what actually reaches
+   * the platform: an item a human wrote can still carry AI-adapted channel
+   * bodies, which is the "AI-adapted" badge in spec §6.
+   */
+  origin: schema.adaptations.origin,
   scheduledAt: schema.adaptations.scheduledAt,
   attemptCount: schema.adaptations.attemptCount,
   lastError: schema.adaptations.lastError,
@@ -359,6 +390,159 @@ export class ContentRepository {
     }
   }
 
+  /**
+   * The publish rule: approval is refused when NO HUMAN HAS OPENED THE ITEM AND
+   * NOTHING HAS BEEN TOUCHED.
+   *
+   * Three clauses, all of which must hold for the refusal — any one of them
+   * being false is a human in the loop, and approval proceeds:
+   *
+   * 1. `origin === "ai"`. A human-written item is nobody's business here, and
+   *    this clause is what keeps it out: a human draft has no version rows at
+   *    all, so every "is this still the AI's text?" question below would answer
+   *    "cannot prove otherwise" and lock the product's ordinary flow.
+   *    KNOWN LIMIT, deliberately left as the spec writes it: the gate is the
+   *    ITEM's origin, so a human-written item carrying AI-WRITTEN ADAPTATIONS —
+   *    the "AI-adapted" badge spec §6 anticipates — never reaches the checks
+   *    below, and its channel text could ship unread. Nothing produces that
+   *    shape today (the terminal write always marks the item `ai` too), and
+   *    increment 2's refine verbs are what would. Widening the gate to "any
+   *    first `ai` version row exists for this item or its adaptations" closes
+   *    it, at the cost of refusing a draft whose body a human typed themselves
+   *    until they open it.
+   * 2. `first_opened_at IS NULL` — nobody has opened it (`markOpened`).
+   * 3. The text is still verbatim what the AI wrote, AT BOTH LEVELS. The item
+   *    body against the item's own first `ai` version, and EVERY adaptation
+   *    against its own — because `adaptations.body ?? contentItems.body` is
+   *    what the worker actually sends (publish.service.ts), so a rule that
+   *    checked only the master text would pass an item whose every channel
+   *    still ships untouched AI.
+   *
+   * Comparison is `isUntouchedAi`, never string equality: it normalises
+   * whitespace and Unicode composition, so a stray space or an NFD paste is not
+   * a human touch — and the same function draws the per-sentence mask in the
+   * UI, so the badge and this gate cannot disagree.
+   *
+   * Missing evidence refuses. An `ai` item with no version row to compare
+   * against reads as untouched, and an adaptation with no version row of its
+   * own does too: the promise is about what we can PROVE a human touched, and
+   * the recovery is one click (open it) rather than a published draft nobody
+   * read. That direction matters because `adaptations.origin` defaults to
+   * `human` — deriving "touched" from the origin column instead would turn a
+   * worker that forgot to set it into an open publish gate.
+   *
+   * A plain read, no `FOR UPDATE`: locking `content_items` here would invert
+   * the lock order the whole codebase depends on (see `lockAdaptations`).
+   */
+  private async requireHumanInvolvement(tx: Tx, orgId: string, id: string): Promise<void> {
+    const rows = await tx
+      .select({
+        body: schema.contentItems.body,
+        origin: schema.contentItems.origin,
+        firstOpenedAt: schema.contentItems.firstOpenedAt,
+      })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    const item = rows[0];
+    // `requireItem` already 404'd a missing row; a delete racing this read is
+    // harmless (the writes below it match nothing).
+    if (!item) return;
+    if (item.origin !== "ai") return;
+
+    // The FIRST `ai` version per level is the provenance reference. Filtered on
+    // origin because increment 2 appends human versions to the same table, and
+    // ordered so "first" cannot drift: the worker writes item and adaptation
+    // versions in one transaction, where `now()` — and therefore `created_at` —
+    // is identical for all of them.
+    const versions = await tx
+      .select({
+        adaptationId: schema.contentVersions.adaptationId,
+        body: schema.contentVersions.body,
+      })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, id),
+          eq(schema.contentVersions.origin, "ai"),
+        ),
+      )
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
+    const firstAiVersion = new Map<string | null, string>();
+    for (const version of versions) {
+      if (!firstAiVersion.has(version.adaptationId)) {
+        firstAiVersion.set(version.adaptationId, version.body);
+      }
+    }
+
+    const adaptations = await tx
+      .select({ id: schema.adaptations.id, body: schema.adaptations.body })
+      .from(schema.adaptations)
+      .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)));
+
+    /** Untouched unless we can prove otherwise — see "missing evidence" above. */
+    const stillAi = (current: string, aiVersion: string | undefined): boolean =>
+      aiVersion === undefined || isUntouchedAi(current, aiVersion);
+
+    const nobodyOpened = item.firstOpenedAt === null;
+    const bodyIsAi = stillAi(item.body, firstAiVersion.get(null));
+    const everyChannelIsAi = adaptations.every((adaptation) =>
+      // `?? item.body` is the worker's own fallback: clearing an override does
+      // not make the channel stop shipping text.
+      stillAi(adaptation.body ?? item.body, firstAiVersion.get(adaptation.id)),
+    );
+
+    if (nobodyOpened && bodyIsAi && everyChannelIsAi) {
+      throw new ConflictException(UNREAD_AI_DRAFT_MESSAGE);
+    }
+  }
+
+  /**
+   * Records that a human has opened this item, once.
+   *
+   * Its own endpoint rather than a side effect of the GET, and that is the
+   * whole design: the public API and the MCP server will issue GETs with no
+   * human anywhere near them, and a GET that stamped the read receipt would
+   * hand them the ability to open the publish gate by listing content. The web
+   * app fires this from the item page after render.
+   *
+   * `WHERE first_opened_at IS NULL` keeps the FIRST open: the column answers
+   * "has anyone ever read this", so overwriting it on every visit would lose
+   * the only timestamp anyone would want, and makes concurrent opens a no-op
+   * for the loser rather than a lost update.
+   *
+   * Idempotent: a second call is 204 too. Zero rows updated is ambiguous —
+   * already stamped, or not this org's item — so it is disambiguated with one
+   * read, because an org must not be able to stamp another org's draft (or
+   * learn that it exists).
+   */
+  async markOpened(orgId: string, id: string): Promise<void> {
+    const stamped = await db
+      .update(schema.contentItems)
+      // A JS Date, matching `scheduledAt`: the column is `timestamp` without a
+      // zone and drizzle writes/reads it as UTC on both sides, so this
+      // round-trips whatever the database's own timezone is. Nothing compares
+      // it to anything — the rule above only asks whether it is null.
+      .set({ firstOpenedAt: new Date() })
+      .where(
+        and(
+          eq(schema.contentItems.orgId, orgId),
+          eq(schema.contentItems.id, id),
+          isNull(schema.contentItems.firstOpenedAt),
+        ),
+      )
+      .returning({ id: schema.contentItems.id });
+    if (stamped.length > 0) return;
+
+    const existing = await db
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    if (existing.length === 0) throw new NotFoundException("Content item not found");
+  }
+
   private async setItemStatus(
     tx: Tx,
     orgId: string,
@@ -444,12 +628,20 @@ export class ContentRepository {
    * An item that has ALREADY published every one of its adaptations is refused
    * with a 409 (`requireNotPublished`): there is nothing left to enqueue, and
    * the only lasting effect used to be overwriting `published` with `approved`.
+   *
+   * And an AI draft that no human has opened or touched is refused too
+   * (`requireHumanInvolvement`) — the promise, enforced here rather than in the
+   * UI, because this is the only door to `enqueuePublish`.
    */
   async approve(orgId: string, id: string, scheduledAt: Date | null) {
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
       await this.requireNotPublished(tx, orgId, id);
+      // After `requireNotPublished`: an item already live in a channel gets the
+      // message about the post that went out, not one about reading it. Before
+      // the loop, so a refusal costs no queue work.
+      await this.requireHumanInvolvement(tx, orgId, id);
 
       for (const adaptation of targets) {
         // CURRENT attempt count (before this attempt) — see publishJobId's contract.
