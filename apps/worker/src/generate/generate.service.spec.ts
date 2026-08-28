@@ -17,6 +17,15 @@ type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
 const BRIEF = "BRIEF_MARKER announce the autumn menu";
 const EDITED = "EDITED_MARKER the autumn menu lands on Monday.";
 
+/** Lets one handler be pinned inside a model call while another one runs. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 /**
  * The worker's generation handler, against a REAL database and a mock model.
  *
@@ -307,6 +316,114 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(second.calls).toHaveLength(0);
       expect(await itemsOf(seeded.orgId)).toHaveLength(1);
     }, 25_000);
+
+    it("does not let two OVERLAPPING deliveries of one job id both pay for the whole run", async () => {
+      // The scenario the nonce exists for, driven through `handle` rather than
+      // through the repository — so it pins the token `handle` MINTS, not one a
+      // test handed it.
+      //
+      // Both handlers are alive at once and neither has finished, so the run is
+      // still `running` and the claim's status guard cannot help; the terminal
+      // write's guard still keeps the content item unique, so the damage is
+      // invisible in every row and shows up only on the bill. Without the
+      // per-delivery nonce both deliveries carry the identical token, every guard
+      // admits both, and the first one pays for all five steps instead of one.
+      const seeded = await seed({ channels: 1 });
+      const firstInResearcher = deferred();
+      const releaseFirst = deferred();
+      const secondInWriter = deferred();
+      const releaseSecond = deferred();
+
+      const first = scriptedModel({
+        researcher: async () => {
+          firstInResearcher.resolve();
+          await releaseFirst.promise;
+          return { angle: "An angle", keyPoints: ["A key point"], avoid: [] };
+        },
+      });
+      const second = scriptedModel({
+        writer: async () => {
+          secondInWriter.resolve();
+          await releaseSecond.promise;
+          return { body: "A second draft." };
+        },
+      });
+
+      const job = { id: "job-nonce", data: { runId: seeded.runId, orgId: seeded.orgId } };
+      const firstRun = serviceFor(first).handle(job);
+      await firstInResearcher.promise;
+      // A second delivery of the SAME job id — what pg-boss produces when a job
+      // expires, because `failJobs` re-inserts the row under its original id.
+      const secondRun = serviceFor(second).handle(job);
+      await secondInWriter.promise;
+      releaseFirst.resolve();
+      await firstRun;
+      releaseSecond.resolve();
+      await secondRun;
+
+      expect(first.calls.map((call) => call.role)).toEqual(["researcher"]);
+      expect(await itemsOf(seeded.orgId)).toHaveLength(1);
+    }, 30_000);
+
+    it("re-takes the fence BEFORE the next model call, not only after it", async () => {
+      // The takeover lands BETWEEN two steps, so the loser is not inside a model
+      // call and its checkpoint write has already succeeded. Nothing but
+      // `beginStep` can stop it before it buys the next step — delete that guard
+      // and this handler pays for all five while the winner pays again.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      const write = repo.writeCheckpoint.bind(repo);
+      let takenOver = false;
+      vi.spyOn(repo, "writeCheckpoint").mockImplementation(async (...args) => {
+        const outcome = await write(...(args as Parameters<typeof write>));
+        if (!takenOver) {
+          takenOver = true;
+          await new Repository().claim(seeded.orgId, seeded.runId, "job-pre#two", "job-pre");
+        }
+        return outcome;
+      });
+
+      const loser = scriptedModel();
+      await serviceFor(loser, repo).handle({
+        id: "job-pre",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      vi.restoreAllMocks();
+
+      expect(loser.calls.map((call) => call.role)).toEqual(["researcher"]);
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+    }, 25_000);
+
+    it("stops at the step boundary when pg-boss aborts the delivery", async () => {
+      // `job.signal` is aborted at exactly the expiry that lets a second handler
+      // be dispatched — `Manager#handleWork` wraps the handler in
+      // `resolveWithinSeconds(…, expireInSeconds, ac)`, which stops waiting and
+      // aborts but cannot stop the promise. It is earlier notice than the fence,
+      // which stays ours until the re-dispatched handler actually claims.
+      const seeded = await seed({ channels: 1 });
+      const controller = new AbortController();
+      const script = scriptedModel({
+        researcher: () => {
+          controller.abort();
+          return { angle: "An angle", keyPoints: ["A key point"], avoid: [] };
+        },
+      });
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-abort",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+          signal: controller.signal,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(script.calls.map((call) => call.role)).toEqual(["researcher"]);
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+      // The step it DID pay for is checkpointed, so the retry resumes past it.
+      expect(Object.keys((await runRow(seeded.runId))?.steps ?? {})).toEqual(["researcher"]);
+      // And the run is left alone: the retry, not this delivery, decides its fate.
+      expect((await runRow(seeded.runId))?.status).toBe("running");
+    }, 25_000);
   });
 
   describe("checkpoints", () => {
@@ -361,12 +478,18 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect((await runRow(seeded.runId))?.status).toBe("succeeded");
     }, 25_000);
 
-    it("advances updated_at on every checkpoint write", async () => {
-      // Drizzle's `$onUpdate` is a query-builder feature and would not fire for a
-      // raw statement at all; where it does fire it sends a client-side Date into
-      // a `timestamp` without time zone. Both are why these writes set
-      // `updated_at = now()` themselves — and why this asserts the value MOVES
-      // rather than merely that the writes succeeded.
+    it("stamps updated_at from the DATABASE clock on every checkpoint write", async () => {
+      // Asserting only that the timestamp ADVANCES cannot fail: these are
+      // query-builder updates, so deleting `updatedAt: now()` just lets drizzle's
+      // `$onUpdate` fire and the value moves anyway. What actually differs is
+      // WHOSE clock wrote it. `now()` has microsecond resolution; a JavaScript
+      // `Date` has milliseconds and is serialised with three fractional digits,
+      // so `$onUpdate` can only ever store a sub-millisecond remainder of zero —
+      // which is also why it is the wrong writer for a `timestamp` WITHOUT time
+      // zone column read back against `now()` on a non-UTC deployment.
+      //
+      // node-postgres parses the column into a millisecond `Date`, so the digits
+      // that carry the proof have to be extracted in SQL.
       const seeded = await seed({ channels: 1 });
       const repo = new Repository();
       const fence = "job-clock#1";
@@ -378,13 +501,28 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         usage: [],
         finishedAt: "",
       };
+      const subMillisecond = async () => {
+        const rows = await db.execute<{ sub: number }>(
+          sql`select (extract(microseconds from ${schema.pipelineRuns.updatedAt})::int % 1000) as sub
+              from ${schema.pipelineRuns} where ${eq(schema.pipelineRuns.id, seeded.runId)}`,
+        );
+        return Number(rows.rows[0]?.sub ?? 0);
+      };
+
       await repo.writeCheckpoint(seeded.orgId, seeded.runId, fence, "one", checkpoint);
       const first = (await runRow(seeded.runId))?.updatedAt as Date;
+      const firstSub = await subMillisecond();
       await new Promise((resolve) => setTimeout(resolve, 10));
       await repo.writeCheckpoint(seeded.orgId, seeded.runId, fence, "two", checkpoint);
       const second = (await runRow(seeded.runId))?.updatedAt as Date;
+      const secondSub = await subMillisecond();
 
       expect(second.getTime()).toBeGreaterThan(first.getTime());
+      // Two samples: `now()` lands exactly on a millisecond boundary about one
+      // time in a thousand, so requiring BOTH to be non-zero would flake, while
+      // requiring neither proves nothing. One in a million is the failure rate of
+      // this form, and a client-written Date makes it certain.
+      expect([firstSub, secondSub].some((sub) => sub !== 0)).toBe(true);
       // And the second write composed with the first rather than replacing it.
       expect(Object.keys((await runRow(seeded.runId))?.steps ?? {}).sort()).toEqual(["one", "two"]);
     }, 20_000);
@@ -422,6 +560,40 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // spent, and a cancellation that erased the record would misreport the bill.
       expect(await ledgerOf(seeded.orgId)).toHaveLength(2);
     }, 20_000);
+
+    it("stops before the next paid call when the cancel lands BETWEEN two steps", async () => {
+      // The other cancellation test cancels DURING a model call, where the
+      // checkpoint write also refuses and would stop the run on its own. Here the
+      // checkpoint lands first and the user presses Cancel a moment later, so the
+      // only thing standing between them and a call they already refused is
+      // `beginStep`'s status guard.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      const write = repo.writeCheckpoint.bind(repo);
+      let cancelled = false;
+      vi.spyOn(repo, "writeCheckpoint").mockImplementation(async (...args) => {
+        const outcome = await write(...(args as Parameters<typeof write>));
+        if (!cancelled) {
+          cancelled = true;
+          await db
+            .update(schema.pipelineRuns)
+            .set({ status: "cancelled" })
+            .where(eq(schema.pipelineRuns.id, seeded.runId));
+        }
+        return outcome;
+      });
+
+      const script = scriptedModel();
+      await serviceFor(script, repo).handle({
+        id: "job-cancel-between",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      vi.restoreAllMocks();
+
+      expect(script.calls.map((call) => call.role)).toEqual(["researcher"]);
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+      expect((await runRow(seeded.runId))?.status).toBe("cancelled");
+    }, 25_000);
 
     it("does not resurrect a run cancelled before its job was ever delivered", async () => {
       const seeded = await seed();
@@ -615,6 +787,106 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // One adapter call per channel, and each got its own channel's identity.
       expect(script.adaptedChannels().sort()).toEqual([...seeded.channelNames].sort());
     }, 30_000);
+
+    it("survives a channel deleted mid-run, writing the draft for the ones that remain", async () => {
+      // `adaptations.channel_id` is NOT NULL and the run's channel list is a
+      // snapshot taken minutes earlier, so a channel deleted while the run worked
+      // used to kill the terminal transaction with a foreign-key violation, three
+      // times over, and throw a fully paid five-step run away.
+      const seeded = await seed({ channels: 2 });
+      const doomed = seeded.channelIds[0] as string;
+      const script = scriptedModel({
+        factcheck: async () => {
+          // After the fan-out list was resolved, before the terminal write.
+          await db.delete(schema.channels).where(eq(schema.channels.id, doomed));
+          return { claims: [] };
+        },
+      });
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-chan-gone",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).resolves.toBeUndefined();
+
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("succeeded");
+      const items = await itemsOf(seeded.orgId);
+      expect(items).toHaveLength(1);
+
+      const adaptations = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.contentItemId, items[0]?.id as string));
+      expect(adaptations.map((row) => row.channelId)).toEqual([seeded.channelIds[1]]);
+      // One version for the master body and one for the surviving adaptation —
+      // the deleted channel leaves nothing behind, not a dangling version row.
+      const versions = await db
+        .select()
+        .from(schema.contentVersions)
+        .where(eq(schema.contentVersions.contentItemId, items[0]?.id as string));
+      expect(versions).toHaveLength(2);
+    }, 30_000);
+
+    it("fails the run rather than writing a draft whose every channel vanished", async () => {
+      const seeded = await seed({ channels: 1 });
+      const script = scriptedModel({
+        factcheck: async () => {
+          await db.delete(schema.channels).where(eq(schema.channels.brandId, seeded.brandId));
+          return { claims: [] };
+        },
+      });
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-chans-gone",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).resolves.toBeUndefined();
+
+      const run = await runRow(seeded.runId);
+      // An item with zero adaptations is one `approve` would mark approved while
+      // enqueueing nothing — a post that looks sent and never was.
+      expect(run?.status).toBe("failed");
+      expect(run?.error).toContain("has since been deleted");
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+    }, 30_000);
+
+    it("drops only the reference that broke when a ledger row outlives its channel", async () => {
+      // Nulling `run_id` as well would take the call out of its own run's cost —
+      // the figure on the finished draft sums by `run_id` — so the run would
+      // under-report its own bill because an unrelated channel was deleted.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      const doomed = seeded.channelIds[0] as string;
+      await repo.claim(seeded.orgId, seeded.runId, "job-fk#1", "job-fk");
+      await db.delete(schema.channels).where(eq(schema.channels.id, doomed));
+
+      await repo.recordUsage(
+        seeded.orgId,
+        seeded.runId,
+        { step: `adapter:${doomed}`, channelId: doomed },
+        {
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          attempt: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0.001,
+          costSource: "price_table",
+          responseMs: 12,
+          status: "ok",
+        },
+      );
+
+      const ledger = await ledgerOf(seeded.orgId);
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]?.channelId).toBeNull();
+      expect(ledger[0]?.runId).toBe(seeded.runId);
+    }, 20_000);
 
     it("attributes every ledger row to the step that made the call", async () => {
       const seeded = await seed({ channels: 2 });

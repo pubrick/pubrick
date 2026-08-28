@@ -33,8 +33,17 @@ export type { GenerateJob } from "@pubrick/shared";
  * envelope keeps the handler honest about where its fence token comes from
  * instead of reconstructing a job id from the payload — the mistake
  * `cancelPublish` already learned about one queue over.
+ *
+ * `signal` is pg-boss's own per-delivery `AbortSignal`. It is aborted at exactly
+ * the moment that makes a second handler possible: `Manager#handleWork` wraps
+ * the handler in `resolveWithinSeconds(…, expireInSeconds, ac)`, which stops
+ * WAITING and aborts — it cannot stop the promise. So the abort is the earliest
+ * notice that this delivery has been given up on, arriving before the
+ * re-dispatched handler has claimed anything and therefore before the fence
+ * itself can tell us. It also fires on a graceful shutdown. Optional, because
+ * nothing but pg-boss supplies one.
  */
-export type GenerateJobEnvelope = { id: string; data: GenerateJob };
+export type GenerateJobEnvelope = { id: string; data: GenerateJob; signal?: AbortSignal };
 
 /** How a step ended when it did not produce a value. */
 const STOPPED = Symbol("stopped");
@@ -42,6 +51,14 @@ type Stopped = typeof STOPPED;
 
 /** Bounded — this rides out a database hiccup, it does not retry forever. */
 const TERMINAL_WRITE_MAX_ATTEMPTS = 3;
+
+/**
+ * One sentence for one situation, reachable from two places: the channels were
+ * already gone when the run started, and they went away while it worked. The
+ * user cannot tell those apart and should not have to.
+ */
+const EVERY_CHANNEL_DELETED =
+  "Every channel this run was started for has since been deleted. Add a channel and try again.";
 
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
@@ -73,6 +90,7 @@ type RunState = {
   checkpoints: ClaimedRun["steps"];
   /** Ledger rows produced per step key, mirrored into that step's checkpoint. */
   usage: Map<string, UsageRecord[]>;
+  signal: AbortSignal | undefined;
 };
 
 @Injectable()
@@ -126,7 +144,7 @@ export class GenerateService {
 
     let payload: TerminalPayload | Stopped;
     try {
-      payload = await this.execute(claimed, fence);
+      payload = await this.execute(claimed, fence, job.signal);
     } catch (error) {
       if (error instanceof PermanentError) {
         await this.recordFailure(orgId, runId, fence, error.message);
@@ -174,7 +192,11 @@ export class GenerateService {
   }
 
   /** The five roles, in order, resuming past whatever already has a checkpoint. */
-  private async execute(run: ClaimedRun, fence: string): Promise<TerminalPayload | Stopped> {
+  private async execute(
+    run: ClaimedRun,
+    fence: string,
+    signal: AbortSignal | undefined,
+  ): Promise<TerminalPayload | Stopped> {
     const input = this.parseInput(run.input);
     const context = await this.loadContext(run, input.channelIds);
     if (context === undefined) {
@@ -199,6 +221,7 @@ export class GenerateService {
       fence,
       checkpoints: { ...run.steps },
       usage,
+      signal,
       ctx: {
         brand: context.brand,
         brief: input.text,
@@ -253,6 +276,19 @@ export class GenerateService {
   private async runStep<I, O>(state: RunState, step: Step<I, O>, input: I): Promise<O | Stopped> {
     const resumed = this.resume(state, step);
     if (resumed !== undefined) return resumed;
+
+    // pg-boss has given up on this delivery — it expired, or the worker is
+    // shutting down. Checked at the step boundary, before any money is spent,
+    // and deliberately NOT before the terminal write: by then the run is paid
+    // for, and writing the draft it bought is strictly better than discarding
+    // it. This is earlier notice than the fence can give, because the
+    // re-dispatched handler may not have claimed the run yet.
+    if (state.signal?.aborted === true) {
+      this.logger.log(
+        `Run ${state.runId} stopped at step ${step.name}: this delivery was aborted (expired or shutting down)`,
+      );
+      return STOPPED;
+    }
 
     if (!(await this.repo.beginStep(state.orgId, state.runId, state.fence, step.name))) {
       return this.stop(state, step.name);
@@ -344,9 +380,7 @@ export class GenerateService {
     const context = await this.repo.context(run.orgId, run.brandId, channelIds);
     if (!context) return undefined;
     if (context.channels.length === 0) {
-      throw new PermanentError(
-        "Every channel this run was started for has since been deleted. Add a channel and try again.",
-      );
+      throw new PermanentError(EVERY_CHANNEL_DELETED);
     }
     if (context.channels.length !== channelIds.length) {
       this.logger.warn(
@@ -385,6 +419,14 @@ export class GenerateService {
           this.logger.log(
             `Run ${runId} succeeded with ${payload.adaptations.length} adaptation(s)`,
           );
+        } else if (outcome === "no-channels") {
+          // Every channel went away while the run was working. There is no draft
+          // to store — an item with zero adaptations is one `approve` would mark
+          // approved while enqueueing nothing — so this ends as the same
+          // permanent failure `loadContext` raises when the channels were already
+          // gone at the start. It is terminal by definition: no retry can bring a
+          // deleted channel back.
+          await this.recordFailure(orgId, runId, fence, EVERY_CHANNEL_DELETED);
         } else {
           this.logger.log(`Run ${runId} produced no draft (${outcome})`);
         }

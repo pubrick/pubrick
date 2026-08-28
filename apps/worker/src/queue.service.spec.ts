@@ -87,7 +87,7 @@ describe("QueueService.registerAll", () => {
     expect(boss.work).toHaveBeenCalledWith(GENERATE_DLQ, expect.anything(), expect.any(Function));
   });
 
-  it("hands the generate handler the whole job, because the fence is built from its id", async () => {
+  it("hands the generate handler the whole job — its id AND its abort signal", async () => {
     const boss = bossStub();
     const { generate, service } = serviceStub();
 
@@ -95,14 +95,18 @@ describe("QueueService.registerAll", () => {
     const handler = boss.work.mock.calls.find((call) => call[0] === GENERATE_QUEUE)?.[2] as (
       jobs: unknown[],
     ) => Promise<void>;
-    await handler([{ id: "job-1", data: { runId: "run-1", orgId: "org-1" } }]);
+    const signal = new AbortController().signal;
+    await handler([{ id: "job-1", data: { runId: "run-1", orgId: "org-1" }, signal }]);
 
     // Passing only `job.data` would leave the handler with no job identity to
     // fence on, and it would have to invent one — which is how a fence stops
-    // fencing.
+    // fencing. `signal` is pg-boss's abort for THIS delivery, fired at the expiry
+    // that lets a second handler start; dropping it here would silently disarm
+    // the earliest stop the handler has.
     expect(generate.handle).toHaveBeenCalledWith({
       id: "job-1",
       data: { runId: "run-1", orgId: "org-1" },
+      signal,
     });
   });
 

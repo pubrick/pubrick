@@ -98,10 +98,11 @@ export class QueueService {
     // GENERATE_WORK_OPTIONS, not a literal: `groupConcurrency` is a work() option
     // and cannot live in the queue options, so the two halves of the contract are
     // in different objects and only the shared module keeps them together. The
-    // JOB is passed whole rather than just its `data`, because the fence token is
-    // built from the job's own id (see GenerateService.handle).
+    // JOB is passed whole rather than just its `data`: the fence token is built
+    // from the job's own id, and `signal` is aborted at the expiry that makes a
+    // second live handler possible (see GenerateService.handle).
     await boss.work<GenerateJob>(names.generate, { ...GENERATE_WORK_OPTIONS }, async ([job]) => {
-      if (job) await this.generate.handle({ id: job.id, data: job.data });
+      if (job) await this.generate.handle({ id: job.id, data: job.data, signal: job.signal });
     });
     // Retries exhausted: the run is stuck with nothing left to move it.
     await boss.work<GenerateJob>(names.generateDeadLetter, { batchSize: 1 }, async ([job]) => {

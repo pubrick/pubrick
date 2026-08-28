@@ -78,6 +78,13 @@ export type TerminalPayload = {
  */
 export type FenceOutcome = "held" | "lost" | "gone" | "cancelled" | "finished";
 
+/**
+ * What the terminal write did. Everything a fenced write can report, plus the
+ * one outcome only this write can reach: every channel the run adapted for was
+ * deleted while it ran, so there is no honest draft to store.
+ */
+export type TerminalOutcome = FenceOutcome | "no-channels";
+
 /** One step's stored result. `usage` is the ledger rows that step produced. */
 export type StepCheckpoint = {
   status: "succeeded";
@@ -319,16 +326,55 @@ export class GenerateRepository {
       // money was still spent. `run_id` and `channel_id` are `ON DELETE SET
       // NULL` precisely so that a tidy-up cannot erase spend history, and the
       // org's total sums by `org_id` ALONE; so the row is written without the
-      // references it can no longer satisfy rather than dropped on the floor,
+      // reference it can no longer satisfy rather than dropped on the floor,
       // which is what a plain rethrow here amounted to (the caller's sink
       // swallows its own failures so a lost ledger row cannot destroy text the
       // org has already paid for).
+      //
+      // ONLY the reference that actually broke is dropped. Nulling both would
+      // quietly take a call out of its own run's cost because an unrelated
+      // channel had been deleted — the per-run figure on the finished draft sums
+      // by `run_id`, so the run would under-report its own bill while the org
+      // total stayed right, which is the worst of both.
+      const alive = await this.survivingReferences(runId, row.channelId);
+      if (alive.runId !== null && alive.channelId === row.channelId) {
+        // Neither reference is missing, so this violation is about something
+        // else (a deleted org). Nothing to narrow; let the caller log it.
+        throw error;
+      }
       this.logger.warn(
         `Run ${runId} or channel ${attribution.channelId ?? "-"} disappeared before its ` +
-          `${attribution.step} ledger row could be written; recording the spend against the org alone`,
+          `${attribution.step} ledger row could be written; recording the spend with ` +
+          `run_id=${alive.runId ?? "null"} channel_id=${alive.channelId ?? "null"}`,
       );
-      await db.insert(schema.usageLedger).values({ ...row, runId: null, channelId: null });
+      try {
+        await db.insert(schema.usageLedger).values({ ...row, ...alive });
+      } catch (retryError) {
+        if (!isForeignKeyViolation(retryError)) throw retryError;
+        // Lost a second race. The spend still has to land somewhere, and the
+        // org is the one column that cannot go stale under us.
+        await db.insert(schema.usageLedger).values({ ...row, runId: null, channelId: null });
+      }
     }
+  }
+
+  /** Which of a ledger row's two nullable references still exist. */
+  private async survivingReferences(
+    runId: string,
+    channelId: string | null,
+  ): Promise<{ runId: string | null; channelId: string | null }> {
+    const runs = await db
+      .select({ id: schema.pipelineRuns.id })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, runId))
+      .limit(1);
+    if (channelId === null) return { runId: runs[0]?.id ?? null, channelId: null };
+    const channels = await db
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, channelId))
+      .limit(1);
+    return { runId: runs[0]?.id ?? null, channelId: channels[0]?.id ?? null };
   }
 
   /** The brand and the channels this run fans out to, or `undefined` if the brand is gone. */
@@ -427,6 +473,16 @@ export class GenerateRepository {
    * a locked `SELECT … FOR UPDATE` against the new version), sees `succeeded`,
    * and writes nothing.
    *
+   * The channels are re-read HERE, under `FOR KEY SHARE`, and not taken on trust
+   * from the snapshot the run started with. `adaptations.channel_id` is NOT NULL,
+   * so a channel deleted at any point during a run — which can be minutes — used
+   * to kill this transaction with a foreign-key violation, three times over, and
+   * then throw away a fully paid five-step run with an ERROR alarm. The lock is
+   * what makes the re-read worth taking: `FOR KEY SHARE` conflicts with the lock
+   * a DELETE needs, so a channel that survives the check cannot vanish before the
+   * insert. It is the same lock class the FK insert takes anyway, one statement
+   * earlier.
+   *
    * On the documented lock order (`adaptations` before `content_items`,
    * `ORDER BY id`): it governs `FOR UPDATE` on rows that already exist, and this
    * transaction locks none of those — it only INSERTs rows nothing else can yet
@@ -441,7 +497,7 @@ export class GenerateRepository {
     fence: string,
     brandId: string,
     payload: TerminalPayload,
-  ): Promise<FenceOutcome> {
+  ): Promise<TerminalOutcome> {
     try {
       return await db.transaction(async (tx) => {
         const locked = await tx
@@ -459,6 +515,40 @@ export class GenerateRepository {
         if (run.status !== "running") return "finished";
         if (run.activeJobId !== fence) return "lost";
 
+        // Every channel that still exists, pinned for the rest of this
+        // transaction. Anything the run adapted for and that has since been
+        // deleted is dropped: the human still gets the draft and the channels
+        // they can actually publish to, instead of the whole run being discarded
+        // over one channel somebody removed while it ran.
+        const live = await tx
+          .select({ id: schema.channels.id })
+          .from(schema.channels)
+          .where(
+            and(
+              eq(schema.channels.orgId, orgId),
+              eq(schema.channels.brandId, brandId),
+              inArray(schema.channels.id, [
+                ...payload.adaptations.map((adaptation) => adaptation.channelId),
+              ]),
+            ),
+          )
+          .for("key share");
+        const surviving = new Set(live.map((channel) => channel.id));
+        const adaptations = payload.adaptations.filter((adaptation) =>
+          surviving.has(adaptation.channelId),
+        );
+        if (adaptations.length !== payload.adaptations.length) {
+          this.logger.warn(
+            `Run ${runId}: ${payload.adaptations.length - adaptations.length} channel(s) were ` +
+              "deleted while it ran; writing the draft for the ones that remain",
+          );
+        }
+        // An item with zero adaptations is the shape `approve` would happily mark
+        // approved while enqueueing nothing — a post that looks sent and never
+        // was. The run has a defined failure for exactly this, so take it rather
+        // than write the trap.
+        if (adaptations.length === 0) return "no-channels";
+
         const items = await tx
           .insert(schema.contentItems)
           .values({ orgId, brandId, body: payload.body, status: "draft", origin: "ai" })
@@ -469,7 +559,7 @@ export class GenerateRepository {
         const inserted = await tx
           .insert(schema.adaptations)
           .values(
-            payload.adaptations.map((adaptation) => ({
+            adaptations.map((adaptation) => ({
               orgId,
               contentItemId,
               channelId: adaptation.channelId,
