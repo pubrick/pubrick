@@ -39,10 +39,13 @@
     "title": "Brands",
     "namePlaceholder": "New brand name",
     "create": "Create brand",
+    "empty": "No brands yet.",
+    "emptyCreateAction": "Create your first brand",
     "genericError": "Something went wrong. Please try again."
   },
   "Channels": {
     "title": "Channels",
+    "platformLabel": "Platform",
     "namePlaceholder": "Channel name",
     "remove": "Remove",
     "add": "Add channel",

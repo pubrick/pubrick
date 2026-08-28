@@ -39,10 +39,13 @@
     "title": "Бренды",
     "namePlaceholder": "Название нового бренда",
     "create": "Создать бренд",
+    "empty": "Брендов пока нет.",
+    "emptyCreateAction": "Создать первый бренд",
     "genericError": "Что-то пошло не так. Попробуйте ещё раз."
   },
   "Channels": {
     "title": "Каналы",
+    "platformLabel": "Платформа",
     "namePlaceholder": "Название канала",
     "remove": "Удалить",
     "add": "Добавить канал",

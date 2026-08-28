@@ -24,9 +24,10 @@ articles with a team of AI agents — text and images — queues everything for
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands, and channels with credentials encrypted at rest, plus content drafts,
-a review queue with approval/rejection/overrides, and publishing to Telegram.
-Next up: AI-drafted content from watched sources. Features land phase by
-phase — see [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
+a review queue with approval/rejection/overrides, and publishing to Telegram —
+through a restyled, installable (PWA) web app. Next up: AI-drafted content
+from watched sources. Features land phase by phase — see
+[docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
 ## Why Pubrick
 

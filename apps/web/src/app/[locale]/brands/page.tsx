@@ -5,9 +5,18 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconBrands, IconChevronRight } from "@/components/ui/icons";
+import { Input } from "@/components/ui/input";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string; contentLanguage: string };
+
+// Explicit id (not Input's auto-generated one) so the empty-state action
+// below can find and focus this field without lifting a ref just for that.
+const NAME_INPUT_ID = "brand-name";
 
 export default function BrandsPage() {
   const t = useTranslations("Brands");
@@ -48,25 +57,83 @@ export default function BrandsPage() {
     }
   }
 
+  // The create form stays visible regardless of whether the list is empty —
+  // it is not nested inside the empty-state branch below. A brands-list test
+  // exercises the failing-creation path against a served empty array and
+  // still expects the name field to be on screen.
+  const isEmpty = brands !== null && brands.length === 0;
+
   return (
     <AppShell title={t("title")}>
-      {error && <p role="alert">{error}</p>}
-      <ul>
-        {(brands ?? []).map((b) => (
-          <li key={b.id}>
-            <Link href={`/${locale}/brands/${b.id}`}>{b.name}</Link>
-          </li>
-        ))}
-      </ul>
-      <form onSubmit={createBrand}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("namePlaceholder")}
-          required
-        />
-        <button type="submit">{t("create")}</button>
-      </form>
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      <Card className="mb-6">
+        <form onSubmit={createBrand} className="flex flex-wrap items-end gap-3">
+          <Input
+            id={NAME_INPUT_ID}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t("namePlaceholder")}
+            label={t("namePlaceholder")}
+            required
+            className="min-w-[220px] flex-1"
+          />
+          <Button type="submit">{t("create")}</Button>
+        </form>
+      </Card>
+
+      {isEmpty && (
+        <Card padded={false}>
+          <EmptyState
+            icon={<IconBrands size={22} />}
+            title={t("empty")}
+            action={
+              <Button
+                size="sm"
+                type="button"
+                onClick={() => document.getElementById(NAME_INPUT_ID)?.focus()}
+              >
+                {t("emptyCreateAction")}
+              </Button>
+            }
+          />
+        </Card>
+      )}
+
+      {!isEmpty && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {(brands ?? []).map((b) => (
+            <Link
+              key={b.id}
+              href={`/${locale}/brands/${b.id}`}
+              className={[
+                "flex items-center justify-between gap-3 rounded-card border border-border bg-panel p-4 shadow-card transition-colors",
+                "hover:bg-bg-sunken",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2",
+              ].join(" ")}
+            >
+              {/* Only b.name renders as text inside the link — its accessible
+                  name has to stay exactly the brand name (a brands-list test
+                  looks the link up by that name), so every other node here
+                  (icon, chevron) is aria-hidden. */}
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent-soft-fg"
+                >
+                  <IconBrands size={20} />
+                </span>
+                <span className="truncate text-[15px] font-semibold text-fg">{b.name}</span>
+              </span>
+              <IconChevronRight size={16} className="shrink-0 text-fg-tertiary" />
+            </Link>
+          ))}
+        </div>
+      )}
     </AppShell>
   );
 }

@@ -28,6 +28,18 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - `packages/shared` — zod schemas, env parsing, types. No runtime deps beyond zod.
 - Queue is pg-boss on Postgres. There is NO Redis; do not add one.
 
+## UX constitution
+
+Every screen shares one design direction (`app/globals.css` + `components/ui/*`). New UI must keep these rules:
+- **One place** — a setting/action lives on exactly one screen, never duplicated.
+- **Advanced-only disclosure** — extra options hide behind the shared `Advanced` component, never a bespoke "show more".
+- **One verb, one word** — a recurring action keeps one fixed one-word verb everywhere (Add, Remove, Approve, Test), never rotating synonyms.
+- **Five statuses** — `StatusBadge`'s five colors are the only status colors that exist; no screen invents a sixth.
+- **Empty states teach** — an empty list names the one next action via `EmptyState`, never a bare "no results".
+- **No dead nav** — every `AppShell` nav entry points at a real, working screen.
+
+Pattern reference for new features: `docs/ux-patterns.md`.
+
 ## Conventions
 
 - TS strict; no `any` without a comment explaining why.

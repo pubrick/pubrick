@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ListRow } from "@/components/ui/list-row";
+import { Select } from "@/components/ui/select";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Channel = { id: string; platform: string; name: string };
@@ -96,66 +101,113 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
 
   return (
     <AppShell title={brand?.name ?? ""}>
-      <h2>{t("title")}</h2>
-      {error && <p role="alert">{error}</p>}
-      <ul>
-        {channels.map((c) => {
-          const result = testResults[c.id];
-          return (
-            <li key={c.id}>
-              [{c.platform}] {c.name}{" "}
-              <button type="button" onClick={() => remove(c.id)}>
-                {t("remove")}
-              </button>{" "}
-              <button type="button" onClick={() => testConnection(c.id)}>
-                {t("test")}
-              </button>
-              {result === "loading" && <span> …</span>}
-              {result && result !== "loading" && result.ok && (
-                <span> {t("testOk", { account: result.account, target: result.target })}</span>
-              )}
-              {result && result !== "loading" && !result.ok && (
-                <span role="alert"> {result.reason}</span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <form onSubmit={addChannel}>
-        <select
-          value={platform}
-          onChange={(e) => {
-            setPlatform(e.target.value as PlatformId);
-            // Drop the previous platform's values: leftover keys would be submitted
-            // and encrypted alongside (or instead of) the ones this platform needs.
-            setCreds({});
-          }}
-        >
-          {PLATFORM_IDS.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("namePlaceholder")}
-          required
-        />
-        {fields.map((f) => (
-          <input
-            key={f}
-            type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
-            autoComplete="off"
-            value={creds[f] ?? ""}
-            onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
-            placeholder={f}
-            required
-          />
-        ))}
-        <button type="submit">{t("add")}</button>
-      </form>
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
+
+      {channels.length > 0 && (
+        <div className="mb-6 overflow-hidden rounded-card border border-border bg-panel">
+          {channels.map((c) => {
+            const result = testResults[c.id];
+            return (
+              <ListRow
+                key={c.id}
+                title={`[${c.platform}] ${c.name}`}
+                meta={
+                  // Plain strings for the loading/ok cases — NOT wrapped in an
+                  // extra <span> — because ListRow already wraps `meta` in one
+                  // span of its own; a redundant inner span would give the ok
+                  // case's exact-text test two elements with identical
+                  // textContent and RTL's getByText would refuse to pick one.
+                  // The failure case needs a real element for role="alert", so
+                  // it stays an element — that test matches by role, not text,
+                  // so the double wrapper there is harmless.
+                  result === "loading" ? (
+                    "…"
+                  ) : result && !result.ok ? (
+                    <span role="alert" className="text-danger">
+                      {result.reason}
+                    </span>
+                  ) : result?.ok ? (
+                    t("testOk", { account: result.account, target: result.target })
+                  ) : undefined
+                }
+                trailing={
+                  <>
+                    <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
+                      {t("test")}
+                    </Button>
+                    {/* Deliberately a plain visible Button, not tucked behind
+                        the Menu component: a page test looks this up directly
+                        via getByRole("button", { name: /remove/i }) with no
+                        prior click to open anything — putting it in a Menu
+                        (whose items render role="menuitem", not "button",
+                        and stay hidden until the trigger opens) would break
+                        that lookup. */}
+                    <Button size="sm" variant="danger" onClick={() => remove(c.id)}>
+                      {t("remove")}
+                    </Button>
+                  </>
+                }
+              />
+            );
+          })}
+        </div>
+      )}
+
+      <Card>
+        <form onSubmit={addChannel} className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-3">
+            <Select
+              label={t("platformLabel")}
+              value={platform}
+              onChange={(e) => {
+                setPlatform(e.target.value as PlatformId);
+                // Drop the previous platform's values: leftover keys would be
+                // submitted and encrypted alongside (or instead of) the ones
+                // this platform needs.
+                setCreds({});
+              }}
+              className="min-w-[160px]"
+            >
+              {PLATFORM_IDS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </Select>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t("namePlaceholder")}
+              label={t("namePlaceholder")}
+              required
+              className="min-w-[200px] flex-1"
+            />
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {fields.map((f) => (
+              <Input
+                key={f}
+                type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
+                autoComplete="off"
+                value={creds[f] ?? ""}
+                onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
+                placeholder={f}
+                required
+                className="min-w-[200px] flex-1"
+              />
+            ))}
+          </div>
+          <div>
+            <Button type="submit">{t("add")}</Button>
+          </div>
+        </form>
+      </Card>
     </AppShell>
   );
 }

@@ -39,10 +39,13 @@
     "title": "Marcas",
     "namePlaceholder": "Nome da nova marca",
     "create": "Criar marca",
+    "empty": "Ainda não há marcas.",
+    "emptyCreateAction": "Crie sua primeira marca",
     "genericError": "Algo deu errado. Tente novamente."
   },
   "Channels": {
     "title": "Canais",
+    "platformLabel": "Plataforma",
     "namePlaceholder": "Nome do canal",
     "remove": "Remover",
     "add": "Adicionar canal",
