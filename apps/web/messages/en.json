@@ -30,6 +30,10 @@
     "brands": "Brands",
     "content": "Content"
   },
+  "Ui": {
+    "advanced": "Advanced",
+    "close": "Close"
+  },
   "Brands": {
     "title": "Brands",
     "namePlaceholder": "New brand name",

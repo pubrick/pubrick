@@ -30,6 +30,10 @@
     "brands": "Бренды",
     "content": "Контент"
   },
+  "Ui": {
+    "advanced": "Дополнительно",
+    "close": "Закрыть"
+  },
   "Brands": {
     "title": "Бренды",
     "namePlaceholder": "Название нового бренда",

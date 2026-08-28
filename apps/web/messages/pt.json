@@ -30,6 +30,10 @@
     "brands": "Marcas",
     "content": "Conteúdo"
   },
+  "Ui": {
+    "advanced": "Avançado",
+    "close": "Fechar"
+  },
   "Brands": {
     "title": "Marcas",
     "namePlaceholder": "Nome da nova marca",
