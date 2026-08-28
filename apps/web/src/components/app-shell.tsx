@@ -99,9 +99,12 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
           aria-label={t("label")}
           className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around gap-1 border-t border-border bg-panel px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 sm:sticky sm:inset-auto sm:top-0 sm:h-screen sm:w-[60px] sm:flex-col sm:items-stretch sm:justify-start sm:gap-1 sm:border-t-0 sm:border-r sm:px-2 sm:py-4 lg:w-[232px] lg:px-3"
         >
-          <div className="hidden items-center gap-2 px-2 pb-5 lg:flex">
-            <Logo width={22} />
-            <span className="text-[17px] font-bold tracking-tight">pubrick</span>
+          {/* The logo IS the wordmark — it spells "pubrick" — so a text label
+              beside it prints the name twice. It carries its own accessible
+              name, which is why nothing here is announced to a screen reader
+              in its place. */}
+          <div className="hidden items-center px-2 pb-5 lg:flex">
+            <Logo width={104} />
           </div>
 
           {destinations.map(({ key, href }) => renderLink(key, href))}
