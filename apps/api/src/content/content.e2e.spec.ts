@@ -22,6 +22,17 @@ describe.skipIf(!url)("content e2e", () => {
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
+    // Listen for the whole file, rather than letting supertest start the server
+    // per request. supertest's Test calls `app.listen(0)` when it finds the
+    // server not listening and `server.close()` when THAT request ends — so the
+    // first of several in-flight requests to finish tears the listener down
+    // under the others, and they die with ECONNRESET / "socket hang up". Measured
+    // on this app: 8 concurrent GETs repeated 60 times lost 259 of 480 requests
+    // that way, and none once the server was already listening. `runs.e2e`'s
+    // admission-cap test is the suite's genuine 10-at-once case; a listener
+    // owned by the suite instead of by one request removes the whole class (and
+    // the several hundred listen/close cycles a file otherwise performs).
+    await app.listen(0);
   });
 
   afterAll(async () => {
@@ -641,8 +652,20 @@ describe.skipIf(!url)("content e2e", () => {
       .expect(201);
     const adaptationId = created.body.adaptations[0].id as string;
 
+    // Checked, and its effect pinned: this request is the whole premise of the
+    // test — it is what makes the adaptation `scheduled` and gives the
+    // reschedule below something to cancel. Left unchecked, a failure here was
+    // swallowed and resurfaced twenty lines down as "expected [ { state:
+    // 'created' } ] to have a length of 2 but got 1": the second approve finds
+    // the adaptation still `pending`, cancels nothing, and enqueues its single
+    // job. That reads like a job that went missing rather than like the first
+    // approve never happening, which is the wrong bug to go looking for.
     const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
-    await agent.post(`/api/content/${created.body.id}/approve`).send({ scheduledAt: first });
+    const scheduled = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({ scheduledAt: first })
+      .expect(200);
+    expect(new Date(scheduled.body.adaptations[0].scheduledAt).toISOString()).toBe(first);
 
     const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
     const rescheduled = await agent

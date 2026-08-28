@@ -39,6 +39,10 @@ describe.skipIf(!url)("org scoping e2e", () => {
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
+    // Listen for the whole file: supertest otherwise starts the server per
+    // request and closes it when that request ends, killing any other request
+    // in flight (see content.e2e.spec.ts for the measurement).
+    await app.listen(0);
   });
 
   afterAll(async () => {
