@@ -4,13 +4,21 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
-import { PUBLISH_DLQ, PUBLISH_QUEUE, PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
+import {
+  GENERATE_DLQ,
+  GENERATE_QUEUE,
+  GENERATE_QUEUE_OPTIONS,
+  type GenerateJob,
+  PUBLISH_DLQ,
+  PUBLISH_QUEUE,
+  PUBLISH_QUEUE_OPTIONS,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 import { v5 as uuidv5 } from "uuid";
 import { env } from "../env";
 
-export { PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
+export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
 /** Stable namespace so a job id is a pure function of (adaptation id, attempt count). */
 const JOB_NAMESPACE = "1b671a64-40d5-491e-99b0-da01ff1f3341";
@@ -43,6 +51,25 @@ export function publishJobId(adaptationId: string, attemptCount: number): string
   return uuidv5(`${adaptationId}:${attemptCount}`, JOB_NAMESPACE);
 }
 
+/**
+ * Deterministic pg-boss job id for ONE generation run.
+ *
+ * Keyed on the run id ALONE, with none of `publishJobId`'s attempt-count
+ * complication, because a run is enqueued exactly once: the row and its job are
+ * inserted in the same transaction and no endpoint re-enqueues an existing run
+ * (Try again starts a NEW run, with its own fresh id, so it can never collide
+ * with the dead job's). pg-boss owns the retry state from there, which is also
+ * why `pipeline_runs` has no `attempt` column to fold in — a second copy would
+ * drift.
+ *
+ * The `run:` prefix keeps the id space disjoint from `publishJobId`'s
+ * `<uuid>:<n>` names inside the shared namespace, so the two families cannot
+ * collide even in principle.
+ */
+export function generateJobId(runId: string): string {
+  return uuidv5(`run:${runId}`, JOB_NAMESPACE);
+}
+
 type Tx = Parameters<Parameters<typeof import("../db").db.transaction>[0]>[0];
 
 @Injectable()
@@ -62,6 +89,13 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     // build) it silently keeps the OLD options, so a change to
     // PUBLISH_QUEUE_OPTIONS would never take effect. updateQueue converges it.
     await boss.updateQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
+    // The same three-call dance for the generate pair. Note there is no
+    // `groupConcurrency` here and there cannot be: it is a work() option, and
+    // the api never calls work() — it lives in GENERATE_WORK_OPTIONS, which the
+    // worker imports from the same module these options come from.
+    await boss.createQueue(GENERATE_DLQ);
+    await boss.createQueue(GENERATE_QUEUE, { ...GENERATE_QUEUE_OPTIONS });
+    await boss.updateQueue(GENERATE_QUEUE, { ...GENERATE_QUEUE_OPTIONS });
     this.boss = boss;
   }
 
@@ -156,5 +190,77 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       .map((job) => job.id);
     if (live.length === 0) return;
     await this.boss.cancel(PUBLISH_QUEUE, live, { db });
+  }
+
+  /**
+   * Enqueue one generation run inside the caller's transaction: the
+   * `pipeline_runs` insert and the job either both land or neither does.
+   *
+   * Without the shared transaction the two halves fail apart in both
+   * directions — a committed run row whose job never enqueued sits at `queued`
+   * forever (nothing will ever pick it up), and a job for a run row that rolled
+   * back has no row to fence against or write to. `fromDrizzle(tx, sql)` hands
+   * pg-boss the caller's connection so its INSERT joins that transaction rather
+   * than opening its own on the pool.
+   *
+   * `group: { id: orgId }` is what `GENERATE_WORK_OPTIONS`'s
+   * `groupConcurrency: 1` keys on: one org's runs execute one at a time
+   * cluster-wide, so a single org cannot occupy every worker slot. It caps
+   * concurrency, not spend — the spend cap is the admission check in
+   * `RunsRepository.create`.
+   *
+   * A `null` return from `send()` is pg-boss's ON CONFLICT DO NOTHING dedupe
+   * and is never swallowed: it means NO job was inserted, so returning
+   * successfully would leave a run row saying `queued` that nothing will ever
+   * run — the silent stall the publish side already learned about. Throwing
+   * rolls back the enclosing transaction (Drizzle rolls back on a thrown
+   * error), so the run row does not exist either, and the caller gets an honest
+   * 409 instead of a lie.
+   */
+  async enqueueGenerate(tx: Tx, run: { id: string; orgId: string }): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const payload: GenerateJob = { runId: run.id, orgId: run.orgId };
+    const jobId = await this.boss.send(GENERATE_QUEUE, payload, {
+      id: generateJobId(run.id),
+      group: { id: run.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (jobId === null) {
+      throw new ConflictException("A generation job for this run is already queued");
+    }
+  }
+
+  /**
+   * Cancels the still-live job of one run, inside the caller's transaction, so
+   * the run's `cancelled` status and the cancellation either both land or
+   * neither does. Without it, "Cancel" would flip a status while the worker
+   * carried on spending the org's money to completion.
+   *
+   * Found by PAYLOAD rather than by recomputing `generateJobId`, mirroring
+   * `cancelPublish` — which learned that the hard way, having cancelled a
+   * nonexistent id for exactly the jobs that most needed stopping. The
+   * recomputation happens to be stable here (the id is keyed on the run id
+   * alone), but a lookup that stays correct when the id scheme changes is worth
+   * more than one query saved, and this is the shape the codebase has agreed
+   * on: `findJobs`'s `data` filter compiles to `data @> $1` and is org-scoped
+   * like every other query here.
+   *
+   * Tolerant of "no such job" for the same reason as the publish side: the job
+   * may legitimately be gone (already completed, already cancelled, aged out of
+   * retention). What must not happen is the run staying live, and that is
+   * decided by the status write this shares a transaction with — plus the
+   * worker's own re-read of the status under its fence before each step.
+   */
+  async cancelGenerate(tx: Tx, runId: string, orgId: string): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const db = fromDrizzle(tx, sql);
+    const jobs = await this.boss.findJobs(GENERATE_QUEUE, { data: { runId, orgId }, db });
+    // Terminal jobs are left alone: `cancel`'s UPDATE is guarded by
+    // `state < completed` and would ignore them anyway.
+    const live = jobs
+      .filter((job) => job.state === "created" || job.state === "retry" || job.state === "active")
+      .map((job) => job.id);
+    if (live.length === 0) return;
+    await this.boss.cancel(GENERATE_QUEUE, live, { db });
   }
 }

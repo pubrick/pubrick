@@ -7,6 +7,7 @@ import { ChannelsModule } from "./channels/channels.module";
 import { ContentModule } from "./content/content.module";
 import { HealthModule } from "./health/health.module";
 import { QueueModule } from "./queue/queue.module";
+import { RunsModule } from "./runs/runs.module";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { QueueModule } from "./queue/queue.module";
     ChannelsModule,
     ContentModule,
     AiCredentialsModule,
+    RunsModule,
   ],
 })
 export class AppModule {}
