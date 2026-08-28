@@ -60,6 +60,54 @@ Pattern reference for new features: `docs/ux-patterns.md`.
 - Conventional commits. One logical change per commit.
 - TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.
 
+## Generation (`packages/ai`, `apps/worker/src/generate`)
+
+- **Ledger before checkpoint.** Every *physical* model call writes its
+  `usage_ledger` row in its own transaction, before the step's checkpoint: a run
+  that dies mid-step has still spent the org's money, and a ledger that records
+  only finished steps under-reports every failure. Metering hooks
+  `executeLanguageModelCall`, passed per call as `telemetry: { integrations }` —
+  never `registerTelemetry` (global, no unregister, leaks between test files),
+  and never `onLanguageModelCallEnd`, which fires *after* the SDK's retry loop:
+  once per step, and not at all when every attempt failed.
+- **Every model call runs under the run's fence.** Re-take it immediately before
+  the call (`beginStep`), never only after — a handler that checks at the end has
+  already spent the money it had lost the right to spend. The token is
+  `<jobId>#<per-delivery nonce>`, because pg-boss deletes and re-inserts a
+  retried job under the *same* id, so `active_job_id = jobId` would admit a retry
+  alongside a live handler and fence nothing. The claim matches the job half
+  (`split_part`), is guarded on `status in ('queued','running')`, and every
+  checkpoint write and the terminal write carry `active_job_id = $fence`.
+- **Failure policy mirrors publishing, and costs more here.** A permanent
+  generation error is recorded on the run and the handler returns normally
+  (completing the job); only a transient one is rethrown for pg-boss, which
+  resumes from the last checkpoint. Each pointless retry is another paid call.
+  Losing the fence, being cancelled, and finding the run row gone (a deleted
+  brand cascades) are all ordinary outcomes: log and return, never throw.
+- **The publish promise is enforced server-side.** `ContentRepository` refuses
+  approval of an `ai` item that nobody opened and nobody touched — body *and*
+  every adaptation compared with `isUntouchedAi` against the first `ai`
+  `content_versions` row, missing evidence refusing. Never move this check into
+  the UI, and never weaken it to the master body alone: `adaptations.body ??
+  contentItems.body` is what actually ships. `first_opened_at` is stamped only by
+  `POST /api/content/:id/opened`, never as a side effect of a GET (the public API
+  and the MCP server would trip it), and the run screen must not auto-forward to
+  the finished draft — that would satisfy the read signal with no human present.
+- **The fact-checker verifies nothing** until increment 3 gives it sources: it
+  lists claims. Every human-readable string uses `CLAIMS_TO_VERIFY_LABEL`
+  ("Claims to verify"); no instruction, schema, endpoint or UI string may suggest
+  a check happened.
+- **Untrusted text never reaches `instructions`.** The brief, earlier steps'
+  output, and (increment 3) fetched article text are nonce-fenced material in
+  `prompt`; only org configuration and this package's step rules are
+  instructions. Define steps with `defineStep` — it is what keeps that boundary,
+  the schema sent to the model, and the ledger attribution from drifting apart.
+- **No test may call a provider.** Use `MockLanguageModelV4` from `ai/test`
+  (its `doGenerate` must return TEXT content, or the `Output.object` path throws
+  `NoOutputGeneratedError`) or the worker's `test/scripted-model`; the single
+  method that reaches a provider (`AiCredentialProbe.call`) is overridden in the
+  probe's own spec, so the classification around it stays real.
+
 ## Testing apps/web
 
 - RTL. Most page tests mock `@/lib/api` at the module boundary

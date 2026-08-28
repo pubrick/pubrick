@@ -190,20 +190,44 @@ template marketplace, browser extension.
 
 ## 5. AI layer and key modes
 
-One interface over AI SDK 7. `providerFor(tenant)` resolves models from tenant
-credentials:
+One interface over AI SDK 7. `resolveModel(credential, modelId?)` builds a model
+from an org credential the caller has already decrypted — `packages/ai` has no
+database dependency and must not acquire one, so the decrypt stays a private
+method on the owning repository, as it is for channel credentials:
 
 - **BYOK:** user's Gemini key and/or OpenRouter key. OpenRouter alone covers
   text + embeddings (+ images via its `/images` endpoint — thin raw client
   until the AI SDK provider supports it).
 - **Platform keys (cloud subscription):** our keys, metered.
 
-Every call passes through `wrapLanguageModel` metering middleware →
-`usage_ledger` rows `{org_id, model, provider, tokens, cost, key_ownership:
-'platform'|'byok', pipeline_step}`. OpenRouter returns actual USD cost in every
-response (ground truth); direct Gemini uses a small versioned price table.
-Subscription quotas are computed from the same ledger. BYOK rows record $0
-platform cost but keep `upstreamInferenceCost` for user-facing transparency.
+Metering is not middleware. Every structured call goes through one function
+(`generateStructured` in `packages/ai`), which attaches a **per-call telemetry
+integration** hooking `executeLanguageModelCall` → `usage_ledger` rows
+`{org_id, run_id, step, channel_id, provider, model_id, tokens, cost_usd,
+cost_source, status, key_ownership: 'platform'|'byok'}`.
+
+That hook, and not another, for three reasons. It is the one the SDK invokes
+*inside* its own retry closure, so there is a row for every **physical** round
+trip — including the ones the SDK's retries made and the ones that failed after
+the provider had already counted tokens; `onLanguageModelCallEnd`, the obvious
+choice, fires once the retry loop has resolved, which is once per step and not
+at all when every attempt failed. A model wrapped once with `wrapLanguageModel`
+cannot say which step or channel a call belongs to: one model object serves all
+five roles and the whole channel fan-out, while attribution travels with the
+call. And the hook's `execute()` resolves to the raw provider result, whose
+usage shape is the nested one (`inputTokens.total`, `inputTokens.cacheRead`,
+`outputTokens.reasoning`) where the end event's is flat — reading the wrong one
+yields silent zeros, not an error. Integrations are passed per call, never
+through `registerTelemetry`: that registry is global and has no unregister.
+
+OpenRouter reports the call's actual USD cost when it reports one — the field is
+optional, and its absence must never be read as zero; direct Gemini is priced
+from a small versioned table whose rates carry effective dates. `cost_source`
+records which of the two priced a row, or that neither could, so a total can say
+honestly whether it is exact, approximate, or a floor. `key_ownership` is `byok`
+on every row until platform keys exist; the column is there now so that P4's
+quota queries — computed from this same ledger, where a platform-key row costs
+the platform money and a BYOK row costs it nothing — need no migration.
 
 Agent orchestration: **no framework** — hand-rolled sequential step classes
 (the reference module reached the same conclusion after dropping CrewAI).

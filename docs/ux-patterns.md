@@ -222,6 +222,28 @@ Lex shows the calm alternative: AI summoned by explicit command only
 ("Refine…") and `⌘K`. Refine verbs are domain-specific: shorten, adapt tone
 to brand, tighten hook, translate. No hover sparkles, no spacebar hijack.
 
+**Amendment — whole-draft generation (2026-08-28, generation engine
+increment 1).** This pattern governs the **refinement of existing text**. What
+it rejects is ambient solicitation while a person is writing, which is why its
+two places are both editor affordances: a selection, and a command over the
+draft in front of you.
+
+Generating a whole draft from a brief is not refinement, and it cannot be
+editor chrome — at the moment it is invoked there is no text to refine. It is a
+compose-time **input**, and it lives where the compose screen's other inputs
+live: a brief field above the body with a **secondary** Generate beside it,
+while "Create post" remains the screen's one primary action. It is summoned,
+never soliciting — §10's third anti-pattern holds: no sparkle, no hover, and
+with no AI key configured the action is absent entirely rather than present and
+disabled. Generate does not fill the form — it discards the typed draft and
+starts a run that lands a different item minutes later, so a non-empty body is
+confirmed first.
+
+So AI now appears in three places, not two: the selection toolbar, `⌘K`, and
+the compose brief. Inside the editor it is still the two. §5.2's staging rule is
+untouched by this: a run lands a `draft`, and approval remains the explicit
+human act.
+
 ### 5.2 The staging loop: Accept / Try again / Discard (Notion AI) — `ADOPT-NOW`
 
 Generated text always lands in a staging state with explicit
@@ -448,7 +470,7 @@ one internal approval + one optional client approval covers the 90% case.
 | 4.2 | Drag-reschedule + Ready rail | Later/Postiz | adopt-now | Calendar |
 | 4.3 | Minimal status-chip density | Planable/Notion | adopt-now | Calendar |
 | 4.4 | IG grid preview | Later | **rejected** (until IG) | — |
-| 5.1 | AI via selection + ⌘K only | Notion (mechanic), Lex (trigger) | adopt-now | Compose |
+| 5.1 | AI via selection + ⌘K (refinement only — see the §5.1 amendment) | Notion (mechanic), Lex (trigger) | adopt-now | Compose |
 | 5.2 | Accept/Try-again/Discard staging | Notion AI | adopt-now | Compose/Review |
 | 5.3 | AI authorship provenance | iA Writer | adopt-now (signature) | Everywhere |
 | 5.4 | Per-brand voice & knowledge object | Jasper | adopt-with-feature | Brand knowledge |
