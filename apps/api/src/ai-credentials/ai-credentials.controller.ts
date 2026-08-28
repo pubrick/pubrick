@@ -30,15 +30,19 @@ import { AiCredentialsRepository } from "./ai-credentials.repository";
  * `ZodValidationPipe` would do the parsing, but its message is built from the
  * issue's path — empty for a bare enum — so the user would get ": Invalid
  * option". A route parameter deserves a sentence.
+ *
+ * The rejected value is deliberately NOT quoted back. This segment is one
+ * mis-built URL away from carrying an API key, and a reflected 400 body copies
+ * it into every access log and error tracker between here and the browser. The
+ * caller knows what it sent; what it needs is the list of what would have
+ * worked.
  */
 @Injectable()
 export class ParseAiProviderPipe implements PipeTransform<string, AiProviderId> {
   transform(value: string): AiProviderId {
     const parsed = aiProviderSchema.safeParse(value);
     if (!parsed.success) {
-      throw new BadRequestException(
-        `Unknown provider "${value}"; expected one of ${AI_PROVIDERS.join(", ")}`,
-      );
+      throw new BadRequestException(`Unknown provider; expected one of ${AI_PROVIDERS.join(", ")}`);
     }
     return parsed.data;
   }

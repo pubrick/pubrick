@@ -1,9 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { type CostRow, costTotals, formatUsd, summarizeCost } from "./cost-display.js";
+import {
+  type CostRow,
+  costTotals,
+  formatUsd,
+  summarizeCost,
+  toLedgerCostUsd,
+} from "./cost-display.js";
 
-const reported = (usd: number): CostRow => ({ costUsd: usd, costSource: "provider_reported" });
-const estimated = (usd: number): CostRow => ({ costUsd: usd, costSource: "price_table" });
-const unpriced = (): CostRow => ({ costUsd: null, costSource: "unknown" });
+const reported = (usd: number): CostRow => ({
+  costUsd: usd,
+  costSource: "provider_reported",
+  inputTokens: 12,
+  outputTokens: 3,
+});
+const estimated = (usd: number): CostRow => ({
+  costUsd: usd,
+  costSource: "price_table",
+  inputTokens: 12,
+  outputTokens: 3,
+});
+/** A model that answered, at a price nothing could name. Real money, unknown amount. */
+const unpriced = (): CostRow => ({
+  costUsd: null,
+  costSource: "unknown",
+  inputTokens: 12,
+  outputTokens: 3,
+});
+/** A 429 or a connection reset: rejected before the provider counted anything. */
+const rejectedBeforeTokens = (): CostRow => ({
+  costUsd: null,
+  costSource: "unknown",
+  inputTokens: 0,
+  outputTokens: 0,
+});
 
 /**
  * The three rules of §4, one test each, named after the rule they defend.
@@ -48,6 +77,53 @@ describe("the three cost display rules", () => {
   });
 });
 
+/**
+ * The refinement §4 gained after metering moved to every physical round trip:
+ * failed attempts write rows too, and a rule that ignored tokens would let one
+ * 429 degrade a lifetime total to "≥ $X (1 unpriced)" forever.
+ */
+describe("a round trip rejected before any tokens were counted", () => {
+  it("does not degrade the label: its cost is known to be zero, not unknown", () => {
+    const summary = summarizeCost(costTotals([reported(1.23), rejectedBeforeTokens()]));
+
+    expect(summary).toEqual({ kind: "exact", usd: 1.23 });
+  });
+
+  it("still counts a FAILED call that did consume tokens — that money was really spent", () => {
+    const burned: CostRow = {
+      costUsd: null,
+      costSource: "unknown",
+      inputTokens: 900,
+      outputTokens: 0,
+    };
+
+    expect(summarizeCost(costTotals([reported(1.23), burned]))).toEqual({
+      kind: "atLeast",
+      usd: 1.23,
+      unpricedCalls: 1,
+    });
+  });
+
+  it("counts output-only tokens too — either side means the provider metered something", () => {
+    const outputOnly: CostRow = {
+      costUsd: null,
+      costSource: "unknown",
+      inputTokens: 0,
+      outputTokens: 7,
+    };
+
+    expect(costTotals([outputOnly]).unpricedCalls).toBe(1);
+  });
+
+  it("adds nothing to the sum, so it cannot inflate the total either", () => {
+    expect(costTotals([rejectedBeforeTokens()])).toEqual({
+      usd: 0,
+      unpricedCalls: 0,
+      estimatedCalls: 0,
+    });
+  });
+});
+
 describe("costTotals", () => {
   it("never adds an unpriced row's cost into the sum — that is what makes SUM() lie", () => {
     expect(costTotals([unpriced(), reported(0.25)])).toEqual({
@@ -57,12 +133,45 @@ describe("costTotals", () => {
     });
   });
 
-  it("treats a null cost as unpriced even when the row claims to be priced", () => {
-    // The two cannot disagree by construction; if a writer ever makes them
-    // disagree, under-claiming knowledge is the safe direction.
-    const lying: CostRow = { costUsd: null, costSource: "provider_reported" };
+  it("treats a row marked unknown as unpriced even when it carries a figure", () => {
+    // The two cannot disagree by construction. If a writer ever makes them
+    // disagree, this is the reading the SQL aggregate takes as well — the two
+    // paths answer one question and must not diverge.
+    const lying: CostRow = {
+      costUsd: 5,
+      costSource: "unknown",
+      inputTokens: 10,
+      outputTokens: 1,
+    };
 
     expect(costTotals([lying])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });
+  });
+
+  it("treats a null cost as unpriced even when the row claims to be priced", () => {
+    const lying: CostRow = {
+      costUsd: null,
+      costSource: "provider_reported",
+      inputTokens: 10,
+      outputTokens: 1,
+    };
+
+    expect(costTotals([lying])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });
+  });
+});
+
+describe("summarizeCost", () => {
+  it("does not clamp a negative total away — money cannot be negative, so hiding it hides a bug", () => {
+    expect(summarizeCost({ usd: -5, unpricedCalls: 0, estimatedCalls: 0 })).toEqual({
+      kind: "exact",
+      usd: -5,
+    });
+  });
+
+  it("falls back to zero only for a total that is not a number at all", () => {
+    expect(summarizeCost({ usd: Number.NaN, unpricedCalls: 0, estimatedCalls: 0 })).toEqual({
+      kind: "exact",
+      usd: 0,
+    });
   });
 });
 
@@ -88,8 +197,45 @@ describe("formatUsd", () => {
     expect(formatUsd(1e-9)).toBe("$0.000001");
   });
 
-  it("refuses to render a negative or non-finite total", () => {
-    expect(formatUsd(-5)).toBe("$0.00");
+  it("shows a negative total as negative instead of quietly printing $0.00", () => {
+    expect(formatUsd(-5)).toBe("-$5.00");
+    expect(formatUsd(-0.000015)).toBe("-$0.000015");
+  });
+
+  it("falls back to $0.00 only when the number is not a number", () => {
     expect(formatUsd(Number.NaN)).toBe("$0.00");
+  });
+});
+
+/**
+ * What actually goes into `numeric(12,6)`.
+ *
+ * `estimateCostUsd` floors a priced-from-table call at 0.000001 so a billed call
+ * never stores 0.000000 — but OpenRouter, the only provider that reports its own
+ * cost, never passes through that function. Without the same floor here, a
+ * provider-reported 4e-7 call stores as zero and then reads "$0.000001" on the
+ * Test line and "$0.00" in the org total: one call, two different numbers.
+ */
+describe("toLedgerCostUsd", () => {
+  it("floors a real but sub-micro-dollar cost at the smallest amount the column can hold", () => {
+    expect(toLedgerCostUsd(0.0000004)).toBe("0.000001");
+  });
+
+  it("writes an exact six-decimal string, not whatever String() decides to print", () => {
+    expect(toLedgerCostUsd(0.00002)).toBe("0.000020");
+    expect(toLedgerCostUsd(1e-7 * 3)).toBe("0.000001");
+  });
+
+  it("keeps a genuine zero as zero — a free model is not the same as an unpriced call", () => {
+    expect(toLedgerCostUsd(0)).toBe("0.000000");
+  });
+
+  it("passes an unknown cost through as NULL, never as a number", () => {
+    expect(toLedgerCostUsd(null)).toBeNull();
+  });
+
+  it("refuses to store a non-finite figure, which would poison every later SUM", () => {
+    expect(toLedgerCostUsd(Number.NaN)).toBeNull();
+    expect(toLedgerCostUsd(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });

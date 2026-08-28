@@ -5,7 +5,9 @@ import {
   generateStructured,
   resolveModel,
   type UsageRecord,
+  type UsageSink,
 } from "@pubrick/ai";
+import type { AiTestFailure } from "@pubrick/shared";
 import { z } from "zod";
 
 /**
@@ -18,7 +20,7 @@ import { z } from "zod";
 export type ProbeOutcome = {
   /** Every physical round trip the SDK made, in ledger shape. */
   records: UsageRecord[];
-} & ({ ok: true; modelId: string } | { ok: false; reason: string });
+} & ({ ok: true; modelId: string } | { ok: false; reason: AiTestFailure });
 
 /** The smallest thing a model can be asked to produce and still prove structured output. */
 const PROBE_SCHEMA = z.object({ ok: z.literal(true) });
@@ -48,52 +50,91 @@ export class AiCredentialProbe {
   async run(credential: AiCredential): Promise<ProbeOutcome> {
     const records: UsageRecord[] = [];
 
-    let model: ReturnType<typeof resolveModel>;
+    let requestedModelId: string;
     try {
-      model = resolveModel(credential);
-    } catch (error) {
-      // An empty stored key, or a provider the factory does not build. No call
-      // was made, so there is nothing to meter.
-      return { ok: false, reason: reasonFor(error), records };
-    }
-
-    try {
-      await generateStructured({
-        model,
-        provider: credential.provider,
-        schema: PROBE_SCHEMA,
-        instructions: PROBE_INSTRUCTIONS,
-        prompt: PROBE_PROMPT,
-        onUsage: (record) => {
-          records.push(record);
-        },
-        // ONE physical call, deliberately. The SDK's default of 2 retries would
-        // bill a BYOK user up to three times for a button whose entire promise
-        // is "one minimal call", and a rate limit or a 5xx is a result worth
-        // showing the user now rather than after two rounds of real backoff.
-        maxRetries: 0,
+      requestedModelId = await this.call(credential, (record) => {
+        records.push(record);
       });
     } catch (error) {
-      return { ok: false, reason: reasonFor(error), records };
+      return { ok: false, reason: classifyProbeFailure(error, records), records };
     }
 
     // Which model actually answered: the id telemetry reported for the round
     // trip, falling back to the one we asked for. They differ on OpenRouter,
     // where the catalogue id can route elsewhere — and "which model answered"
     // is half of what this button is for.
-    return { ok: true, modelId: records[0]?.modelId ?? model.modelId, records };
+    return { ok: true, modelId: records[0]?.modelId ?? requestedModelId, records };
+  }
+
+  /**
+   * The only lines in this feature that reach a provider — and the seam every
+   * test replaces.
+   *
+   * `protected`, not private: `run`'s failure classification is the part that
+   * must never leak a key, so it has to be exercised for real. A test subclass
+   * overrides this one method and throws the error a provider would, leaving
+   * the classification under test rather than stubbed out with it.
+   *
+   * Returns the model id we asked for, so `run` has a fallback when telemetry
+   * reports none.
+   *
+   * ⚠ This is *one logical call*, not necessarily one physical one.
+   * `maxRetries: 0` switches off the SDK's transport retries — the button's
+   * promise is a minimal call, and a BYOK user should not be billed three times
+   * for one click, nor sit through real exponential backoff to be told about a
+   * rate limit. It does NOT switch off `generateStructured`'s repair retry,
+   * which fires on exactly the schema violation this button exists to provoke:
+   * a Test that meets one costs two physical calls, both metered, both charged.
+   */
+  protected async call(credential: AiCredential, onUsage: UsageSink): Promise<string> {
+    const model = resolveModel(credential);
+    await generateStructured({
+      model,
+      provider: credential.provider,
+      schema: PROBE_SCHEMA,
+      instructions: PROBE_INSTRUCTIONS,
+      prompt: PROBE_PROMPT,
+      onUsage,
+      maxRetries: 0,
+    });
+    return model.modelId;
   }
 }
 
 /**
- * A sentence for the user.
+ * Turn a failure into one of a closed set of codes.
  *
- * `classifyAiError` is idempotent — `generateStructured` has usually classified
- * already — and it keeps the provider's own words ("API key not valid"), which
- * for a Test action is the single most useful thing on screen. A rejected key
- * is a *result*, not a 500: the endpoint answers 200 with this reason, exactly
- * as the channel verify endpoint does.
+ * The provider's own words are deliberately dropped on the floor. They are the
+ * most informative thing available and they are also where the key lives:
+ * OpenAI-style bodies quote the submitted credential back
+ * ("Incorrect API key provided: sk-…"), and a Google quota error quotes the
+ * request URL, which carries `?key=`. This value is handed to a browser, so the
+ * only safe contract is one that cannot express a secret at all. The web app
+ * turns the code into a sentence, in four languages — which the provider's
+ * English could never do either.
+ *
+ * `.name` rather than `instanceof`: the marker survives duplicate copies of
+ * `@pubrick/shared` in the tree, which is the same reason the SDK's own
+ * `APICallError.isInstance` exists.
  */
-function reasonFor(error: unknown): string {
-  return classifyAiError(error).message;
+export function classifyProbeFailure(
+  error: unknown,
+  records: readonly UsageRecord[],
+): AiTestFailure {
+  const classified = classifyAiError(error);
+  if (classified.name === "TransientError") return "rate_limited";
+
+  const status = (classified as { code?: number }).code;
+  if (status === 401 || status === 403) return "invalid_key";
+  if (status === 404) return "model_not_found";
+  if (status !== undefined) return "refused";
+
+  // No HTTP status at all: the throw came from our own structured-output layer
+  // (a schema violation twice over, or a tool call where text was required)
+  // rather than from the transport. Distinguished by the meter, never by error
+  // prose: if any round trip reported tokens the provider DID answer, so what
+  // failed was the answer's shape — which is precisely the thing this button
+  // exists to detect. No tokens means nothing ever got that far.
+  const providerAnswered = records.some((record) => record.inputTokens + record.outputTokens > 0);
+  return providerAnswered ? "no_structured_output" : "refused";
 }

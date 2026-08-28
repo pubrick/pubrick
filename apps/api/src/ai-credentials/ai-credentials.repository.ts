@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
@@ -10,6 +10,7 @@ import {
   decryptJson,
   encryptJson,
   summarizeCost,
+  toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -33,6 +34,8 @@ const TEST_STEP = "test";
 
 @Injectable()
 export class AiCredentialsRepository {
+  private readonly logger = new Logger(AiCredentialsRepository.name);
+
   constructor(private readonly probe: AiCredentialProbe) {}
 
   list(orgId: string) {
@@ -50,10 +53,13 @@ export class AiCredentialsRepository {
       .values({ orgId, provider: data.provider, credentialsEncrypted, defaultModel })
       .onConflictDoUpdate({
         target: [schema.aiCredentials.orgId, schema.aiCredentials.provider],
-        // `updatedAt` is set by hand: drizzle's `$onUpdate` fires for `.update()`
-        // only, so an upsert that replaced a key would otherwise still report
-        // the date the key was FIRST saved — the one date this row is for.
-        set: { credentialsEncrypted, defaultModel, updatedAt: new Date() },
+        // `updatedAt` is deliberately absent: drizzle's `buildUpdateSet` — the
+        // same builder `.update()` uses — adds every column carrying an
+        // `$onUpdate`, whether or not it appears here (pg-core/dialect.js:100-109,
+        // reached from insert.js:149). Setting it by hand would be a no-op
+        // dressed up as a safeguard. The e2e backdates the row and asserts the
+        // date moves, so a drizzle upgrade that changed this fails there.
+        set: { credentialsEncrypted, defaultModel },
       })
       .returning(PUBLIC_COLUMNS);
     return rows[0];
@@ -110,14 +116,26 @@ export class AiCredentialsRepository {
    *
    * The counts are not decoration: `SUM()` skips null costs, so without them a
    * ledger full of unpriced calls renders a confident, precise, too-small
-   * number. See `summarizeCost`.
+   * number.
+   *
+   * The three buckets below are `costTotals()`'s, transcribed into SQL and kept
+   * word for word in step with it — the doc comment on `cost-display.ts` is the
+   * single statement of the rule, and two code paths answering one question is
+   * how a total starts depending on which screen asked. `PRICED` is
+   * `cost_usd IS NOT NULL AND cost_source <> 'unknown'`; anything else that
+   * counted tokens is unpriced; anything else that did not (a 429 rejected
+   * before the provider counted anything) is ignored, because its cost is known
+   * to be zero and the ledger is lifetime — one blip must not stamp "≥" on an
+   * org's total forever.
    */
   async spend(orgId: string): Promise<CostSummary> {
+    const priced = sql`${schema.usageLedger.costUsd} is not null and ${schema.usageLedger.costSource} <> 'unknown'`;
+    const countedTokens = sql`${schema.usageLedger.inputTokens} + ${schema.usageLedger.outputTokens} > 0`;
     const rows = await db
       .select({
-        usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}), 0)`,
-        unpricedCalls: sql<string>`count(*) filter (where ${schema.usageLedger.costSource} = 'unknown' or ${schema.usageLedger.costUsd} is null)`,
-        estimatedCalls: sql<string>`count(*) filter (where ${schema.usageLedger.costSource} = 'price_table' and ${schema.usageLedger.costUsd} is not null)`,
+        usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}) filter (where ${priced}), 0)`,
+        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and ${countedTokens})`,
+        estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${schema.usageLedger.costSource} = 'price_table')`,
       })
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.orgId, orgId));
@@ -143,7 +161,19 @@ export class AiCredentialsRepository {
    * cached green tick would be a claim we did not check.
    */
   async test(orgId: string, provider: AiProviderId): Promise<AiCredentialTestResult> {
-    const credential = await this.getDecrypted(orgId, provider);
+    let credential: AiCredential;
+    try {
+      credential = await this.getDecrypted(orgId, provider);
+    } catch (error) {
+      // "No key stored" is genuinely not-found and stays a 404. A blob that
+      // will not decrypt is not: the row exists, the screen is still listing it,
+      // and the honest answer to "test this key" is a verdict about the key —
+      // not a 500 carrying a crypto stack trace to a browser. It happens for a
+      // real reason (APP_ENCRYPTION_KEY rotated under a stored row).
+      if (error instanceof NotFoundException) throw error;
+      return { ok: false, reason: "unreadable_key" };
+    }
+
     const outcome = await this.probe.run(credential);
 
     // Before the verdict, and for the failed verdict too: the provider counts
@@ -193,28 +223,41 @@ export class AiCredentialsRepository {
    */
   private async recordUsage(orgId: string, records: readonly UsageRecord[]): Promise<void> {
     if (records.length === 0) return;
-    await db.insert(schema.usageLedger).values(
-      records.map((record) => ({
-        orgId,
-        runId: null,
-        step: TEST_STEP,
-        channelId: null,
-        attempt: record.attempt,
-        provider: record.provider,
-        modelId: record.modelId,
-        inputTokens: record.inputTokens,
-        outputTokens: record.outputTokens,
-        cachedInputTokens: record.cachedInputTokens,
-        reasoningTokens: record.reasoningTokens,
-        // numeric(12,6) is a string column in drizzle; `toFixed(6)` stores the
-        // exact value the price table computed instead of whatever
-        // `String(number)` decides to print.
-        costUsd: record.costUsd === null ? null : record.costUsd.toFixed(6),
-        costSource: record.costSource,
-        status: record.status,
-        responseMs: record.responseMs,
-        keyOwnership: "byok" as const,
-      })),
-    );
+    try {
+      await db.insert(schema.usageLedger).values(
+        records.map((record) => ({
+          orgId,
+          runId: null,
+          step: TEST_STEP,
+          channelId: null,
+          attempt: record.attempt,
+          provider: record.provider,
+          modelId: record.modelId,
+          inputTokens: record.inputTokens,
+          outputTokens: record.outputTokens,
+          cachedInputTokens: record.cachedInputTokens,
+          reasoningTokens: record.reasoningTokens,
+          // `numeric(12,6)` is a string column in drizzle, and the conversion is
+          // not `String(cost)`: see `toLedgerCostUsd`, which also floors a real
+          // sub-micro-dollar cost so a billed call never stores 0.000000.
+          costUsd: toLedgerCostUsd(record.costUsd),
+          costSource: record.costSource,
+          status: record.status,
+          responseMs: record.responseMs,
+          keyOwnership: "byok" as const,
+        })),
+      );
+    } catch (error) {
+      // Losing the record of a billed call is bad. Throwing away the answer we
+      // already paid for as well is strictly worse — and a 500 here would do
+      // both, on a call the provider has already charged for. Same rule the
+      // publisher follows for a delivered post it could not record, and the same
+      // rule `generateStructured`'s own `onUsageError` follows: shout, keep the
+      // result. The message names what the org's total is now missing.
+      this.logger.error(
+        `USAGE RECORDING FAILED: ${records.length} billed ${records[0]?.provider} call(s) could not be written to the ledger — this org's spend is understated by them. ` +
+          `orgId=${orgId} step=${TEST_STEP} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }

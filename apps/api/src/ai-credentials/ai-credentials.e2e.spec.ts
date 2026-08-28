@@ -196,6 +196,18 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       const rejected = await agent.post("/api/ai-credentials/acme-ai/test").expect(400);
       expect(String(rejected.body.message)).toContain("google");
     });
+
+    it("does not echo the path segment back in its 400", async () => {
+      const { agent } = await orgAgent();
+      // A key pasted one field too far, or a mis-built client URL. Reflecting it
+      // puts the secret in the response body, and from there into every access
+      // log and error tracker between here and the browser.
+      const rejected = await agent
+        .post(`/api/ai-credentials/${encodeURIComponent(SECRET_KEY)}/test`)
+        .expect(400);
+
+      expect(JSON.stringify(rejected.body)).not.toContain(SECRET_KEY);
+    });
   });
 
   describe("org scoping", () => {
@@ -252,6 +264,40 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       expect(runs[0]?.error).toContain("google");
       expect(runs[0]?.error).toContain("removed");
     });
+
+    it("touches only the asking org's runs — another org's queue is not collateral", async () => {
+      // The `org_id` predicate on that UPDATE is the whole of this feature's
+      // blast radius. Without it, one org removing its key fails EVERY org's
+      // queued work, and nothing else in the suite would notice.
+      const victim = await orgAgent();
+      const victimBrand = await victim.agent.post("/api/brands").send({ name: "V" }).expect(201);
+      const victimRun = await direct.db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: victim.orgId,
+          brandId: victimBrand.body.id,
+          input: { kind: "brief", text: "not yours", channelIds: [] },
+        })
+        .returning({ id: schema.pipelineRuns.id });
+
+      const remover = await orgAgent();
+      await save(remover.agent).expect(200);
+      const removerBrand = await remover.agent.post("/api/brands").send({ name: "R" }).expect(201);
+      await direct.db.insert(schema.pipelineRuns).values({
+        orgId: remover.orgId,
+        brandId: removerBrand.body.id,
+        input: { kind: "brief", text: "mine", channelIds: [] },
+      });
+
+      const removed = await remover.agent.delete("/api/ai-credentials/google").expect(200);
+      expect(removed.body.failedRuns).toBe(1);
+
+      const untouched = await direct.db
+        .select({ status: schema.pipelineRuns.status })
+        .from(schema.pipelineRuns)
+        .where(eq(schema.pipelineRuns.id, victimRun[0]?.id as string));
+      expect(untouched[0]?.status).toBe("queued");
+    });
   });
 
   describe("the Test action", () => {
@@ -304,11 +350,11 @@ describe.skipIf(!url)("ai credentials e2e", () => {
     it("is a result, not a 500, when the provider rejects the key", async () => {
       const { agent } = await orgAgent();
       await save(agent).expect(200);
-      probeOutcome = { ok: false, reason: "API key not valid.", records: [] };
+      probeOutcome = { ok: false, reason: "invalid_key", records: [] };
 
       const result = await agent.post("/api/ai-credentials/google/test").expect(200);
 
-      expect(result.body).toEqual({ ok: false, reason: "API key not valid." });
+      expect(result.body).toEqual({ ok: false, reason: "invalid_key" });
     });
 
     it("bills the ledger for a call that failed after the provider counted tokens", async () => {
@@ -316,7 +362,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       await save(agent).expect(200);
       probeOutcome = {
         ok: false,
-        reason: "the model returned output that does not match the required schema, twice",
+        reason: "no_structured_output",
         records: [usage({ status: "errored", costUsd: 0.000044, costSource: "provider_reported" })],
       };
 
@@ -333,6 +379,81 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       await agent.post("/api/ai-credentials/google/test").expect(404);
       expect(probeCalls).toHaveLength(0);
+    });
+
+    it("files the ledger row under the test step, with no run to attribute it to", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      probeOutcome = { ok: true, modelId: "gemini-3.7-flash", records: [usage()] };
+
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      const rows = await direct.db
+        .select({ step: schema.usageLedger.step, runId: schema.usageLedger.runId })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId));
+      expect(rows).toEqual([{ step: "test", runId: null }]);
+    });
+
+    it("stores a sub-micro-dollar reported cost instead of rounding it away to zero", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      // OpenRouter reports real costs this small, and it never passes through
+      // `estimateCostUsd`'s floor. Rounded to six decimals it would be
+      // 0.000000 — a billed call, recorded as free, and the Test line would say
+      // $0.000001 while the org total said $0.00.
+      probeOutcome = {
+        ok: true,
+        modelId: "some/cheap-model",
+        records: [usage({ costUsd: 0.0000004, costSource: "provider_reported" })],
+      };
+
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      const rows = await direct.db
+        .select({ costUsd: schema.usageLedger.costUsd })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId));
+      expect(rows[0]?.costUsd).toBe("0.000001");
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 0.000001,
+      });
+    });
+
+    it("is a result, not a 500, when the stored key cannot be decrypted", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      // What a rotated APP_ENCRYPTION_KEY (or a tampered row) looks like. The
+      // old behaviour was a 500 with a crypto stack trace, on a screen that
+      // went on listing the key as if it were fine.
+      await direct.db
+        .update(schema.aiCredentials)
+        .set({ credentialsEncrypted: "bm90LWEtcmVhbC1ibG9i" })
+        .where(eq(schema.aiCredentials.orgId, orgId));
+
+      const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      expect(result.body).toEqual({ ok: false, reason: "unreadable_key" });
+      expect(probeCalls).toHaveLength(0);
+    });
+
+    it("still answers when the ledger write fails — the call was already paid for", async () => {
+      const { agent } = await orgAgent();
+      await save(agent).expect(200);
+      // Beyond int4: the insert throws. Losing the record of a call is bad;
+      // throwing away the answer we already paid for as well is strictly worse,
+      // and a 500 here would do both.
+      probeOutcome = {
+        ok: true,
+        modelId: "gemini-3.7-flash",
+        records: [usage({ inputTokens: 3_000_000_000 })],
+      };
+
+      const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      expect(result.body.ok).toBe(true);
+      expect(result.body.modelId).toBe("gemini-3.7-flash");
     });
   });
 
@@ -398,6 +519,8 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           modelId: "some/unlisted-model",
           costUsd: null,
           costSource: "unknown",
+          inputTokens: 900,
+          outputTokens: 120,
           status: "ok",
         },
       ]);
@@ -405,6 +528,85 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
         kind: "atLeast",
         usd: 0.002,
+        unpricedCalls: 1,
+      });
+    });
+
+    it("renders a lone price-table row as approximate — rule 2, through the SQL path", async () => {
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.usageLedger).values({
+        orgId,
+        step: "writer",
+        provider: "google",
+        modelId: "gemini-3.7-flash",
+        costUsd: "0.002000",
+        costSource: "price_table",
+        inputTokens: 900,
+        outputTokens: 120,
+        status: "ok",
+      });
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "approximate",
+        usd: 0.002,
+      });
+    });
+
+    it("ignores a round trip that was rejected before any tokens were counted", async () => {
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.usageLedger).values([
+        {
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: "1.230000",
+          costSource: "provider_reported",
+          inputTokens: 900,
+          outputTokens: 120,
+          status: "ok",
+        },
+        {
+          // A 429. No tokens counted, so its cost is known to be zero — and the
+          // ledger is lifetime, so letting one blip stamp "≥" on the total would
+          // stamp it forever.
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          status: "errored",
+        },
+      ]);
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 1.23,
+      });
+    });
+
+    it("does not sum a row marked unknown even when it carries a figure", async () => {
+      // The SQL aggregate and `costTotals()` answer one question and must not
+      // disagree: this row is $0 + one unpriced call in both.
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.usageLedger).values({
+        orgId,
+        step: "writer",
+        provider: "google",
+        modelId: "gemini-3.7-flash",
+        costUsd: "5.000000",
+        costSource: "unknown",
+        inputTokens: 900,
+        outputTokens: 120,
+        status: "ok",
+      });
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0,
         unpricedCalls: 1,
       });
     });

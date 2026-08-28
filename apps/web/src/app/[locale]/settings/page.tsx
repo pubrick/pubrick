@@ -5,12 +5,14 @@ import {
   type AiCredentialPublic,
   type AiCredentialTestResult,
   type AiProviderId,
+  type AiTestFailure,
   type CostSummary,
   formatUsd,
 } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -21,6 +23,24 @@ import { Select } from "@/components/ui/select";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { applyTheme, readThemePref, type ThemePref } from "@/lib/theme";
+
+/**
+ * A message key for every failure the API can report.
+ *
+ * A total `Record` rather than a lookup with a fallback: a new code added to
+ * `AI_TEST_FAILURES` is a compile error here, instead of rendering its raw key
+ * path to a user in four languages. The API sends codes precisely so that a
+ * provider's own 401 body — which quotes the submitted key — never reaches a
+ * browser, and so that this sentence can be translated at all.
+ */
+const TEST_FAILURE_KEYS: Record<AiTestFailure, string> = {
+  invalid_key: "aiTestFailInvalidKey",
+  model_not_found: "aiTestFailModelNotFound",
+  no_structured_output: "aiTestFailNoStructuredOutput",
+  rate_limited: "aiTestFailRateLimited",
+  refused: "aiTestFailRefused",
+  unreadable_key: "aiTestFailUnreadableKey",
+};
 
 /** Vendor names. Wire ids are never shown raw, and brand names are not translated. */
 const PROVIDER_NAMES: Record<AiProviderId, string> = {
@@ -160,7 +180,7 @@ export default function SettingsPage() {
     if (!result.ok) {
       return (
         <span role="alert" className="text-danger">
-          {result.reason}
+          {t(TEST_FAILURE_KEYS[result.reason])}
         </span>
       );
     }
@@ -217,6 +237,10 @@ export default function SettingsPage() {
                       <Button
                         size="sm"
                         variant="secondary"
+                        // Every click is a real, billed call — two physical ones
+                        // when the repair retry fires — so an impatient
+                        // double-click must not be charged twice.
+                        disabled={testResults[credential.provider] === "loading"}
                         onClick={() => testKey(credential.provider)}
                       >
                         {t("test")}
@@ -259,13 +283,17 @@ export default function SettingsPage() {
                 className="min-w-[200px] flex-1"
               />
             </div>
-            <Input
-              label={t("aiModelLabel")}
-              placeholder={t("aiModelPlaceholder")}
-              value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
-              className="w-full"
-            />
+            {/* Constitution rule 2: the one option most people never set lives
+                behind the shared disclosure, never loose on the form. */}
+            <Advanced dirty={defaultModel.trim() !== ""}>
+              <Input
+                label={t("aiModelLabel")}
+                placeholder={t("aiModelPlaceholder")}
+                value={defaultModel}
+                onChange={(e) => setDefaultModel(e.target.value)}
+                className="w-full"
+              />
+            </Advanced>
           </form>
         </Card>
 

@@ -135,6 +135,12 @@
     "aiCostApprox": "≈ {amount}",
     "aiCostAtLeast": "≥ {amount} ({count, plural, one {# llamada sin precio} other {# llamadas sin precio}})",
     "aiCostUnknown": "coste no informado ({count, plural, one {# llamada} other {# llamadas}})",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "aiTestFailInvalidKey": "El proveedor rechazó esta clave de API.",
+    "aiTestFailModelNotFound": "El proveedor no reconoce este identificador de modelo.",
+    "aiTestFailNoStructuredOutput": "El modelo respondió, pero no pudo devolver la salida estructurada que Pubrick necesita. Prueba con otro modelo.",
+    "aiTestFailRateLimited": "El proveedor está limitando las peticiones o no está disponible. Inténtalo de nuevo en un momento.",
+    "aiTestFailRefused": "El proveedor rechazó la petición. Revisa la clave y el identificador de modelo.",
+    "aiTestFailUnreadableKey": "No se pudo leer la clave guardada. Vuelve a guardarla."
   }
 }

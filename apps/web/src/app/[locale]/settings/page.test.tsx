@@ -1,4 +1,5 @@
 import {
+  AI_TEST_FAILURES,
   type AiCredentialPublic,
   type AiCredentialTestResult,
   aiCredentialUpsertSchema,
@@ -42,6 +43,8 @@ type Handlers = {
   credentials?: AiCredentialPublic[];
   spend?: CostSummary;
   test?: AiCredentialTestResult;
+  /** When set, POST …/test hangs until this resolves — the in-flight window. */
+  testGate?: Promise<void>;
 };
 
 const googleKey: AiCredentialPublic = {
@@ -65,7 +68,8 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
     if (method === "GET" && path === "/api/ai-credentials/spend")
       return handlers.spend ?? ({ kind: "exact", usd: 0 } satisfies CostSummary);
     if (method === "PUT" && path === "/api/ai-credentials") return googleKey;
-    if (method === "POST" && path.endsWith("/test"))
+    if (method === "POST" && path.endsWith("/test")) {
+      if (handlers.testGate) await handlers.testGate;
       return (
         handlers.test ??
         ({
@@ -74,6 +78,7 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
           cost: { kind: "exact", usd: 0.000021 },
         } satisfies AiCredentialTestResult)
       );
+    }
     if (method === "DELETE" && path.startsWith("/api/ai-credentials/"))
       return { deleted: true, failedRuns: 0 };
     throw new Error(`unhandled request in test: ${method} ${path}`);
@@ -189,6 +194,7 @@ describe("Settings — AI provider: saving a key", () => {
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk-live-abcdefgh12345678");
+    await user.click(screen.getByText(en.Ui.advanced));
     await user.type(screen.getByLabelText(en.SettingsPage.aiModelLabel), "gemini-3.7-flash");
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
 
@@ -223,6 +229,20 @@ describe("Settings — AI provider: saving a key", () => {
     // default model", and an empty string is not a model id (the schema rejects it).
     expect(put?.body).toEqual({ provider: "google", apiKey: "sk-live-abcdefgh12345678" });
     expect(aiCredentialUpsertSchema.parse(put?.body)).toEqual(put?.body);
+  });
+
+  it("keeps the default model behind the shared Advanced disclosure", async () => {
+    // Constitution rule 2: extra options live inside `Advanced`, never loose on
+    // the form and never behind a bespoke "show more". Provider and key are
+    // required; the model id is the option almost nobody sets.
+    await renderSettings();
+
+    expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).not.toBeVisible();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+
+    expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).toBeVisible();
   });
 
   it("masks the key field and clears it once saved", async () => {
@@ -268,17 +288,54 @@ describe("Settings — AI provider: Test", () => {
     expect(line.textContent).not.toContain("$0.00");
   });
 
-  it("shows a rejected key as a result, not as a broken screen", async () => {
-    installApi([], {
-      credentials: [googleKey],
-      test: { ok: false, reason: "API key not valid." },
-    });
+  it("translates the failure code — the provider's own sentence never reaches the screen", async () => {
+    // The API answers with a code precisely because a provider's 401 body can
+    // quote the submitted key back. A code also has four translations; an
+    // English sentence from Google has one.
+    installApi([], { credentials: [googleKey], test: { ok: false, reason: "invalid_key" } });
     await renderSettings();
 
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("API key not valid.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      en.SettingsPage.aiTestFailInvalidKey,
+    );
+  });
+
+  it("has a sentence for every failure code the API can send", async () => {
+    // A code with no copy renders its raw key path to the user. The page maps
+    // the codes through a total Record; this pins the messages file to it.
+    for (const reason of AI_TEST_FAILURES) {
+      const key = `aiTestFail${reason.replace(/(^|_)([a-z])/g, (_m, _s, c: string) => c.toUpperCase())}`;
+      expect(en.SettingsPage).toHaveProperty(key);
+    }
+  });
+
+  it("cannot be fired twice while the first call is still in flight", async () => {
+    // Each click is a real, billed call — up to two physical ones once the
+    // repair retry fires. A button that stays live through the round trip bills
+    // an impatient double-click twice.
+    const calls: Call[] = [];
+    let release!: () => void;
+    installApi(calls, {
+      credentials: [googleKey],
+      testGate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    const button = await screen.findByRole("button", { name: en.SettingsPage.test });
+    await user.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    await user.click(button);
+    expect(calls.filter((c) => c.path === "/api/ai-credentials/google/test")).toHaveLength(1);
+
+    release();
+    await waitFor(() => expect(button).toBeEnabled());
   });
 
   it("asks the server again every time — a verdict is never reused", async () => {

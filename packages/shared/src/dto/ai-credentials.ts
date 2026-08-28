@@ -55,6 +55,30 @@ export type AiCredentialPublic = {
 };
 
 /**
+ * Why a Test call failed — a closed set of codes, never a sentence.
+ *
+ * The provider's own error text is NEVER passed through, and the reason is
+ * structural: providers echo the submitted key back in their error bodies
+ * ("Incorrect API key provided: sk-live-…"), and this value is returned to a
+ * browser. A code cannot carry a secret however the provider words its 401. It
+ * is also the only way this screen can answer in four languages, which a
+ * provider's English sentence never could.
+ *
+ * `unreadable_key` is the stored blob failing to decrypt — the key predates a
+ * rotated `APP_ENCRYPTION_KEY`, or the row was tampered with. It is a verdict
+ * about the key, so it belongs here rather than in a 500 with a crypto stack.
+ */
+export const AI_TEST_FAILURES = [
+  "invalid_key",
+  "model_not_found",
+  "no_structured_output",
+  "rate_limited",
+  "refused",
+  "unreadable_key",
+] as const;
+export type AiTestFailure = (typeof AI_TEST_FAILURES)[number];
+
+/**
  * The result of one Test call.
  *
  * A rejected key is a *result*, not a 5xx — same rule the channel verify
@@ -64,4 +88,4 @@ export type AiCredentialPublic = {
  */
 export type AiCredentialTestResult =
   | { ok: true; modelId: string; cost: CostSummary }
-  | { ok: false; reason: string };
+  | { ok: false; reason: AiTestFailure };

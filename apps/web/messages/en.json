@@ -135,6 +135,12 @@
     "aiCostApprox": "≈ {amount}",
     "aiCostAtLeast": "≥ {amount} ({count, plural, one {# call unpriced} other {# calls unpriced}})",
     "aiCostUnknown": "cost not reported ({count, plural, one {# call} other {# calls}})",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "aiTestFailInvalidKey": "The provider rejected this API key.",
+    "aiTestFailModelNotFound": "The provider does not recognise this model id.",
+    "aiTestFailNoStructuredOutput": "The model answered, but could not return the structured output Pubrick needs. Try another model.",
+    "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",
+    "aiTestFailRefused": "The provider refused the request. Check the key and the model id.",
+    "aiTestFailUnreadableKey": "The stored key could not be read. Save it again."
   }
 }

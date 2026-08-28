@@ -7,6 +7,7 @@ export {
   formatUsd,
   type LedgerCostTotals,
   summarizeCost,
+  toLedgerCostUsd,
 } from "./cost-display.js";
 export { decryptJson, encryptJson } from "./crypto.js";
 export * from "./dto/ai-credentials.js";

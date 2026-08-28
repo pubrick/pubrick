@@ -1,6 +1,7 @@
+import type { CostSource } from "@pubrick/ai";
 import { AI_PROVIDERS as AI_PACKAGE_PROVIDERS } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
-import { AI_PROVIDERS } from "@pubrick/shared";
+import { AI_COST_SOURCES, AI_PROVIDERS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 
 // One list of model providers, kept by hand in three packages that cannot all
@@ -28,5 +29,25 @@ describe("AI provider enums", () => {
 
     expect([...schema.AI_PROVIDERS]).toEqual([...AI_PROVIDERS]);
     expect([...AI_PACKAGE_PROVIDERS]).toEqual([...AI_PROVIDERS]);
+  });
+});
+
+// `cost_source` is the same problem one column over: `@pubrick/db` owns the
+// enum, `@pubrick/ai` decides which member each call gets, and `@pubrick/shared`
+// types the three display rules against it. A member added to one and not the
+// others is a row the rules cannot classify — and the rules are what stop a
+// nullable SUM() from printing a confident wrong number.
+
+type DbCostSource = (typeof schema.COST_SOURCES)[number];
+type SharedCostSource = (typeof AI_COST_SOURCES)[number];
+
+describe("cost source enums", () => {
+  it("db, shared and the ai package agree on where a cost figure can come from", () => {
+    const dbMatchesShared: Equal<DbCostSource, SharedCostSource> = true;
+    const aiMatchesShared: Equal<CostSource, SharedCostSource> = true;
+    expect(dbMatchesShared).toBe(true);
+    expect(aiMatchesShared).toBe(true);
+
+    expect([...schema.COST_SOURCES]).toEqual([...AI_COST_SOURCES]);
   });
 });
