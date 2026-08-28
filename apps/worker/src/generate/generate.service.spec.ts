@@ -43,10 +43,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   let pool: Pool;
   let workerPool: Pool;
   let schema: Schema;
-  let and: typeof import("drizzle-orm").and;
   let eq: typeof import("drizzle-orm").eq;
   let sql: typeof import("drizzle-orm").sql;
   let encryptJson: typeof import("@pubrick/shared").encryptJson;
+  /** The queue's own expiry — the number the lease is required to match. */
+  let queueOptions: typeof import("@pubrick/shared").GENERATE_QUEUE_OPTIONS;
   let Repository: GenerateRepositoryCtor;
   let Service: GenerateServiceCtor;
   let seq = 0;
@@ -58,8 +59,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     const dbModule = await import("@pubrick/db");
     schema = dbModule.schema;
     ({ db, pool } = dbModule.createDb(url as string));
-    ({ and, eq, sql } = await import("drizzle-orm"));
-    ({ encryptJson } = await import("@pubrick/shared"));
+    ({ eq, sql } = await import("drizzle-orm"));
+    ({ encryptJson, GENERATE_QUEUE_OPTIONS: queueOptions } = await import("@pubrick/shared"));
     ({ GenerateRepository: Repository } = await import("./generate.repository"));
     ({ GenerateService: Service } = await import("./generate.service"));
     workerPool = ((await import("../db")) as { pool: Pool }).pool;
@@ -78,7 +79,17 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     channelNames: string[];
   };
 
-  async function seed(options: { channels?: number; credential?: boolean } = {}): Promise<Seeded> {
+  type SeedOptions = {
+    channels?: number;
+    credential?: boolean;
+    /** Distinct per org where a test has to see WHOSE key was read. */
+    apiKey?: string;
+    defaultModel?: string;
+    /** Distinct per org where a test has to see WHOSE brand was read. */
+    brandName?: string;
+  };
+
+  async function seed(options: SeedOptions = {}): Promise<Seeded> {
     seq += 1;
     const stamp = `gen-${Date.now()}-${seq}`;
     const orgId = stamp;
@@ -92,7 +103,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       .insert(schema.brands)
       .values({
         orgId,
-        name: "Kettle and Co",
+        name: options.brandName ?? "Kettle and Co",
         voice: "dry and concrete",
         audience: "independent cafe owners",
         contentLanguage: "en",
@@ -126,10 +137,10 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         orgId,
         provider: "google",
         credentialsEncrypted: encryptJson(
-          { apiKey: "test-key" },
+          { apiKey: options.apiKey ?? "test-key" },
           process.env.APP_ENCRYPTION_KEY as string,
         ),
-        defaultModel: "gemini-3.7-flash",
+        defaultModel: options.defaultModel ?? "gemini-3.7-flash",
       });
     }
 
@@ -423,6 +434,261 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(Object.keys((await runRow(seeded.runId))?.steps ?? {})).toEqual(["researcher"]);
       // And the run is left alone: the retry, not this delivery, decides its fate.
       expect((await runRow(seeded.runId))?.status).toBe("running");
+    }, 25_000);
+  });
+
+  /**
+   * The lease is the half of the fence that decides WHEN a run may be taken from
+   * a handler that never said anything. `active_job_id` answers "is this still
+   * mine"; `lease_expires_at` answers "has whoever holds it gone quiet long
+   * enough that somebody else may have it" — the only thing standing between a
+   * worker killed with `SIGKILL` and a run nobody can ever touch again.
+   *
+   * Everything here reads the timestamp PRODUCTION wrote. The fence tests above
+   * seed a lease themselves, which pins the fixture: make `leaseExpiry()` return
+   * a time in the past and every one of them still passes, while in production
+   * every claim writes a dead lease and the first redelivery displaces a handler
+   * that is mid-run.
+   */
+  describe("the lease", () => {
+    /** Seconds until the lease lapses, measured by the DATABASE's clock. */
+    async function leaseSecondsLeft(runId: string): Promise<number> {
+      const rows = await db.execute<{ left: string }>(
+        sql`select extract(epoch from (${schema.pipelineRuns.leaseExpiresAt} - now())) as left
+            from ${schema.pipelineRuns} where ${eq(schema.pipelineRuns.id, runId)}`,
+      );
+      return Number(rows.rows[0]?.left ?? Number.NaN);
+    }
+
+    /** Wind the lease down to almost nothing, the way a long step would. */
+    async function ageLease(runId: string) {
+      await db
+        .update(schema.pipelineRuns)
+        .set({ leaseExpiresAt: sql`now() + interval '10 seconds'` })
+        .where(eq(schema.pipelineRuns.id, runId));
+    }
+
+    const checkpoint = {
+      status: "succeeded" as const,
+      output: { body: "x" },
+      usage: [],
+      finishedAt: "",
+    };
+
+    it("claims for exactly as long as pg-boss will wait before re-dispatching", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "job-lease#1", "job-lease"),
+      ).toBeDefined();
+
+      // Compared against the QUEUE's number, not a literal 1800: the lease and
+      // `expireInSeconds` are two names for one moment — the instant pg-boss is
+      // willing to hand the run to somebody else — and this is what stops them
+      // from being two hand-maintained copies that drift.
+      const left = await leaseSecondsLeft(seeded.runId);
+      expect(left).toBeGreaterThan(queueOptions.expireInSeconds - 60);
+      expect(left).toBeLessThanOrEqual(queueOptions.expireInSeconds);
+    }, 20_000);
+
+    it("renews on every fenced write, so a long run is never displaced by its own age", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      const fence = "job-renew#1";
+      expect(await repo.claim(seeded.orgId, seeded.runId, fence, "job-renew")).toBeDefined();
+
+      // Without the renewal a run whose steps take longer than one lease would
+      // lose itself to the next redelivery while still working — and pay twice.
+      await ageLease(seeded.runId);
+      expect(await repo.beginStep(seeded.orgId, seeded.runId, fence, "writer")).toBe(true);
+      expect(await leaseSecondsLeft(seeded.runId)).toBeGreaterThan(
+        queueOptions.expireInSeconds - 60,
+      );
+
+      await ageLease(seeded.runId);
+      expect(
+        await repo.writeCheckpoint(seeded.orgId, seeded.runId, fence, "writer", checkpoint),
+      ).toBe("held");
+      expect(await leaseSecondsLeft(seeded.runId)).toBeGreaterThan(
+        queueOptions.expireInSeconds - 60,
+      );
+    }, 20_000);
+
+    it("refuses a DIFFERENT job's claim while the lease a real claim wrote is live", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      expect(await repo.claim(seeded.orgId, seeded.runId, "job-live#1", "job-live")).toBeDefined();
+
+      // Not the same job re-delivered — a different job entirely, which may only
+      // have the run once the holder's lease has lapsed. A lease already dead
+      // when it was written admits this claim instantly.
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "other-job#1", "other-job"),
+      ).toBeUndefined();
+      expect((await runRow(seeded.runId))?.activeJobId).toBe("job-live#1");
+
+      // And once it HAS lapsed, the run is takeable — otherwise a killed worker
+      // would strand it forever.
+      await db
+        .update(schema.pipelineRuns)
+        .set({ leaseExpiresAt: sql`now() - interval '1 second'` })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "other-job#1", "other-job"),
+      ).toBeDefined();
+    }, 20_000);
+  });
+
+  /**
+   * Two organizations, one worker, one database.
+   *
+   * Every method here takes `orgId` first and every statement carries it, but
+   * with a single-org fixture that predicate can be deleted from any of them and
+   * the whole suite stays green — the run id is a UUID, so nothing else in the
+   * test notices. `credential` is the one where the org predicate is the ONLY
+   * thing selecting the row: lose it and a run is paid for with whichever key
+   * happens to be oldest in the table, which is another org's money.
+   */
+  describe("org scoping", () => {
+    const VICTIM_KEY = "victim-key";
+    const INTRUDER_KEY = "intruder-key";
+
+    /** The victim is seeded FIRST, so it owns the older credential row. */
+    async function twoOrgs() {
+      const victim = await seed({
+        channels: 1,
+        apiKey: VICTIM_KEY,
+        defaultModel: "gemini-3.7-flash",
+        brandName: "Victim Coffee",
+      });
+      const intruder = await seed({
+        channels: 1,
+        apiKey: INTRUDER_KEY,
+        defaultModel: "gemini-3.6-pro",
+        brandName: "Intruder Tea",
+      });
+      return { victim, intruder };
+    }
+
+    const checkpoint = {
+      status: "succeeded" as const,
+      output: { body: "x" },
+      usage: [],
+      finishedAt: "",
+    };
+
+    it("cannot claim, begin, checkpoint, fail or exhaust another org's run", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const repo = new Repository();
+
+      expect(
+        await repo.claim(intruder.orgId, victim.runId, "job-cross#1", "job-cross"),
+      ).toBeUndefined();
+      // The same call with the right org succeeds, so the refusal above was
+      // about the org and not about some unrelated predicate being broken.
+      expect(await repo.claim(victim.orgId, victim.runId, "job-own#1", "job-own")).toBeDefined();
+
+      const fence = "job-own#1";
+      expect(await repo.beginStep(intruder.orgId, victim.runId, fence, "editor")).toBe(false);
+      // "gone", not "lost": the run row is invisible to the wrong org, so the
+      // locking SELECT never finds it and the UPDATE is never reached.
+      expect(
+        await repo.writeCheckpoint(intruder.orgId, victim.runId, fence, "editor", checkpoint),
+      ).toBe("gone");
+      expect(await repo.explain(intruder.orgId, victim.runId, fence)).toBe("gone");
+      expect(await repo.recordFailure(intruder.orgId, victim.runId, fence, "not yours")).toBe(
+        "lost",
+      );
+      await repo.recordTransient(intruder.orgId, victim.runId, fence, "not yours");
+      expect(await repo.markExhausted(intruder.orgId, victim.runId, "not yours")).toBe(false);
+
+      // Nothing the intruder did left a mark of any kind.
+      const run = await runRow(victim.runId);
+      expect(run?.status).toBe("running");
+      expect(run?.activeJobId).toBe(fence);
+      expect(run?.currentStep).toBeNull();
+      expect(run?.error).toBeNull();
+      expect(run?.steps).toEqual({});
+    }, 25_000);
+
+    it("never reads another org's brand or channels into a run's prompt", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const repo = new Repository();
+
+      // The brand carries the voice and audience that become the run's
+      // instructions; reading it across orgs puts one org's positioning into
+      // another org's post.
+      expect(await repo.context(intruder.orgId, victim.brandId, victim.channelIds)).toBeUndefined();
+
+      const own = await repo.context(victim.orgId, victim.brandId, [
+        ...victim.channelIds,
+        ...intruder.channelIds,
+      ]);
+      expect(own?.brand.name).toBe("Victim Coffee");
+      // The channel list is scoped by brand as well as org — the brand predicate
+      // alone would already exclude these — so this pins the pair, not either
+      // predicate on its own.
+      expect(own?.channels.map((channel) => channel.id)).toEqual(victim.channelIds);
+    }, 25_000);
+
+    it("spends the run's OWN org's provider key, never the oldest key in the table", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const repo = new Repository();
+
+      // `credential` is keyed by org and NOTHING else, ordered oldest-first: drop
+      // the predicate and every run in the database bills the first key ever
+      // configured, in an org that never asked for it.
+      expect(await repo.credential(victim.orgId)).toMatchObject({
+        apiKey: VICTIM_KEY,
+        defaultModel: "gemini-3.7-flash",
+      });
+      expect(await repo.credential(intruder.orgId)).toMatchObject({
+        apiKey: INTRUDER_KEY,
+        defaultModel: "gemini-3.6-pro",
+      });
+    }, 25_000);
+
+    it("writes no draft against another org's run", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const repo = new Repository();
+      const fence = "job-cross-finish#1";
+      expect(await repo.claim(victim.orgId, victim.runId, fence, "job-cross-finish")).toBeDefined();
+
+      const outcome = await repo.finish(intruder.orgId, victim.runId, fence, victim.brandId, {
+        body: "A draft nobody asked for.",
+        adaptations: [{ channelId: victim.channelIds[0] as string, body: "An adaptation." }],
+      });
+      // Stops at the locking SELECT — the run does not exist for this org. (The
+      // org predicate on the terminal UPDATE itself is redundant while that lock
+      // is held, and is kept as the belt to this transaction's braces.)
+      expect(outcome).toBe("gone");
+      expect(await itemsOf(victim.orgId)).toHaveLength(0);
+      expect(await itemsOf(intruder.orgId)).toHaveLength(0);
+      expect((await runRow(victim.runId))?.status).toBe("running");
+    }, 25_000);
+
+    it("does nothing, and bills nobody, for a job that names the wrong org", async () => {
+      // The whole cross-tenant path in one call: a job payload pairing one org's
+      // id with another org's run. The claim is what refuses it, and everything
+      // downstream — the brand it would have read, the KEY it would have spent —
+      // is never reached.
+      const { victim, intruder } = await twoOrgs();
+      const script = scriptedModel();
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-tenant",
+          data: { runId: victim.runId, orgId: intruder.orgId },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(script.calls).toHaveLength(0);
+      expect(await ledgerOf(intruder.orgId)).toHaveLength(0);
+      expect(await ledgerOf(victim.orgId)).toHaveLength(0);
+      expect(await itemsOf(victim.orgId)).toHaveLength(0);
+      const run = await runRow(victim.runId);
+      expect(run?.status).toBe("queued");
+      expect(run?.activeJobId).toBeNull();
     }, 25_000);
   });
 
@@ -726,6 +992,114 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   });
 
   describe("the terminal write", () => {
+    it("writes ONE draft when a re-dispatch finishes the run while the first handler stalls", async () => {
+      // The race the re-check under `FOR UPDATE` exists for, and the one thing
+      // no other test in this file can reach: every other takeover is caught at
+      // the NEXT step boundary by `beginStep`, and after the last adapter there
+      // is no next step boundary — only `finish()`.
+      //
+      // H1 writes its last checkpoint and then stalls (a GC pause, a slow
+      // socket) for longer than pg-boss is willing to wait. The job is
+      // re-dispatched; H2 claims with a fresh nonce, resumes all five steps H1
+      // already paid for, and commits the draft. H1 wakes up and walks into the
+      // terminal write holding a fence that is no longer the run's.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      const write = repo.writeCheckpoint.bind(repo);
+      const second = scriptedModel();
+      let redispatched = false;
+      vi.spyOn(repo, "writeCheckpoint").mockImplementation(async (...args) => {
+        const outcome = await write(...(args as Parameters<typeof write>));
+        // Only after the adapter's checkpoint — from there H1 goes straight to
+        // `finish()`. The real write is awaited FIRST, so H1 genuinely holds a
+        // complete checkpoint map before it is overtaken.
+        if (!redispatched && String(args[3]).startsWith("adapter:")) {
+          redispatched = true;
+          await serviceFor(second).handle({
+            id: "job-terminal",
+            data: { runId: seeded.runId, orgId: seeded.orgId },
+          });
+        }
+        return outcome;
+      });
+
+      const first = scriptedModel();
+      await expect(
+        serviceFor(first, repo).handle({
+          id: "job-terminal",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).resolves.toBeUndefined();
+      vi.restoreAllMocks();
+
+      // H1 paid for all five steps; H2 paid for none, because every one of them
+      // was checkpointed. That is the shape of a real expiry re-dispatch.
+      expect(first.calls).toHaveLength(5);
+      expect(second.calls).toHaveLength(0);
+
+      // ONE content item. Remove the run's status/fence re-check under the lock
+      // AND the same predicates from the final UPDATE, and H1 inserts a second
+      // draft here — with its own adaptations and its own `ai` version rows —
+      // for a run that already has one, which is the duplicate the whole fence
+      // exists to prevent.
+      const items = await itemsOf(seeded.orgId);
+      expect(items).toHaveLength(1);
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("succeeded");
+      expect(run?.contentItemId).toBe(items[0]?.id);
+      expect(
+        await db
+          .select()
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.orgId, seeded.orgId)),
+      ).toHaveLength(1);
+      expect(
+        await db
+          .select()
+          .from(schema.contentVersions)
+          .where(eq(schema.contentVersions.orgId, seeded.orgId)),
+      ).toHaveLength(2);
+    }, 30_000);
+
+    it("tells a stale fence apart from a finished run, and writes for neither", async () => {
+      // The two halves of the same guard, at the repository, where the outcome
+      // is visible: `lost` while another handler is still working the run, and
+      // `finished` once that handler has committed. Both are ordinary — they are
+      // logged and returned, never thrown — but they are not the same event, and
+      // an implementation that reached the INSERT before finding out would have
+      // written a second draft in both cases.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "job-stale#one", "job-stale"),
+      ).toBeDefined();
+      // A later delivery of the same job takes the run over.
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "job-stale#two", "job-stale"),
+      ).toBeDefined();
+
+      const payload = {
+        body: "A draft.",
+        adaptations: [{ channelId: seeded.channelIds[0] as string, body: "An adaptation." }],
+      };
+
+      expect(
+        await repo.finish(seeded.orgId, seeded.runId, "job-stale#one", seeded.brandId, payload),
+      ).toBe("lost");
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+
+      expect(
+        await repo.finish(seeded.orgId, seeded.runId, "job-stale#two", seeded.brandId, payload),
+      ).toBe("held");
+      // Now it is the run's STATUS, not the fence, that refuses the loser — the
+      // ambiguous-commit case, where a handler cannot tell whether its own
+      // transaction landed.
+      expect(
+        await repo.finish(seeded.orgId, seeded.runId, "job-stale#one", seeded.brandId, payload),
+      ).toBe("finished");
+      expect(await itemsOf(seeded.orgId)).toHaveLength(1);
+    }, 25_000);
+
     it("writes the draft, its adaptations and the first ai version of each", async () => {
       const seeded = await seed({ channels: 2 });
       const script = scriptedModel({

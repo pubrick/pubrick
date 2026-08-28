@@ -332,7 +332,7 @@ export class GenerateService {
    */
   private resume<I, O>(state: RunState, step: Step<I, O>): O | undefined {
     const checkpoint = state.checkpoints[step.name];
-    if (!checkpoint || checkpoint.status !== "succeeded") return undefined;
+    if (checkpoint?.status !== "succeeded") return undefined;
 
     const parsed = step.schema.safeParse(checkpoint.output);
     if (!parsed.success) {

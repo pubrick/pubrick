@@ -1,7 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepAttribution, UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
-import { decryptJson, PermanentError, toLedgerCostUsd } from "@pubrick/shared";
+import {
+  decryptJson,
+  GENERATE_QUEUE_OPTIONS,
+  PermanentError,
+  toLedgerCostUsd,
+} from "@pubrick/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
@@ -35,11 +40,18 @@ function nowSql() {
  * silently refuses every legitimate takeover, or grants every illegitimate one,
  * depending on the sign.
  *
- * Matched to `GENERATE_QUEUE_OPTIONS.expireInSeconds` (1800s) on purpose: the
- * lease should go stale at the same moment pg-boss is willing to re-dispatch.
+ * The length is READ FROM `GENERATE_QUEUE_OPTIONS.expireInSeconds` rather than
+ * restated as `interval '30 minutes'`. The two are equal on purpose — the lease
+ * must go stale at the same moment pg-boss is willing to re-dispatch the job —
+ * and "on purpose" is not something a second hand-maintained copy of a number
+ * can keep: shorten the queue's expiry alone and every re-dispatched delivery
+ * meets a lease that is still live; lengthen it alone and a run whose job pg-boss
+ * has already given up on stays locked against the delivery meant to take it.
+ * `make_interval(secs => …)` rather than string-building an interval literal, so
+ * the value crosses as a bound parameter and not as SQL text.
  */
 function leaseExpiry() {
-  return sql`now() + interval '30 minutes'`;
+  return sql`now() + make_interval(secs => ${GENERATE_QUEUE_OPTIONS.expireInSeconds})`;
 }
 
 /** The checkpoint map exactly as `pipeline_runs.steps` types it. */
