@@ -8,16 +8,41 @@
  * untouched. Both under-claim human authorship rather than over-claiming it,
  * which is the safe direction for a product whose promise is that AI text is
  * visible.
+ *
+ * Everything else here errs the same way. Where the splitter is unsure, it
+ * splits: two units that should have been one still compare verbatim, while one
+ * unit that should have been two repaints untouched AI text as human-written the
+ * moment a neighbour is edited. `isUntouchedAi` and `aiSentenceMask` are derived
+ * from the same split for the same reason — the badge and the per-sentence
+ * dimming are one promise, and must never disagree.
  */
 
-/** Collapses whitespace so that reflowing or an added space is not an edit. */
+// Zero-width space and byte-order mark are invisible spacing that no human
+// types on purpose; `\s` does not cover them.
+const SPACE = /[\s\u200B\uFEFF]/u;
+const SPACE_RUN = /[\s\u200B\uFEFF]+/gu;
+const SPACE_EDGES = /^[\s\u200B\uFEFF]+|[\s\u200B\uFEFF]+$/gu;
+
+const isSpace = (char: string): boolean => SPACE.test(char);
+const trimSpace = (text: string): string => text.replace(SPACE_EDGES, "");
+
+/**
+ * Collapses whitespace and folds Unicode composition, so that reflowing, an
+ * added space, or a copy-paste that arrived as NFD is not an edit.
+ *
+ * Whitespace is collapsed to a single space, never deleted: deleting it would
+ * make `Buynow` equal `Buy now` and report a real edit as untouched AI.
+ */
 export function normalizeForComparison(text: string): string {
-  return text.replace(/\s+/gu, " ").trim();
+  return text.normalize("NFC").replace(SPACE_RUN, " ").trim();
 }
 
-// Abbreviations that end in a period and must not end a sentence. Russian is a
-// shipped locale and `т.е.` / `и т.д.` are common in ordinary copy.
-const ABBREVIATIONS = [
+// Abbreviations that end in a period. A title is always followed by the
+// capitalised name it introduces, so it never ends a sentence. The rest are
+// ordinarily mid-sentence but idiomatically sentence-final too (`и т.д.`,
+// `etc.`), and what follows decides — see `startsNewSentence`.
+const TITLE_ABBREVIATIONS = ["mr.", "mrs.", "dr."];
+const INLINE_ABBREVIATIONS = [
   "т.е.",
   "и т.д.",
   "и т.п.",
@@ -27,37 +52,67 @@ const ABBREVIATIONS = [
   "i.e.",
   "etc.",
   "vs.",
-  "Mr.",
-  "Mrs.",
-  "Dr.",
 ];
 
-const CJK = /[぀-ヿ㐀-䶿一-鿿]/u;
-
 const TERMINATORS = ".!?。！？…";
+// CJK writes no space after its terminator, so `。` ends a sentence whatever
+// follows it — a Latin word, a digit, a bracket.
+const CJK_TERMINATORS = "。！？";
+// ...and a CJK character (or the fullwidth punctuation that opens a CJK
+// sentence) starts one whatever precedes it.
+const CJK_START =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[「『（【〈《〔｛]/u;
 
 // Characters that may sit between a terminator and the real boundary: markdown
-// emphasis, closing quotes and brackets, and a trailing emoji (plus the joiners
-// that hold a multi-code-point emoji together). Social copy is full of
-// `**Hook.** Body` and `Done!🔥 Next` — without this the two sentences fuse
-// into one unit, and then a human edit to the second one repaints the first,
-// still-verbatim AI sentence as human-written. That is the one direction this
-// module must not err in.
-const CLOSERS = "\"'”’»›)]}*_`";
+// emphasis, closing quotes and brackets (CJK's included), and a trailing emoji.
+// Social copy is full of `**Hook.** Body` and `Done!🔥 Next` — without this the
+// two sentences fuse into one unit, and then a human edit to the second one
+// repaints the first, still-verbatim AI sentence as human-written.
+const CLOSERS = "\"'”’»›)]}*_`」』）】〉》〕｝";
 // Pictographs, their skin-tone modifiers, and the two invisible joiners that
 // hold an emoji sequence together (U+FE0F variation selector, U+200D ZWJ).
 // An alternation, not a character class: a class mixing base and combining
 // characters is flagged as misleading, and rightly so.
 const CLOSING_EMOJI = /\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D/u;
+// Wrappers that a new sentence may open with, skipped when looking ahead.
+const OPENERS = "\"'“‘«‹([{*_";
+
+// `1.` at the head of a line, or an initial like `И.`, is a marker rather than
+// a sentence. Without this an everyday numbered list becomes one "sentence" per
+// marker, and reordering it lands in the accepted-reorder false positive.
+const LIST_MARKER = /^[([]?(?:\d{1,3}|\p{L})$/u;
+
+/** The code point at `index`, as a string, or undefined past the end. */
+function codePointAt(text: string, index: number): string | undefined {
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
+}
+
+/**
+ * Whether what follows `from` reads as the start of a new sentence: end of
+ * text, a capital letter, or a CJK character. Opening wrappers are skipped, so
+ * `и т.д. **Потом**` counts.
+ */
+function startsNewSentence(text: string, from: number): boolean {
+  for (let i = from; i < text.length; ) {
+    const char = codePointAt(text, i) as string;
+    if (isSpace(char) || OPENERS.includes(char)) {
+      i += char.length;
+      continue;
+    }
+    return /\p{Lu}/u.test(char) || CJK_START.test(char);
+  }
+  return true;
+}
 
 /**
  * Splits text into sentences.
  *
- * Terminators are `.!?。！？…`, and a boundary is a terminator — optionally
- * followed by closing wrappers, see `CLOSERS` — followed by whitespace, end of
- * input, or a CJK character (Chinese and Japanese put no space after `。`). A
- * newline is also a boundary: social copy is line-structured and a hook line is
- * its own unit.
+ * Terminators are `.!?。！？…`. A boundary is a terminator — optionally followed
+ * by closing wrappers, see `CLOSERS` — followed by whitespace or end of input;
+ * a CJK terminator, or a CJK character after any terminator, is a boundary on
+ * its own, since CJK writes no space there. A newline is also a boundary:
+ * social copy is line-structured and a hook line is its own unit.
  *
  * Languages with no sentence terminator at all — Thai, for instance — yield a
  * single sentence. That is a known limit, not a bug to paper over: provenance
@@ -72,7 +127,7 @@ export function splitSentences(text: string): string[] {
     const char = text[i] as string;
 
     if (char === "\n") {
-      const piece = text.slice(start, i).trim();
+      const piece = trimSpace(text.slice(start, i));
       if (piece) out.push(piece);
       start = i + 1;
       continue;
@@ -88,79 +143,93 @@ export function splitSentences(text: string): string[] {
     // Then a run of closing wrappers — but only when the terminator is glued to
     // the word it ends. `Use the .* wildcard here.` has a space before the dot,
     // and must stay one sentence rather than breaking after `.*`.
-    const glued = i > 0 && !/\s/u.test(text[i - 1] as string);
+    const glued = i > 0 && !isSpace(text[i - 1] as string);
     if (glued) {
       while (end + 1 < text.length) {
-        const codePoint = text.codePointAt(end + 1) as number;
-        const wrapper = String.fromCodePoint(codePoint);
+        const wrapper = codePointAt(text, end + 1) as string;
         if (!CLOSERS.includes(wrapper) && !CLOSING_EMOJI.test(wrapper)) break;
         end += wrapper.length;
       }
     }
 
-    const next = text[end + 1];
-    const boundary = next === undefined || /\s/u.test(next) || CJK.test(next);
+    const cjkTerminated = Array.from(text.slice(i, terminatorEnd + 1)).some((terminator) =>
+      CJK_TERMINATORS.includes(terminator),
+    );
+    const next = codePointAt(text, end + 1);
+    const boundary = next === undefined || isSpace(next) || CJK_START.test(next) || cjkTerminated;
     if (!boundary) {
       i = end;
       continue; // example.com/x, 2.5x
     }
 
-    const candidate = text.slice(start, end + 1);
-    // The abbreviation test looks at the text up to the terminator itself, so a
-    // wrapped `**и т.д.**` is still recognised as an abbreviation.
-    const trimmed = text.slice(start, terminatorEnd + 1).trimStart();
-    if (ABBREVIATIONS.some((abbr) => trimmed.toLowerCase().endsWith(abbr.toLowerCase()))) {
+    // `1.` / `И.` is a marker, not a sentence. Only for the ASCII period: a
+    // single CJK character followed by `。` is a real, if terse, sentence.
+    if (text[terminatorEnd] === "." && LIST_MARKER.test(trimSpace(text.slice(start, i)))) {
       i = end;
       continue;
     }
 
-    const piece = candidate.trim();
+    // The abbreviation test reads the text up to the terminator itself, so a
+    // wrapped `**и т.д.**` is still recognised as one.
+    const beforeWrappers = text.slice(start, terminatorEnd + 1).toLowerCase();
+    const isTitle = TITLE_ABBREVIATIONS.some((abbr) => beforeWrappers.endsWith(abbr));
+    const isInline =
+      !isTitle &&
+      INLINE_ABBREVIATIONS.some((abbr) => beforeWrappers.endsWith(abbr)) &&
+      !startsNewSentence(text, end + 1);
+    if (isTitle || isInline) {
+      i = end;
+      continue;
+    }
+
+    const piece = trimSpace(text.slice(start, end + 1));
     if (piece) out.push(piece);
     start = end + 1;
     i = end;
   }
 
-  const tail = text.slice(start).trim();
+  const tail = trimSpace(text.slice(start));
   if (tail) out.push(tail);
   return out;
 }
 
 /**
  * One flag per sentence of `current`: true when that sentence is still exactly
- * what the AI wrote. Matching is a multiset with positional preference — each
- * AI sentence is consumed at most once, nearest index first — so a duplicated
- * sentence is not licensed twice by a single AI original.
+ * what the AI wrote. Matching is a multiset — each AI sentence is consumed at
+ * most once — so two copies of a sentence the AI wrote once leave the second
+ * copy marked human.
  */
 export function aiSentenceMask(current: string, aiVersion: string): boolean[] {
-  const aiSentences = splitSentences(aiVersion).map(normalizeForComparison);
-  const available = new Map<string, number[]>();
-  aiSentences.forEach((sentence, index) => {
-    const slot = available.get(sentence);
-    if (slot) slot.push(index);
-    else available.set(sentence, [index]);
-  });
-
-  return splitSentences(current).map((sentence, index) => {
+  const unconsumed = new Map<string, number>();
+  for (const sentence of splitSentences(aiVersion)) {
     const key = normalizeForComparison(sentence);
-    const slots = available.get(key);
-    if (!slots || slots.length === 0) return false;
-    // Nearest-index-first keeps an in-place sentence matched to its own original.
-    let best = 0;
-    for (let i = 1; i < slots.length; i++) {
-      if (Math.abs((slots[i] as number) - index) < Math.abs((slots[best] as number) - index))
-        best = i;
-    }
-    slots.splice(best, 1);
+    unconsumed.set(key, (unconsumed.get(key) ?? 0) + 1);
+  }
+
+  return splitSentences(current).map((sentence) => {
+    const key = normalizeForComparison(sentence);
+    const left = unconsumed.get(key) ?? 0;
+    if (left === 0) return false;
+    unconsumed.set(key, left - 1);
     return true;
   });
 }
 
-/** True when nothing in `current` has been touched by a human. */
+/**
+ * True when nothing in `current` has been touched by a human.
+ *
+ * Derived from the same split as `aiSentenceMask`, never from a whole-body
+ * comparison: normalisation collapses the newline that the splitter treats as a
+ * boundary, so a body-level equality can claim "untouched" for a post whose
+ * every sentence the mask calls human.
+ */
 export function isUntouchedAi(current: string, aiVersion: string): boolean {
-  if (normalizeForComparison(current) === normalizeForComparison(aiVersion)) return true;
-  const mask = aiSentenceMask(current, aiVersion);
-  if (mask.length === 0 || mask.some((isAi) => !isAi)) return false;
-  // Every sentence is the AI's, but a sentence may have been deleted; a deletion
-  // is a human act even though nothing new appeared.
-  return splitSentences(current).length === splitSentences(aiVersion).length;
+  const currentSentences = splitSentences(current);
+  const aiSentences = splitSentences(aiVersion);
+  // Nothing on either side: an empty draft was not written, so it was not
+  // touched. `true` blocks publishing, the safe answer for an empty body.
+  if (currentSentences.length === 0 && aiSentences.length === 0) return true;
+  // A deletion is a human act even though nothing new appeared.
+  if (currentSentences.length !== aiSentences.length) return false;
+  return aiSentenceMask(current, aiVersion).every((isAi) => isAi);
 }
