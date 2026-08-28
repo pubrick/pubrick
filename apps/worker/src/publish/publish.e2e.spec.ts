@@ -39,6 +39,8 @@ type FakeTelegramResponse = { status: number; body: unknown };
  */
 const TEST_PUBLISH_QUEUE = "publish-worker-e2e";
 const TEST_PUBLISH_DLQ = "publish-worker-e2e-dlq";
+const TEST_GENERATE_QUEUE = "generate-publish-e2e";
+const TEST_GENERATE_DLQ = "generate-publish-e2e-dlq";
 
 describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", () => {
   let db: Db;
@@ -121,10 +123,22 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     };
     const repo = new PublishRepository();
     const service = new PublishService(repo);
-    const queueService = new queueModule.QueueService(service);
+    // A no-op generate side: registerAll wires every queue the worker consumes,
+    // and this file is about the publish path. Its generate consumer sits on the
+    // private pair above, where nothing enqueues anything.
+    const noGenerate = {
+      handle: async () => {},
+      markExhausted: async () => {},
+    } as unknown as import("../generate/generate.service").GenerateService;
+    const queueService = new queueModule.QueueService(service, noGenerate);
     await queueService.registerAll(boss, {
       publish: TEST_PUBLISH_QUEUE,
-      deadLetter: TEST_PUBLISH_DLQ,
+      publishDeadLetter: TEST_PUBLISH_DLQ,
+      // This spec drives the publish path only, but registerAll registers every
+      // queue the worker consumes — so its generate pair must be private too, or
+      // this file's live consumer would eat the api suite's generation runs.
+      generate: TEST_GENERATE_QUEUE,
+      generateDeadLetter: TEST_GENERATE_DLQ,
     });
 
     // "../db" is the worker's own module-level pool (imported transitively by
