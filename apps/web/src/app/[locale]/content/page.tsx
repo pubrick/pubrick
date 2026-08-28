@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/app-shell";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 
@@ -100,9 +100,7 @@ export default function ContentQueuePage() {
     : STATUSES.map((s) => [s, (items ?? []).filter((i) => i.status === s)] as const);
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-      <AppNav current="content" />
-      <h1>{t("title")}</h1>
+    <AppShell title={t("title")}>
       {error && <p role="alert">{error}</p>}
       <p>
         <Link href={`/${locale}/content/new`}>{t("newAction")}</Link>
@@ -130,6 +128,6 @@ export default function ContentQueuePage() {
           </section>
         ),
       )}
-    </main>
+    </AppShell>
   );
 }

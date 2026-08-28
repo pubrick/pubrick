@@ -27,8 +27,9 @@
   },
   "Nav": {
     "label": "Разделы",
+    "queue": "Очередь",
     "brands": "Бренды",
-    "content": "Контент"
+    "settings": "Настройки"
   },
   "Ui": {
     "advanced": "Дополнительно",
@@ -105,5 +106,15 @@
     "viewPost": "Открыть публикацию",
     "scheduledFor": "Запланировано на",
     "genericError": "Что-то пошло не так. Попробуйте ещё раз."
+  },
+  "SettingsPage": {
+    "title": "Настройки",
+    "appearanceTitle": "Оформление",
+    "themeSystem": "Системная",
+    "themeLight": "Светлая",
+    "themeDark": "Тёмная",
+    "accountTitle": "Аккаунт",
+    "workspaceTitle": "Рабочее пространство",
+    "workspaceNoOrg": "Нет организации"
   }
 }

@@ -4,6 +4,7 @@ import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/share
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
+import { AppShell } from "@/components/app-shell";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Channel = { id: string; platform: string; name: string };
@@ -94,8 +95,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const fields = PLATFORM_FIELDS[platform];
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-      <h1>{brand?.name}</h1>
+    <AppShell title={brand?.name ?? ""}>
       <h2>{t("title")}</h2>
       {error && <p role="alert">{error}</p>}
       <ul>
@@ -156,6 +156,6 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         ))}
         <button type="submit">{t("add")}</button>
       </form>
-    </main>
+    </AppShell>
   );
 }

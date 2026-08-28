@@ -27,8 +27,9 @@
   },
   "Nav": {
     "label": "Secciones",
+    "queue": "Cola",
     "brands": "Marcas",
-    "content": "Contenido"
+    "settings": "Ajustes"
   },
   "Ui": {
     "advanced": "Avanzado",
@@ -105,5 +106,15 @@
     "viewPost": "Ver publicación",
     "scheduledFor": "Programado para",
     "genericError": "Algo salió mal. Inténtalo de nuevo."
+  },
+  "SettingsPage": {
+    "title": "Ajustes",
+    "appearanceTitle": "Apariencia",
+    "themeSystem": "Sistema",
+    "themeLight": "Claro",
+    "themeDark": "Oscuro",
+    "accountTitle": "Cuenta",
+    "workspaceTitle": "Espacio de trabajo",
+    "workspaceNoOrg": "Sin organización"
   }
 }

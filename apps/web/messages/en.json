@@ -27,8 +27,9 @@
   },
   "Nav": {
     "label": "Sections",
+    "queue": "Queue",
     "brands": "Brands",
-    "content": "Content"
+    "settings": "Settings"
   },
   "Ui": {
     "advanced": "Advanced",
@@ -105,5 +106,15 @@
     "viewPost": "View post",
     "scheduledFor": "Scheduled for",
     "genericError": "Something went wrong. Please try again."
+  },
+  "SettingsPage": {
+    "title": "Settings",
+    "appearanceTitle": "Appearance",
+    "themeSystem": "System",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "accountTitle": "Account",
+    "workspaceTitle": "Workspace",
+    "workspaceNoOrg": "No organization"
   }
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
+import { AppShell } from "@/components/app-shell";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 
@@ -140,21 +141,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   if (!item) {
-    return (
-      <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-        {error && <p role="alert">{error}</p>}
-      </main>
-    );
+    return <AppShell title={tc("untitled")}>{error && <p role="alert">{error}</p>}</AppShell>;
   }
 
   const isPublished = item.status === "published";
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
+    <AppShell title={item.title || tc("untitled")}>
       <p>
         <Link href={`/${locale}/content`}>{t("backToQueue")}</Link>
       </p>
-      <h1>{item.title || tc("untitled")}</h1>
       <p>{tc(`status.${item.status}`)}</p>
       {error && <p role="alert">{error}</p>}
 
@@ -259,6 +255,6 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </li>
         ))}
       </ul>
-    </main>
+    </AppShell>
   );
 }

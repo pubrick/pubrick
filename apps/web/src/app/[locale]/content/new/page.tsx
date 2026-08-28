@@ -4,6 +4,7 @@ import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
+import { AppShell } from "@/components/app-shell";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string };
@@ -89,8 +90,7 @@ export default function NewContentPage() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-      <h1>{t("title")}</h1>
+    <AppShell title={t("title")}>
       {error && <p role="alert">{error}</p>}
       <form onSubmit={submit}>
         <div>
@@ -159,6 +159,6 @@ export default function NewContentPage() {
           {t("submit")}
         </button>
       </form>
-    </main>
+    </AppShell>
   );
 }

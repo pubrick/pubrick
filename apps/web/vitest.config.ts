@@ -14,6 +14,9 @@ export default defineConfig({
       "next/navigation": fileURLToPath(
         new URL("./src/test/next-navigation.stub.ts", import.meta.url),
       ),
+      "@/lib/auth-client": fileURLToPath(
+        new URL("./src/test/auth-client.stub.ts", import.meta.url),
+      ),
     },
   },
 });

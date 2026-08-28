@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
-import { AppNav } from "@/components/AppNav";
+import { AppShell } from "@/components/app-shell";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string; contentLanguage: string };
@@ -49,9 +49,7 @@ export default function BrandsPage() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem", maxWidth: 640 }}>
-      <AppNav current="brands" />
-      <h1>{t("title")}</h1>
+    <AppShell title={t("title")}>
       {error && <p role="alert">{error}</p>}
       <ul>
         {(brands ?? []).map((b) => (
@@ -69,6 +67,6 @@ export default function BrandsPage() {
         />
         <button type="submit">{t("create")}</button>
       </form>
-    </main>
+    </AppShell>
   );
 }

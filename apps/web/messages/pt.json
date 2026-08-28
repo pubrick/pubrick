@@ -27,8 +27,9 @@
   },
   "Nav": {
     "label": "Seções",
+    "queue": "Fila",
     "brands": "Marcas",
-    "content": "Conteúdo"
+    "settings": "Configurações"
   },
   "Ui": {
     "advanced": "Avançado",
@@ -105,5 +106,15 @@
     "viewPost": "Ver publicação",
     "scheduledFor": "Agendado para",
     "genericError": "Algo deu errado. Tente novamente."
+  },
+  "SettingsPage": {
+    "title": "Configurações",
+    "appearanceTitle": "Aparência",
+    "themeSystem": "Sistema",
+    "themeLight": "Claro",
+    "themeDark": "Escuro",
+    "accountTitle": "Conta",
+    "workspaceTitle": "Espaço de trabalho",
+    "workspaceNoOrg": "Sem organização"
   }
 }
