@@ -21,6 +21,14 @@ export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
 export const PUBLICATION_STATUSES = ["published", "failed"] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
+/**
+ * Who wrote the text. Lives here rather than in `generation.ts` because the
+ * first columns using it are these two, and the reverse direction would make
+ * the two schema modules import each other.
+ */
+export const CONTENT_ORIGINS = ["ai", "human"] as const;
+export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
+
 export const contentItems = pgTable(
   "content_items",
   {
@@ -34,6 +42,15 @@ export const contentItems = pgTable(
     title: text("title"),
     body: text("body").notNull(),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
+    /** Defaults to `human`, which is what every row written before AI existed is. */
+    origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
+    /**
+     * Stamped by an explicit `POST /content/:id/opened` the item page fires once
+     * after render — never as a side effect of the GET, which the future public
+     * API and MCP server would also trip. Null here is half of the refusal to
+     * publish text no human has read.
+     */
+    firstOpenedAt: timestamp("first_opened_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .$onUpdate(() => new Date())
@@ -62,6 +79,12 @@ export const adaptations = pgTable(
     /** Per-channel override; falls back to the content item body when null. */
     body: text("body"),
     status: text("status", { enum: ADAPTATION_STATUSES }).notNull().default("pending"),
+    /**
+     * The adaptation body is what actually reaches the platform, so provenance
+     * tracks it separately from the master item: an item a human wrote can still
+     * carry AI-adapted channel bodies.
+     */
+    origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
     scheduledAt: timestamp("scheduled_at"),
     attemptCount: integer("attempt_count").notNull().default(0),
     lastError: text("last_error"),
