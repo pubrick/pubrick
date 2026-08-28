@@ -136,6 +136,12 @@
  * only the handful with no named primitive (plain white, the shadow
  * literals) are restated.
  *
+ * These two selectors do ship in the production CSS even though /design
+ * 404s there. That is deliberate: `.gallery-dark` shares the dark theme's
+ * declaration block, so moving it to a route-scoped file would mean
+ * duplicating every dark token — a second source of truth for the theme,
+ * traded for under a kilobyte.
+ *
  * Both also set `color` explicitly (not just the `--color-fg` custom
  * property): only `body` declares `color: var(--color-fg)` today, so any
  * element that doesn't itself use a `text-*` utility just inherits body's
