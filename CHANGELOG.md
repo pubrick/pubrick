@@ -5,6 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 
 ## [Unreleased]
 ### Fixed
+- Signing in again no longer sends a returning member to onboarding to create a second workspace: a new session is born with `activeOrganizationId` set to the user's organization (earliest membership, read from their own `member` rows), instead of null. Previously only the sign-up → create-org flow set it, so every later sign-in looked org-less. A user with no organization still lands on onboarding, unchanged.
 - `useToast()` no longer throws on first real use — `ToastProvider` is now mounted once in the signed-in app shell.
 - The modal backdrop is no longer a second, identically-named "Close" control ahead of the dialog in the tab order: it stays clickable (closing the modal), but is now out of the tab order and out of the accessible name space, leaving the header button and Escape as the only close affordances a screen reader or keyboard user sees.
 - The modal backdrop scrim and the wordmark's accent fill now reference real design tokens (`--color-overlay`, defined in both themes; `--color-accent`) instead of a raw `/40` opacity modifier and an undefined `--color-brick` fallback.

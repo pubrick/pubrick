@@ -41,4 +41,66 @@ describe.skipIf(!url)("auth e2e", () => {
   it("health stays anonymous", async () => {
     await request(app.getHttpServer()).get("/api/health").expect(200);
   });
+
+  // A returning member's fresh session must already carry their organization: without
+  // it the web app reads activeOrganizationId === null and sends someone who already
+  // has a workspace to /onboarding to create a second one.
+  it("a returning member's new sign-in session carries their organization", async () => {
+    const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+    const password = "password1234";
+
+    const first = request.agent(app.getHttpServer());
+    await first.post("/api/auth/sign-up/email").send({ email, password, name: "Returning" });
+    const created = await first
+      .post("/api/auth/organization/create")
+      .send({ name: "Returning Co", slug: `returning-${Date.now()}` })
+      .expect(200);
+    const orgId = created.body.id as string;
+
+    // A brand new cookie jar: this is the LATER sign-in, not the sign-up session.
+    const second = request.agent(app.getHttpServer());
+    await second.post("/api/auth/sign-in/email").send({ email, password }).expect(200);
+
+    const session = await second.get("/api/auth/get-session").expect(200);
+    expect(session.body.session.activeOrganizationId).toBe(orgId);
+  });
+
+  it("a member of several organizations gets the earliest one they joined", async () => {
+    const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+    const password = "password1234";
+
+    const first = request.agent(app.getHttpServer());
+    await first.post("/api/auth/sign-up/email").send({ email, password, name: "Multi" });
+    const earliest = await first
+      .post("/api/auth/organization/create")
+      .send({ name: "First Co", slug: `first-${Date.now()}` })
+      .expect(200);
+    await first
+      .post("/api/auth/organization/create")
+      .send({ name: "Second Co", slug: `second-${Date.now()}` })
+      .expect(200);
+
+    const second = request.agent(app.getHttpServer());
+    await second.post("/api/auth/sign-in/email").send({ email, password }).expect(200);
+
+    const session = await second.get("/api/auth/get-session").expect(200);
+    expect(session.body.session.activeOrganizationId).toBe(earliest.body.id);
+  });
+
+  it("a user with no organization still gets a session with no active org", async () => {
+    const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+    const password = "password1234";
+
+    const first = request.agent(app.getHttpServer());
+    await first
+      .post("/api/auth/sign-up/email")
+      .send({ email, password, name: "Orgless" })
+      .expect(200);
+
+    const second = request.agent(app.getHttpServer());
+    await second.post("/api/auth/sign-in/email").send({ email, password }).expect(200);
+
+    const session = await second.get("/api/auth/get-session").expect(200);
+    expect(session.body.session.activeOrganizationId ?? null).toBeNull();
+  });
 });
