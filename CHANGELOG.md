@@ -15,6 +15,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 - Default link color no longer overrides component text colors (the primary "Sign up" link on the landing page rendered white-on-invisible) — base anchor styles moved into `@layer base`.
 - Hydration warnings from the theme boot script (`suppressHydrationWarning` on `<html>`) and from the Settings appearance control (stored theme preference now syncs after mount).
 - The queue's status filter scrolls inside itself on narrow screens instead of widening the page.
+- "Try again" on a finished run now dismisses the run it retries. The retried run stayed open, and failures sort first, so each retry left its predecessor's strip stacked above the run that was actually working — press it twice and the live run sat under two failures that would never change again.
 
 ### Changed
 - One noun for the trackable object across every screen and all four locales: a post's title/new-action/empty-state/compose-submit/landing-link all say "post" now (the queue screen itself keeps its "Queue" title), replacing "content" wording that had drifted in from three separate places.

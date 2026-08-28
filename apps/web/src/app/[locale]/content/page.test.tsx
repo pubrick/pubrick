@@ -112,11 +112,16 @@ function installHandlers(
     if (method === "GET" && path === "/api/runs?state=open") return runs.current;
     if (method === "POST" && path === "/api/runs") {
       const created = run({ id: NEW_RUN_ID, status: "queued", currentStep: null, error: null });
-      runs.current = [created];
+      // Creating a run does NOT clear the one it was started from: that run stays
+      // open until somebody dismisses it, and sorts ABOVE the new one because
+      // failures come first. A fixture that dropped it here is what let "Try
+      // again" stack stale failure strips over the live run with a green suite.
+      runs.current = [...runs.current, created];
       return created;
     }
     if (method === "POST" && path.endsWith("/dismiss")) {
-      runs.current = [];
+      const dismissed = path.slice("/api/runs/".length, -"/dismiss".length);
+      runs.current = runs.current.filter((r) => r.id !== dismissed);
       return {};
     }
     if (method === "GET" && path.startsWith("/api/content")) {
@@ -392,6 +397,32 @@ describe("run strips (Task 10)", () => {
     // optional field cannot parse to {} and still pass.
     expect(runCreateSchema.parse(body)).toEqual(body);
     expect(routerMock.push).toHaveBeenCalledWith(`/en/content/runs/${NEW_RUN_ID}`);
+  });
+
+  it("Try again dismisses the run it replaces, so failures cannot stack over the live one", async () => {
+    const calls: Call[] = [];
+    const runs = { current: [run({ status: "failed", error: "boom" })] };
+    installHandlers(calls, () => [], noChannels, runs);
+
+    render(<ContentQueuePage />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === "POST" && c.path === `/api/runs/${RUN_ID}/dismiss`),
+      ).toBe(true),
+    );
+    // Created FIRST, dismissed second: a dismissal that fails must not be able
+    // to cost the user the retry it was meant to tidy up after.
+    const posts = calls.filter((c) => c.method === "POST").map((c) => c.path);
+    expect(posts.indexOf("/api/runs")).toBeLessThan(posts.indexOf(`/api/runs/${RUN_ID}/dismiss`));
+
+    // And the strip the user pressed is gone, with the new run in its place —
+    // not sitting above it in red, unchanged, forever.
+    await waitFor(() =>
+      expect(within(strips()).queryByText(en.Runs.status.failed)).not.toBeInTheDocument(),
+    );
+    expect(within(strips()).getByText(en.Runs.status.queued)).toBeInTheDocument();
   });
 
   /**

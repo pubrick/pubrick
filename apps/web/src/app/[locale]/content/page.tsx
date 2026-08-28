@@ -145,6 +145,22 @@ export default function ContentQueuePage() {
     }
   }, [runsError, router, locale]);
 
+  /**
+   * Start the run again from the same brief, and clear the one being retried.
+   *
+   * The dismissal is not tidiness. A retried run stays open until somebody
+   * acknowledges it, and the API sorts failures FIRST — so without this, every
+   * retry leaves its predecessor's red strip stacked above the run that is
+   * actually working, and a third attempt puts the live run under two corpses
+   * that will never change again.
+   *
+   * Order is load-bearing in both directions. The new run is created FIRST, so a
+   * dismissal that fails cannot cost the user their retry, and a creation that
+   * fails leaves the strip exactly where they can press it again. The dismissal
+   * is then best-effort: the retry already exists, and reporting a failed
+   * cleanup as a failed retry would be a lie — the old strip simply stays, with
+   * its own Dismiss, which is a far smaller thing to be wrong about.
+   */
   async function tryAgain(run: Run) {
     setError(null);
     try {
@@ -156,6 +172,12 @@ export default function ContentQueuePage() {
           channelIds: run.input.channelIds,
         }),
       });
+      const dismissed = await api(`/api/runs/${run.id}/dismiss`, { method: "POST" })
+        .then(() => true)
+        .catch(() => false);
+      // Only once the write is known to have succeeded, and before the re-read —
+      // the same reasoning as `dismissRun`.
+      if (dismissed) mutateRuns((open) => (open ?? []).filter((r) => r.id !== run.id));
       // Re-read BEFORE navigating: the new run belongs on this list whether
       // or not the reader comes straight back to it, and awaiting the re-read
       // is what makes "the strip is there" true rather than likely.
