@@ -90,14 +90,14 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
     const { port } = server.address() as AddressInfo;
 
-    // Env + migrations BEFORE any dynamic import that reads env at module load.
+    // Env BEFORE any dynamic import that reads env at module load. Migrations run once
+    // for the whole suite in vitest.global-setup.ts (a single barrier), not here.
     process.env.DATABASE_URL = url as string;
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     process.env.TELEGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
 
     const dbModule = await import("@pubrick/db");
     schema = dbModule.schema;
-    await dbModule.runMigrations(url as string);
     ({ db, pool } = dbModule.createDb(url as string));
     ({ eq } = await import("drizzle-orm"));
 

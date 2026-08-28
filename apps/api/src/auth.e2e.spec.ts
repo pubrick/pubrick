@@ -12,8 +12,10 @@ describe.skipIf(!url)("auth e2e", () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
-    const { runMigrations } = await import("@pubrick/db");
-    await runMigrations(url as string);
+    // Migrations run once for the whole suite in vitest.global-setup.ts (a single
+    // barrier, instead of six e2e files each racing runMigrations() against the
+    // same DB — that redundant per-file migration dance is what caused the
+    // "beforeAll hook timed out" flake).
     const { AppModule } = await import("./app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
