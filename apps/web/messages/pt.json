@@ -175,7 +175,8 @@
       "done": "Concluído",
       "active": "Em andamento",
       "failed": "Falhou",
-      "pending": "Aguardando"
+      "pending": "Aguardando",
+      "skipped": "Não executado"
     },
     "stepProgress": "{done} de {total} canais",
     "status": {

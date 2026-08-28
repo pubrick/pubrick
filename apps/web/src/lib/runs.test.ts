@@ -117,15 +117,39 @@ describe("runStepStates", () => {
     expect(stateOf(run, "adapter")).toBe("done");
   });
 
-  it("leaves a cancelled run's unreached steps waiting, never in progress", () => {
-    const run = makeRun({
+  it("says a terminal run's un-reached steps did not run, rather than that they are waiting", () => {
+    // "Waiting" is a promise that the step is still going to happen. On a run
+    // that is over it is simply false — and it was what the receipt showed for
+    // all five steps of a failed run.
+    const failed = makeRun({
+      status: "failed",
+      currentStep: "writer",
+      steps: { researcher: { status: "succeeded" } },
+      error: "provider refused",
+    });
+
+    expect(stateOf(failed, "researcher")).toBe("done");
+    expect(stateOf(failed, "writer")).toBe("failed");
+    expect(stateOf(failed, "editor")).toBe("skipped");
+    expect(stateOf(failed, "factcheck")).toBe("skipped");
+    expect(stateOf(failed, "adapter")).toBe("skipped");
+
+    const cancelled = makeRun({
       status: "cancelled",
       currentStep: "writer",
       steps: { researcher: { status: "succeeded" } },
     });
 
-    expect(stateOf(run, "researcher")).toBe("done");
-    // Nothing is running: the job was cancelled while standing here.
-    expect(stateOf(run, "writer")).toBe("pending");
+    expect(stateOf(cancelled, "researcher")).toBe("done");
+    // Nothing is running and nothing will: the job was cancelled standing here.
+    expect(stateOf(cancelled, "writer")).toBe("skipped");
+  });
+
+  it("keeps 'waiting' for a run that has not finished", () => {
+    const queued = makeRun({ status: "queued" });
+    expect(runStepStates(queued).every((s) => s.state === "pending")).toBe(true);
+
+    const running = makeRun({ status: "running", currentStep: "researcher" });
+    expect(stateOf(running, "factcheck")).toBe("pending");
   });
 });

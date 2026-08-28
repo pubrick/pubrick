@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError } from "@/lib/api";
 
 /** How often a live run is re-read while the tab is in front. */
 export const POLL_INTERVAL_MS = 2000;
@@ -17,33 +18,73 @@ export type PollOptions = { intervalMs?: number; hiddenIntervalMs?: number };
 export type PollResult<T> = {
   data: T | null;
   error: unknown;
-  /** Re-runs the fetch immediately and, if the value is not terminal, resumes polling. */
-  refresh: () => void;
+  /**
+   * Fetches once, right now, and resumes polling if the value is not terminal.
+   *
+   * Awaitable on purpose: a mutation handler that wants the list it just
+   * changed to be re-read has to be able to sequence the re-read after its own
+   * write, and to know when the rendered result is current.
+   */
+  refresh: () => Promise<void>;
+  /**
+   * Applies a change the caller already knows to be true to the rendered value,
+   * without waiting for a round trip.
+   *
+   * This is not a cache the client maintains — the next poll overwrites it, and
+   * the server stays the authority on what the value is. It exists so that a
+   * mutation's visible result does not depend on a re-read landing: a dismissed
+   * run leaving the strip is something the caller knows the moment its write
+   * succeeded, and making the user's own action wait on a request that might
+   * fail is how a screen ends up frozen rather than merely stale.
+   */
+  mutate: (update: (previous: T | null) => T | null) => void;
 };
+
+const NOOP = async () => {};
+
+/**
+ * A definite answer about this request that will not change by asking again:
+ * the row is gone (404), the caller may not see it (403), the session expired
+ * (401). Everything else — a 5xx, a dropped connection, `ApiError(0)` — is a
+ * blip, and stopping on it would end progress updates for a run that is still
+ * going.
+ */
+function isPermanent(err: unknown): boolean {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500;
+}
 
 /**
  * Polls `fetcher` until `isTerminal` says the value has stopped changing.
  *
- * The app's first polling of any kind, so the rules it has to keep are written
- * here rather than learned twice:
+ * The app's only polling, so the rules it has to keep are written here rather
+ * than learned twice:
  *
  * - The timer is cleared on unmount **and** the moment a terminal value
  *   arrives. Only clearing on unmount leaves a finished run being re-read every
  *   two seconds for as long as its receipt is on screen.
- * - Nothing is written after unmount: a response that lands late is dropped, so
- *   a navigation mid-request cannot produce a React state update on a component
- *   that is gone.
- * - An error stops the polling instead of retrying forever. The two errors that
- *   actually happen here are permanent (the run row is gone; the session
- *   expired), and a poll that keeps firing to re-learn the same 404 is spend
- *   with no reader. `refresh()` is the way back.
+ * - A response that lands after unmount is dropped. Under React 19 the state
+ *   write itself would be a silent no-op, so this is NOT the crash guard the
+ *   comment here used to claim: no test can distinguish keeping it from
+ *   dropping it. What it actually does is stop a torn-down instance from
+ *   scheduling the next tick, and keep one rule ("a stopped instance writes
+ *   nothing") instead of two.
+ * - A transient failure does NOT stop the poll; a 4xx does. See `isPermanent`.
+ *
+ * `refresh()` calls THIS instance's fetch directly rather than restarting the
+ * effect through a state key. The indirect version shipped first and was wrong
+ * in a way worth recording: a restart marks the previous effect instance
+ * stopped, and a stopped instance drops the response it already has in flight —
+ * so a refresh whose effect was re-run again before its own response landed
+ * silently discarded that response, leaving the list rendering data older than
+ * the mutation the user had just made. Polling directly has no instance to lose
+ * the race against, and it makes the refresh awaitable, which is what lets a
+ * caller sequence it after its own write.
  *
  * `fetcher` and `isTerminal` must be stable (module-level, or `useCallback`) —
- * they are effect dependencies, so that changing WHAT is polled (a different
- * run id) restarts the poll, exactly as the React dependency contract implies.
- * An inline arrow would restart the poll on every render, which is a request
- * loop; `useExhaustiveDependencies` flags the missing dependency if either is
- * left out.
+ * they are effect dependencies, so changing WHAT is polled (a different run id)
+ * restarts the poll. An inline arrow would restart it on every render, which is
+ * a request loop; `useExhaustiveDependencies` flags either one if it is left
+ * out.
  */
 export function usePoll<T>(
   fetcher: () => Promise<T>,
@@ -53,13 +94,14 @@ export function usePoll<T>(
   const { intervalMs = POLL_INTERVAL_MS, hiddenIntervalMs = POLL_HIDDEN_INTERVAL_MS } = options;
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
-  // Bumped by refresh(); the effect below keys off it, so a refresh tears the
-  // old timer down and starts a clean cycle rather than racing a live one.
-  const [attempt, setAttempt] = useState(0);
 
-  const refresh = useCallback(() => setAttempt((n) => n + 1), []);
+  // Points at the live effect instance's fetch, and at a no-op once that
+  // instance is torn down — so a refresh() racing an unmount cannot resurrect
+  // a dead poll or write state after the component is gone.
+  const pollNowRef = useRef<() => Promise<void>>(NOOP);
+  const refresh = useCallback(() => pollNowRef.current(), []);
+  const mutate = useCallback((update: (previous: T | null) => T | null) => setData(update), []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a restart key, not a value this effect reads. Bumping it is exactly how refresh() tears the old timer down and starts a clean cycle; taking the rule's fix would make refresh() a no-op in the one situation it exists for — after the poll has stopped.
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,12 +133,23 @@ export function usePoll<T>(
       } catch (err) {
         if (stopped) return;
         setError(err);
-        stopped = true;
-        clear();
-        return;
+        if (isPermanent(err)) {
+          stopped = true;
+          clear();
+          return;
+        }
       }
       schedule();
     }
+
+    const pollNow = async () => {
+      // A refresh resumes a poll that had stopped — on a terminal value, or on
+      // a 4xx. If the value is still terminal, the fetch below stops it again.
+      stopped = false;
+      clear();
+      await poll();
+    };
+    pollNowRef.current = pollNow;
 
     // Re-price the delay that is already ticking, in both directions: hiding a
     // tab whose next poll is 2s away should back that poll off, and showing it
@@ -115,9 +168,10 @@ export function usePoll<T>(
     return () => {
       stopped = true;
       clear();
+      if (pollNowRef.current === pollNow) pollNowRef.current = NOOP;
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [fetcher, isTerminal, intervalMs, hiddenIntervalMs, attempt]);
+  }, [fetcher, isTerminal, intervalMs, hiddenIntervalMs]);
 
-  return { data, error, refresh };
+  return { data, error, refresh, mutate };
 }

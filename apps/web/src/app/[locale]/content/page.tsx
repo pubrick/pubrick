@@ -17,7 +17,12 @@ import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { channelLabel as platformChannelLabel } from "@/lib/platform";
-import { isTerminalRunStatus, RUN_BADGE_STATUS, type Run } from "@/lib/runs";
+import {
+  isTerminalRunStatus,
+  OPEN_RUNS_POLL_INTERVAL_MS,
+  RUN_BADGE_STATUS,
+  type Run,
+} from "@/lib/runs";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -56,16 +61,25 @@ type ContentItem = {
   adaptations: Adaptation[];
 };
 
-const fetchOpenRuns = () => api<Run[]>("/api/runs?state=open");
+// `no-store`: a poll exists to see a change, so it must never be answered from
+// the browser's cache with the body it was given a moment ago.
+const fetchOpenRuns = () => api<Run[]>("/api/runs?state=open", { cache: "no-store" });
 
 /**
- * Stop polling once nothing on the strip can still change on its own.
+ * The open list never settles, and that is not an oversight.
  *
- * `failed`/`cancelled` runs stay in the `open` list until a human dismisses
- * them — that is the point of the strip — but they are done moving, so a list
- * made only of those (or an empty one) needs no further requests.
+ * A single run has a terminal state; a LIST of what is open does not. Its
+ * contents change from outside this tab — the worker finishing a run, another
+ * tab or another member of the organization starting or dismissing one — so
+ * there is no value that means "nothing further can happen here".
+ *
+ * The first version stopped once every open run was terminal, which is where a
+ * dismissed strip could sit on screen with the server already reporting `[]`:
+ * with polling stopped, the list had exactly one chance to be right, and
+ * nothing corrected it if that chance was missed. An empty list stopped too,
+ * so a run started anywhere else never appeared at all.
  */
-const allRunsSettled = (runs: Run[]) => runs.every((run) => isTerminalRunStatus(run.status));
+const openListNeverSettles = () => false;
 
 export default function ContentQueuePage() {
   const t = useTranslations("Content");
@@ -109,7 +123,8 @@ export default function ContentQueuePage() {
     data: runs,
     error: runsError,
     refresh: refreshRuns,
-  } = usePoll(fetchOpenRuns, allRunsSettled);
+    mutate: mutateRuns,
+  } = usePoll(fetchOpenRuns, openListNeverSettles, { intervalMs: OPEN_RUNS_POLL_INTERVAL_MS });
 
   // A run that leaves the open list has either succeeded — landing a draft this
   // list does not yet contain — or been dismissed. Either way the cards below
@@ -141,6 +156,10 @@ export default function ContentQueuePage() {
           channelIds: run.input.channelIds,
         }),
       });
+      // Re-read BEFORE navigating: the new run belongs on this list whether
+      // or not the reader comes straight back to it, and awaiting the re-read
+      // is what makes "the strip is there" true rather than likely.
+      await refreshRuns();
       router.push(`/${locale}/content/runs/${created.id}`);
     } catch (err) {
       handleError(err);
@@ -151,7 +170,17 @@ export default function ContentQueuePage() {
     setError(null);
     try {
       await api(`/api/runs/${run.id}/dismiss`, { method: "POST" });
-      refreshRuns();
+      // Drop it from the rendered list the moment the write is known to have
+      // succeeded, BEFORE re-reading. What the user just did must not depend on
+      // a second request landing: a re-read that fails, or a poll that is not
+      // running, would otherwise leave the dismissed strip on screen until a
+      // full reload — which is exactly the bug this replaced. Dropping after
+      // the write rather than before it also means no in-flight poll can read
+      // the run back as still open and undo it.
+      mutateRuns((open) => (open ?? []).filter((r) => r.id !== run.id));
+      // ...and the server, which owns what "open" means, still gets the last
+      // word.
+      await refreshRuns();
     } catch (err) {
       handleError(err);
     }

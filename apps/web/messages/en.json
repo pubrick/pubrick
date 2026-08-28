@@ -175,7 +175,8 @@
       "done": "Done",
       "active": "In progress",
       "failed": "Failed",
-      "pending": "Waiting"
+      "pending": "Waiting",
+      "skipped": "Not run"
     },
     "stepProgress": "{done} of {total} channels",
     "status": {

@@ -52,7 +52,19 @@ export const RUN_STEP_BADGE_STATUS: Record<RunStepState, StatusBadgeStatus> = {
   active: "scheduled",
   failed: "failed",
   pending: "draft",
+  skipped: "draft",
 };
+
+/**
+ * How often the queue re-reads `?state=open`.
+ *
+ * Slower than a run receipt's own poll: this is a LIST, and unlike a single
+ * run it never reaches a state where it can stop (see `runStepStates`' caller
+ * on the queue screen) — so the cadence is what an always-on request costs
+ * every user with the main screen open, rather than what a person watching one
+ * run wants to see.
+ */
+export const OPEN_RUNS_POLL_INTERVAL_MS = 5000;
 
 /** What a run was asked to produce. `kind` is discriminated upstream for later increments. */
 export type RunInput = { kind: "brief"; text: string; channelIds: string[] };
@@ -86,7 +98,12 @@ export type RunDetail = Run & { steps: Record<string, RunStepCheckpoint> };
 export const RUN_STEP_KEYS = ["researcher", "writer", "editor", "factcheck", "adapter"] as const;
 export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
 
-export type RunStepState = "done" | "active" | "failed" | "pending";
+/**
+ * `pending` and `skipped` look alike and are not: "waiting" is a promise that
+ * the step is still going to run, and on a run that is over that is a lie.
+ * A failed or cancelled run's un-reached steps read "not run" instead.
+ */
+export type RunStepState = "done" | "active" | "failed" | "pending" | "skipped";
 
 export type RunStepProgress = {
   key: RunStepKey;
@@ -143,5 +160,7 @@ function stepState(
   if (checkpoint?.status === "failed") return "failed";
   if (isCurrent && run.status === "failed") return "failed";
   if (isCurrent && run.status === "running") return "active";
-  return "pending";
+  // Nothing more will happen to this run, so a step with no checkpoint never
+  // ran and never will — it is not waiting for anything.
+  return isTerminalRunStatus(run.status) ? "skipped" : "pending";
 }

@@ -120,6 +120,69 @@ describe("the step checklist", () => {
   });
 });
 
+describe("a run that is over does not claim anything is still coming", () => {
+  it("reads a failed run's un-reached steps as not run, never as waiting", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "failed",
+        currentStep: "writer",
+        steps: { researcher: { status: "succeeded" } },
+        error: "provider refused",
+      }),
+    });
+
+    await renderRun();
+
+    const rows = await screen.findAllByRole("listitem");
+    const row = (label: string) =>
+      rows.find((r) => r.textContent?.startsWith(label)) as HTMLElement;
+
+    // "Waiting" promises the step is still going to run. Nothing is going to
+    // run: the run is over.
+    expect(screen.queryByText(en.Runs.stepState.pending)).not.toBeInTheDocument();
+    expect(row(en.Runs.step.editor)).toHaveTextContent(en.Runs.stepState.skipped);
+    expect(row(en.Runs.step.factcheck)).toHaveTextContent(en.Runs.stepState.skipped);
+    expect(row(en.Runs.step.adapter)).toHaveTextContent(en.Runs.stepState.skipped);
+    // ...and what DID happen before the failure still reads as it happened.
+    expect(row(en.Runs.step.researcher)).toHaveTextContent(en.Runs.stepState.done);
+    expect(row(en.Runs.step.writer)).toHaveTextContent(en.Runs.stepState.failed);
+  });
+
+  it("shows four done and one failed when a run dies at the fan-out", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "failed",
+        currentStep: `adapter:${CHANNEL_A}`,
+        steps: {
+          researcher: { status: "succeeded" },
+          writer: { status: "succeeded" },
+          editor: { status: "succeeded" },
+          factcheck: { status: "succeeded" },
+        },
+        error: "the model could not fit Telegram's limit",
+      }),
+    });
+
+    await renderRun();
+
+    const rows = await screen.findAllByRole("listitem");
+    const states = rows.map((r) => r.textContent ?? "");
+    expect(states.filter((t) => t.includes(en.Runs.stepState.done))).toHaveLength(4);
+    expect(states.filter((t) => t.includes(en.Runs.stepState.failed))).toHaveLength(1);
+    expect(states.filter((t) => t.includes(en.Runs.stepState.pending))).toHaveLength(0);
+  });
+
+  it("still reads a queued run's steps as waiting — nothing is over there", async () => {
+    installHandlers({ current: makeRun({ status: "queued", currentStep: null }) });
+
+    await renderRun();
+
+    const rows = await screen.findAllByRole("listitem");
+    expect(rows.filter((r) => r.textContent?.includes(en.Runs.stepState.pending))).toHaveLength(5);
+    expect(screen.queryByText(en.Runs.stepState.skipped)).not.toBeInTheDocument();
+  });
+});
+
 describe("the finished draft is offered, never forced", () => {
   it("shows a Draft ready link on a run that was already finished", async () => {
     installHandlers({

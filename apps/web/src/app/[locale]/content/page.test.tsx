@@ -1,11 +1,12 @@
 import { runCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContentOrigin } from "@/lib/origin";
-import type { Run } from "@/lib/runs";
+import { OPEN_RUNS_POLL_INTERVAL_MS, type Run } from "@/lib/runs";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { act, render, screen, waitFor, within } from "@/test/render";
+import { act, fireEvent, render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
 import ContentQueuePage from "./page";
 
@@ -64,12 +65,15 @@ function item(
 
 const BRAND_ID = "66666666-6666-4666-8666-666666666666";
 const RUN_CHANNEL_ID = "77777777-7777-4777-8777-777777777777";
+const RUN_ID = "88888888-8888-4888-8888-888888888888";
+const NEW_RUN_ID = "99999999-9999-4999-8999-999999999999";
+const BRIEF = "A post about our new pricing";
 
 function run(overrides: Partial<Run> = {}): Run {
   return {
-    id: "88888888-8888-4888-8888-888888888888",
+    id: RUN_ID,
     brandId: BRAND_ID,
-    input: { kind: "brief", text: "A post about our new pricing", channelIds: [RUN_CHANNEL_ID] },
+    input: { kind: "brief", text: BRIEF, channelIds: [RUN_CHANNEL_ID] },
     status: "running",
     currentStep: "writer",
     contentItemId: null,
@@ -106,7 +110,11 @@ function installHandlers(
 
     if (method === "GET" && path === "/api/channels") return channelList;
     if (method === "GET" && path === "/api/runs?state=open") return runs.current;
-    if (method === "POST" && path === "/api/runs") return run({ id: "new-run-id" });
+    if (method === "POST" && path === "/api/runs") {
+      const created = run({ id: NEW_RUN_ID, status: "queued", currentStep: null, error: null });
+      runs.current = [created];
+      return created;
+    }
     if (method === "POST" && path.endsWith("/dismiss")) {
       runs.current = [];
       return {};
@@ -308,6 +316,17 @@ describe("adaptation rendering (Step 2)", () => {
 });
 
 describe("run strips (Task 10)", () => {
+  /**
+   * The strips section only. "Failed" is also the name of the content filter's
+   * tab, so an unscoped query for a run's status label matches two elements.
+   */
+  function strips(): HTMLElement {
+    const heading = screen.getByRole("heading", { name: en.Runs.stripsTitle });
+    const section = heading.closest("section");
+    if (!section) throw new Error("run strips <section> not found");
+    return section as HTMLElement;
+  }
+
   it("keeps a failed run visible, with its error and both actions", async () => {
     const calls: Call[] = [];
     const runs = {
@@ -372,7 +391,49 @@ describe("run strips (Task 10)", () => {
     // …and the schema the API validates it with, round-tripped so a renamed
     // optional field cannot parse to {} and still pass.
     expect(runCreateSchema.parse(body)).toEqual(body);
-    expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/new-run-id");
+    expect(routerMock.push).toHaveBeenCalledWith(`/en/content/runs/${NEW_RUN_ID}`);
+  });
+
+  /**
+   * The rendered result, which is what actually broke. The suite pinned the
+   * POST and passed while the screen kept showing the run the user had just
+   * retried or dismissed until a full reload — a call that fires proves
+   * nothing about the list a person is looking at.
+   */
+  it("shows the retried run's own strip, and keeps polling it, without a reload", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Call[] = [];
+      const runs = { current: [run({ status: "failed", error: "boom" })] };
+      installHandlers(calls, () => [], noChannels, runs);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      expect(within(strips()).getByText(en.Runs.status.failed)).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Runs.tryAgain }));
+      });
+
+      // The NEW run is on screen — its own id, its own status — and the failed
+      // one it replaced is gone from the list the server now returns.
+      expect(screen.getByRole("link", { name: BRIEF })).toHaveAttribute(
+        "href",
+        `/en/content/runs/${NEW_RUN_ID}`,
+      );
+      expect(within(strips()).getByText(en.Runs.status.queued)).toBeInTheDocument();
+      expect(within(strips()).queryByText(en.Runs.status.failed)).not.toBeInTheDocument();
+
+      // ...and polling resumed: the worker picks the run up, and the strip
+      // follows it with no interaction at all.
+      runs.current = [run({ id: NEW_RUN_ID, status: "running" })];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OPEN_RUNS_POLL_INTERVAL_MS);
+      });
+      expect(within(strips()).getByText(en.Runs.status.running)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Dismiss clears the strip", async () => {
@@ -394,11 +455,87 @@ describe("run strips (Task 10)", () => {
         ),
       ).toBe(true),
     );
+    // The strip is GONE from the DOM — not merely "the POST was sent".
     await waitFor(() =>
-      expect(
-        screen.queryByRole("link", { name: "A post about our new pricing" }),
-      ).not.toBeInTheDocument(),
+      expect(screen.queryByRole("link", { name: BRIEF })).not.toBeInTheDocument(),
     );
+    expect(screen.queryByRole("button", { name: en.Runs.dismiss })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Under React's StrictMode — which `next dev` turns on and this harness's
+   * `render` does not — every effect is mounted, torn down and mounted again.
+   * No other test in this suite exercises that, and the polling effect is
+   * exactly the kind of code whose dev behaviour differs from production, so
+   * the screen's headline interaction is asserted under both.
+   */
+  it("clears the strip under StrictMode's double-invoked effects too", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, {
+      current: [run({ status: "failed", error: "boom" })],
+    });
+
+    render(
+      <StrictMode>
+        <ContentQueuePage />
+      </StrictMode>,
+    );
+    await screen.findByRole("link", { name: BRIEF });
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Runs.dismiss }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: BRIEF })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("clears a run dismissed somewhere else on the next poll, with no local action", async () => {
+    // The list holds nothing but settled runs, which is exactly when the first
+    // version stopped polling — and why a stale strip had no way to correct
+    // itself. A list of what is open has no terminal state: it changes from
+    // outside this tab.
+    vi.useFakeTimers();
+    try {
+      const calls: Call[] = [];
+      const runs = { current: [run({ status: "failed", error: "boom" })] };
+      installHandlers(calls, () => [], noChannels, runs);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      expect(screen.getByRole("link", { name: BRIEF })).toBeInTheDocument();
+
+      runs.current = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OPEN_RUNS_POLL_INTERVAL_MS);
+      });
+
+      expect(screen.queryByRole("link", { name: BRIEF })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a run started somewhere else without a remount", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: Call[] = [];
+      const runs: { current: Run[] } = { current: [] };
+      installHandlers(calls, () => [], noChannels, runs);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      expect(screen.queryByRole("link", { name: BRIEF })).not.toBeInTheDocument();
+
+      // Another tab, or another member of the organization, starts one.
+      runs.current = [run({ status: "queued" })];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OPEN_RUNS_POLL_INTERVAL_MS);
+      });
+
+      expect(screen.getByRole("link", { name: BRIEF })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not teach 'create your first post' while a generation is in flight", async () => {
@@ -426,7 +563,7 @@ describe("run strips (Task 10)", () => {
       // the content list — which this screen has not re-read since mount.
       runs.current = [];
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
+        await vi.advanceTimersByTimeAsync(OPEN_RUNS_POLL_INTERVAL_MS);
       });
 
       expect(calls.filter((c) => c.path.startsWith("/api/content")).length).toBeGreaterThan(

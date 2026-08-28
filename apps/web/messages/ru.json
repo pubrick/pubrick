@@ -175,7 +175,8 @@
       "done": "Готово",
       "active": "В работе",
       "failed": "Ошибка",
-      "pending": "Ожидает"
+      "pending": "Ожидает",
+      "skipped": "Не выполнялся"
     },
     "stepProgress": "{done} из {total} каналов",
     "status": {

@@ -38,7 +38,12 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   const locale = useLocale();
   const router = useRouter();
 
-  const fetchRun = useCallback(() => api<RunDetail>(`/api/runs/${id}`), [id]);
+  // `no-store` for the same reason the queue's poll sets it: a cached body is
+  // the one thing a poll must never be answered with.
+  const fetchRun = useCallback(
+    () => api<RunDetail>(`/api/runs/${id}`, { cache: "no-store" }),
+    [id],
+  );
   const { data: run, error: pollError, refresh } = usePoll(fetchRun, isRunFinished);
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -59,7 +64,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     setCancelling(true);
     try {
       await api(`/api/runs/${id}/cancel`, { method: "POST" });
-      refresh();
+      await refresh();
     } catch (err) {
       setActionError(errorMessage(err, t("genericError")));
     } finally {
