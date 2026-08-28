@@ -1,6 +1,7 @@
 import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { credentialFieldLabel } from "@/lib/platform";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor } from "@/test/render";
@@ -119,9 +120,12 @@ describe("addChannel POST body (Step 3, Critical)", () => {
 
     // Platform stays at its default ("telegram"): botToken + chatId.
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText(en.Channels.namePlaceholder), "Main channel");
-    await user.type(screen.getByPlaceholderText("botToken"), "123456:ABC-DEF-token");
-    await user.type(screen.getByPlaceholderText("chatId"), "-1001234567890");
+    await user.type(screen.getByLabelText(en.Channels.namePlaceholder), "Main channel");
+    await user.type(
+      screen.getByLabelText(credentialFieldLabel("botToken")),
+      "123456:ABC-DEF-token",
+    );
+    await user.type(screen.getByLabelText(credentialFieldLabel("chatId")), "-1001234567890");
 
     await user.click(screen.getByRole("button", { name: en.Channels.add }));
 
@@ -172,11 +176,17 @@ describe.each(PLATFORM_IDS)("credential fields for platform %s (Step 3)", (platf
       form.querySelectorAll<HTMLInputElement>('input[autocomplete="off"]'),
     );
 
-    expect(credInputs.map((i) => i.placeholder)).toEqual([...expectedFields]);
-    for (const input of credInputs) {
-      const expectedType = NON_SECRET_FIELDS.has(input.placeholder) ? "text" : "password";
-      expect(input).toHaveAttribute("type", expectedType);
-    }
+    // The wire key used to live in `placeholder` (visible to the user, which
+    // M13 removed as a redundant duplicate of `label`); the field's real,
+    // humanized <label> is the only remaining on-screen identity, so that's
+    // what this proves is in the right order now.
+    expect(credInputs.map((i) => i.parentElement?.querySelector("label")?.textContent)).toEqual(
+      expectedFields.map((f) => credentialFieldLabel(f)),
+    );
+    expectedFields.forEach((field, index) => {
+      const expectedType = NON_SECRET_FIELDS.has(field) ? "text" : "password";
+      expect(credInputs[index]).toHaveAttribute("type", expectedType);
+    });
   });
 });
 
@@ -198,12 +208,12 @@ describe("switching platform clears credentials (Step 3, Plan 2 regression)", ()
     // exact scenario where a leftover `creds` object silently resurfaces
     // under the next platform.
     await user.selectOptions(select, "vk");
-    const vkAccessToken = screen.getByPlaceholderText("accessToken");
+    const vkAccessToken = screen.getByLabelText(credentialFieldLabel("accessToken"));
     await user.type(vkAccessToken, "vk-secret-value");
     expect(vkAccessToken).toHaveValue("vk-secret-value");
 
     await user.selectOptions(select, "mastodon");
-    const mastodonAccessToken = screen.getByPlaceholderText("accessToken");
+    const mastodonAccessToken = screen.getByLabelText(credentialFieldLabel("accessToken"));
     expect(mastodonAccessToken).toHaveValue("");
   });
 });

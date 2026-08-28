@@ -31,7 +31,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 ## UX constitution
 
 Every screen shares one design direction (`app/globals.css` + `components/ui/*`). New UI must keep these rules:
-- **One place** — a setting/action lives on exactly one screen, never duplicated.
+- **One place** — a setting/action lives at exactly one fixed location, never duplicated: Settings pins to the sidebar bottom (mobile: rightmost tab), with the user/workspace block under it (mobile: inside Settings); the one primary action is a top-right brick-colored button (mobile: round button beside the title) — on forms that means top-right in the toolbar, NEVER a submit/save button at the bottom of the form, and never two primary buttons on one screen; search sits immediately left of the primary action.
 - **Advanced-only disclosure** — extra options hide behind the shared `Advanced` component, never a bespoke "show more".
 - **One verb, one word** — a recurring action keeps one fixed one-word verb everywhere (Add, Remove, Approve, Test), never rotating synonyms.
 - **Five statuses** — `StatusBadge`'s five colors are the only status colors that exist; no screen invents a sixth.
@@ -125,7 +125,10 @@ Pattern reference for new features: `docs/ux-patterns.md`.
 Before reporting any task complete: run `pnpm typecheck && pnpm lint && pnpm test`
 and paste the tail of the output. Failing tests are reported as failing —
 never edit or delete a failing test to make it pass (see CONTRIBUTING.md
-bug-fix protocol).
+bug-fix protocol). If you run `apps/web`'s vitest directly instead of via
+`pnpm test` (e.g. `pnpm exec vitest run`, or a single-file invocation), you
+MUST prefix it with `NODE_OPTIONS=--no-experimental-webstorage` — only the
+package's own `test` script sets that, and without it 8 tests fail on Node ≥24.
 
 ## Things Claude gets wrong
 

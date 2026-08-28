@@ -23,7 +23,7 @@
     "signOut": "Sign out",
     "login": "Log in",
     "signup": "Sign up",
-    "goToContent": "Go to content"
+    "goToContent": "Go to queue"
   },
   "Nav": {
     "label": "Sections",
@@ -55,8 +55,8 @@
   },
   "Content": {
     "title": "Queue",
-    "newAction": "New content",
-    "empty": "No content yet.",
+    "newAction": "New post",
+    "empty": "No posts yet.",
     "emptyCreateAction": "Create your first post",
     "filterLabel": "Status",
     "filterAll": "All",
@@ -79,7 +79,7 @@
     "genericError": "Something went wrong. Please try again."
   },
   "ContentNew": {
-    "title": "New content",
+    "title": "New post",
     "brand": "Brand",
     "selectBrand": "Select a brand",
     "channels": "Channels",
@@ -90,7 +90,7 @@
     "titlePlaceholder": "Title (optional)",
     "body": "Body",
     "bodyPlaceholder": "Write the post…",
-    "submit": "Create draft",
+    "submit": "Create post",
     "genericError": "Something went wrong. Please try again."
   },
   "Publish": {
@@ -104,7 +104,7 @@
     "scheduleLabel": "Or schedule for",
     "approveScheduled": "Approve with schedule",
     "reject": "Reject",
-    "alreadyPublished": "This content has already been published; it can no longer be approved or rejected.",
+    "alreadyPublished": "This post has already been published; it can no longer be approved or rejected.",
     "resultsTitle": "Results",
     "linkUnavailable": "published — link unavailable",
     "viewPost": "View post",

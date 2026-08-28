@@ -90,7 +90,6 @@ export default function BrandsPage() {
             id={NAME_INPUT_ID}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={t("namePlaceholder")}
             label={t("namePlaceholder")}
             required
             className="min-w-[220px] flex-1"

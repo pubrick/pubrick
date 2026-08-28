@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 
@@ -108,7 +109,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
 
   return (
     <AppShell
-      title={brand?.name ?? ""}
+      title={brand ? brand.name : <Skeleton lines={1} className="w-40" />}
       primaryAction={
         <Button type="submit" form={FORM_ID}>
           {t("add")}
@@ -197,7 +198,6 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={t("namePlaceholder")}
               label={t("namePlaceholder")}
               required
               className="min-w-[200px] flex-1"
@@ -211,7 +211,6 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 autoComplete="off"
                 value={creds[f] ?? ""}
                 onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
-                placeholder={f}
                 label={credentialFieldLabel(f)}
                 required
                 className="min-w-[200px] flex-1"

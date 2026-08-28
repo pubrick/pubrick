@@ -47,12 +47,17 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
     <div className="fixed inset-0 z-50">
       {/* A real <button> rather than a click handler on a bare <div>, so the
           backdrop stays keyboard/a11y-clean (no synthetic role + keydown
-          duplicate of the Escape handler above is needed for this part). */}
+          duplicate of the Escape handler above is needed for this part).
+          It is deliberately unnamed, aria-hidden and pulled out of the tab
+          order: the header's Close button and Escape are the accessible
+          affordances, so this click target doesn't get exposed to assistive
+          tech as a second, redundant "Close" control ahead of the dialog. */}
       <button
         type="button"
         onClick={onClose}
-        aria-label={t("close")}
-        className="absolute inset-0 cursor-default bg-[var(--ink)]/40"
+        tabIndex={-1}
+        aria-hidden="true"
+        className="absolute inset-0 cursor-default bg-overlay"
       />
       <div className="pointer-events-none absolute inset-0 flex items-end justify-center sm:items-center">
         <div

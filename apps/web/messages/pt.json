@@ -23,7 +23,7 @@
     "signOut": "Sair",
     "login": "Entrar",
     "signup": "Cadastrar",
-    "goToContent": "Ir para conteúdo"
+    "goToContent": "Ir para a fila"
   },
   "Nav": {
     "label": "Seções",
@@ -55,8 +55,8 @@
   },
   "Content": {
     "title": "Fila",
-    "newAction": "Novo conteúdo",
-    "empty": "Ainda não há conteúdo.",
+    "newAction": "Nova publicação",
+    "empty": "Ainda não há publicações.",
     "emptyCreateAction": "Criar sua primeira publicação",
     "filterLabel": "Status",
     "filterAll": "Todos",
@@ -79,7 +79,7 @@
     "genericError": "Algo deu errado. Tente novamente."
   },
   "ContentNew": {
-    "title": "Novo conteúdo",
+    "title": "Nova publicação",
     "brand": "Marca",
     "selectBrand": "Selecione uma marca",
     "channels": "Canais",
@@ -90,7 +90,7 @@
     "titlePlaceholder": "Título (opcional)",
     "body": "Texto",
     "bodyPlaceholder": "Escreva a publicação…",
-    "submit": "Criar rascunho",
+    "submit": "Criar publicação",
     "genericError": "Algo deu errado. Tente novamente."
   },
   "Publish": {
@@ -104,7 +104,7 @@
     "scheduleLabel": "Ou agendar para",
     "approveScheduled": "Aprovar com agendamento",
     "reject": "Rejeitar",
-    "alreadyPublished": "Este conteúdo já foi publicado; não pode mais ser aprovado ou rejeitado.",
+    "alreadyPublished": "Esta publicação já foi publicada; não pode mais ser aprovada ou rejeitada.",
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — link indisponível",
     "viewPost": "Ver publicação",

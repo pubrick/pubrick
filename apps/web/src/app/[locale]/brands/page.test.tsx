@@ -89,7 +89,7 @@ describe("creating a brand (Step 4)", () => {
     await screen.findByRole("link", { name: "Acme" });
 
     const user = userEvent.setup();
-    const input = screen.getByPlaceholderText(en.Brands.namePlaceholder);
+    const input = screen.getByLabelText(en.Brands.namePlaceholder);
     await user.type(input, "New Co");
     await user.click(screen.getByRole("button", { name: en.Brands.create }));
 
@@ -118,7 +118,7 @@ describe("creating a brand (Step 4)", () => {
     await waitFor(() => expect(calls.length).toBeGreaterThan(0));
 
     const user = userEvent.setup();
-    const input = screen.getByPlaceholderText(en.Brands.namePlaceholder);
+    const input = screen.getByLabelText(en.Brands.namePlaceholder);
     await user.type(input, "Acme");
     await user.click(screen.getByRole("button", { name: en.Brands.create }));
 

@@ -23,7 +23,7 @@
     "signOut": "Cerrar sesión",
     "login": "Iniciar sesión",
     "signup": "Registrarse",
-    "goToContent": "Ir a contenido"
+    "goToContent": "Ir a la cola"
   },
   "Nav": {
     "label": "Secciones",
@@ -55,8 +55,8 @@
   },
   "Content": {
     "title": "Cola",
-    "newAction": "Nuevo contenido",
-    "empty": "Todavía no hay contenido.",
+    "newAction": "Nueva publicación",
+    "empty": "Todavía no hay publicaciones.",
     "emptyCreateAction": "Crear tu primera publicación",
     "filterLabel": "Estado",
     "filterAll": "Todos",
@@ -79,7 +79,7 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo."
   },
   "ContentNew": {
-    "title": "Nuevo contenido",
+    "title": "Nueva publicación",
     "brand": "Marca",
     "selectBrand": "Selecciona una marca",
     "channels": "Canales",
@@ -90,7 +90,7 @@
     "titlePlaceholder": "Título (opcional)",
     "body": "Texto",
     "bodyPlaceholder": "Escribe la publicación…",
-    "submit": "Crear borrador",
+    "submit": "Crear publicación",
     "genericError": "Algo salió mal. Inténtalo de nuevo."
   },
   "Publish": {
@@ -104,7 +104,7 @@
     "scheduleLabel": "O programar para",
     "approveScheduled": "Aprobar con horario",
     "reject": "Rechazar",
-    "alreadyPublished": "Este contenido ya se ha publicado; ya no se puede aprobar ni rechazar.",
+    "alreadyPublished": "Esta publicación ya se ha publicado; ya no se puede aprobar ni rechazar.",
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — enlace no disponible",
     "viewPost": "Ver publicación",

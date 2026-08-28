@@ -5,11 +5,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 
 ## [Unreleased]
 ### Fixed
+- `useToast()` no longer throws on first real use — `ToastProvider` is now mounted once in the signed-in app shell.
+- The modal backdrop is no longer a second, identically-named "Close" control ahead of the dialog in the tab order: it stays clickable (closing the modal), but is now out of the tab order and out of the accessible name space, leaving the header button and Escape as the only close affordances a screen reader or keyboard user sees.
+- The modal backdrop scrim and the wordmark's accent fill now reference real design tokens (`--color-overlay`, defined in both themes; `--color-accent`) instead of a raw `/40` opacity modifier and an undefined `--color-brick` fallback.
+- `Textarea`'s character counter is wired to the field via `aria-describedby`, so assistive tech announces it.
+- Brand/channel name fields and credential fields no longer duplicate their label as a placeholder; credential fields show only the humanized label, not the raw wire key as visible text.
+- The brand detail page's title shows a `Skeleton` while the brand loads, instead of a permanently empty `<h1>` if the fetch fails.
 - Default link color no longer overrides component text colors (the primary "Sign up" link on the landing page rendered white-on-invisible) — base anchor styles moved into `@layer base`.
 - Hydration warnings from the theme boot script (`suppressHydrationWarning` on `<html>`) and from the Settings appearance control (stored theme preference now syncs after mount).
 - The queue's status filter scrolls inside itself on narrow screens instead of widening the page.
 
 ### Changed
+- One noun for the trackable object across every screen and all four locales: a post's title/new-action/empty-state/compose-submit/landing-link all say "post" now (the queue screen itself keeps its "Queue" title), replacing "content" wording that had drifted in from three separate places.
 - Platform ids are never shown raw: channels are labeled "Telegram · Name" everywhere, the platform picker shows display names, and credential fields have human labels.
 - The queue screen's title matches its navigation item ("Queue") in all four locales.
 

@@ -7,10 +7,13 @@ import type { ReactNode } from "react";
 import { Logo } from "@/components/Logo";
 import { IconBrands, type IconProps, IconQueue, IconSettings } from "@/components/ui/icons";
 import { Menu } from "@/components/ui/menu";
+import { ToastProvider } from "@/components/ui/toast";
 import { authClient } from "@/lib/auth-client";
 
 export type AppShellProps = {
-  title: string;
+  // ReactNode (not just string) so a page can show e.g. a `Skeleton` in the
+  // title slot while the real title is still loading.
+  title: ReactNode;
   primaryAction?: ReactNode;
   search?: ReactNode;
   children: ReactNode;
@@ -90,65 +93,67 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
   const initial = email.charAt(0).toUpperCase();
 
   return (
-    <div className="flex min-h-screen flex-col bg-bg text-fg sm:flex-row">
-      <nav
-        aria-label={t("label")}
-        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around gap-1 border-t border-border bg-panel px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 sm:sticky sm:inset-auto sm:top-0 sm:h-screen sm:w-[60px] sm:flex-col sm:items-stretch sm:justify-start sm:gap-1 sm:border-t-0 sm:border-r sm:px-2 sm:py-4 lg:w-[232px] lg:px-3"
-      >
-        <div className="hidden items-center gap-2 px-2 pb-5 lg:flex">
-          <Logo width={22} />
-          <span className="text-[17px] font-bold tracking-tight">pubrick</span>
-        </div>
-
-        {destinations.map(({ key, href }) => renderLink(key, href))}
-
-        {/* Grows in the sidebar/rail column to push Settings + the user
-            block down; hidden (zero space) in the mobile row, where
-            justify-around already spaces the three tabs evenly. */}
-        <div aria-hidden="true" className="hidden sm:block sm:flex-1" />
-
-        {renderLink("settings", settingsHref)}
-
-        {session && (
-          <div className="hidden items-center gap-2 border-t border-border px-2 pt-3 lg:flex">
-            <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-fg text-[11px] font-semibold text-bg">
-              {initial}
-            </span>
-            <Menu
-              trigger={<span className="truncate text-[13px] font-medium text-fg">{email}</span>}
-              items={[{ label: tLanding("signOut"), onSelect: () => authClient.signOut() }]}
-            />
+    <ToastProvider>
+      <div className="flex min-h-screen flex-col bg-bg text-fg sm:flex-row">
+        <nav
+          aria-label={t("label")}
+          className="fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around gap-1 border-t border-border bg-panel px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 sm:sticky sm:inset-auto sm:top-0 sm:h-screen sm:w-[60px] sm:flex-col sm:items-stretch sm:justify-start sm:gap-1 sm:border-t-0 sm:border-r sm:px-2 sm:py-4 lg:w-[232px] lg:px-3"
+        >
+          <div className="hidden items-center gap-2 px-2 pb-5 lg:flex">
+            <Logo width={22} />
+            <span className="text-[17px] font-bold tracking-tight">pubrick</span>
           </div>
-        )}
-      </nav>
 
-      <div className="flex min-w-0 flex-1 flex-col pb-16 sm:pb-0">
-        <header className="flex flex-wrap items-center justify-between gap-3 px-5 pt-6 pb-2 sm:px-9 sm:pt-7">
-          <h1 className="m-0 text-[30px] font-bold tracking-tight sm:text-[26px]">{title}</h1>
-          {(search || primaryAction) && (
-            <div className="flex items-center gap-3">
-              {search}
-              {/* Spec §3: touch targets ≥44px below 640px. Button's own `md`/`sm`
-                  sizes are 36px/30px tall — min-height (not height) is what a
-                  descendant selector can add without fighting Button's own `h-*`
-                  utility, since min-height always clamps the box's used height
-                  regardless of a smaller explicit `height` elsewhere in the
-                  cascade. Reset to min-h-0 at sm+ so desktop/rail sizing (the
-                  Button's own height) is unchanged — `min-h-11` mirrors the same
-                  44px token the mobile nav links already use above. Text labels
-                  stay: the item screen's header carries Approve + Reject, where
-                  round icon-only buttons would be cryptic — deliberate deviation
-                  from the spec's "round" 44px mobile primary-action wording. */}
-              {primaryAction && (
-                <div className="flex items-center gap-2 [&_button]:min-h-11 sm:[&_button]:min-h-0">
-                  {primaryAction}
-                </div>
-              )}
+          {destinations.map(({ key, href }) => renderLink(key, href))}
+
+          {/* Grows in the sidebar/rail column to push Settings + the user
+              block down; hidden (zero space) in the mobile row, where
+              justify-around already spaces the three tabs evenly. */}
+          <div aria-hidden="true" className="hidden sm:block sm:flex-1" />
+
+          {renderLink("settings", settingsHref)}
+
+          {session && (
+            <div className="hidden items-center gap-2 border-t border-border px-2 pt-3 lg:flex">
+              <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-fg text-[11px] font-semibold text-bg">
+                {initial}
+              </span>
+              <Menu
+                trigger={<span className="truncate text-[13px] font-medium text-fg">{email}</span>}
+                items={[{ label: tLanding("signOut"), onSelect: () => authClient.signOut() }]}
+              />
             </div>
           )}
-        </header>
-        <main className="flex-1 px-5 pb-9 sm:px-9">{children}</main>
+        </nav>
+
+        <div className="flex min-w-0 flex-1 flex-col pb-16 sm:pb-0">
+          <header className="flex flex-wrap items-center justify-between gap-3 px-5 pt-6 pb-2 sm:px-9 sm:pt-7">
+            <h1 className="m-0 text-[30px] font-bold tracking-tight sm:text-[26px]">{title}</h1>
+            {(search || primaryAction) && (
+              <div className="flex items-center gap-3">
+                {search}
+                {/* Spec §3: touch targets ≥44px below 640px. Button's own `md`/`sm`
+                    sizes are 36px/30px tall — min-height (not height) is what a
+                    descendant selector can add without fighting Button's own `h-*`
+                    utility, since min-height always clamps the box's used height
+                    regardless of a smaller explicit `height` elsewhere in the
+                    cascade. Reset to min-h-0 at sm+ so desktop/rail sizing (the
+                    Button's own height) is unchanged — `min-h-11` mirrors the same
+                    44px token the mobile nav links already use above. Text labels
+                    stay: the item screen's header carries Approve + Reject, where
+                    round icon-only buttons would be cryptic — deliberate deviation
+                    from the spec's "round" 44px mobile primary-action wording. */}
+                {primaryAction && (
+                  <div className="flex items-center gap-2 [&_button]:min-h-11 sm:[&_button]:min-h-0">
+                    {primaryAction}
+                  </div>
+                )}
+              </div>
+            )}
+          </header>
+          <main className="flex-1 px-5 pb-9 sm:px-9">{children}</main>
+        </div>
       </div>
-    </div>
+    </ToastProvider>
   );
 }
