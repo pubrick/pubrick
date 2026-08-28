@@ -1,3 +1,4 @@
+import { CLAIMS_TO_VERIFY_LABEL } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
 import type { Step } from "./types.js";
@@ -5,11 +6,14 @@ import type { Step } from "./types.js";
 /**
  * What this step's output is called, everywhere a human can read it.
  *
- * Exported so the API and the UI use this exact phrase rather than each
- * inventing one. It is the whole point of the step's honesty: nothing here is
- * checked against anything.
+ * DEFINED IN `@pubrick/shared` and only re-exported here, so the prompt below
+ * and the label `apps/web` prints in the run checklist are one string rather
+ * than two that agree today. `apps/web` is a UI-only app and does not depend on
+ * this package; shared is the one both sides already have. Re-exported from here
+ * because this step is what the phrase belongs to: nothing here is checked
+ * against anything, and that is the whole point of the wording.
  */
-export const CLAIMS_TO_VERIFY_LABEL = "claims to verify";
+export { CLAIMS_TO_VERIFY_LABEL };
 
 /**
  * Claims found in the draft.
