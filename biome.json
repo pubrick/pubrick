@@ -8,10 +8,18 @@
     "formatter": { "quoteStyle": "double" },
     "parser": { "unsafeParameterDecoratorsEnabled": true }
   },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
   "overrides": [
     {
       "includes": ["apps/api/src/**/*.ts", "apps/worker/src/**/*.ts"],
       "linter": { "rules": { "style": { "useImportType": "off" } } }
+    },
+    {
+      "includes": ["apps/web/src/app/globals.css"],
+      "formatter": { "enabled": false },
+      "linter": { "rules": { "complexity": { "noImportantStyles": "off" } } }
     }
   ]
 }

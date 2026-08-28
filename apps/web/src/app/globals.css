@@ -1,33 +1,154 @@
+@import "tailwindcss";
+
 /*
- * Pubrick brand palette. Deliberately just tokens plus a readable default
- * ground — the design system is a separate track and will build on these.
+ * Pubrick design tokens — two layers.
+ * Primitives never appear in components; semantic tokens do, via Tailwind.
+ * Dark theme redefines ONLY the semantic layer.
  */
 :root {
-  --color-ink: #0f0f0f;
-  --color-brick: #e67131;
-  --color-paper: #f5f6f7;
+  /* — primitives — */
+  --ink: #0f0f0f;
+  --paper: #f5f6f7;
+  --brick-500: #e67131;
+  --brick-600: #d4642a;
+  --brick-100: #fdeee4;
+  --brick-700: #b45309;
+  --gray-50: #fafbfb;
+  --gray-100: #f0f1f3;
+  --gray-200: #e6e8ea;
+  --gray-300: #d6d9dc;
+  --gray-500: #98a1a8;
+  --gray-600: #66707a;
+  --gray-800: #2c3136;
+  --green-100: #eaf4ee;
+  --green-700: #2e7d4f;
+  --blue-100: #eef1f6;
+  --blue-700: #5b7a99;
+  --red-100: #fbecec;
+  --red-700: #b3403a;
 
-  /* Page ground, flipped by the OS colour scheme. */
-  --color-bg: var(--color-paper);
-  --color-fg: var(--color-ink);
+  /* — semantic: ground & text — */
+  --color-bg: #ffffff;
+  --color-bg-sunken: var(--paper);
+  --color-panel: #ffffff;
+  --color-border: var(--gray-200);
+  --color-border-soft: var(--gray-100);
+  --color-fg: var(--ink);
+  --color-fg-secondary: var(--gray-600);
+  --color-fg-tertiary: var(--gray-500);
+  --color-accent: var(--brick-500);
+  --color-accent-hover: var(--brick-600);
+  --color-accent-soft: var(--brick-100);
+  --color-accent-soft-fg: var(--brick-700);
+  --color-danger: var(--red-700);
 
-  color-scheme: light dark;
+  /* — semantic: the five statuses (spec §2.4 — the only status colors) — */
+  --status-draft-bg: var(--gray-100);
+  --status-draft-fg: var(--gray-600);
+  --status-review-bg: var(--brick-100);
+  --status-review-fg: var(--brick-700);
+  --status-scheduled-bg: var(--blue-100);
+  --status-scheduled-fg: var(--blue-700);
+  --status-published-bg: var(--green-100);
+  --status-published-fg: var(--green-700);
+  --status-failed-bg: var(--red-100);
+  --status-failed-fg: var(--red-700);
+
+  /* — depth & motion — */
+  --shadow-card: 0 1px 2px rgb(15 15 15 / 0.04);
+  --shadow-popover: 0 8px 28px rgb(15 15 15 / 0.10), 0 1px 2px rgb(15 15 15 / 0.06);
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: var(--color-ink);
-    --color-fg: var(--color-paper);
+  :root:not([data-theme="light"]) {
+    --color-bg: #131416;
+    --color-bg-sunken: #0f0f0f;
+    --color-panel: #1b1d1f;
+    --color-border: #2b2e31;
+    --color-border-soft: #232629;
+    --color-fg: #f5f6f7;
+    --color-fg-secondary: #a3abb2;
+    --color-fg-tertiary: #7c848c;
+    --color-accent-soft: #3a2417;
+    --color-accent-soft-fg: #f09a66;
+    --status-draft-bg: #26292c;
+    --status-draft-fg: #a3abb2;
+    --status-review-bg: #3a2417;
+    --status-review-fg: #f09a66;
+    --status-scheduled-bg: #1d2733;
+    --status-scheduled-fg: #8fb0cf;
+    --status-published-bg: #17291e;
+    --status-published-fg: #6fbf8f;
+    --status-failed-bg: #331b1a;
+    --status-failed-fg: #e08b85;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-popover: 0 8px 28px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --color-bg: #131416;
+  --color-bg-sunken: #0f0f0f;
+  --color-panel: #1b1d1f;
+  --color-border: #2b2e31;
+  --color-border-soft: #232629;
+  --color-fg: #f5f6f7;
+  --color-fg-secondary: #a3abb2;
+  --color-fg-tertiary: #7c848c;
+  --color-accent-soft: #3a2417;
+  --color-accent-soft-fg: #f09a66;
+  --status-draft-bg: #26292c;
+  --status-draft-fg: #a3abb2;
+  --status-review-bg: #3a2417;
+  --status-review-fg: #f09a66;
+  --status-scheduled-bg: #1d2733;
+  --status-scheduled-fg: #8fb0cf;
+  --status-published-bg: #17291e;
+  --status-published-fg: #6fbf8f;
+  --status-failed-bg: #331b1a;
+  --status-failed-fg: #e08b85;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-popover: 0 8px 28px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-bg-sunken: var(--color-bg-sunken);
+  --color-panel: var(--color-panel);
+  --color-border: var(--color-border);
+  --color-border-soft: var(--color-border-soft);
+  --color-fg: var(--color-fg);
+  --color-fg-secondary: var(--color-fg-secondary);
+  --color-fg-tertiary: var(--color-fg-tertiary);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-soft: var(--color-accent-soft);
+  --color-accent-soft-fg: var(--color-accent-soft-fg);
+  --color-danger: var(--color-danger);
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --radius-card-lg: 12px;
+  --shadow-card: var(--shadow-card);
+  --shadow-popover: var(--shadow-popover);
+  --font-sans: -apple-system, system-ui, "Segoe UI", sans-serif;
 }
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background: var(--color-bg-sunken);
   color: var(--color-fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
-/* The UA default link blue fails contrast on the ink ground. */
-a {
-  color: var(--color-brick);
+a { color: var(--color-accent); }
+a:hover { color: var(--color-accent-hover); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }

@@ -18,6 +18,16 @@ export default async function LocaleLayout({
   if (!hasLocale(routing.locales, locale)) notFound();
   return (
     <html lang={locale}>
+      <head>
+        <script
+          // Applies a stored explicit theme before first paint; system pref needs no attribute.
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: static, non-interpolated no-FOUC boot script (no user input)
+          dangerouslySetInnerHTML={{
+            __html:
+              'try{var t=localStorage.getItem("pubrick-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}',
+          }}
+        />
+      </head>
       <body>
         <NextIntlClientProvider>{children}</NextIntlClientProvider>
       </body>
