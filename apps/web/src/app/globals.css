@@ -89,7 +89,7 @@
     color-scheme: dark;
   }
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"], .gallery-dark {
   --color-bg: #131416;
   --color-bg-sunken: #0f0f0f;
   --color-panel: #1b1d1f;
@@ -112,7 +112,62 @@
   --status-failed-fg: #e08b85;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-popover: 0 8px 28px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+  /* See the `.gallery-light` comment below for why `color` is declared
+     explicitly here rather than left to `body`'s own declaration. On the
+     real <html> root this is a no-op: `body { color: var(--color-fg) }`
+     always wins there since a same-property declaration on body itself
+     beats anything only inherited from an ancestor. */
+  color: var(--color-fg);
   color-scheme: dark;
+}
+
+/*
+ * Gallery-only theme scoping (/design route, dev-only): custom properties
+ * inherit through the DOM, but `:root[data-theme="dark"]` only ever matches
+ * the real <html> root — it does not re-trigger from a `data-theme`
+ * attribute on a nested <div>, which is what a light/dark side-by-side
+ * gallery needs. `.gallery-dark` was added to the existing dark rule above
+ * (same declaration block, one more selector — zero duplicated values).
+ * `.gallery-light` mirrors it for the light side, re-using the same
+ * primitives the base :root block above already points at for each entry;
+ * only the handful with no named primitive (plain white, the shadow
+ * literals) are restated.
+ *
+ * Both also set `color` explicitly (not just the `--color-fg` custom
+ * property): only `body` declares `color: var(--color-fg)` today, so any
+ * element that doesn't itself use a `text-*` utility just inherits body's
+ * already-resolved color, from the real document theme, straight past
+ * these overrides — custom-property inheritance only changes what a var()
+ * resolves to at the element that *declares* it, not values already
+ * resolved higher up. Re-declaring `color` here gives every plain
+ * (non-`text-*`) descendant — e.g. a bare `<Icon>` with `currentColor`
+ * strokes and no color class — a correct local default to inherit instead.
+ */
+.gallery-light {
+  --color-bg: #ffffff;
+  --color-bg-sunken: var(--paper);
+  --color-panel: #ffffff;
+  --color-border: var(--gray-200);
+  --color-border-soft: var(--gray-100);
+  --color-fg: var(--ink);
+  --color-fg-secondary: var(--gray-600);
+  --color-fg-tertiary: var(--gray-500);
+  --color-accent-soft: var(--brick-100);
+  --color-accent-soft-fg: var(--brick-700);
+  --status-draft-bg: var(--gray-100);
+  --status-draft-fg: var(--gray-600);
+  --status-review-bg: var(--brick-100);
+  --status-review-fg: var(--brick-700);
+  --status-scheduled-bg: var(--blue-100);
+  --status-scheduled-fg: var(--blue-700);
+  --status-published-bg: var(--green-100);
+  --status-published-fg: var(--green-700);
+  --status-failed-bg: var(--red-100);
+  --status-failed-fg: var(--red-700);
+  --shadow-card: 0 1px 2px rgb(15 15 15 / 0.04);
+  --shadow-popover: 0 8px 28px rgb(15 15 15 / 0.10), 0 1px 2px rgb(15 15 15 / 0.06);
+  color: var(--color-fg);
+  color-scheme: light;
 }
 
 @theme inline {
