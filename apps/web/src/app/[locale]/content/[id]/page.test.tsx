@@ -1,6 +1,7 @@
 import { adaptationUpdateSchema, contentApproveSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
@@ -109,6 +110,10 @@ function resultsList(): HTMLElement {
 
 beforeEach(() => {
   mockApi.mockReset();
+  // AppShell (now wrapping this page) reads a session for its sidebar user
+  // block; the aliased auth-client stub defaults to signed-out, so a page
+  // whose own tests don't care about that content still opts in explicitly.
+  signedInSession();
 });
 
 describe("rendering by adaptation status (Step 1)", () => {

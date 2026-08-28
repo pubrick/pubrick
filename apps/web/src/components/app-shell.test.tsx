@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { signedInSession } from "@/test/auth-client.stub";
 import { navigationState } from "@/test/next-navigation.stub";
 import { render, screen, within } from "@/test/render";
 import en from "../../messages/en.json";
@@ -72,5 +73,25 @@ describe("AppShell navigation", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "My Title" })).toBeInTheDocument();
     expect(screen.getByText("the page body")).toBeInTheDocument();
+  });
+});
+
+describe("AppShell auth stub safety", () => {
+  it("shows no signed-in user content when the auth stub is untouched (default is signed-out)", () => {
+    // No signedInSession() call here — this is the untouched, aliased
+    // @/lib/auth-client stub every page test gets for free. The default
+    // MUST be signed-out: a stub that defaults to a fabricated happy-path
+    // session would let a future AppShell-wrapped test that forgets to opt
+    // in render real user-block content by accident and stay green.
+    render(<AppShell title="Queue">content</AppShell>);
+
+    expect(screen.queryByText(/test@example\.com/)).not.toBeInTheDocument();
+  });
+
+  it("shows the signed-in user's email once a test opts in via signedInSession()", () => {
+    signedInSession("ann@example.com");
+    render(<AppShell title="Queue">content</AppShell>);
+
+    expect(screen.getByText("ann@example.com")).toBeInTheDocument();
   });
 });

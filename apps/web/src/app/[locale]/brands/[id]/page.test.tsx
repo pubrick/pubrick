@@ -1,6 +1,7 @@
 import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
@@ -17,6 +18,15 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 const brand = { id: "b1", name: "Acme" };
+
+// AppShell (now wrapping this page) reads a session for its sidebar user
+// block; the aliased auth-client stub defaults to signed-out, so a page
+// whose own tests don't care about that content still opts in explicitly.
+// A single top-level beforeEach covers every describe below — each of them
+// has its own beforeEach for stubbing fetch, but none for the session.
+beforeEach(() => {
+  signedInSession();
+});
 
 /**
  * Serves GET /api/brands/:id and GET /api/channels?brandId=:id out of fixed
