@@ -1,7 +1,15 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 export type ToastKind = "info" | "error";
 
@@ -23,13 +31,29 @@ const AUTO_DISMISS_MS = 4000;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(0);
+  // Every pending auto-dismiss timer, keyed by toast id, so it can be
+  // cancelled — on unmount below, and whenever its own toast is removed
+  // early — instead of firing a setState after the provider is gone.
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timerMap = timers.current;
+    return () => {
+      for (const timerId of timerMap.values()) {
+        clearTimeout(timerId);
+      }
+      timerMap.clear();
+    };
+  }, []);
 
   const show = useCallback((message: string, kind: ToastKind = "info") => {
     const id = nextId.current++;
     setToasts((current) => [...current, { id, message, kind }]);
-    setTimeout(() => {
+    const timerId = setTimeout(() => {
+      timers.current.delete(id);
       setToasts((current) => current.filter((toast) => toast.id !== id));
     }, AUTO_DISMISS_MS);
+    timers.current.set(id, timerId);
   }, []);
 
   const value = useMemo(() => ({ show }), [show]);

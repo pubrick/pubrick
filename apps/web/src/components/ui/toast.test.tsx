@@ -76,6 +76,23 @@ describe("Toast", () => {
     expect(screen.queryByText("Saved")).not.toBeInTheDocument();
   });
 
+  it("clears the pending auto-dismiss timer on unmount — no leaked timer", async () => {
+    const { unmount } = render(
+      <ToastProvider>
+        <Trigger message="Saved" />
+      </ToastProvider>,
+    );
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Fire" }).click();
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("throws when useToast is called outside a ToastProvider", () => {
     // Swallow the expected React error-boundary console noise for this one assertion.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});

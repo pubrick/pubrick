@@ -54,15 +54,40 @@ describe("Menu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("does not leave a global listener attached after unmount", () => {
+  it("removes every global listener it added, once unmounted (no leak)", () => {
+    // Dispatching an event after unmount never throws either way — a
+    // dangling `document` listener just silently calls a dead component's
+    // setState, which React swallows in a test environment. The only
+    // signal that actually distinguishes "cleaned up" from "leaked" is
+    // whether removeEventListener was called to match every
+    // addEventListener the component made — so spy on both and assert
+    // they balance, rather than asserting on an event dispatch.
+    const addSpy = vi.spyOn(document, "addEventListener");
+    const removeSpy = vi.spyOn(document, "removeEventListener");
+
     const { unmount } = render(<Menu trigger="Options" items={items} />);
     fireEvent.click(screen.getByText("Options"));
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
+    const globalEventTypes = ["mousedown", "keydown"];
+    const addedTypes = addSpy.mock.calls
+      .map(([type]) => type)
+      .filter((type): type is string => globalEventTypes.includes(type as string))
+      .sort();
+    // Sanity check on the spy itself: if this is empty, the assertion
+    // below would pass vacuously (0 added == 0 removed) without ever
+    // having exercised the leak this test exists to catch.
+    expect(addedTypes).toEqual(["keydown", "mousedown"]);
+
     unmount();
 
-    // No assertion throws just by dispatching after unmount; the real
-    // guard is that this does not crash and nothing is left listening.
-    expect(() => fireEvent.keyDown(document, { key: "Escape" })).not.toThrow();
+    const removedTypes = removeSpy.mock.calls
+      .map(([type]) => type)
+      .filter((type): type is string => globalEventTypes.includes(type as string))
+      .sort();
+    expect(removedTypes).toEqual(addedTypes);
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });
