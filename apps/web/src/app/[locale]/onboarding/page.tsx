@@ -3,6 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
+import { Logo } from "@/components/Logo";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { orgSlug } from "@/lib/slug";
 
@@ -35,15 +39,31 @@ export default function OnboardingPage() {
   }
 
   return (
-    <form onSubmit={submit}>
-      <h1>{t("title")}</h1>
-      <p>{t("subtitle")}</p>
-      <label>
-        {t("orgName")}
-        <input value={name} onChange={(e) => setName(e.target.value)} required minLength={1} />
-      </label>
-      {error && <p role="alert">{error}</p>}
-      <button type="submit">{t("create")}</button>
-    </form>
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-bg-sunken px-4">
+      <Logo width={160} />
+      <Card padded={false} className="w-full max-w-[400px] p-8">
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <div>
+            <h1 className="text-xl font-semibold text-fg">{t("title")}</h1>
+            <p className="mt-1 text-sm text-fg-secondary">{t("subtitle")}</p>
+          </div>
+          <Input
+            label={t("orgName")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            minLength={1}
+          />
+          {error && (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          )}
+          <Button type="submit" className="w-full">
+            {t("create")}
+          </Button>
+        </form>
+      </Card>
+    </main>
   );
 }
