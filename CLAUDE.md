@@ -76,8 +76,23 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   `<jobId>#<per-delivery nonce>`, because pg-boss deletes and re-inserts a
   retried job under the *same* id, so `active_job_id = jobId` would admit a retry
   alongside a live handler and fence nothing. The claim matches the job half
-  (`split_part`), is guarded on `status in ('queued','running')`, and every
-  checkpoint write and the terminal write carry `active_job_id = $fence`.
+  (`split_part`), is guarded on `status in ('queued','running')`, and every write
+  a HANDLER makes while it believes it owns the run — each checkpoint and the
+  terminal write — carries `status = 'running' AND active_job_id = $fence`.
+  The claim also writes `lease_expires_at`, and every fenced write renews it; the
+  lease length is `GENERATE_QUEUE_OPTIONS.expireInSeconds`, read from that
+  constant rather than restated, so the run goes stale at the same moment pg-boss
+  is willing to re-dispatch it.
+  Writes made by code that is NOT a handler are deliberately UNFENCED, and
+  fencing them would be a bug rather than a tightening: `markExhausted` (the DLQ
+  consumer), `RunsRepository.cancel`/`dismiss`, and the queued-run failure
+  `AiCredentialsRepository.delete` writes all act precisely when the handler that
+  held the fence is gone, or when the user is overruling it. A fenced
+  `markExhausted` would match no row and leave every exhausted run at `running`
+  forever with no job left to move it — the silent stall the queue strip exists
+  to prevent. Each is scoped by `org_id` and by the statuses it is allowed to
+  move (`markExhausted`: `queued | running`; `delete`: `queued`), never by
+  `active_job_id`.
 - **Failure policy mirrors publishing, and costs more here.** A permanent
   generation error is recorded on the run and the handler returns normally
   (completing the job); only a transient one is rethrown for pg-boss, which
@@ -94,9 +109,14 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   and the MCP server would trip it), and the run screen must not auto-forward to
   the finished draft — that would satisfy the read signal with no human present.
 - **The fact-checker verifies nothing** until increment 3 gives it sources: it
-  lists claims. Every human-readable string uses `CLAIMS_TO_VERIFY_LABEL`
-  ("Claims to verify"); no instruction, schema, endpoint or UI string may suggest
-  a check happened.
+  lists claims. No instruction, schema, endpoint or UI string may suggest a check
+  happened. `CLAIMS_TO_VERIFY_LABEL` (`@pubrick/shared`, re-exported by
+  `@pubrick/ai`) is the phrase: the step's own prompt interpolates it, and the
+  English label `Runs.step.factcheck` is pinned to it — case-insensitively — by
+  `apps/web/src/test/factcheck-label.test.ts`. `es`/`ru`/`pt` are translations of
+  that label and cannot be pinned by equality; the same test holds them to the
+  half that matters, that none of them reads as a past participle ("verified
+  claims").
 - **Untrusted text never reaches `instructions`.** The brief, earlier steps'
   output, and (increment 3) fetched article text are nonce-fenced material in
   `prompt`; only org configuration and this package's step rules are
