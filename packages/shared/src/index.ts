@@ -1,4 +1,15 @@
+export {
+  AI_COST_SOURCES,
+  type AiCostSource,
+  type CostRow,
+  type CostSummary,
+  costTotals,
+  formatUsd,
+  type LedgerCostTotals,
+  summarizeCost,
+} from "./cost-display.js";
 export { decryptJson, encryptJson } from "./crypto.js";
+export * from "./dto/ai-credentials.js";
 export * from "./dto/brands.js";
 export * from "./dto/channels.js";
 export * from "./dto/content.js";

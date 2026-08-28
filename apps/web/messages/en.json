@@ -119,6 +119,22 @@
     "themeDark": "Dark",
     "accountTitle": "Account",
     "workspaceTitle": "Workspace",
-    "workspaceNoOrg": "No organization"
+    "workspaceNoOrg": "No organization",
+    "aiTitle": "AI provider",
+    "aiSpend": "Spent so far: {amount}",
+    "aiEmpty": "No API key yet — add one below so Pubrick can generate content.",
+    "aiProviderLabel": "Provider",
+    "aiKeyLabel": "API key",
+    "aiModelLabel": "Default model",
+    "aiModelPlaceholder": "Provider default",
+    "aiProviderDefault": "Provider default",
+    "aiSave": "Save key",
+    "test": "Test",
+    "remove": "Remove",
+    "aiTestOk": "{model} answered — {cost}",
+    "aiCostApprox": "≈ {amount}",
+    "aiCostAtLeast": "≥ {amount} ({count, plural, one {# call unpriced} other {# calls unpriced}})",
+    "aiCostUnknown": "cost not reported ({count, plural, one {# call} other {# calls}})",
+    "genericError": "Something went wrong. Please try again."
   }
 }

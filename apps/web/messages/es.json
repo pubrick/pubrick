@@ -119,6 +119,22 @@
     "themeDark": "Oscuro",
     "accountTitle": "Cuenta",
     "workspaceTitle": "Espacio de trabajo",
-    "workspaceNoOrg": "Sin organización"
+    "workspaceNoOrg": "Sin organización",
+    "aiTitle": "Proveedor de IA",
+    "aiSpend": "Gastado hasta ahora: {amount}",
+    "aiEmpty": "Aún no hay clave de API: añade una abajo para que Pubrick pueda generar contenido.",
+    "aiProviderLabel": "Proveedor",
+    "aiKeyLabel": "Clave de API",
+    "aiModelLabel": "Modelo predeterminado",
+    "aiModelPlaceholder": "Modelo del proveedor",
+    "aiProviderDefault": "Modelo del proveedor",
+    "aiSave": "Guardar clave",
+    "test": "Probar",
+    "remove": "Eliminar",
+    "aiTestOk": "Respondió {model} — {cost}",
+    "aiCostApprox": "≈ {amount}",
+    "aiCostAtLeast": "≥ {amount} ({count, plural, one {# llamada sin precio} other {# llamadas sin precio}})",
+    "aiCostUnknown": "coste no informado ({count, plural, one {# llamada} other {# llamadas}})",
+    "genericError": "Algo salió mal. Inténtalo de nuevo."
   }
 }

@@ -119,6 +119,22 @@
     "themeDark": "Тёмная",
     "accountTitle": "Аккаунт",
     "workspaceTitle": "Рабочее пространство",
-    "workspaceNoOrg": "Нет организации"
+    "workspaceNoOrg": "Нет организации",
+    "aiTitle": "ИИ-провайдер",
+    "aiSpend": "Потрачено: {amount}",
+    "aiEmpty": "Ключа пока нет — добавьте его ниже, чтобы Pubrick мог генерировать контент.",
+    "aiProviderLabel": "Провайдер",
+    "aiKeyLabel": "API-ключ",
+    "aiModelLabel": "Модель по умолчанию",
+    "aiModelPlaceholder": "Модель провайдера",
+    "aiProviderDefault": "Модель провайдера",
+    "aiSave": "Сохранить ключ",
+    "test": "Проверить",
+    "remove": "Удалить",
+    "aiTestOk": "Ответила {model} — {cost}",
+    "aiCostApprox": "≈ {amount}",
+    "aiCostAtLeast": "≥ {amount} ({count, plural, one {# вызов без цены} few {# вызова без цены} many {# вызовов без цены} other {# вызова без цены}})",
+    "aiCostUnknown": "стоимость не сообщена ({count, plural, one {# вызов} few {# вызова} many {# вызовов} other {# вызова}})",
+    "genericError": "Что-то пошло не так. Попробуйте ещё раз."
   }
 }

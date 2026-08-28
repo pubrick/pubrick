@@ -119,6 +119,22 @@
     "themeDark": "Escuro",
     "accountTitle": "Conta",
     "workspaceTitle": "Espaço de trabalho",
-    "workspaceNoOrg": "Sem organização"
+    "workspaceNoOrg": "Sem organização",
+    "aiTitle": "Provedor de IA",
+    "aiSpend": "Gasto até agora: {amount}",
+    "aiEmpty": "Ainda não há chave de API — adicione uma abaixo para o Pubrick gerar conteúdo.",
+    "aiProviderLabel": "Provedor",
+    "aiKeyLabel": "Chave de API",
+    "aiModelLabel": "Modelo padrão",
+    "aiModelPlaceholder": "Modelo do provedor",
+    "aiProviderDefault": "Modelo do provedor",
+    "aiSave": "Salvar chave",
+    "test": "Testar",
+    "remove": "Remover",
+    "aiTestOk": "{model} respondeu — {cost}",
+    "aiCostApprox": "≈ {amount}",
+    "aiCostAtLeast": "≥ {amount} ({count, plural, one {# chamada sem preço} other {# chamadas sem preço}})",
+    "aiCostUnknown": "custo não informado ({count, plural, one {# chamada} other {# chamadas}})",
+    "genericError": "Algo deu errado. Tente novamente."
   }
 }
