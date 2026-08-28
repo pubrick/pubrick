@@ -54,6 +54,7 @@
     "title": "Contenido",
     "newAction": "Nuevo contenido",
     "empty": "Todavía no hay contenido.",
+    "emptyCreateAction": "Crear tu primera publicación",
     "filterLabel": "Estado",
     "filterAll": "Todos",
     "untitled": "(sin título)",

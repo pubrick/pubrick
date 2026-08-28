@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconPlus } from "@/components/ui/icons";
+import { Segmented } from "@/components/ui/segmented";
+import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 
@@ -12,6 +18,19 @@ type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
 
 const STATUSES: ContentStatus[] = ["draft", "approved", "rejected", "published", "failed"];
+
+// Spec §2.4's five status colors, mapped from every adaptation status that
+// exists today. "queued"/"publishing" both read as the same in-flight blue
+// as "scheduled" — their own labels still come through unchanged, only the
+// color is shared.
+const ADAPTATION_BADGE_STATUS: Record<AdaptationStatus, StatusBadgeStatus> = {
+  pending: "draft",
+  scheduled: "scheduled",
+  queued: "scheduled",
+  publishing: "scheduled",
+  published: "published",
+  failed: "failed",
+};
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -70,18 +89,34 @@ export default function ContentQueuePage() {
 
   function renderItem(item: ContentItem) {
     return (
-      <li key={item.id}>
-        <Link href={`/${locale}/content/${item.id}`}>{item.title || t("untitled")}</Link>
-        <ul>
+      <li key={item.id} className="border-b border-border-soft py-3 last:border-b-0">
+        <Link
+          href={`/${locale}/content/${item.id}`}
+          className="text-[15px] font-semibold text-fg hover:text-accent"
+        >
+          {item.title || t("untitled")}
+        </Link>
+        <ul className="mt-1.5 flex flex-col gap-1">
           {item.adaptations.map((a) => (
-            <li key={a.id}>
-              {channelLabel(a.channelId)} — {t(`adaptationStatus.${a.status}`)}
+            <li
+              key={a.id}
+              className="flex flex-wrap items-center gap-1.5 text-[13px] text-fg-tertiary"
+            >
+              {channelLabel(a.channelId)} —{" "}
+              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
+                {t(`adaptationStatus.${a.status}`)}
+              </StatusBadge>
               {a.status === "published" &&
                 a.externalUrl &&
                 (isLinkableUrl(a.externalUrl) ? (
                   <>
                     {" "}
-                    <a href={a.externalUrl} target="_blank" rel="noreferrer">
+                    <a
+                      href={a.externalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent hover:underline"
+                    >
                       {a.externalUrl}
                     </a>
                   </>
@@ -99,32 +134,54 @@ export default function ContentQueuePage() {
     ? [[status as ContentStatus, items ?? []] as const]
     : STATUSES.map((s) => [s, (items ?? []).filter((i) => i.status === s)] as const);
 
-  return (
-    <AppShell title={t("title")}>
-      {error && <p role="alert">{error}</p>}
-      <p>
-        <Link href={`/${locale}/content/new`}>{t("newAction")}</Link>
-      </p>
+  const filterOptions = [
+    { value: "", label: t("filterAll") },
+    ...STATUSES.map((s) => ({ value: s, label: t(`status.${s}`) })),
+  ];
 
-      <div>
-        <label htmlFor="status">{t("filterLabel")}</label>{" "}
-        <select id="status" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">{t("filterAll")}</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {t(`status.${s}`)}
-            </option>
-          ))}
-        </select>
+  const isEmpty = items !== null && items.length === 0;
+
+  return (
+    <AppShell
+      title={t("title")}
+      primaryAction={
+        <Button onClick={() => router.push(`/${locale}/content/new`)}>
+          <IconPlus size={16} />
+          {t("newAction")}
+        </Button>
+      }
+    >
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      <div className="mb-5">
+        <p className="mb-2 text-sm font-medium text-fg-secondary">{t("filterLabel")}</p>
+        <Segmented options={filterOptions} value={status} onChange={setStatus} />
       </div>
 
-      {items && items.length === 0 && <p>{t("empty")}</p>}
+      {isEmpty && (
+        <Card padded={false}>
+          <EmptyState
+            title={t("empty")}
+            action={
+              <Button size="sm" onClick={() => router.push(`/${locale}/content/new`)}>
+                {t("emptyCreateAction")}
+              </Button>
+            }
+          />
+        </Card>
+      )}
 
       {groups.map(([s, groupItems]) =>
         groupItems.length === 0 ? null : (
-          <section key={s}>
-            <h2>{t(`status.${s}`)}</h2>
-            <ul>{groupItems.map(renderItem)}</ul>
+          <section key={s} className="mb-6">
+            <h2 className="mb-2 text-sm font-semibold text-fg-secondary">{t(`status.${s}`)}</h2>
+            <Card padded={false}>
+              <ul className="px-4">{groupItems.map(renderItem)}</ul>
+            </Card>
           </section>
         ),
       )}

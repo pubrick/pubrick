@@ -122,6 +122,12 @@ describe("grouping by status (Step 2)", () => {
 });
 
 describe("filtering (Step 2)", () => {
+  // SANCTIONED DEVIATION (controller decision, ledger-approved): the
+  // status filter is a Segmented control (role=tablist/tab), not a
+  // <select>. The canvas is the visual authority for this change. The
+  // filter's semantics are untouched — same translation strings drive the
+  // tab names, same ?status=<value> query param on refetch — only the
+  // control used to drive it changed from selectOptions() to a tab click.
   it("refetches with ?status=<value> when the filter changes, and shows only that group", async () => {
     const calls: Call[] = [];
     const unfiltered = [item("c1", "Draft post", "draft"), item("c2", "Approved post", "approved")];
@@ -131,8 +137,8 @@ describe("filtering (Step 2)", () => {
     render(<ContentQueuePage />);
     await screen.findByRole("link", { name: "Draft post" });
 
-    const select = screen.getByLabelText(en.Content.filterLabel);
-    await userEvent.setup().selectOptions(select, "approved");
+    const tab = screen.getByRole("tab", { name: en.Content.status.approved });
+    await userEvent.setup().click(tab);
 
     await waitFor(() => {
       expect(calls.some((c) => c.path === "/api/content?status=approved")).toBe(true);

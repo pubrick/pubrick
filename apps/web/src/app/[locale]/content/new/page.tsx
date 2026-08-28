@@ -5,11 +5,18 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
+
+const FORM_ID = "new-content-form";
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
@@ -63,8 +70,12 @@ export default function NewContentPage() {
     });
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  // Shared by the form's own submit (Enter in a field) and the
+  // AppShell header's primary-action button, which lives outside the
+  // <form> element (constitution: submit is the top-right primary
+  // action, not an in-flow button) and drives this directly by onClick
+  // rather than relying on the button/form association.
+  async function createContent() {
     setError(null);
     if (channelIds.size === 0) {
       setError(t("noChannelsSelected"));
@@ -89,76 +100,90 @@ export default function NewContentPage() {
     }
   }
 
+  function onFormSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void createContent();
+  }
+
   return (
-    <AppShell title={t("title")}>
-      {error && <p role="alert">{error}</p>}
-      <form onSubmit={submit}>
-        <div>
-          <label htmlFor="brand">{t("brand")}</label>
-          <br />
-          <select id="brand" value={brandId} onChange={(e) => setBrandId(e.target.value)} required>
+    <AppShell
+      title={t("title")}
+      primaryAction={
+        <Button type="button" onClick={() => void createContent()} disabled={submitting}>
+          {t("submit")}
+        </Button>
+      }
+    >
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
+
+      <Card className="max-w-2xl">
+        <form id={FORM_ID} onSubmit={onFormSubmit} className="flex flex-col gap-5">
+          <Select
+            id="brand"
+            label={t("brand")}
+            value={brandId}
+            onChange={(e) => setBrandId(e.target.value)}
+            required
+          >
             <option value="">{t("selectBrand")}</option>
             {(brands ?? []).map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
 
-        <div>
-          <p>{t("channels")}</p>
-          {!brandId && <p>{t("selectBrandFirst")}</p>}
-          {brandId && channels.length === 0 && <p>{t("noChannels")}</p>}
-          <ul>
-            {channels.map((c) => (
-              <li key={c.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={channelIds.has(c.id)}
-                    onChange={() => toggleChannel(c.id)}
-                  />{" "}
-                  [{c.platform}] {c.name}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </div>
+          <div>
+            <p className="mb-2 text-sm font-medium text-fg-secondary">{t("channels")}</p>
+            {!brandId && <p className="text-sm text-fg-tertiary">{t("selectBrandFirst")}</p>}
+            {brandId && channels.length === 0 && (
+              <p className="text-sm text-fg-tertiary">{t("noChannels")}</p>
+            )}
+            {channels.length > 0 && (
+              <ul className="flex flex-col divide-y divide-border-soft overflow-hidden rounded-control border border-border">
+                {channels.map((c) => (
+                  <li key={c.id} className="px-3 py-2">
+                    <label className="flex items-center gap-2.5 text-sm text-fg">
+                      <input
+                        type="checkbox"
+                        checked={channelIds.has(c.id)}
+                        onChange={() => toggleChannel(c.id)}
+                        className="h-4 w-4 rounded border-border text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      />
+                      [{c.platform}] {c.name}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
-        <div>
-          <label htmlFor="title">{t("titleLabel")}</label>
-          <br />
-          <input
+          <Input
             id="title"
+            label={t("titleLabel")}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={t("titlePlaceholder")}
             maxLength={300}
           />
-        </div>
 
-        <div>
-          <label htmlFor="body">{t("body")}</label>
-          <br />
-          <textarea
+          <Textarea
             id="body"
+            label={t("body")}
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder={t("bodyPlaceholder")}
             maxLength={MAX_BODY_LENGTH}
+            showCount
             rows={10}
             required
           />
-          <p>
-            {body.length}/{MAX_BODY_LENGTH}
-          </p>
-        </div>
-
-        <button type="submit" disabled={submitting}>
-          {t("submit")}
-        </button>
-      </form>
+        </form>
+      </Card>
     </AppShell>
   );
 }

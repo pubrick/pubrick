@@ -54,6 +54,7 @@
     "title": "Content",
     "newAction": "New content",
     "empty": "No content yet.",
+    "emptyCreateAction": "Create your first post",
     "filterLabel": "Status",
     "filterAll": "All",
     "untitled": "(untitled)",

@@ -123,18 +123,23 @@ describe("selecting a brand loads its channels (Step 1)", () => {
 });
 
 describe("character counter (Step 1)", () => {
+  // SANCTIONED DEVIATION (controller decision, ledger-approved): the counter
+  // now renders through Textarea's built-in `showCount`, whose format is
+  // spaced ("12 / 4096"), not the page's old hand-rolled "12/4096". Only the
+  // literal spacing changed here — MAX_BODY_LENGTH semantics and the
+  // textarea's maxLength enforcement (asserted below) are untouched.
   it("reflects the body length as the user types", async () => {
     const calls: Call[] = [];
     installHandlers(calls);
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
 
-    expect(screen.getByText(`0/${MAX_BODY_LENGTH}`)).toBeInTheDocument();
+    expect(screen.getByText(`0 / ${MAX_BODY_LENGTH}`)).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(en.ContentNew.body), "Hello world");
 
-    expect(screen.getByText(`11/${MAX_BODY_LENGTH}`)).toBeInTheDocument();
+    expect(screen.getByText(`11 / ${MAX_BODY_LENGTH}`)).toBeInTheDocument();
   });
 
   it("stops accepting characters at MAX_BODY_LENGTH, the boundary the textarea's maxLength enforces", async () => {
@@ -149,14 +154,14 @@ describe("character counter (Step 1)", () => {
     // past the limit through real keystrokes so the browser's own maxLength
     // enforcement — the mechanism the page actually relies on — is exercised.
     fireEvent.change(textarea, { target: { value: "a".repeat(MAX_BODY_LENGTH - 3) } });
-    expect(screen.getByText(`${MAX_BODY_LENGTH - 3}/${MAX_BODY_LENGTH}`)).toBeInTheDocument();
+    expect(screen.getByText(`${MAX_BODY_LENGTH - 3} / ${MAX_BODY_LENGTH}`)).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.type(textarea, "XYZW"); // 4 more chars offered, only 3 fit
 
     expect((textarea as HTMLTextAreaElement).value.length).toBe(MAX_BODY_LENGTH);
     expect((textarea as HTMLTextAreaElement).value.endsWith("XYZ")).toBe(true);
-    expect(screen.getByText(`${MAX_BODY_LENGTH}/${MAX_BODY_LENGTH}`)).toBeInTheDocument();
+    expect(screen.getByText(`${MAX_BODY_LENGTH} / ${MAX_BODY_LENGTH}`)).toBeInTheDocument();
   });
 });
 

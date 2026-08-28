@@ -6,11 +6,28 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
+import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
+
+// Spec §2.4's five status colors. "queued"/"publishing" share "scheduled"'s
+// blue — their own translated labels are unaffected, only the color is
+// shared — matching the mapping used on the queue screen.
+const ADAPTATION_BADGE_STATUS: Record<AdaptationStatus, StatusBadgeStatus> = {
+  pending: "draft",
+  scheduled: "scheduled",
+  queued: "scheduled",
+  publishing: "scheduled",
+  published: "published",
+  failed: "failed",
+};
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -141,57 +158,88 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   if (!item) {
-    return <AppShell title={tc("untitled")}>{error && <p role="alert">{error}</p>}</AppShell>;
+    return (
+      <AppShell title={tc("untitled")}>
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </AppShell>
+    );
   }
 
   const isPublished = item.status === "published";
 
   return (
-    <AppShell title={item.title || tc("untitled")}>
-      <p>
-        <Link href={`/${locale}/content`}>{t("backToQueue")}</Link>
+    <AppShell
+      title={item.title || tc("untitled")}
+      primaryAction={
+        <div className="flex items-center gap-2">
+          <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
+            {t("approveNow")}
+          </Button>
+          <Button variant="danger" onClick={reject} disabled={isPublished}>
+            {t("reject")}
+          </Button>
+        </div>
+      }
+    >
+      <p className="mb-3">
+        <Link href={`/${locale}/content`} className="text-sm text-fg-secondary hover:text-accent">
+          {t("backToQueue")}
+        </Link>
       </p>
-      <p>{tc(`status.${item.status}`)}</p>
-      {error && <p role="alert">{error}</p>}
+      <p className="mb-4 text-sm font-medium text-fg-secondary">{tc(`status.${item.status}`)}</p>
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
 
-      <div>
-        <label htmlFor="body">{t("bodyLabel")}</label>
-        <br />
-        <textarea
+      <Card className="mb-6">
+        <Textarea
           id="body"
+          label={t("bodyLabel")}
           value={bodyDraft}
           onChange={(e) => setBodyDraft(e.target.value)}
           maxLength={MAX_BODY_LENGTH}
+          showCount
           rows={10}
         />
-        <p>
-          {bodyDraft.length}/{MAX_BODY_LENGTH}
-        </p>
-        <button type="button" onClick={saveBody}>
-          {t("saveBody")}
-        </button>
-      </div>
+        <div className="mt-3">
+          <Button variant="secondary" onClick={saveBody}>
+            {t("saveBody")}
+          </Button>
+        </div>
+      </Card>
 
-      <h2>{t("overridesTitle")}</h2>
-      <ul>
+      <h2 className="mb-3 text-lg font-semibold text-fg">{t("overridesTitle")}</h2>
+      <div className="mb-6 flex flex-col gap-3">
         {item.adaptations.map((a) => (
-          <li key={a.id}>
-            <strong>{channelLabel(a.channelId)}</strong> — {tc(`adaptationStatus.${a.status}`)}
-            <br />
-            <textarea
+          <Card key={a.id}>
+            <div className="mb-3 flex items-center gap-2">
+              <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
+              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
+                {tc(`adaptationStatus.${a.status}`)}
+              </StatusBadge>
+            </div>
+            <Textarea
               value={overrideDrafts[a.id] ?? ""}
               onChange={(e) => setOverrideDrafts({ ...overrideDrafts, [a.id]: e.target.value })}
               placeholder={t("overridePlaceholder")}
               maxLength={MAX_BODY_LENGTH}
+              showCount
               rows={4}
             />
-            <br />
-            <button type="button" onClick={() => saveOverride(a.id)}>
-              {t("saveOverride")}
-            </button>
-          </li>
+            <div className="mt-3">
+              <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
+                {t("saveOverride")}
+              </Button>
+            </div>
+          </Card>
         ))}
-      </ul>
+      </div>
 
       {/*
         A published item has nothing left to decide: the post is live in the
@@ -199,57 +247,70 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ContentRepository.requireNotPublished). Offering the buttons anyway is
         offering a choice that no longer exists, so they are disabled and the
         reason is spelled out rather than left to be discovered by clicking.
+        Approve/Reject moved into the AppShell header (constitution: they are
+        this screen's primary actions) — only the schedule row still lives
+        here, since "Approve with schedule" is a secondary path next to the
+        date field it depends on.
       */}
-      <div>
-        {isPublished && <p>{t("alreadyPublished")}</p>}
-        <button type="button" onClick={() => approve(false)} disabled={isPublished}>
-          {t("approveNow")}
-        </button>
-        <div>
-          <label htmlFor="scheduledAt">{t("scheduleLabel")}</label>{" "}
-          <input
+      <Card className="mb-6">
+        {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
+        <div className="flex flex-wrap items-end gap-3">
+          <Input
             id="scheduledAt"
             type="datetime-local"
+            label={t("scheduleLabel")}
             value={scheduledAt}
             onChange={(e) => setScheduledAt(e.target.value)}
             disabled={isPublished}
-          />{" "}
-          <button
-            type="button"
+          />
+          <Button
+            variant="secondary"
             onClick={() => approve(true)}
             disabled={isPublished || !scheduledAt}
           >
             {t("approveScheduled")}
-          </button>
+          </Button>
         </div>
-        <button type="button" onClick={reject} disabled={isPublished}>
-          {t("reject")}
-        </button>
-      </div>
+      </Card>
 
-      <h2>{t("resultsTitle")}</h2>
+      <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>
         {item.adaptations.map((a) => (
-          <li key={a.id}>
-            <strong>{channelLabel(a.channelId)}</strong> — {tc(`adaptationStatus.${a.status}`)}
+          <li
+            key={a.id}
+            className="flex flex-col gap-1 border-b border-border-soft py-3 last:border-b-0"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
+              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
+                {tc(`adaptationStatus.${a.status}`)}
+              </StatusBadge>
+            </div>
             {a.status === "published" &&
               (isLinkableUrl(a.externalUrl) ? (
-                <>
-                  {" "}
-                  <a href={a.externalUrl} target="_blank" rel="noreferrer">
-                    {t("viewPost")}
-                  </a>
-                </>
+                <a
+                  href={a.externalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-accent hover:underline"
+                >
+                  {t("viewPost")}
+                </a>
               ) : (
                 // No link, or one whose scheme we will not put in an href:
                 // show what was recorded when there is something to show.
-                <span> — {a.externalUrl ?? t("linkUnavailable")}</span>
+                <span className="text-sm text-fg-tertiary">
+                  {a.externalUrl ?? t("linkUnavailable")}
+                </span>
               ))}
-            {a.status === "failed" && a.lastError && <p role="alert">{a.lastError}</p>}
+            {a.status === "failed" && a.lastError && (
+              <p role="alert" className="text-sm text-danger">
+                {a.lastError}
+              </p>
+            )}
             {a.status === "scheduled" && a.scheduledAt && (
-              <span>
-                {" "}
-                — {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
+              <span className="text-sm text-fg-tertiary">
+                {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
               </span>
             )}
           </li>

@@ -54,6 +54,7 @@
     "title": "Контент",
     "newAction": "Новый контент",
     "empty": "Контента пока нет.",
+    "emptyCreateAction": "Создать первый пост",
     "filterLabel": "Статус",
     "filterAll": "Все",
     "untitled": "(без названия)",
