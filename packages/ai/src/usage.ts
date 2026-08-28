@@ -1,4 +1,5 @@
 import { estimateCostUsd, priceFor } from "./pricing.js";
+import type { AiProvider } from "./provider.js";
 
 /** Where a ledger row's dollar figure came from. Mirrors `COST_SOURCES` in `@pubrick/db`. */
 export type CostSource = "provider_reported" | "price_table" | "unknown";
@@ -7,14 +8,16 @@ export type CostSource = "provider_reported" | "price_table" | "unknown";
 export type UsageStatus = "ok" | "errored";
 
 /**
- * One model call, in the shape the ledger stores it.
+ * One **physical** round trip to the provider, in the shape the ledger stores it.
  *
+ * `provider` is the credential's provider, not a string parsed out of an SDK id:
+ * the ledger column is an enum, and we always know which key paid for the call.
  * `attempt` is 2 for a structured-output repair retry of the same step; the
  * caller adds `orgId`, `runId`, `step` and `channelId`, which this package has
  * no way to know.
  */
 export type UsageRecord = {
-  provider: string;
+  provider: AiProvider;
   modelId: string;
   attempt: number;
   inputTokens: number;
@@ -31,40 +34,33 @@ export type UsageRecord = {
 export type UsageSink = (record: UsageRecord) => Promise<void> | void;
 
 /**
- * The subset of the SDK's `LanguageModelCallEndEvent` this package reads.
+ * What `executeLanguageModelCall`'s `execute()` resolves to: the raw
+ * provider-level result.
  *
- * Declared structurally rather than imported so the mapping is pinned to the
- * fields we actually depend on. Note the shape: **flat totals with nested
- * details**. The fully nested provider-level shape — `inputTokens.total`,
- * `inputTokens.cacheRead` — is what `MockLanguageModelV4.doGenerate` returns
- * and what model middleware sees; it never reaches here. Mixing the two is the
- * easiest mistake in this file, so both appear in the tests on purpose.
+ * ⚠ This carries the **nested** usage shape — `inputTokens.total`,
+ * `inputTokens.cacheRead`, `outputTokens.reasoning`. The *other* shape, flat
+ * totals with nested details (`inputTokens`, `inputTokenDetails.cacheReadTokens`),
+ * is what the `onLanguageModelCallEnd` event carries. Choosing the metering hook
+ * chooses the shape, and reading the wrong one yields silent zeros rather than an
+ * error. Both appear in the tests on purpose.
  */
-export type ModelCallEnd = {
-  provider: string;
-  modelId: string;
-  usage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    inputTokenDetails?: { cacheReadTokens?: number };
-    outputTokenDetails?: { reasoningTokens?: number };
+export type ProviderCallResult = {
+  usage?: {
+    inputTokens?: { total?: number | undefined; cacheRead?: number | undefined };
+    outputTokens?: { total?: number | undefined; reasoning?: number | undefined };
   };
   providerMetadata?: Record<string, unknown> | undefined;
-  performance?: { responseTimeMs?: number };
 };
 
-/**
- * `google.generative-ai` → `google`, `openrouter` → `openrouter`.
- *
- * The SDK reports its own provider ids; the price table and the ledger's
- * provider column speak our two-value vocabulary. Anything unrecognised passes
- * through unchanged rather than being coerced, so an unexpected id shows up in
- * the ledger as itself instead of masquerading as a provider we support.
- */
-export function normalizeProviderName(providerId: string): string {
-  const head = providerId.split(".")[0];
-  return head === undefined || head === "" ? providerId : head;
-}
+/** One physical round trip, buffered until the attempt's outcome is known. */
+export type MeteredCall = {
+  modelId: string;
+  responseMs: number;
+  /** Absent when the round trip threw: the provider reported no tokens at all. */
+  result?: ProviderCallResult;
+  /** False when the round trip itself failed, whatever the attempt went on to do. */
+  transportOk: boolean;
+};
 
 /**
  * OpenRouter reports what the call actually cost. The field is **optional** —
@@ -72,7 +68,8 @@ export function normalizeProviderName(providerId: string): string {
  * be summed into a total that looks authoritative and is wrong.
  *
  * A reported `0` is different: that is a report, and free models really do
- * cost nothing.
+ * cost nothing. A *negative* figure is neither — no call earns money — so it is
+ * treated as no report at all rather than quietly credited against the run.
  *
  * (Two neighbours that will surprise anyone grepping: the sibling field is
  * camelCased — `costDetails.upstreamInferenceCost` — and video models report
@@ -83,20 +80,30 @@ export function providerReportedCostUsd(
 ): number | null {
   const openrouter = providerMetadata?.openrouter as { usage?: { cost?: unknown } } | undefined;
   const cost = openrouter?.usage?.cost;
-  return typeof cost === "number" && Number.isFinite(cost) ? cost : null;
+  if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return null;
+  return cost;
 }
 
-/** Turn one telemetry event into the ledger row it implies. */
+/** Turn one physical call into the ledger row it implies. */
 export function toUsageRecord(
-  event: ModelCallEnd,
-  options: { attempt: number; status: UsageStatus; at: Date },
+  call: MeteredCall,
+  options: { provider: AiProvider; attempt: number; status: UsageStatus; at: Date },
 ): UsageRecord {
-  const provider = normalizeProviderName(event.provider);
-  const inputTokens = event.usage.inputTokens ?? 0;
-  const outputTokens = event.usage.outputTokens ?? 0;
+  const usage = call.result?.usage;
+  const inputTotal = usage?.inputTokens?.total;
+  const outputTotal = usage?.outputTokens?.total;
 
-  const reported = providerReportedCostUsd(event.providerMetadata);
-  const rate = reported === null ? priceFor(provider, event.modelId, options.at) : null;
+  // A call the provider never reported tokens for — it threw, or the provider
+  // omitted usage — cannot be priced from a table that multiplies token counts.
+  // Pricing it as zero would render "≈ $0.00", a precise-looking claim that the
+  // call was free. Unknown is the honest answer.
+  const hasUsage = typeof inputTotal === "number" || typeof outputTotal === "number";
+  const inputTokens = inputTotal ?? 0;
+  const outputTokens = outputTotal ?? 0;
+
+  const reported = providerReportedCostUsd(call.result?.providerMetadata);
+  const rate =
+    reported === null && hasUsage ? priceFor(options.provider, call.modelId, options.at) : null;
 
   let costUsd: number | null;
   let costSource: CostSource;
@@ -112,40 +119,72 @@ export function toUsageRecord(
   }
 
   return {
-    provider,
-    modelId: event.modelId,
+    provider: options.provider,
+    modelId: call.modelId,
     attempt: options.attempt,
     inputTokens,
     outputTokens,
-    cachedInputTokens: event.usage.inputTokenDetails?.cacheReadTokens ?? 0,
-    reasoningTokens: event.usage.outputTokenDetails?.reasoningTokens ?? 0,
+    cachedInputTokens: usage?.inputTokens?.cacheRead ?? 0,
+    reasoningTokens: usage?.outputTokens?.reasoning ?? 0,
     costUsd,
     costSource,
-    responseMs: Math.round(event.performance?.responseTimeMs ?? 0),
+    responseMs: Math.round(call.responseMs),
     status: options.status,
   };
 }
 
 /**
- * A telemetry integration that buffers the model calls of a single
- * `generateText`, so their status can be decided once the call has settled.
+ * A telemetry integration that buffers every **physical** model call of a single
+ * `generateText`, so each one's status can be decided once the attempt settles.
+ *
+ * The hook is `executeLanguageModelCall`, which the SDK invokes *inside* its own
+ * retry closure — once per round trip. `onLanguageModelCallEnd`, the obvious
+ * choice, fires after the retry loop has resolved: once per step, or not at all
+ * if every attempt failed. Metering there bills a BYOK user for retries that
+ * leave no record, which is precisely what the ledger exists to prevent.
  *
  * It is built per call and passed as `telemetry: { integrations: recorder }`,
  * never through `registerTelemetry`: the global registry has no unregister, so
  * a sink registered in one test file would still be listening in the next.
  * Per-call integrations take precedence over the global list.
  */
-export function createCallRecorder(): {
-  integration: { onLanguageModelCallEnd: (event: ModelCallEnd) => void };
-  events: ModelCallEnd[];
+export function createCallRecorder(fallbackModelId: string): {
+  integration: {
+    executeLanguageModelCall: <T>(options: {
+      modelId?: string | undefined;
+      execute: () => PromiseLike<T>;
+    }) => Promise<T>;
+  };
+  calls: MeteredCall[];
 } {
-  const events: ModelCallEnd[] = [];
+  const calls: MeteredCall[] = [];
+
   return {
+    calls,
     integration: {
-      onLanguageModelCallEnd: (event: ModelCallEnd) => {
-        events.push(event);
+      executeLanguageModelCall: async <T>(options: {
+        modelId?: string | undefined;
+        execute: () => PromiseLike<T>;
+      }): Promise<T> => {
+        const startedAt = Date.now();
+        const modelId = options.modelId ?? fallbackModelId;
+        try {
+          const result = await options.execute();
+          calls.push({
+            modelId,
+            responseMs: Date.now() - startedAt,
+            // The SDK types `execute()` generically; at this call site it always
+            // resolves to the provider's own generate result. The runtime shape
+            // is pinned by the tests rather than by this cast.
+            result: result as ProviderCallResult,
+            transportOk: true,
+          });
+          return result;
+        } catch (error) {
+          calls.push({ modelId, responseMs: Date.now() - startedAt, transportOk: false });
+          throw error;
+        }
       },
     },
-    events,
   };
 }

@@ -66,6 +66,30 @@ describe("classifyAiError", () => {
     expect((classified as TransientError).retryAfterSeconds).toBe(2);
   });
 
+  it("treats an empty retry-after header as no hint, not as zero seconds", () => {
+    // `Number("")` is 0, which would be read as "retry immediately" — a hot loop
+    // against the provider that has just asked us to slow down.
+    expect(
+      (classifyAiError(apiError(429, { "retry-after": "" })) as TransientError).retryAfterSeconds,
+    ).toBeUndefined();
+    expect(
+      (classifyAiError(apiError(429, { "retry-after": "   " })) as TransientError)
+        .retryAfterSeconds,
+    ).toBeUndefined();
+    expect(
+      (classifyAiError(apiError(429, { "retry-after-ms": "" })) as TransientError)
+        .retryAfterSeconds,
+    ).toBeUndefined();
+  });
+
+  it("reads an HTTP-date retry-after", () => {
+    const at = new Date(Date.now() + 30_000).toUTCString();
+    const seconds = (classifyAiError(apiError(429, { "retry-after": at })) as TransientError)
+      .retryAfterSeconds;
+    expect(seconds).toBeGreaterThan(25);
+    expect(seconds).toBeLessThanOrEqual(30);
+  });
+
   it("leaves an already-classified error alone", () => {
     const permanent = new PermanentError("already decided");
     expect(classifyAiError(permanent)).toBe(permanent);

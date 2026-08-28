@@ -33,6 +33,22 @@ describe("priceFor", () => {
   });
 });
 
+describe("estimateCostUsd rounding", () => {
+  it("never rounds a call that cost something down to free", () => {
+    // A cheap model — $0.05/MTok is well inside OpenRouter's range — makes a
+    // one-token call cost 5e-8, which numeric(12,6) cannot express. Storing
+    // 0.000000 would have the UI render a definite "≈ $0.00" for a billed call,
+    // so the smallest unit the column can hold is the honest floor.
+    const cheap = { inputPerMTok: 0.05, outputPerMTok: 0.05 };
+    expect(estimateCostUsd(cheap, { inputTokens: 1, outputTokens: 0 })).toBe(0.000001);
+  });
+
+  it("still reports a genuinely zero-token call as zero", () => {
+    const rate = { inputPerMTok: 0.75, outputPerMTok: 3.75 };
+    expect(estimateCostUsd(rate, { inputTokens: 0, outputTokens: 0 })).toBe(0);
+  });
+});
+
 describe("estimateCostUsd", () => {
   it("prices input and output separately, per million tokens", () => {
     const rate = { inputPerMTok: 0.75, outputPerMTok: 3.75 };

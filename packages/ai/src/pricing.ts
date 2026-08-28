@@ -57,9 +57,16 @@ export function priceFor(provider: string, modelId: string, at: Date): ModelRate
   const windows = PRICE_TABLE[provider]?.[modelId];
   if (windows === undefined) return null;
 
+  // The latest window that has already started — picked by date, not by array
+  // position, so a rate appended out of order cannot silently misprice a call.
   let current: RateWindow | null = null;
+  let currentStart = Number.NEGATIVE_INFINITY;
   for (const window of windows) {
-    if (Date.parse(window.effectiveFrom) <= at.getTime()) current = window;
+    const start = Date.parse(window.effectiveFrom);
+    if (start <= at.getTime() && start >= currentStart) {
+      current = window;
+      currentStart = start;
+    }
   }
   if (current === null) return null;
 
@@ -85,5 +92,12 @@ export function estimateCostUsd(
     (tokens.inputTokens * rate.inputPerMTok + tokens.outputTokens * rate.outputPerMTok) / 1_000_000;
   // The ledger column is numeric(12,6); rounding here keeps the stored value and
   // the value we just computed identical.
-  return Math.round(dollars * 1_000_000) / 1_000_000;
+  const rounded = Math.round(dollars * 1_000_000) / 1_000_000;
+
+  // A call that cost something must never store 0.000000. The column cannot hold
+  // the true figure, and the UI renders a `price_table` row as a definite "≈ $0.00"
+  // — a call that was billed reported as free. The smallest unit the column can
+  // express is the honest floor.
+  if (dollars > 0 && rounded === 0) return 0.000001;
+  return rounded;
 }

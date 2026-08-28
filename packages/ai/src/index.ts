@@ -10,8 +10,8 @@ export {
 } from "./provider.js";
 export {
   type CostSource,
-  type ModelCallEnd,
-  normalizeProviderName,
+  type MeteredCall,
+  type ProviderCallResult,
   providerReportedCostUsd,
   toUsageRecord,
   type UsageRecord,

@@ -63,11 +63,17 @@ function unwrapRetry(error: unknown): unknown {
 function retryAfterSeconds(headers: Record<string, string> | undefined): number | undefined {
   if (headers === undefined) return undefined;
 
-  const ms = Number(headers["retry-after-ms"]);
-  if (Number.isFinite(ms) && ms > 0) return Math.ceil(ms / 1000);
+  const rawMs = headers["retry-after-ms"]?.trim();
+  if (rawMs !== undefined && rawMs !== "") {
+    const ms = Number(rawMs);
+    if (Number.isFinite(ms) && ms > 0) return Math.ceil(ms / 1000);
+  }
 
-  const raw = headers["retry-after"];
-  if (raw === undefined) return undefined;
+  // An empty or whitespace-only header is not a hint. `Number("")` is 0, which
+  // would otherwise be read as "retry immediately" and turn a rate limit into a
+  // hot loop against the provider that just asked us to slow down.
+  const raw = headers["retry-after"]?.trim();
+  if (raw === undefined || raw === "") return undefined;
 
   // Seconds form.
   const seconds = Number(raw);

@@ -1,23 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ModelCallEnd,
-  normalizeProviderName,
-  providerReportedCostUsd,
-  toUsageRecord,
-} from "./usage.js";
-
-describe("normalizeProviderName", () => {
-  it("reduces the SDK's provider ids to the two the ledger stores", () => {
-    expect(normalizeProviderName("google.generative-ai")).toBe("google");
-    expect(normalizeProviderName("openrouter")).toBe("openrouter");
-  });
-
-  it("passes an unrecognised id through rather than coercing it", () => {
-    // A provider we do not support should appear in the ledger as itself, not
-    // masquerade as one we do.
-    expect(normalizeProviderName("mock-provider")).toBe("mock-provider");
-  });
-});
+import { type MeteredCall, providerReportedCostUsd, toUsageRecord } from "./usage.js";
 
 describe("providerReportedCostUsd", () => {
   it("reads the cost OpenRouter reports", () => {
@@ -35,23 +17,32 @@ describe("providerReportedCostUsd", () => {
     expect(providerReportedCostUsd({ openrouter: { usage: { cost: "0.004" } } })).toBeNull();
     expect(providerReportedCostUsd({ openrouter: { usage: { cost: Number.NaN } } })).toBeNull();
   });
+
+  it("rejects a negative cost rather than crediting it against the run", () => {
+    // No call earns money. A negative figure is a provider bug or a field we
+    // have misread; either way it must not reduce the org's spend-to-date.
+    expect(providerReportedCostUsd({ openrouter: { usage: { cost: -1.5 } } })).toBeNull();
+  });
 });
 
 describe("toUsageRecord", () => {
-  const event: ModelCallEnd = {
-    provider: "google.generative-ai",
+  // The nested provider-level usage shape, which is what
+  // `executeLanguageModelCall`'s `execute()` resolves to.
+  const call: MeteredCall = {
     modelId: "gemini-3.7-flash",
-    usage: {
-      inputTokens: 1000,
-      inputTokenDetails: { cacheReadTokens: 400 },
-      outputTokens: 200,
-      outputTokenDetails: { reasoningTokens: 150 },
+    responseMs: 812.4,
+    transportOk: true,
+    result: {
+      usage: {
+        inputTokens: { total: 1000, cacheRead: 400 },
+        outputTokens: { total: 200, reasoning: 150 },
+      },
     },
-    performance: { responseTimeMs: 812.4 },
   };
+  const at = new Date("2026-09-01");
 
-  it("maps the flat telemetry shape onto the ledger row", () => {
-    expect(toUsageRecord(event, { attempt: 1, status: "ok", at: new Date("2026-09-01") })).toEqual({
+  it("maps the nested provider usage shape onto the ledger row", () => {
+    expect(toUsageRecord(call, { provider: "google", attempt: 1, status: "ok", at })).toEqual({
       provider: "google",
       modelId: "gemini-3.7-flash",
       attempt: 1,
@@ -67,42 +58,74 @@ describe("toUsageRecord", () => {
   });
 
   it("prices the same call higher after the 2027 rate change, from data alone", () => {
-    const after = toUsageRecord(event, { attempt: 1, status: "ok", at: new Date("2027-02-01") });
+    const after = toUsageRecord(call, {
+      provider: "google",
+      attempt: 1,
+      status: "ok",
+      at: new Date("2027-02-01"),
+    });
     expect(after.costUsd).toBe(0.003);
   });
 
   it("records unknown, not zero, for a model the table has never heard of", () => {
     const record = toUsageRecord(
-      { ...event, modelId: "gemini-9.9-imaginary" },
-      { attempt: 1, status: "ok", at: new Date("2026-09-01") },
+      { ...call, modelId: "gemini-9.9-imaginary" },
+      { provider: "google", attempt: 1, status: "ok", at },
     );
     expect(record.costUsd).toBeNull();
     expect(record.costSource).toBe("unknown");
   });
 
+  it("records unknown when the provider reported no usage for a model it knows", () => {
+    // The SDK types every token count `number | undefined`. Multiplying a
+    // missing count by a known rate yields 0, which the display rules render as
+    // a definite "≈ $0.00" — a confident claim that a billed call was free.
+    const record = toUsageRecord(
+      { modelId: "gemini-3.7-flash", responseMs: 5, transportOk: true, result: {} },
+      { provider: "google", attempt: 1, status: "ok", at },
+    );
+    expect(record.costUsd).toBeNull();
+    expect(record.costSource).toBe("unknown");
+  });
+
+  it("records unknown for a round trip that threw before reporting anything", () => {
+    const record = toUsageRecord(
+      { modelId: "gemini-3.7-flash", responseMs: 20, transportOk: false },
+      { provider: "google", attempt: 1, status: "errored", at },
+    );
+    expect(record).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: null,
+      costSource: "unknown",
+      status: "errored",
+    });
+  });
+
   it("prefers the provider's own figure over the table's estimate", () => {
     const record = toUsageRecord(
-      { ...event, providerMetadata: { openrouter: { usage: { cost: 0.9 } } } },
-      { attempt: 1, status: "ok", at: new Date("2026-09-01") },
+      {
+        ...call,
+        result: { ...call.result, providerMetadata: { openrouter: { usage: { cost: 0.9 } } } },
+      },
+      { provider: "openrouter", attempt: 1, status: "ok", at },
     );
     expect(record.costUsd).toBe(0.9);
     expect(record.costSource).toBe("provider_reported");
   });
 
-  it("tolerates a telemetry event with no usage or timing at all", () => {
+  it("prices a two-token call rather than rounding it away", () => {
     const record = toUsageRecord(
-      { provider: "openrouter", modelId: "x/y", usage: {} },
-      { attempt: 2, status: "errored", at: new Date() },
+      {
+        modelId: "gemini-3.7-flash",
+        responseMs: 1,
+        transportOk: true,
+        result: { usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
+      },
+      { provider: "google", attempt: 1, status: "ok", at },
     );
-    expect(record).toMatchObject({
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
-      reasoningTokens: 0,
-      responseMs: 0,
-      status: "errored",
-      attempt: 2,
-      costSource: "unknown",
-    });
+    // (0.75 + 3.75) / 1e6, at the column's six decimal places.
+    expect(record.costUsd).toBe(0.000005);
+    expect(record.costSource).toBe("price_table");
   });
 });
