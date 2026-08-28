@@ -25,5 +25,11 @@ export {
   factcheckSchema,
 } from "./factcheck.js";
 export { RESEARCHER, type ResearchOutput, researchSchema } from "./researcher.js";
-export type { Step, StepBrand, StepContext } from "./types.js";
+export type {
+  Step,
+  StepAttribution,
+  StepBrand,
+  StepContext,
+  StepUsageSink,
+} from "./types.js";
 export { type DraftOutput, draftSchema, WRITER, type WriterInput } from "./writer.js";

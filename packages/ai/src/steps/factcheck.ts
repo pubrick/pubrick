@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callStep } from "./prompt.js";
+import { defineStep } from "./prompt.js";
 import type { Step } from "./types.js";
 
 /**
@@ -40,20 +40,16 @@ export type FactcheckInput = { body: string };
  * against the source article; until then, saying otherwise would be the exact
  * slop this product exists to oppose.
  */
-export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = {
+export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = defineStep({
   name: "factcheck",
   schema: factcheckSchema,
-  run: (ctx, input) =>
-    callStep(ctx, {
-      schema: factcheckSchema,
-      role: [
-        `You read a draft post and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
-        "You have no sources and no way to look anything up, so you check nothing and decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
-        "Produce, for each claim:",
-        "- text: the claim in one sentence, as the draft states it.",
-        "- needsCheck: true when a reader could reasonably ask whether it is true — numbers, dates, prices, comparisons, superlatives, attributions, anything about the world outside the post. False for common knowledge and for plainly signalled opinion.",
-        "If the draft makes no factual claims, return an empty list.",
-      ],
-      material: [{ label: "DRAFT", text: input.body }],
-    }),
-};
+  role: [
+    `You read a draft post and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
+    "You have no sources and no way to look anything up, so you check nothing and decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
+    "Produce, for each claim:",
+    "- text: the claim in one sentence, as the draft states it.",
+    "- needsCheck: true when a reader could reasonably ask whether it is true — numbers, dates, prices, comparisons, superlatives, attributions, anything about the world outside the post. False for common knowledge and for plainly signalled opinion.",
+    "If the draft makes no factual claims, return an empty list.",
+  ],
+  material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
+});

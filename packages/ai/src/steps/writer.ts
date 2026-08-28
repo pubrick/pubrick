@@ -1,6 +1,6 @@
 import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
-import { callStep } from "./prompt.js";
+import { defineStep } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
 import type { Step } from "./types.js";
 
@@ -33,25 +33,21 @@ export function planMaterial(research: ResearchOutput): string {
 }
 
 /** Step 2 — write the master draft the channels are adapted from. */
-export const WRITER: Step<WriterInput, DraftOutput> = {
+export const WRITER: Step<WriterInput, DraftOutput> = defineStep({
   name: "writer",
   schema: draftSchema,
-  run: (ctx, input) =>
-    callStep(ctx, {
-      schema: draftSchema,
-      role: [
-        "You write the master draft of a social post, working from a brief and a plan someone else made.",
-        "Write the post itself: no title, no preamble, no explanation of what you wrote, no hashtags unless the brief asks for them.",
-        "Make every point in the plan, in its order, and add nothing the brief or the plan does not support.",
-        `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
-      ],
-      material: [
-        { label: "BRIEF", text: ctx.brief },
-        // Not re-parsed here: a resumed run reads this from a jsonb checkpoint,
-        // and the place to validate that is the run, which can classify the
-        // failure. A ZodError thrown from inside a step would reach pg-boss
-        // unclassified and be retried until the attempts ran out.
-        { label: "PLAN", text: planMaterial(input.research) },
-      ],
-    }),
-};
+  role: [
+    "You write the master draft of a social post, working from a brief and a plan someone else made.",
+    "Write the post itself: no title, no preamble, no explanation of what you wrote, no hashtags unless the brief asks for them.",
+    "Make every point in the plan, in its order, and add nothing the brief or the plan does not support.",
+    `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
+  ],
+  material: (ctx, input) => [
+    { label: "BRIEF", text: ctx.brief },
+    // Not re-parsed here: a resumed run reads this from a jsonb checkpoint, and
+    // the place to validate that is the run, which can classify the failure. A
+    // ZodError thrown from inside a step would reach pg-boss unclassified and be
+    // retried until the attempts ran out.
+    { label: "PLAN", text: planMaterial(input.research) },
+  ],
+});

@@ -1,6 +1,6 @@
 import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
-import { callStep } from "./prompt.js";
+import { defineStep } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
 import type { Step } from "./types.js";
 import { planMaterial } from "./writer.js";
@@ -30,24 +30,20 @@ export type EditorInput = { research: ResearchOutput; body: string };
  * force at the edit; an editor holding only the draft cannot tell a deliberate
  * omission from a missing point.
  */
-export const EDITOR: Step<EditorInput, EditOutput> = {
+export const EDITOR: Step<EditorInput, EditOutput> = defineStep({
   name: "editor",
   schema: editSchema,
-  run: (ctx, input) =>
-    callStep(ctx, {
-      schema: editSchema,
-      role: [
-        "You edit a draft post into the brand's voice. You are the last person to touch it before a human reads it.",
-        "Cut what does not earn its place, fix what is limp or generic, and keep the writer's meaning. Do not add facts, numbers, names or claims that are not already in the draft.",
-        `The edited post must be at most ${MAX_BODY_LENGTH} characters.`,
-        "Produce:",
-        "- body: the edited post, complete, ready to read.",
-        "- changes: what you changed, one short plain-language line each, for the human who approves this. If you changed nothing, return an empty list rather than inventing an edit.",
-      ],
-      material: [
-        { label: "BRIEF", text: ctx.brief },
-        { label: "PLAN", text: planMaterial(input.research) },
-        { label: "DRAFT", text: input.body },
-      ],
-    }),
-};
+  role: [
+    "You edit a draft post into the brand's voice. You are the last person to touch it before a human reads it.",
+    "Cut what does not earn its place, fix what is limp or generic, and keep the writer's meaning. Do not add facts, numbers, names or claims that are not already in the draft.",
+    `The edited post must be at most ${MAX_BODY_LENGTH} characters.`,
+    "Produce:",
+    "- body: the edited post, complete, ready to read.",
+    "- changes: what you changed, one short plain-language line each, for the human who approves this. If you changed nothing, return an empty list rather than inventing an edit.",
+  ],
+  material: (ctx, input) => [
+    { label: "BRIEF", text: ctx.brief },
+    { label: "PLAN", text: planMaterial(input.research) },
+    { label: "DRAFT", text: input.body },
+  ],
+});

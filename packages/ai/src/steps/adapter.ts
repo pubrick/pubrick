@@ -1,10 +1,15 @@
-import { MAX_BODY_LENGTH, PermanentError, PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
+import {
+  MAX_BODY_LENGTH,
+  PermanentError,
+  PLATFORM_IDS,
+  PLATFORM_MAX_TEXT_LENGTH,
+} from "@pubrick/shared";
 import { z } from "zod";
-import { callStep } from "./prompt.js";
+import { defineStep } from "./prompt.js";
 import type { Step } from "./types.js";
 
-/** The platforms a channel can exist for. Keyed off the limits table so the two cannot drift. */
-export type Platform = keyof typeof PLATFORM_MAX_TEXT_LENGTH;
+/** The platforms a channel can exist for. */
+export type Platform = (typeof PLATFORM_IDS)[number];
 
 /**
  * How long an adaptation for this platform may be.
@@ -16,29 +21,61 @@ export type Platform = keyof typeof PLATFORM_MAX_TEXT_LENGTH;
  * vc_ru) are therefore clamped to what the product can edit.
  */
 export function adaptationLimit(platform: Platform): number {
-  return Math.min(PLATFORM_MAX_TEXT_LENGTH[platform], MAX_BODY_LENGTH);
+  const limit: number | undefined = PLATFORM_MAX_TEXT_LENGTH[platform];
+  // The type says this cannot happen; `channels.platform` is a text column, so
+  // at runtime it can. Unchecked, the arithmetic below yields NaN and the run
+  // fails much later with "limit of NaN characters" — or, worse, a `max(NaN)`
+  // that rejects nothing at all.
+  if (limit === undefined) {
+    throw new PermanentError(`no text limit is known for platform "${String(platform)}"`);
+  }
+  return Math.min(limit, MAX_BODY_LENGTH);
 }
 
 /** The channel a run adapts for. Not the drizzle row: this package has no database. */
 export type StepChannel = { id: string; name: string; platform: Platform };
 
+/**
+ * Checked at the boundary, because `StepChannel` is a hand-written type over
+ * rows this package did not read. An unknown platform is the one that matters:
+ * it silently produced a `NaN` limit before this existed.
+ */
+const stepChannelSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  platform: z.enum(PLATFORM_IDS),
+});
+
 export type AdapterInput = { body: string };
 export type AdaptationOutput = { body: string };
 
 /**
- * The schema's own words for "too long", which double as the detector.
+ * Was this failure the body being too long?
  *
- * The custom message travels twice: into the repair prompt, where it tells the
- * model the exact number it missed, and into the `PermanentError` message on a
- * second failure, where matching it distinguishes an overflow from any other
- * schema violation. Sniffing the generic "does not match the required schema"
- * text instead would report a missing body as a length problem.
+ * Read from the **structured** validation issues, never from the error's
+ * rendered message. That message quotes the model's own output back verbatim,
+ * so a model can write any sentence into it — including one that looks like a
+ * length complaint. A post *about* character limits ("Bluesky posts must be at
+ * most 300 characters") returned under a misspelled key would otherwise be
+ * reported to the user as a limit failure, hiding the real defect.
  *
- * It carries no quotation marks or apostrophes on purpose: the message reaches
- * us through a JSON-encoded validation error, where those would be escaped.
+ * `generateStructured` attaches the originating error as `cause`; the issues sit
+ * a few links down that chain (`NoObjectGeneratedError` → `TypeValidationError`
+ * → `ZodError`), so the walk is by shape rather than by depth.
  */
-function overflowMarker(limit: number): string {
-  return `must be at most ${limit} characters`;
+function isBodyTooLong(error: unknown): boolean {
+  let node: unknown = error;
+  for (let depth = 0; depth < 8 && node !== null && node !== undefined; depth += 1) {
+    const issues = (node as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      return issues.some((issue: unknown) => {
+        const { code, path } = (issue ?? {}) as { code?: unknown; path?: unknown };
+        return code === "too_big" && Array.isArray(path) && path[0] === "body";
+      });
+    }
+    node = (node as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
@@ -56,37 +93,51 @@ function overflowMarker(limit: number): string {
  * differently from us.
  */
 export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationOutput> {
-  const limit = adaptationLimit(channel.platform);
-  const marker = overflowMarker(limit);
+  const parsed = stepChannelSchema.safeParse(channel);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "channel"}: ${issue.message}`)
+      .join("; ");
+    throw new PermanentError(
+      `cannot build an adapter for platform "${String(channel?.platform)}": ${detail}`,
+    );
+  }
+  const { id, name, platform } = parsed.data;
+  const limit = adaptationLimit(platform);
+
+  // The custom message is not how the overflow is detected — `isBodyTooLong`
+  // does that from the issues. It is how the model is told what it missed: it
+  // travels into the repair prompt, where "Too big: expected string to have
+  // <=300 characters" says less than the number in the model's own terms.
   const schema = z.object({
     body: z
       .string()
       .min(1)
-      .max(limit, { message: `the body ${marker} to fit this channel` }),
+      .max(limit, { message: `the body must be at most ${limit} characters to fit this channel` }),
+  });
+
+  const step = defineStep<AdapterInput, AdaptationOutput>({
+    name: `adapter:${id}`,
+    schema,
+    channelId: id,
+    role: [
+      `You rewrite an approved post for one channel: ${name}, on ${platform}.`,
+      `The result must be at most ${limit} characters — characters, not words or tokens, counted including spaces, punctuation and any link.`,
+      "Fitting the limit matters more than keeping every detail: cut the least important point rather than going over, and never end mid-sentence to make room.",
+      "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make, and do not add hashtags or emoji unless the draft already uses them.",
+    ],
+    material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
   });
 
   return {
-    name: `adapter:${channel.id}`,
-    schema,
+    ...step,
     run: async (ctx, input) => {
       try {
-        return await callStep(ctx, {
-          schema,
-          role: [
-            `You rewrite an approved post for one channel: ${channel.name}, on ${channel.platform}.`,
-            `The result must be at most ${limit} characters — characters, not words or tokens, counted including spaces, punctuation and any link.`,
-            "Fitting the limit matters more than keeping every detail: cut the least important point rather than going over, and never end mid-sentence to make room.",
-            "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make, and do not add hashtags or emoji unless the draft already uses them.",
-          ],
-          material: [{ label: "DRAFT", text: input.body }],
-        });
+        return await step.run(ctx, input);
       } catch (error) {
-        // `instanceof Error` rather than `instanceof PermanentError`: the marker
-        // is what identifies the failure, and a class check would silently stop
-        // matching if two copies of @pubrick/shared ever ended up in the tree.
-        if (error instanceof Error && error.message.includes(marker)) {
+        if (isBodyTooLong(error)) {
           throw new PermanentError(
-            `the model could not fit ${channel.name}'s limit of ${limit} characters, twice`,
+            `the model could not fit ${name}'s limit of ${limit} characters, twice`,
           );
         }
         throw error;

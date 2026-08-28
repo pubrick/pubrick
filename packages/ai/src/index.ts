@@ -29,9 +29,11 @@ export {
   type ResearchOutput,
   researchSchema,
   type Step,
+  type StepAttribution,
   type StepBrand,
   type StepChannel,
   type StepContext,
+  type StepUsageSink,
   WRITER,
   type WriterInput,
 } from "./steps/index.js";

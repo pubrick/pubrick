@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callStep } from "./prompt.js";
+import { defineStep } from "./prompt.js";
 import type { Step } from "./types.js";
 
 /**
@@ -30,20 +30,16 @@ export type ResearchOutput = z.infer<typeof researchSchema>;
  * field the writer would have to be told to treat as a subtraction is the same
  * instruction spread over two places.
  */
-export const RESEARCHER: Step<void, ResearchOutput> = {
+export const RESEARCHER: Step<void, ResearchOutput> = defineStep({
   name: "researcher",
   schema: researchSchema,
-  run: (ctx) =>
-    callStep(ctx, {
-      schema: researchSchema,
-      role: [
-        "You plan a social post before anyone writes it. You do not write the post itself.",
-        "You have no web access and no sources: work from the brief and from what you already know. Never invent a statistic, a date, a name or a quotation to make a point land.",
-        "Produce:",
-        "- angle: one sentence saying what this post is really about and why this audience should care.",
-        "- keyPoints: the points the post must make, in the order they should be made.",
-        "- avoid: what to leave out — what this audience already knows, claims you cannot support, and the clichés this subject attracts.",
-      ],
-      material: [{ label: "BRIEF", text: ctx.brief }],
-    }),
-};
+  role: [
+    "You plan a social post before anyone writes it. You do not write the post itself.",
+    "You have no web access and no sources: work from the brief and from what you already know. Never invent a statistic, a date, a name or a quotation to make a point land.",
+    "Produce:",
+    "- angle: one sentence saying what this post is really about and why this audience should care.",
+    "- keyPoints: the points the post must make, in the order they should be made.",
+    "- avoid: what to leave out — what this audience already knows, claims you cannot support, and the clichés this subject attracts.",
+  ],
+  material: (ctx) => [{ label: "BRIEF", text: ctx.brief }],
+});

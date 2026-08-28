@@ -89,9 +89,17 @@ export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Pr
       repaired = await attempt(args, repairPrompt(args.prompt, firstError), 2, clock);
     } catch (repairError) {
       if (!NoObjectGeneratedError.isInstance(repairError)) throw classifyAiError(repairError);
-      throw new PermanentError(
+      const failure = new PermanentError(
         `the model returned output that does not match the required schema, twice: ${validationMessage(repairError)}`,
       );
+      // The originating error travels along as `cause`, and callers that need to
+      // know WHICH rule was broken must read the validation issues through it.
+      // The message above is not a safe substitute: it renders the model's own
+      // output verbatim, so a model can write any sentence it likes into it —
+      // including one that impersonates a validation failure. The adapter's
+      // platform-limit check reads the issues for exactly that reason.
+      failure.cause = repairError;
+      throw failure;
     }
     return repaired;
   }

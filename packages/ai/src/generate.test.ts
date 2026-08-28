@@ -352,6 +352,34 @@ describe("generateStructured", () => {
     ).rejects.toMatchObject({ name: "PermanentError" });
   });
 
+  it("carries the originating error as `cause`, so callers can read the validation issues", async () => {
+    // The message renders the model's own output verbatim, so a model can write
+    // any sentence into it — including one that impersonates a specific
+    // validation failure. A caller that needs to know WHICH rule was broken (the
+    // adapter, deciding whether a platform limit was missed) must reach the
+    // structured issues instead, and this chain is how it gets there.
+    const error = await generateStructured({
+      ...base,
+      model: textModel('{"headline":1}', '{"headline":2}'),
+      onUsage: vi.fn(),
+    }).catch((e) => e);
+
+    let node: unknown = error;
+    let issues: unknown;
+    for (let depth = 0; depth < 8 && node !== null && node !== undefined; depth += 1) {
+      const candidate = (node as { issues?: unknown }).issues;
+      if (Array.isArray(candidate)) {
+        issues = candidate;
+        break;
+      }
+      node = (node as { cause?: unknown }).cause;
+    }
+
+    expect(error).toBeInstanceOf(PermanentError);
+    expect(issues).toBeInstanceOf(Array);
+    expect(issues).toMatchObject([{ code: "invalid_type", path: ["headline"] }]);
+  });
+
   it("still records a ledger row when the call errors after the provider counted tokens", async () => {
     // The provider counts tokens before anyone knows whether the answer parses.
     // Both failed attempts must leave a row, or the ledger under-reports spend
