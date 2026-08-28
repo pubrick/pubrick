@@ -13,6 +13,7 @@ import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badg
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
+import { channelLabel as platformChannelLabel } from "@/lib/platform";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -154,7 +155,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function channelLabel(channelId: string): string {
     const ch = channels.find((c) => c.id === channelId);
-    return ch ? `[${ch.platform}] ${ch.name}` : channelId;
+    return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
   }
 
   if (!item) {

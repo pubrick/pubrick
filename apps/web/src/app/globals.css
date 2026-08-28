@@ -201,8 +201,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--color-accent); }
-a:hover { color: var(--color-accent-hover); }
+/* In @layer base so Tailwind utilities (e.g. text-white on link-buttons)
+   can override the default link color — un-layered rules beat all layers. */
+@layer base {
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-hover); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }

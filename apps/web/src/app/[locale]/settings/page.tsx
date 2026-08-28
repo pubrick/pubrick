@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,11 +15,13 @@ export default function SettingsPage() {
   const { data: session } = authClient.useSession();
   const { data: organization } = authClient.useActiveOrganization();
 
-  // Read once on mount (client-only, matching applyTheme/readThemePref's own
-  // localStorage-or-fall-back-to-"system" contract) rather than in an effect
-  // — readThemePref() already tolerates a missing `localStorage` (SSR) by
-  // catching and returning "system", so there's nothing an effect would add.
-  const [pref, setPref] = useState<ThemePref>(() => readThemePref());
+  const [pref, setPref] = useState<ThemePref>("system");
+  // Stored pref is client-only state: reading it during the first render makes
+  // the SSR html (always "system") disagree with the client and React reports
+  // a hydration mismatch — so sync it after mount instead.
+  useEffect(() => {
+    setPref(readThemePref());
+  }, []);
 
   function changeTheme(value: string) {
     const next = value as ThemePref;

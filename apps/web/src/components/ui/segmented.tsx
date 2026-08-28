@@ -22,7 +22,9 @@ export function Segmented({ options, value, onChange, className }: SegmentedProp
   return (
     <div
       role="tablist"
-      className={["inline-flex items-center gap-1", className].filter(Boolean).join(" ")}
+      className={["flex max-w-full items-center gap-1 overflow-x-auto", className]
+        .filter(Boolean)
+        .join(" ")}
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -34,7 +36,7 @@ export function Segmented({ options, value, onChange, className }: SegmentedProp
             aria-selected={active}
             onClick={() => onChange(option.value)}
             className={[
-              "rounded-control px-3.5 py-1.5 text-sm font-semibold transition-colors",
+              "shrink-0 whitespace-nowrap rounded-control px-3.5 py-1.5 text-sm font-semibold transition-colors",
               active ? "bg-border-soft text-fg" : "text-fg-secondary hover:text-fg",
             ].join(" ")}
           >

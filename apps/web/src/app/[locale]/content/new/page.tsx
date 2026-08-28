@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { channelLabel } from "@/lib/platform";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
@@ -154,7 +155,7 @@ export default function NewContentPage() {
                         onChange={() => toggleChannel(c.id)}
                         className="h-4 w-4 rounded border-border text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       />
-                      [{c.platform}] {c.name}
+                      {channelLabel(c.platform, c.name)}
                     </label>
                   </li>
                 ))}

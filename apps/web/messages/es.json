@@ -54,7 +54,7 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo."
   },
   "Content": {
-    "title": "Contenido",
+    "title": "Cola",
     "newAction": "Nuevo contenido",
     "empty": "Todavía no hay contenido.",
     "emptyCreateAction": "Crear tu primera publicación",

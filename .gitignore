@@ -11,3 +11,4 @@ coverage/
 # `next-env.d.ts` stays tracked — Next's docs say to commit that one.
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
+.DS_Store

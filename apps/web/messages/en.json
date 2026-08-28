@@ -54,7 +54,7 @@
     "genericError": "Something went wrong. Please try again."
   },
   "Content": {
-    "title": "Content",
+    "title": "Queue",
     "newAction": "New content",
     "empty": "No content yet.",
     "emptyCreateAction": "Create your first post",

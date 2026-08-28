@@ -54,7 +54,7 @@
     "genericError": "Algo deu errado. Tente novamente."
   },
   "Content": {
-    "title": "Conteúdo",
+    "title": "Fila",
     "newAction": "Novo conteúdo",
     "empty": "Ainda não há conteúdo.",
     "emptyCreateAction": "Criar sua primeira publicação",

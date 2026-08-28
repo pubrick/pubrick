@@ -207,7 +207,7 @@ describe("adaptation rendering (Step 2)", () => {
 
     // a1: published + https:// externalUrl -> real channel label + a real link.
     expect(rows[0]).toHaveTextContent(
-      `[telegram] Main channel — ${en.Content.adaptationStatus.published}`,
+      `Telegram · Main channel — ${en.Content.adaptationStatus.published}`,
     );
     const link = within(rows[0] as HTMLElement).getByRole("link", {
       name: "https://t.me/main/42",
@@ -215,12 +215,12 @@ describe("adaptation rendering (Step 2)", () => {
     expect(link).toHaveAttribute("href", "https://t.me/main/42");
 
     // a2: published but externalUrl is null -> different channel's label, no link.
-    expect(rows[1]).toHaveTextContent(`[vk] VK group — ${en.Content.adaptationStatus.published}`);
+    expect(rows[1]).toHaveTextContent(`VK · VK group — ${en.Content.adaptationStatus.published}`);
     expect(within(rows[1] as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
 
     // a3: failed -> same channel as a1 (proves the label isn't just "whatever a1 showed"), no link.
     expect(rows[2]).toHaveTextContent(
-      `[telegram] Main channel — ${en.Content.adaptationStatus.failed}`,
+      `Telegram · Main channel — ${en.Content.adaptationStatus.failed}`,
     );
     expect(within(rows[2] as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
   });

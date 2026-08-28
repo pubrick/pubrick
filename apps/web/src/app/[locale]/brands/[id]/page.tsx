@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Select } from "@/components/ui/select";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 
 type Channel = { id: string; platform: string; name: string };
 type Brand = { id: string; name: string };
@@ -116,7 +117,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             return (
               <ListRow
                 key={c.id}
-                title={`[${c.platform}] ${c.name}`}
+                title={channelLabel(c.platform, c.name)}
                 meta={
                   // Plain strings for the loading/ok cases — NOT wrapped in an
                   // extra <span> — because ListRow already wraps `meta` in one
@@ -176,7 +177,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             >
               {PLATFORM_IDS.map((p) => (
                 <option key={p} value={p}>
-                  {p}
+                  {platformName(p)}
                 </option>
               ))}
             </Select>
@@ -198,6 +199,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 value={creds[f] ?? ""}
                 onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
                 placeholder={f}
+                label={credentialFieldLabel(f)}
                 required
                 className="min-w-[200px] flex-1"
               />

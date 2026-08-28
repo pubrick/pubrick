@@ -13,6 +13,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
+import { channelLabel as platformChannelLabel } from "@/lib/platform";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -84,7 +85,7 @@ export default function ContentQueuePage() {
 
   function channelLabel(channelId: string): string {
     const ch = channels.find((c) => c.id === channelId);
-    return ch ? `[${ch.platform}] ${ch.name}` : channelId;
+    return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
   }
 
   function renderItem(item: ContentItem) {

@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- Default link color no longer overrides component text colors (the primary "Sign up" link on the landing page rendered white-on-invisible) — base anchor styles moved into `@layer base`.
+- Hydration warnings from the theme boot script (`suppressHydrationWarning` on `<html>`) and from the Settings appearance control (stored theme preference now syncs after mount).
+- The queue's status filter scrolls inside itself on narrow screens instead of widening the page.
+
+### Changed
+- Platform ids are never shown raw: channels are labeled "Telegram · Name" everywhere, the platform picker shows display names, and credential fields have human labels.
+- The queue screen's title matches its navigation item ("Queue") in all four locales.
+
 ### Added
 - Monorepo scaffold: web / api / worker apps, db package, docker compose, CI.
 - Auth: Better Auth email/password sign-up and sessions, proxied through the web app at `/api/auth/*`.
