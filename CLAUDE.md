@@ -101,40 +101,62 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   brand cascades) are all ordinary outcomes: log and return, never throw.
 - **The publish promise is enforced server-side.** `ContentRepository` refuses
   approval of an `ai` item that nobody opened and nobody touched — body *and*
-  every adaptation compared with `isUntouchedAi` against the first `ai`
-  `content_versions` row, missing evidence refusing. Never move this check into
+  every adaptation judged with `allSentencesAi` against that level's `ai`
+  `content_versions` rows, missing **or partial** evidence refusing (a level
+  whose only rows are fragments has no countable reference and refuses too).
+  Never move this check into
   the UI, and never weaken it to the master body alone: `adaptations.body ??
   contentItems.body` is what actually ships. `first_opened_at` is stamped only by
   `POST /api/content/:id/opened`, never as a side effect of a GET (the public API
   and the MCP server would trip it), and the run screen must not auto-forward to
   the finished draft — that would satisfy the read signal with no human present.
-- **Three provenance references, one per question.** "One function, so the badge
-  and the gate cannot disagree" stops being true as soon as a level has more than
-  one `ai` `content_versions` row (increment 2b's refine rows write the second),
-  so each question names its own reference and its own formula:
-  - **the gate** — may this be approved? — the **first** `ai` row per level,
-    `isUntouchedAi` (`ContentRepository.requireHumanInvolvement`);
-  - **the badge** — **any** `ai` row: `matchesAnyAiVersion` (`@pubrick/shared`),
-    run by `ContentRepository` and delivered as the boolean `bodyIsAiVerbatim`
-    on **both** `GET /api/content/:id` and the LIST rows, so a queue card shows
-    the same badge as the screen it opens. Ship the verdict, never the version
-    text: a badge has no use for the bodies, and a list that carried them would
-    be shipping every version of every item to draw four words;
-  - **the lens** — which sentences dim — **all** `ai` rows: `aiSentenceMaskAny`,
-    an index-wise OR of one `aiSentenceMask` per version.
+- **One provenance question, two references.** The question is "is every
+  sentence of this text still one the model wrote", and it is asked at two
+  grains — never as separate rules that could answer differently on one screen:
+  - **whole text** — the gate ("may this be approved?") and the origin badge
+    ("AI-drafted or Human-edited?"): `allSentencesAi(current, aiRows,
+    firstFullRow)` (`@pubrick/shared`), over **all** of that level's `ai` rows
+    for the mask plus the level's **first `scope = 'full'`** row for the
+    deletion clause. Run by `ContentRepository` in
+    `requireHumanInvolvement`, in `get` and in `list`, and delivered to the web
+    as the boolean `bodyIsAiVerbatim` on **both** `GET /api/content/:id` and the
+    LIST rows, so a queue card shows the same badge as the screen it opens. Ship
+    the verdict, never the version text: a badge has no use for the bodies, and
+    a list that carried them would be shipping every version of every item to
+    draw four words;
+  - **per sentence** — the lens, which sentences dim — **all** `ai` rows:
+    `aiSentenceMaskAny`, an index-wise OR of one `aiSentenceMask` per version.
+    `allSentencesAi` reads this same mask, so the two cannot drift.
 
-  Today there is exactly one `ai` row per level, so all three coincide and the
-  wrong choice looks right in every test you would think to write.
+  There used to be a third reference — "does the body equal ANY `ai` row"
+  (`matchesAnyAiVersion`, deleted). A refine's fragment can never EQUAL a whole
+  body, so that formula captions the model's own words "Human-edited" the first
+  time a proposal is accepted. If you find yourself adding a reference, you are
+  about to ship a screen that answers one question twice.
+
+  Two traps, both silent. **`aiRows[0]` is not the first `full` row** — a
+  fragment can sort first, and counting against a one-sentence fragment makes
+  the deletion clause a no-op, so every deletion reads as untouched AI; any
+  query feeding this must order by `created_at, id` and select `scope`. And
+  while a level has exactly one `full` row and no fragments — every row on live
+  data today — every wrong choice here coincides with the right one, so it looks
+  right in each test you would think to write.
+
+  **The badge and the lens can disagree on one screen, honestly.** The whole-text
+  grain knows what is no longer there: delete a sentence and every sentence left
+  is dimmed while the badge reads "Human-edited". The lens legend says so; do not
+  "fix" it by making the badge ignore deletions.
 - **Never mask against a concatenation of versions.** `aiSentenceMask` consumes
   each AI sentence at most once on purpose — a human's second copy of a sentence
   the AI wrote once stays human — and joining the versions destroys that count,
   dimming the human's own duplicate. That is why the multi-version helper is
   `aiSentenceMaskAny(current, versions)`, OR-ing per-version masks so each keeps
   its own multiset; replacing it with `aiSentenceMask(current, versions.join())`
-  is a silent provenance inversion, not a simplification. The badge cannot take a
-  joined reference either: `isUntouchedAi` short-circuits on a sentence-count
-  mismatch, so a concatenation always answers `false` and every AI draft would
-  read as human-edited.
+  is a silent provenance inversion, not a simplification. The whole-text grain
+  cannot take a joined reference either: `allSentencesAi` masks through that same
+  helper, and its deletion clause counts against ONE row — the first `full` one —
+  so joining the versions would measure the text against every version at once
+  and read every AI draft as human-edited.
 - **Pair spans with flags only through `dimSpans`.** The partition and the mask
   do not index-align — `splitSentences` drops blank pieces, so
   `"\n\nHello. World."` is three spans and two sentences, and zipping the mask on

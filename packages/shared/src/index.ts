@@ -36,7 +36,6 @@ export {
   type DimSpan,
   dimSpans,
   isUntouchedAi,
-  matchesAnyAiVersion,
   normalizeForComparison,
   normalizeNewlines,
   type SentenceSpan,

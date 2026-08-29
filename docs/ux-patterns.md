@@ -286,9 +286,12 @@ it had to be true; a card that read *AI-drafted* for a body the item screen
 called *human-edited* would be a worse untruth than the one the lens removes.
 Revisit the default as a per-user preference rather than by flipping it, and
 revisit it deliberately — if the badge ever stops being on every card, the
-argument above no longer holds. When the lens IS on, a one-line legend says
+argument above no longer holds. When the lens IS on, a short legend says
 what dim means: without it, "nothing is dimmed" cannot be told apart from
-"the highlighting is broken". (Provenance-lens design §5; the default itself is
+"the highlighting is broken". The legend also owns the one place the badge and
+the lens visibly disagree — a deleted sentence is an edit the dimming has
+nothing left to show, so the badge can read *human-edited* while every visible
+sentence is dimmed. (Provenance-lens design §5; the default itself is
 one `useState(false)` in `app/[locale]/content/[id]/page.tsx`.)
 
 ### 5.4 Brand voice as a named, per-brand object (Jasper) — `ADOPT-WITH-FEATURE` (brand knowledge)

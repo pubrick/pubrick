@@ -637,8 +637,8 @@ describe("origin badges (Task 10)", () => {
    * rewritten item read "AI-drafted" here and "Human-edited" one click later.
    *
    * The list now carries `bodyIsAiVerbatim`, a boolean the API computes with
-   * the same `matchesAnyAiVersion` the item response uses — a verdict, not the
-   * version bodies, which a badge has no use for.
+   * the same `allSentencesAi` the item response and the publish gate use — a
+   * verdict, not the version bodies, which a badge has no use for.
    */
   it("labels a rewritten AI draft human-edited on the card, not only on the item screen", async () => {
     const calls: Call[] = [];

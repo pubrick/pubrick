@@ -114,7 +114,7 @@
     "backToQueue": "Volver a la cola",
     "bodyLabel": "Texto",
     "lensToggle": "Resaltar el texto de la IA",
-    "lensLegend": "Las frases atenuadas son exactamente lo que escribió la IA. Si no hay nada atenuado, todas las frases son tuyas.",
+    "lensLegend": "Las frases atenuadas son exactamente lo que escribió la IA. Si no hay nada atenuado, todas las frases son tuyas. Borrar una frase también cuenta como tu edición, así que la etiqueta de arriba puede indicar que lo editó una persona aunque todo lo que quede esté atenuado.",
     "saveBody": "Guardar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Déjalo vacío para usar el texto de arriba",

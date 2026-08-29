@@ -114,7 +114,7 @@
     "backToQueue": "Voltar à fila",
     "bodyLabel": "Texto",
     "lensToggle": "Destacar o texto da IA",
-    "lensLegend": "As frases esmaecidas são exatamente o que a IA escreveu. Se nada estiver esmaecido, todas as frases são suas.",
+    "lensLegend": "As frases esmaecidas são exatamente o que a IA escreveu. Se nada estiver esmaecido, todas as frases são suas. Apagar uma frase também conta como a sua edição, por isso a etiqueta acima pode indicar que foi editado por uma pessoa mesmo que tudo o que resta esteja esmaecido.",
     "saveBody": "Salvar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Deixe em branco para usar o texto acima",

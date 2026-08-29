@@ -13,30 +13,46 @@
  * API answers that comparison as `bodyIsAiVerbatim` — a single boolean, on
  * BOTH the item response and every row of the list.
  *
- * **Why the API and not here.** The comparison itself is
- * `matchesAnyAiVersion` in `@pubrick/shared`, and it needs the `ai` version
- * bodies. The item screen is given those anyway (the lens dims against them),
- * so this function used to run the comparison itself — and the QUEUE could
- * not, because its rows carry no version bodies and shipping the full text of
- * every version to draw a badge would be absurd. The result was a card that
- * read "AI-drafted" for a body the detail screen called "Human-edited" one
- * click later, which is precisely the claim the provenance-lens design's §5
- * leans on when it ships the lens off by default: *the badge already carries
- * the claim at a glance on every card*. A boolean makes that sentence true.
+ * **Why the API and not here.** The comparison itself is `allSentencesAi` in
+ * `@pubrick/shared`, and it needs the `ai` version rows — their `scope`
+ * included, which the response does not carry. The item screen is given the
+ * bodies anyway (the lens dims against them), so this function used to run the
+ * comparison itself — and the QUEUE could not, because its rows carry no
+ * version bodies and shipping the full text of every version to draw a badge
+ * would be absurd. The result was a card that read "AI-drafted" for a body the
+ * detail screen called "Human-edited" one click later, which is precisely the
+ * claim the provenance-lens design's §5 leans on when it ships the lens off by
+ * default: *the badge already carries the claim at a glance on every card*. A
+ * boolean makes that sentence true.
  *
  * So the formula lives in one place, `ContentRepository`, next to the publish
- * gate's own read of the same table — where the two references can be compared
- * side by side rather than across a process boundary.
+ * gate's own read of the same table — where the two grains of the question can
+ * be read side by side rather than across a process boundary.
  *
  * **Which rows the badge is allowed to read is a decision, not a detail.**
- * The provenance-lens design's §3 is the authority, and it gives each question
- * its own reference:
+ * There is ONE question — is every sentence of this text still the model's —
+ * and two references, per the authorship-per-sentence design's §2:
  *
- * | Question | Reference |
- * |---|---|
- * | May this be approved? (the gate) | the **first** `ai` row per level |
- * | What does the badge say? | **any** `ai` row |
- * | Which sentences dim? | **all** `ai` rows |
+ * | Question | Reference | Grain |
+ * |---|---|---|
+ * | May this be approved? (the gate) / what does the badge say? | **all** `ai` rows, and the first `full` row for the deletion clause | the whole text |
+ * | Which sentences dim? (the lens) | **all** `ai` rows | one sentence |
+ *
+ * There used to be a third — "does the body equal ANY `ai` row" — and it is
+ * gone because a refine's fragment can never EQUAL a whole body: the moment the
+ * model refines a draft, that formula captions the model's own words
+ * "Human-edited" while the gate refuses the same draft. Two answers to one
+ * question on one screen.
+ *
+ * **The badge and the lens can still disagree on that screen, and honestly so.**
+ * They answer at different grains, and the whole-text grain knows one thing the
+ * dimming cannot show: what is NO LONGER there. Delete a sentence and every
+ * sentence left is the model's — the lens dims all of them — while the badge
+ * reads "Human-edited", which is true, and which the lens legend says out loud
+ * rather than leaving the reader to reconcile. The mirror case is a level whose
+ * only evidence is a fragment: no `full` row, so the badge takes its fail-safe
+ * and reads "AI-drafted" while most sentences stay undimmed. That one is
+ * missing evidence rather than a claim, and it is not paperable-over here.
  *
  * Everything unknown still resolves to the AI badge. An older payload with no
  * `bodyIsAiVerbatim` at all means no evidence of an edit, and no evidence of an

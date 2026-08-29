@@ -5,7 +5,6 @@ import {
   allSentencesAi,
   dimSpans,
   isUntouchedAi,
-  matchesAnyAiVersion,
   normalizeForComparison,
   normalizeNewlines,
   splitSentenceSpans,
@@ -675,53 +674,6 @@ describe("normalizeNewlines", () => {
 });
 
 /**
- * The badge's reference — design §3's middle row. See `matchesAnyAiVersion`'s
- * docstring for why each of the three questions gets its own.
- */
-describe("matchesAnyAiVersion", () => {
-  it("is true while the body still matches the only ai version", () => {
-    expect(matchesAnyAiVersion("Alpha one. Beta two.", ["Alpha one. Beta two."])).toBe(true);
-  });
-
-  it("is true when the body matches a LATER version, not the first", () => {
-    // The fixture that tells §3's rule apart from the publish gate's. Reading
-    // only the first row here would flip an accepted refinement to
-    // "human-edited" the moment 2b writes the second row.
-    expect(
-      matchesAnyAiVersion("A later AI refinement.", [
-        "The model's first attempt.",
-        "A later AI refinement.",
-      ]),
-    ).toBe(true);
-  });
-
-  it("is false only when the body matches none of them", () => {
-    expect(
-      matchesAnyAiVersion("I rewrote the whole thing.", [
-        "The model's first attempt.",
-        "A later AI refinement.",
-      ]),
-    ).toBe(false);
-  });
-
-  it("is true with no versions at all — missing evidence is not evidence of an edit", () => {
-    // The fail-safe, and the one an `Array.some` would get backwards. An item
-    // whose version row was never written must keep reading AI-drafted;
-    // answering "human-edited" would over-claim human authorship on a body
-    // nobody has touched.
-    expect(matchesAnyAiVersion("Whatever this is.", [])).toBe(true);
-  });
-
-  it("never answers a concatenation of the versions", () => {
-    // `isUntouchedAi` short-circuits on a sentence-count mismatch, so a joined
-    // reference always answers false and would read every AI draft as edited.
-    const versions = ["Alpha one.", "Beta two."];
-    expect(matchesAnyAiVersion("Alpha one.", versions)).toBe(true);
-    expect(isUntouchedAi("Alpha one.", versions.join("\n"))).toBe(false);
-  });
-});
-
-/**
  * The one question the gate and the badge both ask once refine verbs exist.
  * `true` means "still the model's", which REFUSES an unread draft; `false` says
  * a human was involved and opens the gate. Every case below is written with
@@ -881,10 +833,11 @@ describe("allSentencesAi", () => {
   it("counts against the first FULL row, not against aiRows[0]", () => {
     // The two arguments are not interchangeable and nothing else here can tell
     // them apart — every other case passes the full row first. They arrive in
-    // this order for real: the badge's version query has no `ORDER BY` on
-    // purpose ("any" has no first), so a fragment can be `aiRows[0]`. Counting
-    // against a one-sentence fragment makes `n >= 1` true for every body:
-    // clause 3 becomes a no-op and every deletion publishes.
+    // this order for real: nothing promises `aiRows` is ordered, and nothing
+    // makes a level's `full` row its oldest one — a re-generation after a refine
+    // puts the fragment first. Counting against a one-sentence fragment makes
+    // `n >= 1` true for every body: clause 3 becomes a no-op and every deletion
+    // publishes.
     expect(allSentencesAi("Alpha one. Gamma three.", ["Beta two.", full], full)).toBe(false);
   });
 

@@ -165,11 +165,18 @@ describe.skipIf(!url)("content e2e", () => {
    * `origin` and `scope` default to what a generation writes (`ai`, `full`), so
    * a caller spelling either one out is being explicit about the thing its test
    * turns on. `replaceExisting` drops the item's own rows first, for the shapes
-   * that are about what is MISSING.
+   * that are about what is MISSING. `createdAt` is spelled out only by the
+   * tests that turn on ROW ORDER — `defaultNow()` would make "the fragment was
+   * written before the full row" depend on how fast the inserts ran.
    */
   async function addItemVersions(
     itemId: string,
-    versions: { body: string; origin?: "ai" | "human"; scope?: "full" | "fragment" }[],
+    versions: {
+      body: string;
+      origin?: "ai" | "human";
+      scope?: "full" | "fragment";
+      createdAt?: Date;
+    }[],
     options: { replaceExisting?: boolean } = {},
   ): Promise<void> {
     const { createDb, schema } = await import("@pubrick/db");
@@ -194,6 +201,7 @@ describe.skipIf(!url)("content e2e", () => {
         body: version.body,
         origin: version.origin ?? ("ai" as const),
         scope: version.scope ?? ("full" as const),
+        ...(version.createdAt ? { createdAt: version.createdAt } : {}),
       })),
     );
     await pool.end();
@@ -1534,8 +1542,8 @@ describe.skipIf(!url)("content e2e", () => {
      * not — the list has no reference text — so a rewritten item read
      * "AI-drafted" in the queue and "Human-edited" one click later. The list
      * carries the VERDICT instead: a boolean the api computes with the same
-     * `matchesAnyAiVersion` the item response uses, and none of the version
-     * text a badge would have no use for.
+     * `allSentencesAi` the item response and the publish gate use, and none of
+     * the version text a badge would have no use for.
      */
     it("answers the badge on the list too, not only on the item", async () => {
       const agent = await orgAgent();
@@ -1563,6 +1571,94 @@ describe.skipIf(!url)("content e2e", () => {
       expect(edited.body.bodyIsAiVerbatim).toBe(false);
       // The card and the screen it opens now agree.
       expect(await bodyIsAiVerbatim()).toBe(false);
+    });
+
+    /**
+     * The badge asks the gate's question, on the same rows.
+     *
+     * A fragment can never EQUAL a whole body, so whole-body equality captioned
+     * a refined draft "Human-edited" on text that is one hundred percent the
+     * model's — the product's one distinctive claim running backwards, on the
+     * card and in the editor, while the gate refused the very same draft. Two
+     * answers to one question on one screen.
+     */
+    it("reads AI-drafted for a refined body — every sentence is still the model's", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const listedVerdict = async () => {
+        const listed = (await agent.get("/api/content").expect(200)).body as {
+          id: string;
+          bodyIsAiVerbatim: boolean;
+        }[];
+        return listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim;
+      };
+
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      const edited = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: REFINED_BODY })
+        .expect(200);
+
+      expect(edited.body.bodyIsAiVerbatim).toBe(true);
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.bodyIsAiVerbatim).toBe(true);
+      expect(await listedVerdict()).toBe(true);
+    });
+
+    /**
+     * A deletion is still a human act, and the CARD has to know it.
+     *
+     * This is the test that pins WHICH row the count runs against, and it is
+     * the only one that can: everywhere else the item's single `full` row is
+     * also its oldest row, so `aiRows[0]`, "some full row" and "the FIRST full
+     * row" all name the same string and no mutation between them shows.
+     *
+     * Three rows, each with a job, written in an insert order that is NOT their
+     * chronological order — because the list's version read carried no
+     * `ORDER BY` at all while the badge asked whether the body matched ANY row
+     * ("any" has no first), and an unordered read of "the first full row" is
+     * wrong silently:
+     *
+     * - the FRAGMENT is the oldest, so `aiRows[0]` is a one-sentence row.
+     *   Counting against it makes "at least as many sentences as the model
+     *   wrote" true for every body — the deletion clause becomes a no-op and
+     *   every deletion reads AI-drafted.
+     * - a SECOND, shorter `full` row (the model regenerated the draft) is
+     *   written first physically but stamped last, so a read that takes rows in
+     *   table order rather than in `created_at` order anchors on one sentence
+     *   and excuses the deletion below.
+     * - the FIRST `full` row, two sentences, is the only correct anchor.
+     */
+    it("reads Human-edited for a deletion, counting against the first FULL row", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      await addItemVersions(
+        itemId,
+        [
+          { body: AI_FRAGMENT, scope: "fragment", createdAt: new Date("2026-08-01T09:00:00Z") },
+          { body: "Passez nous voir.", createdAt: new Date("2026-08-01T11:00:00Z") },
+          { body: AI_BODY, createdAt: new Date("2026-08-01T10:00:00Z") },
+        ],
+        { replaceExisting: true },
+      );
+      // One of the model's two sentences, deleted. Every sentence LEFT is the
+      // model's, so the mask alone says "untouched" and only the count against
+      // the first full row says a human was here.
+      const edited = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Café ouvert." })
+        .expect(200);
+
+      expect(edited.body.bodyIsAiVerbatim).toBe(false);
+      const listed = (await agent.get("/api/content").expect(200)).body as {
+        id: string;
+        bodyIsAiVerbatim: boolean;
+      }[];
+      expect(listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim).toBe(false);
     });
 
     it("keeps reading verbatim when there is no ai version to compare against", async () => {

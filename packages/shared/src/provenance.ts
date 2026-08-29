@@ -12,9 +12,10 @@
  * Everything else here errs the same way. Where the splitter is unsure, it
  * splits: two units that should have been one still compare verbatim, while one
  * unit that should have been two repaints untouched AI text as human-written the
- * moment a neighbour is edited. `isUntouchedAi` and `aiSentenceMask` are derived
- * from the same split for the same reason — the badge and the per-sentence
- * dimming are one promise, and must never disagree.
+ * moment a neighbour is edited. `allSentencesAi` and `aiSentenceMask` are
+ * derived from the same split for the same reason — there is ONE question here,
+ * "is every sentence still the model's", and the publish gate, the origin badge
+ * and the per-sentence dimming are three grains of it rather than three rules.
  */
 
 // Zero-width space and byte-order mark are invisible spacing that no human
@@ -321,10 +322,9 @@ export function aiSentenceMask(current: string, aiVersion: string): boolean[] {
  * reference breaks that counting, dimming a human's own duplicate of a sentence
  * the AI wrote once. OR-ing per-version masks keeps every version's own count.
  *
- * (The badge asks a different question of the same rows and gets its own
- * formula — `bodies.some(b => isUntouchedAi(body, b))`, never this one. See the
- * design's §3: `isUntouchedAi` short-circuits on a sentence-count mismatch, so
- * a concatenated reference always answers false there.)
+ * (This is the fine grain of the SAME question the gate and the badge ask of
+ * the same rows: `allSentencesAi` reads this mask at the grain of the whole
+ * text. Two references, one question — never a third formula here.)
  *
  * Note this is a deliberate *exception* to the policy in the module header. In
  * general a human who retypes a sentence identically is credited to the AI —
@@ -387,12 +387,20 @@ export function dimSpans(current: string, aiVersions: readonly string[]): DimSpa
 }
 
 /**
- * True when nothing in `current` has been touched by a human.
+ * True when nothing in `current` has been touched by a human, judged against
+ * ONE version as a whole.
  *
  * Derived from the same split as `aiSentenceMask`, never from a whole-body
  * comparison: normalisation collapses the newline that the splitter treats as a
  * boundary, so a body-level equality can claim "untouched" for a post whose
  * every sentence the mask calls human.
+ *
+ * **Superseded in production by `allSentencesAi`, and deliberately kept.** It
+ * cannot see a refine — a fragment never equals a whole body — so nothing that
+ * answers the gate's or the badge's question may call it again. What it is
+ * still for is the corpus test that pins the direction of every disagreement
+ * between the two formulas: the old answer has to stay computable for the new
+ * one to be provably no laxer.
  */
 export function isUntouchedAi(current: string, aiVersion: string): boolean {
   const currentSentences = splitSentences(current);
@@ -403,40 +411,6 @@ export function isUntouchedAi(current: string, aiVersion: string): boolean {
   // A deletion is a human act even though nothing new appeared.
   if (currentSentences.length !== aiSentences.length) return false;
   return aiSentenceMask(current, aiVersion).every((isAi) => isAi);
-}
-
-/**
- * The badge's question, and the third of the design's three references:
- * is `current` still *some* AI version verbatim?
- *
- * | Question | Reference | Formula |
- * |---|---|---|
- * | May this be approved? (the gate) | the **first** `ai` row per level | `isUntouchedAi` |
- * | What does the badge say? | **any** `ai` row | this |
- * | Which sentences dim? | **all** `ai` rows | `aiSentenceMaskAny` |
- *
- * **This table describes today's callers, and increment 2b-1 collapses its top
- * two rows.** `allSentencesAi` below asks one question — is every sentence the
- * model's — for both the gate and the badge, because whole-body equality reads
- * an accepted refine as a human touch (design §2). Until those callers move,
- * this function is still the badge's, and the table is still true of the code
- * that runs; when they move, this function loses its last caller and goes with
- * it. Do not add a new caller to it.
- *
- * `some`, never the first row and never a concatenation. `isUntouchedAi`
- * short-circuits on a sentence-count mismatch, so a joined reference always
- * answers false and would read every AI draft as human-edited; the gate's
- * first-row rule would read an accepted refinement as the human's own writing.
- *
- * **No versions means true**, and that is the fail-safe direction rather than
- * an accident of `Array.some`. No reference text is no evidence of an edit,
- * and no evidence of an edit is not evidence of one: answering false there
- * would over-claim human authorship on a body nobody touched. Every function
- * in this module errs that way, and callers must not "improve" this one.
- */
-export function matchesAnyAiVersion(current: string, aiVersions: readonly string[]): boolean {
-  if (aiVersions.length === 0) return true;
-  return aiVersions.some((aiVersion) => isUntouchedAi(current, aiVersion));
 }
 
 /**
@@ -475,11 +449,16 @@ export function matchesAnyAiVersion(current: string, aiVersions: readonly string
  * equivalence is conditional on clause 2, and clause 2 is where the limits
  * below live; it says nothing about a body clause 2 has already refused.
  *
- * The row it counts against is `firstFullRow`, NEVER `aiRows[0]`. The rows
- * arrive unordered (the badge's query has no `ORDER BY`, deliberately: "any"
- * has no first), so `aiRows[0]` can be a one-sentence fragment — and then
- * `n >= 1` is true for every body, clause 3 is a no-op, and every deletion
- * publishes. The two arguments exist separately for exactly this reason.
+ * The row it counts against is `firstFullRow`, NEVER `aiRows[0]`. Nothing in
+ * this signature promises `aiRows` is ordered, and nothing makes a level's
+ * `full` row its oldest one either — a re-generation after a refine puts the
+ * fragment first however the caller reads them. Then `n >= 1` is
+ * true for every body, clause 3 is a no-op, and every deletion publishes and
+ * reads as untouched AI. The two arguments exist separately for exactly this
+ * reason, and a caller that hands the same list to both has not thought about
+ * it: the badge's query had no `ORDER BY` at all until it started asking this
+ * question, because the question it asked before ("does the body match ANY
+ * row") has no first.
  *
  * An empty or whitespace-only body has no sentence to judge and takes the
  * refusing answer, as `isUntouchedAi` does for an empty draft with no version.

@@ -1,8 +1,8 @@
 import {
   adaptationUpdateSchema,
+  allSentencesAi,
   contentApproveSchema,
   MAX_BODY_LENGTH,
-  matchesAnyAiVersion,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,9 +95,15 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
      * spelled out per fixture: the badge's verdict and the lens's reference
      * text come from the same rows in the real response, and a fixture that
      * let them disagree would be testing a payload the API cannot produce.
+     *
+     * The first row stands in for the first `scope = 'full'` row, which is the
+     * anchor the API actually passes. It may only do so because every fixture
+     * here writes whole bodies — `scope` is a column the API reads and does not
+     * ship, so a fixture cannot express a fragment anyway.
      */
     bodyIsAiVerbatim:
-      overrides.bodyIsAiVerbatim ?? matchesAnyAiVersion(merged.body, merged.aiVersionBodies.item),
+      overrides.bodyIsAiVerbatim ??
+      allSentencesAi(merged.body, merged.aiVersionBodies.item, merged.aiVersionBodies.item[0]),
   };
 }
 

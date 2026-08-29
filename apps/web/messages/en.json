@@ -114,7 +114,7 @@
     "backToQueue": "Back to queue",
     "bodyLabel": "Body",
     "lensToggle": "Highlight AI text",
-    "lensLegend": "Dimmed sentences are still exactly what the AI wrote. Nothing dimmed means every sentence is yours.",
+    "lensLegend": "Dimmed sentences are still exactly what the AI wrote. Nothing dimmed means every sentence is yours. Deleting a sentence counts as your edit too, so the badge above can read Human-edited while everything left here is dimmed.",
     "saveBody": "Save body",
     "overridesTitle": "Per-channel overrides",
     "overridePlaceholder": "Leave empty to use the item body above",

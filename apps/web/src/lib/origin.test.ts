@@ -33,12 +33,13 @@ describe("deriveOrigin", () => {
 /**
  * The fourth badge.
  *
- * The comparison behind it — "does the body still match ANY `ai` row", design
- * §3's middle reference — is `matchesAnyAiVersion` in `@pubrick/shared`, run by
- * the API and delivered as `bodyIsAiVerbatim`. Its own tests live beside it.
- * What is left for this function is the mapping, and the fail-safe.
+ * The comparison behind it — "is every sentence of the body still one the model
+ * wrote", the same question the publish gate asks — is `allSentencesAi` in
+ * `@pubrick/shared`, run by the API and delivered as `bodyIsAiVerbatim`. Its
+ * own tests live beside it. What is left for this function is the mapping, and
+ * the fail-safe.
  */
-describe("deriveOrigin — human-edited (design §3, §5)", () => {
+describe("deriveOrigin — human-edited (design §2, §5)", () => {
   it("reads human-edited once the api reports the body is no longer verbatim", () => {
     expect(deriveOrigin({ origin: "ai", adaptations: [], bodyIsAiVerbatim: false })).toBe(
       "humanEdited",

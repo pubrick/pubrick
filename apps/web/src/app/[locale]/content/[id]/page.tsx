@@ -293,6 +293,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         commonest case on a post the author has actually worked on. It sits
         under the toggle rather than in a tooltip because it is the answer to
         the question the toggle just raised.
+
+        Its last sentence is about the badge above, and it is here rather than
+        on the badge because this is the only place the reader can see the
+        contradiction: delete a sentence and every sentence LEFT is the model's,
+        so the lens dims all of them while the badge reads "Human-edited". Both
+        are true — the badge's grain is the whole text, and the whole text is
+        the only grain that knows what is no longer in it — and a reader looking
+        at two answers deserves the reason rather than a guess about which one
+        is broken.
       */}
       {lens && (
         <p data-testid="lens-legend" className="mb-4 text-sm text-fg-tertiary">

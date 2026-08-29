@@ -10,7 +10,6 @@ import {
   allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
-  matchesAnyAiVersion,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -25,8 +24,8 @@ const ITEM_COLUMNS = {
   /**
    * Who wrote this text. Exposed because the origin badge is DERIVED, not
    * stored (spec §6): `human` reads human-written, `ai` reads AI-drafted or
-   * human-edited depending on whether the body still matches the AI's own
-   * first version.
+   * human-edited depending on `bodyIsAiVerbatim` — whether every sentence of
+   * the body is still one the model wrote.
    */
   origin: schema.contentItems.origin,
   createdAt: schema.contentItems.createdAt,
@@ -37,6 +36,9 @@ const ITEM_COLUMNS = {
 type ContentStatusValue = (typeof schema.CONTENT_STATUSES)[number];
 
 type AdaptationStatusValue = (typeof schema.ADAPTATION_STATUSES)[number];
+
+/** `full` or `fragment` — whether a version row is a whole body or a refine's. */
+type VersionScopeValue = (typeof schema.VERSION_SCOPES)[number];
 
 /**
  * Item statuses in which the text is still the author's to change.
@@ -173,16 +175,71 @@ const ADAPTATION_COLUMNS = {
 
 /**
  * The columns `get` needs to answer "which sentences are still the AI's" —
- * which level a version belongs to, and its text. Nothing wider: the caller
- * dims sentences, and a version's title, run, author and timestamp would be
- * payload nobody reads and an allowlist nobody could shrink again.
+ * which level a version belongs to, its text, and whether that text is a whole
+ * body or a refine's fragment. Nothing wider: the caller dims sentences, and a
+ * version's title, run, author and timestamp would be payload nobody reads and
+ * an allowlist nobody could shrink again.
+ *
+ * `scope` is read but NOT returned. It answers the badge's deletion clause on
+ * the server (`collectAiEvidence`); the lens dims a sentence that matches any
+ * `ai` row, and a fragment is dimmable text like any other.
  */
 const AI_VERSION_COLUMNS = {
   adaptationId: schema.contentVersions.adaptationId,
   body: schema.contentVersions.body,
+  scope: schema.contentVersions.scope,
 };
 
 type AiVersionRow = { adaptationId: string | null; body: string };
+
+/**
+ * The evidence `allSentencesAi` judges ONE level against: every `ai` body, for
+ * the mask, and the first `scope = 'full'` body, for the deletion clause.
+ *
+ * The two are separate arguments there for a reason worth restating at every
+ * call site, because getting it wrong is silent: `bodies[0]` is NOT the full
+ * row. Nothing makes a level's `full` row its oldest one — a fragment sorts
+ * first at any level whose full row arrives later, a re-generation after a
+ * refine being the obvious way — and counting a body's sentences against a
+ * one-sentence fragment makes "at least as many sentences as the model wrote"
+ * true for everything: the deletion clause becomes a no-op and every deletion
+ * reads as untouched AI.
+ */
+type AiEvidence = { readonly bodies: readonly string[]; readonly firstFullBody?: string };
+
+/**
+ * No rows at all: the fail-safe shape, spelled once and shared by every caller
+ * that missed the map — hence `readonly`, so no consumer can push a body into
+ * the value the next one reads.
+ */
+const NO_AI_EVIDENCE: AiEvidence = { bodies: [], firstFullBody: undefined };
+
+/**
+ * Collects that evidence per level, from rows already ordered oldest-first.
+ *
+ * The order is the caller's job and every caller does it the same way
+ * (`created_at, id`), because "first" is only meaningful under one — see
+ * `aiVersionRows` for why the tiebreak is load-bearing. This function cannot
+ * check that it was given one, which is why it is the only place that decides
+ * what "first `full`" means: the gate, the item response and the queue all read
+ * it from here rather than each picking a row for itself.
+ */
+function collectAiEvidence<K, R extends { body: string; scope: VersionScopeValue }>(
+  rows: readonly R[],
+  levelOf: (row: R) => K,
+): Map<K, AiEvidence> {
+  const byLevel = new Map<K, { bodies: string[]; firstFullBody?: string }>();
+  for (const row of rows) {
+    const level = levelOf(row);
+    const evidence = byLevel.get(level) ?? { bodies: [], firstFullBody: undefined };
+    evidence.bodies.push(row.body);
+    if (row.scope === "full" && evidence.firstFullBody === undefined) {
+      evidence.firstFullBody = row.body;
+    }
+    byLevel.set(level, evidence);
+  }
+  return byLevel;
+}
 
 /** The `ai` version bodies of one item, by level, oldest first. */
 type AiVersionBodies = {
@@ -237,29 +294,34 @@ export class ContentRepository {
   }
 
   /**
-   * The item-level `ai` version bodies for many items at once, keyed by item.
+   * The item-level `ai` version evidence for many items at once, keyed by item.
    *
-   * `list` needs the badge's answer for every card, and the badge's answer is a
-   * comparison against these bodies. One `IN` query rather than a read per
-   * item: this is already an N+1 for adaptations, and the cure for that is not
-   * a second one.
+   * `list` needs the badge's answer for every card, and the badge's answer is
+   * the gate's question asked of these rows. One `IN` query rather than a read
+   * per item: this is already an N+1 for adaptations, and the cure for that is
+   * not a second one.
    *
    * `adaptation_id IS NULL` because the card's badge is about the MASTER body.
    * A channel override's provenance is a detail of the item screen, and joining
    * an adaptation's AI text into the item's reference would compare a body
    * against text the adapter rewrote for a platform — which never matches, so
    * every card would read "human-edited".
+   *
+   * Ordered `created_at, id`, the same order as the gate's read and `get`'s,
+   * because the badge's deletion clause counts against the FIRST `scope =
+   * 'full'` row. This query deliberately had no `ORDER BY` while the badge
+   * asked whether the body matched ANY row — "any" has no first — and the
+   * moment it stopped asking that, an unordered read became a silently wrong
+   * one: no order means no first full row, and picking whatever the planner
+   * returned first makes the deletion clause a no-op.
    */
-  private async itemAiVersionBodies(
-    orgId: string,
-    itemIds: string[],
-  ): Promise<Map<string, string[]>> {
-    const byItem = new Map<string, string[]>();
-    if (itemIds.length === 0) return byItem;
+  private async itemAiEvidence(orgId: string, itemIds: string[]): Promise<Map<string, AiEvidence>> {
+    if (itemIds.length === 0) return new Map();
     const rows = await db
       .select({
         contentItemId: schema.contentVersions.contentItemId,
         body: schema.contentVersions.body,
+        scope: schema.contentVersions.scope,
       })
       .from(schema.contentVersions)
       .where(
@@ -269,13 +331,9 @@ export class ContentRepository {
           isNull(schema.contentVersions.adaptationId),
           eq(schema.contentVersions.origin, "ai"),
         ),
-      );
-    for (const row of rows) {
-      const bodies = byItem.get(row.contentItemId) ?? [];
-      bodies.push(row.body);
-      byItem.set(row.contentItemId, bodies);
-    }
-    return byItem;
+      )
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
+    return collectAiEvidence(rows, (row) => row.contentItemId);
   }
 
   async list(orgId: string, status?: string) {
@@ -293,18 +351,21 @@ export class ContentRepository {
         )
       : eq(schema.contentItems.orgId, orgId);
     const items = await db.select(ITEM_COLUMNS).from(schema.contentItems).where(where);
-    // No ORDER BY on the version rows, unlike `aiVersionRows`: the badge asks
-    // whether the body matches ANY of them, and "any" does not have a first.
-    const aiBodies = await this.itemAiVersionBodies(
+    const aiEvidence = await this.itemAiEvidence(
       orgId,
       items.map((item) => item.id),
     );
     return Promise.all(
-      items.map(async (item) => ({
-        ...item,
-        bodyIsAiVerbatim: matchesAnyAiVersion(item.body, aiBodies.get(item.id) ?? []),
-        adaptations: await this.adaptationsFor(orgId, item.id),
-      })),
+      items.map(async (item) => {
+        // The gate's question, on the card. See `get` for why the badge is a
+        // boolean the server computes rather than a comparison the browser runs.
+        const evidence = aiEvidence.get(item.id) ?? NO_AI_EVIDENCE;
+        return {
+          ...item,
+          bodyIsAiVerbatim: allSentencesAi(item.body, evidence.bodies, evidence.firstFullBody),
+          adaptations: await this.adaptationsFor(orgId, item.id),
+        };
+      }),
     );
   }
 
@@ -320,10 +381,11 @@ export class ContentRepository {
    *
    * The same rows the gate reads, at a different grain rather than a different
    * reference. The lens dims a sentence that still matches ANY `ai` version;
-   * the gate asks whether EVERY sentence does (`allSentencesAi`), off this same
-   * list. The gate additionally needs each level's first `scope = 'full'` row
-   * for its deletion clause, which is why it queries `scope` and this does not:
-   * a fragment is dimmable text like any other.
+   * the gate and the badge ask whether EVERY sentence does (`allSentencesAi`),
+   * off this same list. `scope` comes back too, because that question's
+   * deletion clause counts against the level's first `scope = 'full'` row —
+   * read here and NOT forwarded to the browser, which dims a fragment like any
+   * other text.
    *
    * The `org_id` predicate is defence in depth rather than this endpoint's only
    * tenant boundary: `get` has already 404'd an item belonging to another org
@@ -372,25 +434,36 @@ export class ContentRepository {
       adaptations.map((adaptation) => adaptation.id),
       aiVersions,
     );
+    /**
+     * The badge's evidence, at the MASTER level — the same rows the lens is
+     * handed, plus the `scope` the browser has no use for. Through
+     * `collectAiEvidence` rather than a `find` here, so that "the first full
+     * row" is decided in one place for the gate, the item and the queue alike.
+     */
+    const itemEvidence =
+      collectAiEvidence(aiVersions, (row) => row.adaptationId).get(null) ?? NO_AI_EVIDENCE;
     return {
       ...item,
       adaptations,
       /**
        * The origin badge's answer — computed here rather than in the browser,
        * because the QUEUE has to be able to give it too and the queue has no
-       * reference text to compute it from (see `itemAiVersionBodies`). Before
-       * this field, a rewritten item's card read "AI-drafted" while its own
-       * detail screen said "Human-edited" one click later, which is the exact
-       * claim design §5 leans on to ship the lens off by default: the badge
-       * already carries it at a glance on every card.
+       * reference text to compute it from (see `itemAiEvidence`). Before this
+       * field, a rewritten item's card read "AI-drafted" while its own detail
+       * screen said "Human-edited" one click later, which is the exact claim
+       * design §5 leans on to ship the lens off by default: the badge already
+       * carries it at a glance on every card.
        *
-       * Off the SAME `aiVersionBodies.item` the lens is handed, so the badge
-       * and the dimming cannot come to answer about different rows.
-       * `matchesAnyAiVersion` is design §3's middle row, fail-safe included: no
-       * version rows means `true`, so an item whose reference was never written
-       * keeps reading AI-drafted instead of over-claiming an edit nobody made.
+       * The gate's own question (`allSentencesAi`, spec §2), off the same rows
+       * the lens dims against, so the badge and the gate cannot give one screen
+       * two answers. Whole-body equality could not: a refine's fragment never
+       * EQUALS a whole body, so an accepted proposal made the badge caption the
+       * model's own words "Human-edited" while the gate refused the same draft.
+       * Fail-safe included: no version rows, or none with `scope = 'full'`,
+       * means `true` — an item whose reference was never written keeps reading
+       * AI-drafted instead of over-claiming an edit nobody made.
        */
-      bodyIsAiVerbatim: matchesAnyAiVersion(item.body, aiVersionBodies.item),
+      bodyIsAiVerbatim: allSentencesAi(item.body, itemEvidence.bodies, itemEvidence.firstFullBody),
       aiVersionBodies,
     };
   }
@@ -612,9 +685,10 @@ export class ContentRepository {
    *   anchor: it is shorter than the body it edits by construction, so counting
    *   its sentences as the body's would read every refine as a deletion.
    *
-   * That is the same question the badge answers for the whole text and the lens
-   * paints per sentence, off the same rows — one fact, three grains, instead of
-   * three references that could disagree. Never string equality either way:
+   * That is literally the same call the badge makes (`get`, `list`) and the
+   * fine grain of what the lens paints, off the same rows — one question, two
+   * references, instead of three formulas that could disagree on one screen.
+   * Never string equality either way:
    * the comparison normalises whitespace and Unicode composition, so a stray
    * space or an NFD paste is not a human touch.
    *
@@ -669,18 +743,12 @@ export class ContentRepository {
         ),
       )
       .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
-    /** Every `ai` body per level, for the mask. */
-    const aiBodies = new Map<string | null, string[]>();
-    /** The first `full` row per level, and only it, for the deletion clause. */
-    const firstFullAiVersion = new Map<string | null, string>();
-    for (const version of versions) {
-      const bodies = aiBodies.get(version.adaptationId) ?? [];
-      bodies.push(version.body);
-      aiBodies.set(version.adaptationId, bodies);
-      if (version.scope === "full" && !firstFullAiVersion.has(version.adaptationId)) {
-        firstFullAiVersion.set(version.adaptationId, version.body);
-      }
-    }
+    /**
+     * Every `ai` body per level for the mask, and each level's first `full` row
+     * for the deletion clause — the same collector the badge reads through, so
+     * the gate and the badge cannot come to disagree about which row is first.
+     */
+    const aiEvidence = collectAiEvidence(versions, (version) => version.adaptationId);
 
     const adaptations = await tx
       .select({ id: schema.adaptations.id, body: schema.adaptations.body })
@@ -698,8 +766,10 @@ export class ContentRepository {
      * `allSentencesAi` answers true for a level with no rows and for one with
      * no `full` row — see "missing evidence" above.
      */
-    const stillAi = (current: string, level: string | null): boolean =>
-      allSentencesAi(current, aiBodies.get(level) ?? [], firstFullAiVersion.get(level));
+    const stillAi = (current: string, level: string | null): boolean => {
+      const evidence = aiEvidence.get(level) ?? NO_AI_EVIDENCE;
+      return allSentencesAi(current, evidence.bodies, evidence.firstFullBody);
+    };
 
     const nobodyOpened = item.firstOpenedAt === null;
     const bodyIsAi = stillAi(item.body, null);
