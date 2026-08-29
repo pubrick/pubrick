@@ -1,4 +1,4 @@
-import { adaptationUpdateSchema, contentApproveSchema } from "@pubrick/shared";
+import { adaptationUpdateSchema, contentApproveSchema, MAX_BODY_LENGTH } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContentOrigin } from "@/lib/origin";
@@ -45,6 +45,7 @@ type ContentItem = {
   createdAt: string;
   updatedAt: string;
   adaptations: Adaptation[];
+  aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
 };
 
 type Channel = { id: string; platform: string; name: string };
@@ -76,6 +77,9 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
     adaptations: [],
+    // The real GET always carries this key; `[]` is what it holds for an item
+    // with no `ai` version rows (a human-written draft).
+    aiVersionBodies: { item: [], adaptations: {} },
     ...overrides,
   };
 }
@@ -89,6 +93,7 @@ function installBaseHandlers(
   served: { current: ContentItem },
   calls: Call[],
   extra?: (path: string, method: string, init: RequestInit | undefined) => unknown | undefined,
+  channels: Channel[] = [channel],
 ) {
   mockApi.mockImplementation(async (...args: unknown[]) => {
     const path = args[0] as string;
@@ -102,9 +107,22 @@ function installBaseHandlers(
     }
 
     if (method === "GET" && path === `/api/content/${served.current.id}`) return served.current;
-    if (method === "GET" && path.startsWith("/api/channels")) return [channel];
+    if (method === "GET" && path.startsWith("/api/channels")) return channels;
     throw new Error(`unhandled request in test: ${method} ${path}`);
   });
+}
+
+/**
+ * The counter a field describes itself with — followed from the textarea's own
+ * `aria-describedby` rather than picked out of the page by position, so each
+ * assertion is about *that* field's denominator and not about render order.
+ */
+function counterFor(field: HTMLElement): HTMLElement {
+  const described = field.getAttribute("aria-describedby");
+  const id = described?.split(" ").pop();
+  const counter = id ? document.getElementById(id) : null;
+  if (!counter) throw new Error("the field describes no counter");
+  return counter;
 }
 
 function resultsList(): HTMLElement {
@@ -641,5 +659,246 @@ describe("no active organization redirects to onboarding", () => {
       expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+/** The dim overlay belonging to one field — they share a positioning parent. */
+function overlayFor(field: HTMLElement): HTMLElement | null {
+  return field.parentElement?.querySelector<HTMLElement>("[data-dim-overlay]") ?? null;
+}
+
+const AI_MASTER = "The model wrote this line.";
+const AI_CHANNEL = "The model wrote this channel copy.";
+
+/**
+ * The lens (design §5): a toggle in the editor, off by default.
+ *
+ * "Off by default" is a written trade, not an accident — the badge already
+ * carries the claim at a glance and the writing surface stays calm (dossier
+ * §2.3) — so it is pinned here rather than left to whatever the default happens
+ * to be after the next refactor.
+ */
+describe("the provenance lens (design §5)", () => {
+  function lensFixture() {
+    return makeItem({
+      origin: "ai",
+      body: AI_MASTER,
+      adaptations: [
+        makeAdaptation({ id: "a1", channelId: "ch1", body: AI_CHANNEL, origin: "ai" }),
+        // Same text, but written by a human for this channel: it has no `ai`
+        // version row of its own, and the ITEM's versions must not dim it.
+        makeAdaptation({ id: "a2", channelId: "ch1", body: AI_MASTER, origin: "human" }),
+      ],
+      aiVersionBodies: { item: [AI_MASTER], adaptations: { a1: [AI_CHANNEL], a2: [] } },
+    });
+  }
+
+  it("is off by default: no overlay, and the real text is opaque", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    expect(screen.getByRole("checkbox", { name: en.Publish.lensToggle })).not.toBeChecked();
+    expect(screen.queryAllByTestId("dim-overlay")).toHaveLength(0);
+    // ...and nothing has made its own text transparent, which would leave the
+    // field blank with no overlay to paint it.
+    expect(screen.getByLabelText(en.Publish.bodyLabel)).not.toHaveAttribute("data-dim-input");
+  });
+
+  it("is a secondary control — the screen's primary actions are untouched", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    // A checkbox, not a button — a view option can never be mistaken for, or
+    // compete with, the one primary action (constitution: one primary action).
+    const toggle = screen.getByRole("checkbox", { name: en.Publish.lensToggle });
+    expect(toggle.tagName).toBe("INPUT");
+    expect(screen.queryByRole("button", { name: en.Publish.lensToggle })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
+    expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeEnabled();
+  });
+
+  it("reveals the overlay on the body when turned on, character for character", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    await userEvent.setup().click(screen.getByRole("checkbox", { name: en.Publish.lensToggle }));
+
+    const body = screen.getByLabelText(en.Publish.bodyLabel) as HTMLTextAreaElement;
+    const overlay = overlayFor(body);
+    expect(overlay).not.toBeNull();
+    // The overlay renders slices of the same string; a dropped character is a
+    // highlight sliding off the words it describes, and in a layout-less jsdom
+    // this is the only way to see it.
+    expect(overlay?.textContent).toBe(body.value);
+    expect(overlay?.querySelector("[data-ai]")).toHaveAttribute("data-ai", "true");
+  });
+
+  it("dims each override against its OWN adaptation's versions, never the item's", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    await userEvent.setup().click(screen.getByRole("checkbox", { name: en.Publish.lensToggle }));
+
+    const [first, second] = screen.getAllByPlaceholderText(
+      en.Publish.overridePlaceholder,
+    ) as HTMLTextAreaElement[];
+
+    // a1's text is still exactly what the model adapted for this channel.
+    expect(overlayFor(first as HTMLElement)?.querySelector("[data-ai]")).toHaveAttribute(
+      "data-ai",
+      "true",
+    );
+    // a2 carries the same characters as the ITEM's ai version, and no ai
+    // version of its own. Passing the item's bodies down to every override —
+    // or concatenating all of them — would dim a human's own words as the
+    // model's, which is the one direction provenance may not fail in.
+    expect(second?.value).toBe(AI_MASTER);
+    expect(overlayFor(second as HTMLElement)?.querySelector("[data-ai]")).toHaveAttribute(
+      "data-ai",
+      "false",
+    );
+  });
+
+  it("turns back off again, leaving the field with no overlay", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const user = userEvent.setup();
+    const toggle = screen.getByRole("checkbox", { name: en.Publish.lensToggle });
+    await user.click(toggle);
+    expect(screen.getAllByTestId("dim-overlay").length).toBeGreaterThan(0);
+
+    await user.click(toggle);
+    expect(screen.queryAllByTestId("dim-overlay")).toHaveLength(0);
+  });
+});
+
+/**
+ * The counter (design §6): the denominator is the smaller of the platform's
+ * limit and `MAX_BODY_LENGTH`, and `maxLength` does NOT drop with it.
+ */
+describe("the per-channel counter (design §6)", () => {
+  const xChannel: Channel = { id: "chx", platform: "x", name: "Announcements" };
+
+  function counterFixture(bodies: { a1: string | null; a2: string | null }) {
+    return makeItem({
+      adaptations: [
+        makeAdaptation({ id: "a1", channelId: "chx", body: bodies.a1 }),
+        makeAdaptation({ id: "a2", channelId: "ch1", body: bodies.a2 }),
+      ],
+      aiVersionBodies: { item: [], adaptations: { a1: [], a2: [] } },
+    });
+  }
+
+  it("shows each channel its own platform limit, not one number for all of them", async () => {
+    installBaseHandlers({ current: counterFixture({ a1: null, a2: null }) }, [], undefined, [
+      channel,
+      xChannel,
+    ]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const [forX, forTelegram] = screen.getAllByPlaceholderText(
+      en.Publish.overridePlaceholder,
+    ) as HTMLTextAreaElement[];
+
+    // X enforces 280 and telegram 4096 — one `/ 4096` for both is the lie.
+    expect(counterFor(forX as HTMLElement)).toHaveTextContent("0 / 280");
+    expect(counterFor(forTelegram as HTMLElement)).toHaveTextContent("0 / 4096");
+    // The master body has no platform, so it keeps what the API can store.
+    expect(counterFor(screen.getByLabelText(en.Publish.bodyLabel))).toHaveTextContent("11 / 4096");
+  });
+
+  it("keeps maxLength at MAX_BODY_LENGTH, so an over-limit override stays fixable", async () => {
+    // 300 characters of X copy: over that platform's 280, under what the API
+    // stores. A hard cap at 280 would make it permanently unfixable — the human
+    // could read the text and never edit it — which is exactly what
+    // `adaptationLimit`'s own docstring exists to prevent (design §6).
+    const tooLongForX = "x".repeat(300);
+    installBaseHandlers({ current: counterFixture({ a1: tooLongForX, a2: null }) }, [], undefined, [
+      channel,
+      xChannel,
+    ]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const [forX] = screen.getAllByPlaceholderText(
+      en.Publish.overridePlaceholder,
+    ) as HTMLTextAreaElement[];
+
+    // Both pinned together: the denominator dropped, the cap did not.
+    expect(counterFor(forX as HTMLElement)).toHaveTextContent("300 / 280");
+    expect(forX).toHaveAttribute("maxlength", String(MAX_BODY_LENGTH));
+    expect(forX?.value).toHaveLength(300);
+    expect(forX).not.toBeDisabled();
+    // Over-limit reads as over-limit rather than being silently truncated...
+    expect(counterFor(forX as HTMLElement)).toHaveAttribute("data-over-limit");
+
+    // ...and the text is still editable down to a length the platform accepts.
+    fireEvent.change(forX as HTMLElement, { target: { value: "x".repeat(200) } });
+    expect(counterFor(forX as HTMLElement)).toHaveTextContent("200 / 280");
+    expect(counterFor(forX as HTMLElement)).not.toHaveAttribute("data-over-limit");
+  });
+
+  it("falls back to MAX_BODY_LENGTH when the channel cannot be resolved", async () => {
+    // `channels` is `[]` whenever GET /api/channels failed (load() swallows it),
+    // and the counter must still show a number rather than NaN or nothing.
+    installBaseHandlers({ current: counterFixture({ a1: null, a2: null }) }, [], undefined, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    for (const field of screen.getAllByPlaceholderText(en.Publish.overridePlaceholder)) {
+      expect(counterFor(field)).toHaveTextContent(`0 / ${MAX_BODY_LENGTH}`);
+    }
+  });
+});
+
+describe("the fourth origin badge (design §3)", () => {
+  it("reads human-edited once the body matches no ai version", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          origin: "ai",
+          body: "I rewrote it.",
+          aiVersionBodies: { item: [AI_MASTER], adaptations: {} },
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(en.Content.origin.humanEdited)).toBeInTheDocument();
+    expect(screen.queryByText(en.Content.origin.ai)).not.toBeInTheDocument();
+  });
+
+  it("still reads AI-drafted while the body is untouched", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          origin: "ai",
+          body: AI_MASTER,
+          aiVersionBodies: { item: [AI_MASTER], adaptations: {} },
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(en.Content.origin.ai)).toBeInTheDocument();
   });
 });

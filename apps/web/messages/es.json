@@ -79,6 +79,7 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "origin": {
       "ai": "Redactado por IA",
+      "humanEdited": "Editado por una persona",
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por una persona"
     }
@@ -112,6 +113,7 @@
   "Publish": {
     "backToQueue": "Volver a la cola",
     "bodyLabel": "Texto",
+    "lensToggle": "Resaltar el texto de la IA",
     "saveBody": "Guardar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Déjalo vacío para usar el texto de arriba",

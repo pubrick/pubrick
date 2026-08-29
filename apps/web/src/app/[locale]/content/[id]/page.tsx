@@ -9,13 +9,13 @@ import { AppShell } from "@/components/app-shell";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { Input } from "@/components/ui/input";
 import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
-import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
-import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
-import { channelLabel as platformChannelLabel } from "@/lib/platform";
+import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
+import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
@@ -57,7 +57,23 @@ type ContentItem = {
   createdAt: string;
   updatedAt: string;
   adaptations: Adaptation[];
+  /**
+   * The lens's reference text: every `ai` version body, for the item and for
+   * each adaptation under its own id. Computing the mask here rather than
+   * asking the server for one is deliberate (design §4) — a server-computed
+   * mask would still have to be aligned to a split done in the browser, and
+   * two splitters that must agree are two splitters that will stop agreeing.
+   */
+  aiVersionBodies: AiVersionBodies;
 };
+
+/**
+ * One frozen empty array for every adaptation with no `ai` version of its own.
+ * A fresh `[]` per render would be a new dependency for `DimmedTextarea`'s
+ * `useMemo` every time, re-splitting the text on every keystroke elsewhere on
+ * the page.
+ */
+const NO_AI_VERSIONS: readonly string[] = [];
 
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -72,6 +88,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
   const [scheduledAt, setScheduledAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The lens, off by default (design §5).
+   *
+   * A written trade, not a leftover: the dossier's §5.3 argues AI text should
+   * be visibly AI, which points at "on", while its §2.3 keeps the writing
+   * surface calm. The badge already carries the claim at a glance on every
+   * card, and the lens is for when you want the detail — so it ships off, and
+   * the choice lives in the design document rather than buried in a default.
+   */
+  const [lens, setLens] = useState(false);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -185,6 +211,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
   }
 
+  /**
+   * The counter's denominator for one channel's override (design §6). An
+   * unresolved channel — deleted, or `GET /api/channels` failed and `channels`
+   * is `[]` — keeps what the API can store, the same fallback
+   * `adaptationLimit` makes for an id it does not know.
+   */
+  function overrideLimit(channelId: string): number {
+    const ch = channels.find((c) => c.id === channelId);
+    return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
+  }
+
   if (!item) {
     return (
       <AppShell title={tc("untitled")}>
@@ -218,10 +255,24 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {t("backToQueue")}
         </Link>
       </p>
-      <p className="mb-4 flex items-center gap-2 text-sm font-medium text-fg-secondary">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-fg-secondary">
         {tc(`status.${item.status}`)}
         <OriginBadge origin={deriveOrigin(item)} />
-      </p>
+        {/*
+          The lens switch: one control for the whole screen (constitution: one
+          place), and a checkbox rather than a button so a view option can
+          never read as, or compete with, this screen's primary action.
+        */}
+        <label className="ml-auto flex cursor-pointer items-center gap-2 font-normal">
+          <input
+            type="checkbox"
+            checked={lens}
+            onChange={(e) => setLens(e.target.checked)}
+            className="h-4 w-4 accent-accent"
+          />
+          {t("lensToggle")}
+        </label>
+      </div>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
@@ -229,11 +280,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
 
       <Card className="mb-6">
-        <Textarea
+        <DimmedTextarea
           id="body"
           label={t("bodyLabel")}
           value={bodyDraft}
-          onChange={(e) => setBodyDraft(e.target.value)}
+          onChange={setBodyDraft}
+          aiVersions={item.aiVersionBodies.item}
+          dimmed={lens}
           maxLength={MAX_BODY_LENGTH}
           showCount
           rows={10}
@@ -255,10 +308,26 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {tc(`adaptationStatus.${a.status}`)}
               </StatusBadge>
             </div>
-            <Textarea
+            <DimmedTextarea
               value={overrideDrafts[a.id] ?? ""}
-              onChange={(e) => setOverrideDrafts({ ...overrideDrafts, [a.id]: e.target.value })}
+              onChange={(value) => setOverrideDrafts({ ...overrideDrafts, [a.id]: value })}
+              /*
+               * This adaptation's OWN `ai` versions. Not the item's, and not
+               * every adaptation's joined together: a human who wrote the same
+               * words for a channel the model never adapted would see their
+               * own sentences painted as the model's — the one direction
+               * provenance may not fail in.
+               */
+              aiVersions={item.aiVersionBodies.adaptations[a.id] ?? NO_AI_VERSIONS}
+              dimmed={lens}
               placeholder={t("overridePlaceholder")}
+              /*
+               * The counter drops to what this platform accepts; the cap does
+               * not follow it down (design §6). An override already longer
+               * than the platform limit has to stay editable, or it is
+               * unfixable forever.
+               */
+              displayLimit={overrideLimit(a.channelId)}
               maxLength={MAX_BODY_LENGTH}
               showCount
               rows={4}

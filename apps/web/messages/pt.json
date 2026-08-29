@@ -79,6 +79,7 @@
     "genericError": "Algo deu errado. Tente novamente.",
     "origin": {
       "ai": "Rascunho de IA",
+      "humanEdited": "Editado por uma pessoa",
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por uma pessoa"
     }
@@ -112,6 +113,7 @@
   "Publish": {
     "backToQueue": "Voltar à fila",
     "bodyLabel": "Texto",
+    "lensToggle": "Destacar o texto da IA",
     "saveBody": "Salvar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Deixe em branco para usar o texto acima",

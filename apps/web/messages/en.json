@@ -79,6 +79,7 @@
     "genericError": "Something went wrong. Please try again.",
     "origin": {
       "ai": "AI-drafted",
+      "humanEdited": "Human-edited",
       "aiAdapted": "AI-adapted",
       "human": "Human-written"
     }
@@ -112,6 +113,7 @@
   "Publish": {
     "backToQueue": "Back to queue",
     "bodyLabel": "Body",
+    "lensToggle": "Highlight AI text",
     "saveBody": "Save body",
     "overridesTitle": "Per-channel overrides",
     "overridePlaceholder": "Leave empty to use the item body above",
