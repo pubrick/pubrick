@@ -1,8 +1,7 @@
 import {
-  MAX_BODY_LENGTH,
   PermanentError,
   PLATFORM_IDS,
-  PLATFORM_MAX_TEXT_LENGTH,
+  adaptationLimit as platformAdaptationLimit,
 } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
@@ -12,24 +11,24 @@ import type { Step } from "./types.js";
 export type Platform = (typeof PLATFORM_IDS)[number];
 
 /**
- * How long an adaptation for this platform may be.
+ * How long an adaptation for this platform may be, or a `PermanentError`.
  *
- * `min(platformLimit, MAX_BODY_LENGTH)`, and the second half is not padding:
- * `MAX_BODY_LENGTH` bounds `adaptationUpdateSchema`, so an adaptation longer
- * than it would be un-editable through the API forever — the human could read
- * the text but never fix it. Platforms whose own limit is larger (vk, dzen,
- * vc_ru) are therefore clamped to what the product can edit.
+ * The number itself — `min(platform limit, MAX_BODY_LENGTH)` — is
+ * `@pubrick/shared`'s, so the bound this step generates against and the
+ * denominator the editor's counter shows cannot drift apart. What is decided
+ * *here* is the policy for a platform this build has no limit for.
  */
 export function adaptationLimit(platform: Platform): number {
-  const limit: number | undefined = PLATFORM_MAX_TEXT_LENGTH[platform];
+  const limit = platformAdaptationLimit(platform);
   // The type says this cannot happen; `channels.platform` is a text column, so
-  // at runtime it can. Unchecked, the arithmetic below yields NaN and the run
-  // fails much later with "limit of NaN characters" — or, worse, a `max(NaN)`
-  // that rejects nothing at all.
+  // at runtime it can. Answering with a number anyway would mean generating
+  // against a `max(NaN)` that rejects nothing, so the run stops here instead.
+  // The editor's counter makes the opposite call on the same input — there the
+  // worst case is a generous denominator, not money spent on unusable text.
   if (limit === undefined) {
     throw new PermanentError(`no text limit is known for platform "${String(platform)}"`);
   }
-  return Math.min(limit, MAX_BODY_LENGTH);
+  return limit;
 }
 
 /** The channel a run adapts for. Not the drizzle row: this package has no database. */

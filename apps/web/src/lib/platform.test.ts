@@ -23,11 +23,11 @@ describe("credentialFieldLabel", () => {
  * The counter's denominator (design §6).
  *
  * These numbers must equal `adaptationLimit()` in `@pubrick/ai`, which is the
- * limit the adapter actually generates against. The two cannot be one import
- * today — `@pubrick/ai` is server-only and pulls the model SDK — so what keeps
- * them from drifting is that both are pinned to `PLATFORM_MAX_TEXT_LENGTH`,
- * here and in `packages/ai/src/steps/steps.test.ts`. Changing the rule in one
- * place fails a test in the other's package.
+ * limit the adapter actually generates against. Both now read one formula in
+ * `@pubrick/shared` — the browser cannot import `@pubrick/ai`, which is
+ * server-only — and these cases stay because what this module still decides is
+ * the *policy* around it: the platform's number where there is one, and a
+ * fallback rather than a throw where there is not.
  */
 describe("adaptationLimit", () => {
   it("shows the platform's own limit where it is smaller than what the API can edit", () => {

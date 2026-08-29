@@ -28,7 +28,7 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   type PublishJob,
 } from "./jobs.js";
-export { PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
+export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
 export {
   aiSentenceMask,
   aiSentenceMaskAny,
