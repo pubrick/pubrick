@@ -1176,6 +1176,135 @@ describe.skipIf(!url)("content e2e", () => {
       await agent.post("/api/content/00000000-0000-4000-8000-000000000000/opened").expect(404);
     });
 
+    it("returns the ai version bodies so the editor can dim untouched sentences", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+
+      expect(fetched.body.aiVersionBodies.item).toEqual([AI_BODY]);
+      expect(fetched.body.aiVersionBodies.adaptations[adaptationIds[0] as string]).toEqual([
+        aiAdapted(0),
+      ]);
+    });
+
+    it("returns EVERY ai version, oldest first — the lens dims against all of them", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // Spec §3: three questions, three references. The publish gate reads the
+      // FIRST `ai` row per level, because it asks whether any human was ever
+      // involved; the lens dims a sentence that still matches ANY `ai` version,
+      // so this endpoint must return them all. Increment 2b's refine verbs
+      // write that second row — reusing the gate's "first row" semantics here
+      // would leave refined AI text rendering as the human's own, silently.
+      // The `human` row in between is the origin filter's turn: a version the
+      // author typed is not a reference for "is this still the AI's text".
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+        .rows as { org_id: string }[];
+      const orgId = row?.org_id as string;
+      await db
+        .delete(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.contentItemId, itemId),
+            isNull(schema.contentVersions.adaptationId),
+          ),
+        );
+      await db.insert(schema.contentVersions).values([
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: AI_BODY,
+          origin: "ai",
+          createdAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "The human's own sentence.",
+          origin: "human",
+          createdAt: new Date("2026-08-01T11:00:00Z"),
+        },
+        {
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "A later AI refinement.",
+          origin: "ai",
+          createdAt: new Date("2026-08-01T12:00:00Z"),
+        },
+      ]);
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.aiVersionBodies.item).toEqual([AI_BODY, "A later AI refinement."]);
+    });
+
+    it("returns empty lists for a human-written item, which has no ai versions", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "I typed this myself.", channelIds: [channelId] })
+        .expect(201);
+
+      const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+
+      expect(fetched.body.aiVersionBodies.item).toEqual([]);
+      // Keyed, not absent: the web must never have to tell "this adaptation has
+      // no AI text" apart from "the response forgot to mention it".
+      expect(fetched.body.aiVersionBodies.adaptations[created.body.adaptations[0].id]).toEqual([]);
+    });
+
+    it("never leaks another org's version bodies", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const stranger = await orgAgent();
+      await stranger.get(`/api/content/${itemId}`).expect(404);
+    });
+
+    it("reads version rows this org owns, not every row hanging off the item", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // The 404 above cannot pin the version query's own org filter: `get` has
+      // already refused on the ITEM lookup, so the stranger never reaches this
+      // read. What the filter defends against is a version row carrying another
+      // org's `org_id` while pointing at this item — the shape a writer that
+      // passed the wrong orgId would leave behind — so that row is written here
+      // and this org's response must not contain it. Drop
+      // `eq(contentVersions.orgId, orgId)` and this is the test that fails.
+      const stranger = await orgAgent();
+      const strangerBrand = await stranger.post("/api/brands").send({ name: "B" }).expect(201);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [strangerRow] = (
+        await db.execute(`SELECT org_id FROM brands WHERE id = '${strangerBrand.body.id}'`)
+      ).rows as { org_id: string }[];
+      await db.insert(schema.contentVersions).values({
+        orgId: strangerRow?.org_id as string,
+        contentItemId: itemId,
+        adaptationId: null,
+        body: "Another org's words.",
+        origin: "ai",
+      });
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.aiVersionBodies.item).toEqual([AI_BODY]);
+    });
+
     it("exposes origin on the list and on the item, for both levels", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);

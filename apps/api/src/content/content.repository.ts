@@ -170,6 +170,55 @@ const ADAPTATION_COLUMNS = {
   )`,
 };
 
+/**
+ * The columns `get` needs to answer "which sentences are still the AI's" —
+ * which level a version belongs to, and its text. Nothing wider: the caller
+ * dims sentences, and a version's title, run, author and timestamp would be
+ * payload nobody reads and an allowlist nobody could shrink again.
+ */
+const AI_VERSION_COLUMNS = {
+  adaptationId: schema.contentVersions.adaptationId,
+  body: schema.contentVersions.body,
+};
+
+type AiVersionRow = { adaptationId: string | null; body: string };
+
+/** The `ai` version bodies of one item, by level, oldest first. */
+type AiVersionBodies = {
+  item: string[];
+  adaptations: Record<string, string[]>;
+};
+
+/**
+ * Groups version rows by level: `null` is the master body, everything else
+ * keys by adaptation.
+ *
+ * EVERY adaptation of the item gets a key, `[]` when it has no `ai` rows of its
+ * own, so the web never has to tell "this channel has no AI text" apart from
+ * "the response forgot to mention it" — and a human-written item, which has no
+ * version rows at all, comes back as empty lists rather than as an error or a
+ * missing field.
+ */
+function groupAiVersionBodies(adaptationIds: string[], rows: AiVersionRow[]): AiVersionBodies {
+  const item: string[] = [];
+  const adaptations: Record<string, string[]> = Object.fromEntries(
+    adaptationIds.map((id) => [id, [] as string[]]),
+  );
+  for (const row of rows) {
+    if (row.adaptationId === null) {
+      item.push(row.body);
+      continue;
+    }
+    // A version row cascades with its adaptation, so it can only ever name one
+    // of the ids above; the fallback keeps the body rather than dropping it
+    // silently if that ever stops being true.
+    const bodies = adaptations[row.adaptationId] ?? [];
+    bodies.push(row.body);
+    adaptations[row.adaptationId] = bodies;
+  }
+  return { item, adaptations };
+}
+
 @Injectable()
 export class ContentRepository {
   constructor(private readonly queue: QueueService) {}
@@ -209,6 +258,45 @@ export class ContentRepository {
     );
   }
 
+  /**
+   * The `ai` version bodies of one item, both levels, oldest first.
+   *
+   * Same table, same org scoping and the same `created_at, id` order as the
+   * publish gate's read in `requireHumanInvolvement`. The tiebreak is
+   * load-bearing in both: the worker writes an item's versions and all its
+   * adaptations' versions in ONE transaction, where `now()` — and therefore
+   * `created_at` — is identical across them, so `created_at` alone is not a
+   * total order and "oldest first" would be whatever the planner felt like.
+   *
+   * The SEMANTICS deliberately differ from the gate's, and spec §3 is the table
+   * that says why. The gate reads only the FIRST `ai` row per level, because it
+   * answers "has any human been involved at all". The lens dims a sentence that
+   * still matches ANY `ai` version, so it needs every row. Today they coincide —
+   * there is exactly one `ai` row per level — and increment 2b's refine verbs
+   * write the second, at which point reusing the gate's reference here would
+   * render refined AI text as the human's own with nothing to notice it.
+   *
+   * The `org_id` predicate is defence in depth rather than this endpoint's only
+   * tenant boundary: `get` has already 404'd an item belonging to another org
+   * before this runs. It is what keeps a version row written with the wrong
+   * `org_id` from being served as this org's own text, and the repository
+   * convention that every read is scoped is worth more than the one saved
+   * predicate.
+   */
+  private aiVersionRows(orgId: string, contentItemId: string) {
+    return db
+      .select(AI_VERSION_COLUMNS)
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, contentItemId),
+          eq(schema.contentVersions.origin, "ai"),
+        ),
+      )
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
+  }
+
   async get(orgId: string, id: string) {
     const rows = await db
       .select(ITEM_COLUMNS)
@@ -217,7 +305,28 @@ export class ContentRepository {
       .limit(1);
     const item = rows[0];
     if (!item) throw new NotFoundException("Content item not found");
-    return { ...item, adaptations: await this.adaptationsFor(orgId, item.id) };
+    // Two independent reads of the same item, issued together: this method is
+    // the response of every mutation on the resource as well as of the GET, so
+    // it pays for its round trips more often than any other read here.
+    const [adaptations, aiVersions] = await Promise.all([
+      this.adaptationsFor(orgId, item.id),
+      this.aiVersionRows(orgId, item.id),
+    ]);
+    return {
+      ...item,
+      adaptations,
+      /**
+       * The provenance lens's reference text. Returned rather than a
+       * server-computed mask because the browser would have to split the
+       * current text identically to align a mask to it anyway (spec §4), and
+       * two splitters that must agree are two splitters that will stop
+       * agreeing.
+       */
+      aiVersionBodies: groupAiVersionBodies(
+        adaptations.map((adaptation) => adaptation.id),
+        aiVersions,
+      ),
+    };
   }
 
   async create(orgId: string, data: ContentCreate) {
