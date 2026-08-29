@@ -32,4 +32,19 @@ describe("generation schema", () => {
     expect(schema.contentItems.origin.default).toBe("human");
     expect(schema.adaptations.origin.default).toBe("human");
   });
+
+  // `full` is the default because it is what every row written before fragments
+  // existed already means: a whole body, restorable and listable as history.
+  it("gives every existing version row the meaning it already had", () => {
+    expect(schema.VERSION_SCOPES).toEqual(["full", "fragment"]);
+    expect(schema.contentVersions.scope.notNull).toBe(true);
+    expect(schema.contentVersions.scope.default).toBe("full");
+  });
+
+  // A refine call has no run, so `run_id` alone cannot answer what refining a
+  // draft cost. Nullable because most rows are made inside a run and name none.
+  it("lets a ledger row name the draft it was spent on", () => {
+    expect(schema.usageLedger.contentItemId.notNull).toBe(false);
+    expect(schema.usageLedger.adaptationId.notNull).toBe(false);
+  });
 });

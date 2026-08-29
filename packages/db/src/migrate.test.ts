@@ -1,9 +1,41 @@
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { createDb } from "./client.js";
 import { runMigrations } from "./migrate.js";
 
 const url = process.env.TEST_DATABASE_URL;
+
+/** The migration whose additivity is proved below, by name rather than by index. */
+const ADDITIVE_MIGRATION = "0006_authorship";
+
+/**
+ * Copies the migrations folder minus `tag` and everything after it, so a
+ * database can be brought to the schema as it stood *before* that migration.
+ * Proving a migration additive needs rows that predate it, and rows that
+ * predate it can only be written against the older schema.
+ */
+async function migrationsFolderBefore(tag: string): Promise<string> {
+  const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+  const journalPath = path.join("meta", "_journal.json");
+  const journal = JSON.parse(await fs.readFile(path.join(source, journalPath), "utf8")) as {
+    entries: { tag: string }[];
+  };
+  const cut = journal.entries.findIndex((entry) => entry.tag === tag);
+  if (cut === -1) throw new Error(`No migration tagged ${tag} in the journal`);
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "pubrick-migrations-"));
+  await fs.cp(source, dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, journalPath),
+    JSON.stringify({ ...journal, entries: journal.entries.slice(0, cut) }),
+  );
+  return dir;
+}
 
 /** Creates a throwaway database on the same server and returns its url + a dropper. */
 async function withFreshDatabase(
@@ -140,5 +172,103 @@ describe.skipIf(!url)("runMigrations", () => {
       numeric_precision: 12,
       numeric_scale: 6,
     });
+  });
+
+  // `scope` lands on a table that already holds rows, and every one of them is a
+  // whole body — so the default is what keeps them restorable rather than
+  // NULL-or-guessed, exactly as the origin columns above.
+  it("adds the version scope and the ledger's draft columns", async () => {
+    await runMigrations(url as string);
+    const { db, pool } = createDb(url as string);
+    const cols = await db.execute(
+      "SELECT table_name, column_name, is_nullable, data_type, column_default FROM information_schema.columns WHERE (table_name, column_name) IN (('content_versions','scope'),('usage_ledger','content_item_id'),('usage_ledger','adaptation_id'))",
+    );
+    // Money outlives what it was spent on: deleting a draft must blank the
+    // ledger's pointer, never take the row (and its cost) with it.
+    const fks = await db.execute(
+      `SELECT kcu.column_name, rc.delete_rule
+         FROM information_schema.referential_constraints rc
+         JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = rc.constraint_name
+        WHERE kcu.table_name = 'usage_ledger'
+          AND kcu.column_name IN ('content_item_id', 'adaptation_id')`,
+    );
+    await pool.end();
+    const byKey = new Map<string, (typeof cols.rows)[number]>(
+      cols.rows.map((r) => [`${r.table_name}.${r.column_name}`, r]),
+    );
+    expect(byKey.size).toBe(3);
+    expect(byKey.get("content_versions.scope")).toMatchObject({
+      is_nullable: "NO",
+      data_type: "text",
+      column_default: "'full'::text",
+    });
+    for (const key of ["usage_ledger.content_item_id", "usage_ledger.adaptation_id"]) {
+      expect(byKey.get(key)).toMatchObject({ is_nullable: "YES", data_type: "uuid" });
+    }
+    expect(
+      Object.fromEntries(fks.rows.map((r) => [r.column_name as string, r.delete_rule])),
+    ).toEqual({ content_item_id: "SET NULL", adaptation_id: "SET NULL" });
+  });
+
+  // The proof that 0006 is additive: rows written against the pre-0006 schema
+  // must survive it unchanged, and must mean afterwards what they meant before.
+  // A version row that came back as `fragment` — or came back with a rewritten
+  // body or timestamp — would be history the app can no longer restore.
+  it("leaves rows written before the scope column exactly as they were", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(ADDITIVE_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: { version: pg.QueryResultRow; ledger: pg.QueryResultRow };
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the columns already existed here, "seeded before the migration"
+        // would be a lie and the assertions below would prove nothing.
+        const pre = await pool.query(
+          "SELECT column_name FROM information_schema.columns WHERE (table_name, column_name) IN (('content_versions','scope'),('usage_ledger','content_item_id'),('usage_ledger','adaptation_id'))",
+        );
+        expect(pre.rows).toHaveLength(0);
+
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('org_additive', 'Additive', 'additive')",
+        );
+        const brand = await pool.query(
+          "INSERT INTO brands (org_id, name) VALUES ('org_additive', 'Brand') RETURNING id",
+        );
+        const item = await pool.query(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('org_additive', $1, 'the body') RETURNING id",
+          [brand.rows[0].id],
+        );
+        const version = await pool.query(
+          "INSERT INTO content_versions (org_id, content_item_id, body, title, origin) VALUES ('org_additive', $1, 'the first draft', 'A title', 'ai') RETURNING id, body, title, origin, created_at",
+          [item.rows[0].id],
+        );
+        const ledger = await pool.query(
+          "INSERT INTO usage_ledger (org_id, step, provider, model_id, cost_usd, cost_source, status) VALUES ('org_additive', 'writer', 'google', 'gemini-3-flash', 0.001234, 'price_table', 'ok') RETURNING id, step, model_id, cost_usd, cost_source, created_at",
+        );
+        seeded = { version: version.rows[0], ledger: ledger.rows[0] };
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const versions = await after.query(
+        "SELECT id, body, title, origin, scope, created_at FROM content_versions",
+      );
+      const ledgers = await after.query(
+        "SELECT id, step, model_id, cost_usd, cost_source, content_item_id, adaptation_id, created_at FROM usage_ledger",
+      );
+      await after.end();
+
+      expect(versions.rows).toEqual([{ ...seeded.version, scope: "full" }]);
+      expect(ledgers.rows).toEqual([
+        { ...seeded.ledger, content_item_id: null, adaptation_id: null },
+      ]);
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
   });
 });

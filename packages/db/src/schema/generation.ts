@@ -48,6 +48,18 @@ export const KEY_OWNERSHIPS = ["byok", "platform"] as const;
 export type KeyOwnership = (typeof KEY_OWNERSHIPS)[number];
 
 /**
+ * How much of a body a version row holds. `full` is a whole body — the only
+ * kind that can be restored, listed as history, or answer the publish gate's
+ * "did a human delete something" clause. `fragment` is a refine proposal's
+ * replacement text, which is evidence of a touch but is not a body.
+ *
+ * `full` is the default because it is what every row written before fragments
+ * existed already is.
+ */
+export const VERSION_SCOPES = ["full", "fragment"] as const;
+export type VersionScope = (typeof VERSION_SCOPES)[number];
+
+/**
  * What a run was asked to produce. `kind` is discriminated from the start so
  * watched sources can add `"topic"` without a migration.
  */
@@ -161,6 +173,23 @@ export const usageLedger = pgTable(
     step: text("step").notNull(),
     /** Set for adapter calls, which are made once per channel. */
     channelId: uuid("channel_id").references(() => channels.id, { onDelete: "set null" }),
+    /**
+     * What the call was spent on, for calls made outside a run: an editor
+     * refine has no `run_id`, so without these nothing can answer what refining
+     * a given draft cost. `set null` on delete for the same reason `run_id` is —
+     * the money was spent whatever happened to the draft, and the org's
+     * spend-to-date is summed from these rows.
+     */
+    contentItemId: uuid("content_item_id").references(() => contentItems.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * Set when a call targeted one channel's override rather than the master
+     * body. Whether a refine can target an adaptation at all is still 2b-2's to
+     * decide; the column is added while this migration is open, because an
+     * unused nullable column is cheaper than a second migration.
+     */
+    adaptationId: uuid("adaptation_id").references(() => adaptations.id, { onDelete: "set null" }),
     /** 2 for a structured-output repair retry of the same step. */
     attempt: integer("attempt").notNull().default(1),
     provider: text("provider", { enum: AI_PROVIDERS }).notNull(),
@@ -205,6 +234,14 @@ export const contentVersions = pgTable(
     body: text("body").notNull(),
     title: text("title"),
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull(),
+    /**
+     * Whole body or refine fragment. Defaulted so every row written before this
+     * column keeps exactly the meaning it had: a whole body. Restore, history
+     * and the gate's deletion clause all read `full` rows only — a fragment is
+     * shorter than the body it edits, and counting its sentences as the body's
+     * would read every refine as a deletion.
+     */
+    scope: text("scope", { enum: VERSION_SCOPES }).notNull().default("full"),
     runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
     /** Null for AI-written versions. */
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
