@@ -39,6 +39,11 @@ describe("generation schema", () => {
     expect(schema.VERSION_SCOPES).toEqual(["full", "fragment"]);
     expect(schema.contentVersions.scope.notNull).toBe(true);
     expect(schema.contentVersions.scope.default).toBe("full");
+    // The column is bounded BY that list, not merely alongside it. Without
+    // this, `text("scope")` with no enum — or one spelled out a second time and
+    // left to drift — stores whatever a caller sends, and the badge's deletion
+    // clause silently stops finding the level's `full` row.
+    expect(schema.contentVersions.scope.enumValues).toEqual(schema.VERSION_SCOPES);
   });
 
   // A refine call has no run, so `run_id` alone cannot answer what refining a
