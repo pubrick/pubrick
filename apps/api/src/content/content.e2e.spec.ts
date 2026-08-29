@@ -77,6 +77,18 @@ describe.skipIf(!url)("content e2e", () => {
   const aiAdapted = (index: number) => `Channel ${index} version. The AI wrote this one too.`;
 
   /**
+   * One sentence the model wrote later, stored as a refine `fragment` row's
+   * whole body — the shape increment 2b-2's accepted proposal leaves behind.
+   */
+  const AI_FRAGMENT = "Venez goûter nos viennoiseries.";
+  /**
+   * The body an accepted refine produces: `AI_BODY`'s first sentence and the
+   * fragment's, merged. Equal to NO stored version row, which is precisely why
+   * whole-body equality read a human touch here that never happened.
+   */
+  const REFINED_BODY = `Café ouvert. ${AI_FRAGMENT}`;
+
+  /**
    * What Task 8's terminal write leaves behind, written directly.
    *
    * That write creates the item (`origin: "ai"`), its adaptations (each with
@@ -144,6 +156,47 @@ describe.skipIf(!url)("content e2e", () => {
     );
     await pool.end();
     return (jobs.rows[0] as { n: number }).n;
+  }
+
+  /**
+   * Appends `content_versions` rows at the MASTER level, the way the worker
+   * does today and an accepted refine will from 2b-2.
+   *
+   * `origin` and `scope` default to what a generation writes (`ai`, `full`), so
+   * a caller spelling either one out is being explicit about the thing its test
+   * turns on. `replaceExisting` drops the item's own rows first, for the shapes
+   * that are about what is MISSING.
+   */
+  async function addItemVersions(
+    itemId: string,
+    versions: { body: string; origin?: "ai" | "human"; scope?: "full" | "fragment" }[],
+    options: { replaceExisting?: boolean } = {},
+  ): Promise<void> {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+      .rows as { org_id: string }[];
+    if (options.replaceExisting) {
+      await db
+        .delete(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.contentItemId, itemId),
+            isNull(schema.contentVersions.adaptationId),
+          ),
+        );
+    }
+    await db.insert(schema.contentVersions).values(
+      versions.map((version) => ({
+        orgId: row?.org_id as string,
+        contentItemId: itemId,
+        adaptationId: null,
+        body: version.body,
+        origin: version.origin ?? ("ai" as const),
+        scope: version.scope ?? ("full" as const),
+      })),
+    );
+    await pool.end();
   }
 
   async function firstOpenedAt(itemId: string): Promise<string | null> {
@@ -1028,16 +1081,26 @@ describe.skipIf(!url)("content e2e", () => {
       expect(await publishJobCount(adaptationIds[1] as string)).toBe(0);
     });
 
-    it("compares against the FIRST ai version — not the first version, and not the latest", async () => {
+    it("reads the ai rows only — a human version ordered first is not the reference", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
       const { itemId } = await aiDraft(agent, brandId, [channelId]);
 
       // The version history increment 2 will actually produce: a human draft,
       // the AI's rewrite of it, and a later AI refinement. The item body is the
-      // AI's FIRST output, so the rule must refuse — and only the first `ai`
-      // row says so. Timestamps are explicit, not `defaultNow()`, so the order
-      // does not depend on the database's session timezone.
+      // AI's own output, so the rule must refuse.
+      //
+      // This test used to be called "compares against the FIRST ai version",
+      // and that stopped being true when the gate started asking whether EVERY
+      // SENTENCE is the model's: the mask now ORs across every `ai` row, and
+      // only the deletion clause's anchor is a single row (the first with
+      // `scope = 'full'`). What the fixture still pins is the `origin` filter —
+      // the human's own first attempt sorts before both `ai` rows, and a gate
+      // that took "the first row" of any origin, or that let a human row into
+      // the mask, would compare this body against text it was never equal to
+      // and call that a human touch. Timestamps are explicit, not
+      // `defaultNow()`, so the order does not depend on the database's session
+      // timezone.
       const { createDb, schema } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
@@ -1079,9 +1142,77 @@ describe.skipIf(!url)("content e2e", () => {
       ]);
       await pool.end();
 
-      // Taking the latest `ai` row, or the first row of any origin, compares
-      // the body against text it was never equal to and calls that a human.
+      // Taking the first row of any origin compares the body against text it
+      // was never equal to and calls that a human.
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+    });
+
+    it("still refuses a refined draft — the fragment proves the new sentence is the model's too", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // The shape this whole increment exists for, and the one the old formula
+      // let through: a `fragment` row carrying the sentence the model proposed,
+      // and a body equal to NEITHER stored row. Whole-body equality reads that
+      // as a human touch and publishes a draft nobody opened. Per sentence
+      // there is nothing human in it — the first sentence is the full row's,
+      // the second is the fragment's.
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      await agent.patch(`/api/content/${itemId}`).send({ body: REFINED_BODY }).expect(200);
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("opens as soon as one sentence is the human's own", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // The counterweight to the test above, which a gate that simply refused
+      // everything would also satisfy. Same refined body, one sentence of the
+      // author's own added: no `ai` row wrote that sentence, so the mask has a
+      // false in it and the gate opens.
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: `${REFINED_BODY} On vous attend dès sept heures.` })
+        .expect(200);
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    });
+
+    it("allows a deletion — trimming a draft is a human act", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      // Every sentence left IS the model's, so the mask alone answers "still
+      // untouched AI" and would refuse the commonest API-side edit there is,
+      // with a message telling the caller to edit the draft they just edited.
+      // Only the count against the first `full` row says a human was here.
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Café ouvert." }).expect(200);
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    });
+
+    it("refuses a level whose only ai evidence is a fragment", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // Partial evidence refuses exactly as no evidence does. With no `full`
+      // row there is no sentence count to measure against, so a deletion and a
+      // rewrite are indistinguishable — and the body here is the model's own
+      // text, untouched. Judging it against the fragment alone (one sentence
+      // against two) reads a human edit that never happened.
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }], {
+        replaceExisting: true,
+      });
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
     });
 
     it("tells an AI draft that already published about the POST, not about reading it", async () => {
@@ -1195,14 +1326,12 @@ describe.skipIf(!url)("content e2e", () => {
       const { brandId, channelId } = await brandWithChannel(agent);
       const { itemId } = await aiDraft(agent, brandId, [channelId]);
 
-      // Spec §3: three questions, three references. The publish gate reads the
-      // FIRST `ai` row per level, because it asks whether any human was ever
-      // involved; the lens dims a sentence that still matches ANY `ai` version,
-      // so this endpoint must return them all. Increment 2b's refine verbs
-      // write that second row — reusing the gate's "first row" semantics here
-      // would leave refined AI text rendering as the human's own, silently.
-      // The `human` row in between is the origin filter's turn: a version the
-      // author typed is not a reference for "is this still the AI's text".
+      // The lens dims a sentence that still matches ANY `ai` version, so this
+      // endpoint must return them all — increment 2b's refine verbs write that
+      // second row, and returning one of them would leave refined AI text
+      // rendering as the human's own, silently. The `human` row in between is
+      // the origin filter's turn: a version the author typed is not a
+      // reference for "is this still the AI's text".
       const { createDb, schema } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))

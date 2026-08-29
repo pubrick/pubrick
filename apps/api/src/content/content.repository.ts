@@ -7,9 +7,9 @@ import {
 import { schema } from "@pubrick/db";
 import {
   type AdaptationUpdate,
+  allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
-  isUntouchedAi,
   matchesAnyAiVersion,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -318,13 +318,12 @@ export class ContentRepository {
    * `created_at` — is identical across them, so `created_at` alone is not a
    * total order and "oldest first" would be whatever the planner felt like.
    *
-   * The SEMANTICS deliberately differ from the gate's, and spec §3 is the table
-   * that says why. The gate reads only the FIRST `ai` row per level, because it
-   * answers "has any human been involved at all". The lens dims a sentence that
-   * still matches ANY `ai` version, so it needs every row. Today they coincide —
-   * there is exactly one `ai` row per level — and increment 2b's refine verbs
-   * write the second, at which point reusing the gate's reference here would
-   * render refined AI text as the human's own with nothing to notice it.
+   * The same rows the gate reads, at a different grain rather than a different
+   * reference. The lens dims a sentence that still matches ANY `ai` version;
+   * the gate asks whether EVERY sentence does (`allSentencesAi`), off this same
+   * list. The gate additionally needs each level's first `scope = 'full'` row
+   * for its deletion clause, which is why it queries `scope` and this does not:
+   * a fragment is dimmable text like any other.
    *
    * The `org_id` predicate is defence in depth rather than this endpoint's only
    * tenant boundary: `get` has already 404'd an item belonging to another org
@@ -587,35 +586,48 @@ export class ContentRepository {
    *    it, at the cost of refusing a draft whose body a human typed themselves
    *    until they open it.
    * 2. `first_opened_at IS NULL` — nobody has opened it (`markOpened`).
-   * 3. The text is still verbatim what the AI wrote, AT BOTH LEVELS. The item
-   *    body against the item's own first `ai` version, and EVERY adaptation
-   *    against its own — because `adaptations.body ?? contentItems.body` is
-   *    what the worker actually sends (publish.service.ts), so a rule that
-   *    checked only the master text would pass an item whose every channel
-   *    still ships untouched AI.
+   * 3. EVERY SENTENCE of the text is still the model's, AT BOTH LEVELS. The
+   *    item body against the item's own `ai` rows, and EVERY adaptation against
+   *    its own — because `adaptations.body ?? contentItems.body` is what the
+   *    worker actually sends (publish.service.ts), so a rule that checked only
+   *    the master text would pass an item whose every channel still ships
+   *    untouched AI.
    *
-   * Comparison is `isUntouchedAi`, never string equality: it normalises
-   * whitespace and Unicode composition, so a stray space or an NFD paste is not
-   * a human touch.
+   * Clause 3 used to be a whole-body equality against the FIRST `ai` row per
+   * level, and increment 2b's refine verbs break that: an accepted proposal
+   * merges a fragment into the body, the body then equals no stored row, and
+   * equality reads a human touch that never happened — the gate publishing a
+   * draft nobody opened, to exactly the callers it was written for. The
+   * question is therefore asked one sentence at a time (`allSentencesAi`, spec
+   * §2), which needs TWO things per level rather than one row:
    *
-   * It shares that function with the UI but NOT its reference, and the
-   * difference is deliberate. Three questions, three references: this gate
-   * reads the FIRST `ai` row ("has any human been involved at all?"), the
-   * origin badge reads ANY row, and the editor's dim mask reads ALL of them.
-   * They coincide today because a generation writes exactly one row per level;
-   * they stop coinciding the moment increment 2b's refine verbs write a second,
-   * and using one reference for all three would then be silently wrong. An
-   * earlier version of this comment claimed the badge and the gate "cannot
-   * disagree" because one function serves both — that was never the reason, and
-   * it is no longer true.
+   * - EVERY `ai` body, for the mask. A sentence still counts as the model's
+   *   when ANY `ai` row wrote it, so an accepted proposal's fragment covers the
+   *   sentence it replaced. The rows are NOT concatenated — see
+   *   `aiSentenceMaskAny`, which keeps each version's own multiset count.
+   * - The first `scope = 'full'` row, as the deletion clause's anchor. A mask
+   *   has no notion of count, so a body that is a strict subset of the model's
+   *   sentences would read "all AI" and a caller who TRIMMED the draft would be
+   *   refused with a message telling them to edit it. A fragment cannot be that
+   *   anchor: it is shorter than the body it edits by construction, so counting
+   *   its sentences as the body's would read every refine as a deletion.
    *
-   * Missing evidence refuses. An `ai` item with no version row to compare
-   * against reads as untouched, and an adaptation with no version row of its
-   * own does too: the promise is about what we can PROVE a human touched, and
-   * the recovery is one click (open it) rather than a published draft nobody
-   * read. That direction matters because `adaptations.origin` defaults to
-   * `human` — deriving "touched" from the origin column instead would turn a
-   * worker that forgot to set it into an open publish gate.
+   * That is the same question the badge answers for the whole text and the lens
+   * paints per sentence, off the same rows — one fact, three grains, instead of
+   * three references that could disagree. Never string equality either way:
+   * the comparison normalises whitespace and Unicode composition, so a stray
+   * space or an NFD paste is not a human touch.
+   *
+   * Missing evidence refuses, and PARTIAL evidence refuses with it. An `ai`
+   * item with no version row to compare against reads as untouched, an
+   * adaptation with no version row of its own does too, and so does a level
+   * whose only `ai` rows are fragments — with no `full` row a deletion and a
+   * rewrite are indistinguishable. The promise is about what we can PROVE a
+   * human touched, and the recovery is one click (open it) rather than a
+   * published draft nobody read. That direction matters because
+   * `adaptations.origin` defaults to `human` — deriving "touched" from the
+   * origin column instead would turn a worker that forgot to set it into an
+   * open publish gate.
    *
    * A plain read, no `FOR UPDATE`: locking `content_items` here would invert
    * the lock order the whole codebase depends on (see `lockAdaptations`).
@@ -636,15 +648,17 @@ export class ContentRepository {
     if (!item) return;
     if (item.origin !== "ai") return;
 
-    // The FIRST `ai` version per level is the provenance reference. Filtered on
-    // origin because increment 2 appends human versions to the same table, and
+    // The `ai` version rows are the provenance evidence. Filtered on origin
+    // because increment 2 appends human versions to the same table — a version
+    // the author typed is not evidence that the model wrote a sentence — and
     // ordered so "first" cannot drift: the worker writes item and adaptation
     // versions in one transaction, where `now()` — and therefore `created_at` —
-    // is identical for all of them.
+    // is identical for all of them, so `created_at` alone is not a total order.
     const versions = await tx
       .select({
         adaptationId: schema.contentVersions.adaptationId,
         body: schema.contentVersions.body,
+        scope: schema.contentVersions.scope,
       })
       .from(schema.contentVersions)
       .where(
@@ -655,10 +669,16 @@ export class ContentRepository {
         ),
       )
       .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
-    const firstAiVersion = new Map<string | null, string>();
+    /** Every `ai` body per level, for the mask. */
+    const aiBodies = new Map<string | null, string[]>();
+    /** The first `full` row per level, and only it, for the deletion clause. */
+    const firstFullAiVersion = new Map<string | null, string>();
     for (const version of versions) {
-      if (!firstAiVersion.has(version.adaptationId)) {
-        firstAiVersion.set(version.adaptationId, version.body);
+      const bodies = aiBodies.get(version.adaptationId) ?? [];
+      bodies.push(version.body);
+      aiBodies.set(version.adaptationId, bodies);
+      if (version.scope === "full" && !firstFullAiVersion.has(version.adaptationId)) {
+        firstFullAiVersion.set(version.adaptationId, version.body);
       }
     }
 
@@ -667,12 +687,22 @@ export class ContentRepository {
       .from(schema.adaptations)
       .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)));
 
-    /** Untouched unless we can prove otherwise — see "missing evidence" above. */
-    const stillAi = (current: string, aiVersion: string | undefined): boolean =>
-      aiVersion === undefined || isUntouchedAi(current, aiVersion);
+    /**
+     * Is every sentence of `current` still the model's, judged against one
+     * LEVEL's evidence — `null` for the master body, an adaptation id for a
+     * channel's own text.
+     *
+     * Takes the level rather than the reference strings so the cleared-override
+     * branch below can switch both of them together and cannot switch one
+     * without the other. Untouched unless we can prove otherwise:
+     * `allSentencesAi` answers true for a level with no rows and for one with
+     * no `full` row — see "missing evidence" above.
+     */
+    const stillAi = (current: string, level: string | null): boolean =>
+      allSentencesAi(current, aiBodies.get(level) ?? [], firstFullAiVersion.get(level));
 
     const nobodyOpened = item.firstOpenedAt === null;
-    const bodyIsAi = stillAi(item.body, firstAiVersion.get(null));
+    const bodyIsAi = stillAi(item.body, null);
     const everyChannelIsAi = adaptations.every((adaptation) =>
       // The channel's text AND the version it is judged against, together.
       // `adaptations.body ?? content_items.body` is the worker's own fallback,
@@ -683,9 +713,7 @@ export class ContentRepository {
       // platform and so never matches: clearing an override read as a human
       // edit and published every channel's verbatim AI text. The shipped web UI
       // sends exactly that null (content/[id]/page.tsx, an emptied textarea).
-      adaptation.body === null
-        ? stillAi(item.body, firstAiVersion.get(null))
-        : stillAi(adaptation.body, firstAiVersion.get(adaptation.id)),
+      adaptation.body === null ? stillAi(item.body, null) : stillAi(adaptation.body, adaptation.id),
     );
 
     if (nobodyOpened && bodyIsAi && everyChannelIsAi) {
