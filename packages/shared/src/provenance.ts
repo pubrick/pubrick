@@ -18,7 +18,12 @@
  */
 
 // Zero-width space and byte-order mark are invisible spacing that no human
-// types on purpose; `\s` does not cover them.
+// types on purpose. `\s` does not cover U+200B — that single character is the
+// whole reason this class exists, and the whole difference between it and
+// `String.trim()`. It DOES cover U+FEFF: ECMAScript's WhiteSpace production
+// includes ZWNBSP, so `/\s/.test("\uFEFF")` is true and `"\uFEFF".trim()` is
+// empty. U+FEFF is spelled out below for the reader, not for the engine; do
+// not cite it as a difference from `.trim()`, because it is not one.
 const SPACE = /[\s\u200B\uFEFF]/u;
 const SPACE_RUN = /[\s\u200B\uFEFF]+/gu;
 const SPACE_EDGES = /^[\s\u200B\uFEFF]+|[\s\u200B\uFEFF]+$/gu;
@@ -135,6 +140,21 @@ export interface SentenceSpan {
  * single span. That is a known limit, not a bug to paper over: provenance
  * there degrades to whole-body comparison and the UI hides the per-sentence
  * view rather than pretending to a granularity it does not have.
+ *
+ * Two more known limits, both measured rather than assumed:
+ *
+ * Only U+000A is treated as a line boundary. A textarea normalises CRLF on the
+ * way in, so that pair is covered, but U+2028 and U+2029 survive a paste and
+ * are *not* boundaries here — two lines joined by one fuse into a single unit,
+ * so editing the second half repaints the untouched first half as
+ * human-written. That is under-splitting, the unsafe direction, and it is the
+ * first thing to fix if a real body ever arrives carrying one.
+ *
+ * A CJK terminator is a boundary whatever follows it, so a combining mark
+ * sitting on `。` is cut from its base: `好。` + `\u0300more` splits the
+ * grapheme cluster and the overlay renders the mark orphaned at the head of
+ * the next span. Cosmetic, and only on the CJK path — after an ASCII period a
+ * following combining mark blocks the boundary instead.
  */
 export function splitSentenceSpans(text: string): SentenceSpan[] {
   const spans: SentenceSpan[] = [];
@@ -270,6 +290,15 @@ export function aiSentenceMask(current: string, aiVersion: string): boolean[] {
  * formula — `bodies.some(b => isUntouchedAi(body, b))`, never this one. See the
  * design's §3: `isUntouchedAi` short-circuits on a sentence-count mismatch, so
  * a concatenated reference always answers false there.)
+ *
+ * Note this is a deliberate *exception* to the policy in the module header. In
+ * general a human who retypes a sentence identically is credited to the AI —
+ * under-claiming human authorship is the safe direction. Here the opposite is
+ * chosen: a second copy of a sentence the AI wrote once is credited to the
+ * human. The multiset is the reason. Crediting it to the AI would mean
+ * inventing an AI original that does not exist, and the count is the only
+ * thing standing between "the AI wrote this once" and "the AI wrote this as
+ * many times as you paste it".
  */
 export function aiSentenceMaskAny(current: string, aiVersions: readonly string[]): boolean[] {
   const sentenceCount = splitSentences(current).length;
@@ -301,16 +330,24 @@ export interface DimSpan extends SentenceSpan {
  * repeats it.
  *
  * A blank span therefore consumes no mask entry and is never dimmed. "Blank" is
- * this module's own whitespace class, the one `splitSentences` filters with:
- * `String.trim()` leaves U+200B and U+FEFF standing, and a blank line carrying
- * an invisible character would consume a flag and shift every span after it.
+ * this module's own whitespace class, the one `splitSentences` filters with —
+ * not `String.trim()`, which leaves U+200B standing. That one character is the
+ * entire difference between the two (U+FEFF is *not*: `\s` matches it and
+ * `.trim()` strips it), and a blank line carrying one would consume a flag and
+ * shift every span after it.
  */
 export function dimSpans(current: string, aiVersions: readonly string[]): DimSpan[] {
   const mask = aiSentenceMaskAny(current, aiVersions);
   let sentenceIndex = 0;
   return splitSentenceSpans(current).map((span) => {
     if (!trimSpace(current.slice(span.start, span.end))) return { ...span, ai: false };
-    return { ...span, ai: mask[sentenceIndex++] ?? false };
+    // The fallback is unreachable: every span that gets here is non-blank, and
+    // `splitSentences` is exactly the non-blank spans, so there is always an
+    // entry left. It is `true` rather than `false` so that if the two ever did
+    // drift apart, the failure over-dims — crediting the AI with text a human
+    // may have written — rather than painting untouched AI text as human, the
+    // direction this module's header refuses.
+    return { ...span, ai: mask[sentenceIndex++] ?? true };
   });
 }
 

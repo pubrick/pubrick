@@ -218,9 +218,16 @@ describe("splitSentenceSpans", () => {
 
   it("keeps splitSentences as the trimmed view of the same partition", () => {
     // Trimmed with the module's own whitespace class, which counts the
-    // zero-width space and the BOM that `String.trim()` leaves behind. With a
-    // bare `.trim()` a body of nothing but invisible spacing reads as a
-    // disagreement between the two views when there is none.
+    // zero-width space that `String.trim()` leaves behind (U+200B; NOT the
+    // BOM, which `\s` matches and `.trim()` strips). With a bare `.trim()` a
+    // body of nothing but invisible spacing reads as a disagreement between
+    // the two views when there is none.
+    //
+    // This pins the `splitSentences` side only — the trim-and-filter. It has
+    // no power over the partition: both sides are computed from
+    // `splitSentenceSpans`, so a change there moves them together and this
+    // stays green. The partition's real guards are the losslessness test
+    // above, the separator test, and dimSpans' blank-span test.
     const trimSpace = (piece: string) =>
       piece.replace(/^[\s\u200B\uFEFF]+|[\s\u200B\uFEFF]+$/gu, "");
     for (const text of corpus) {
@@ -383,6 +390,39 @@ describe("dimSpans", () => {
     expect(spans.map((s) => s.ai)).toEqual([false, true, true]);
   });
 
+  it("gives each sentence its own flag, not the first sentence's", () => {
+    // Every other case here has a uniform mask — all AI or all human — under
+    // which `mask[0]` for every span, no increment at all, or a backwards walk
+    // are all indistinguishable from the truth. A mixed mask is what separates
+    // them. With `mask[0]` everywhere, editing the FIRST sentence undims the
+    // whole body, verbatim AI included.
+    const ai = "Alpha one. Beta two. Gamma three.";
+    const text = "\n\nAlpha one. My own words. Gamma three.";
+    expect(dimSpans(text, [ai]).map((s) => s.ai)).toEqual([false, true, false, true]);
+  });
+
+  it("walks the mask forwards", () => {
+    // Deliberately NOT the fixture above: its mask is [true, false, true],
+    // a palindrome, so reversing the mask leaves it unchanged and that
+    // mutation survives. This one's is [true, true, false].
+    const ai = "Alpha one. Beta two. Gamma three.";
+    const text = "\n\nAlpha one. Beta two. My own words.";
+    expect(dimSpans(text, [ai]).map((s) => s.ai)).toEqual([false, true, true, false]);
+  });
+
+  it("dims against every version, not just the first", () => {
+    // aiSentenceMaskAny is tested with many versions; dimSpans was not, so
+    // `aiVersions.slice(0, 1)` here would reintroduce one layer up exactly the
+    // defect that helper exists to prevent — and it is the likeliest real
+    // regression once 2b's refine rows create the second version.
+    const text = "Alpha one. Gamma three. Mine here.";
+    expect(dimSpans(text, ["Alpha one. Beta two.", "Gamma three."]).map((s) => s.ai)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
   it("stays a lossless partition", () => {
     const text = "Alpha one. Beta two.\n\nGamma three.";
     expect(
@@ -393,10 +433,18 @@ describe("dimSpans", () => {
   });
 
   it("counts a zero-width character as blank, exactly as splitSentences does", () => {
-    // `String.trim()` leaves U+200B and U+FEFF standing, so a blank line
-    // carrying one would look like content, consume a flag, and shift every
-    // later span — the same off-by-one the blank line above pins, reached by a
-    // character nobody can see. The module's own whitespace class covers them.
+    // `String.trim()` leaves U+200B standing, so a blank line carrying one
+    // would look like content, consume a flag, and shift every later span —
+    // the same off-by-one the blank line above pins, reached by a character
+    // nobody can see.
+    //
+    // U+200B is the ONLY such character, and the assertions below pin that:
+    // U+FEFF is matched by `\s` and stripped by `.trim()` (ECMAScript's
+    // WhiteSpace production includes ZWNBSP), so citing it as a difference is
+    // wrong. The fixture carries both because §7's overlay inserts a
+    // zero-width character for a trailing newline; only the U+200B does work.
+    expect("\u200B".trim()).toBe("\u200B");
+    expect("\uFEFF".trim()).toBe("");
     const ai = "Hello. World.";
     const text = `\n\u200B\uFEFF\n${ai}`;
     const spans = dimSpans(text, [ai]);
