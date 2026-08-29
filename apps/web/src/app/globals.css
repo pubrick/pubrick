@@ -36,6 +36,12 @@
   --color-fg: var(--ink);
   --color-fg-secondary: var(--gray-600);
   --color-fg-tertiary: var(--gray-500);
+  /* AI text under the provenance lens: clearly quieter than --color-fg, and
+     still readable body text (AA on this ground) — the lens dims authorship,
+     it does not hide the words. Its own token rather than a reuse of
+     --color-fg-secondary because the role is provenance, not hierarchy, and
+     the two must be tunable apart. */
+  --color-fg-dim: var(--gray-600);
   --color-accent: var(--brick-500);
   --color-accent-hover: var(--brick-600);
   --color-accent-soft: var(--brick-100);
@@ -73,6 +79,7 @@
     --color-fg: #f5f6f7;
     --color-fg-secondary: #a3abb2;
     --color-fg-tertiary: #7c848c;
+    --color-fg-dim: #a3abb2;
     --color-accent-soft: #3a2417;
     --color-accent-soft-fg: #f09a66;
     --status-draft-bg: #26292c;
@@ -100,6 +107,7 @@
   --color-fg: #f5f6f7;
   --color-fg-secondary: #a3abb2;
   --color-fg-tertiary: #7c848c;
+  --color-fg-dim: #a3abb2;
   --color-accent-soft: #3a2417;
   --color-accent-soft-fg: #f09a66;
   --status-draft-bg: #26292c;
@@ -161,6 +169,7 @@
   --color-fg: var(--ink);
   --color-fg-secondary: var(--gray-600);
   --color-fg-tertiary: var(--gray-500);
+  --color-fg-dim: var(--gray-600);
   --color-accent-soft: var(--brick-100);
   --color-accent-soft-fg: var(--brick-700);
   --status-draft-bg: var(--gray-100);
@@ -189,6 +198,7 @@
   --color-fg: var(--color-fg);
   --color-fg-secondary: var(--color-fg-secondary);
   --color-fg-tertiary: var(--color-fg-tertiary);
+  --color-fg-dim: var(--color-fg-dim);
   --color-accent: var(--color-accent);
   --color-accent-hover: var(--color-accent-hover);
   --color-accent-soft: var(--color-accent-soft);
@@ -230,4 +240,31 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+
+/*
+ * The provenance lens (DimmedTextarea): a transparent <textarea> over a
+ * mirrored overlay that paints the same characters, dimming the ones still
+ * verbatim AI. Only the two conditions where the mirror stops being safe live
+ * here — everything metric-related is on both elements, in the component, so
+ * one string cannot reach only one layer.
+ */
+
+/* A trailing newline's empty last line has no character to give it height, so
+   the overlay comes up one line short of the textarea. The character lives in
+   generated content, NOT in a text node: the overlay's textContent must stay
+   exactly the textarea's value, which is the assertion that catches a
+   partition dropping a character. */
+[data-dim-overlay]::after { content: "\200B"; }
+
+@media (forced-colors: active), print {
+  /* The UA (or the printer) picks the colours: `color: transparent` on the
+     textarea is overridden, the real text paints opaque on top of the overlay's
+     copy, and the two double. A dim/normal distinction means nothing when the
+     palette is not ours either — so the lens turns itself off and the textarea
+     goes back to being an ordinary one. `CanvasText` rather than --color-fg:
+     forced-colors ignores authored colours, and a dark theme would otherwise
+     print near-white text onto white paper. */
+  [data-dim-overlay] { display: none; }
+  [data-dim-input] { color: CanvasText; }
 }
