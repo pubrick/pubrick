@@ -4,6 +4,7 @@ import {
   aiSentenceMaskAny,
   allSentencesAi,
   dimSpans,
+  isSameText,
   isUntouchedAi,
   normalizeForComparison,
   normalizeNewlines,
@@ -524,8 +525,13 @@ describe("isUntouchedAi", () => {
     expect(isUntouchedAi("A one. B two.", "A one. B two.")).toBe(true);
   });
 
-  it("is true across pure whitespace edits — a stray space is not a human touch", () => {
+  it("is true across a doubled space or a trailing one — neither is a human touch", () => {
+    // Titled for what it actually exercises. "Pure whitespace edits" is NOT
+    // true of whitespace in general: U+000A is a sentence boundary here, and
+    // swapping one for a space is a structural edit — see the joined-lines case
+    // below, which is the same claim's counterexample.
     expect(isUntouchedAi("A one.  B two. ", "A one. B two.")).toBe(true);
+    expect(isUntouchedAi("A one.\tB two.", "A one. B two.")).toBe(true);
   });
 
   it("is false once any sentence changed", () => {
@@ -602,6 +608,119 @@ describe("isUntouchedAi", () => {
       const sameCount = splitSentences(current).length === splitSentences(ai).length;
       expect(isUntouchedAi(current, ai)).toBe(everySentenceIsAi && sameCount);
     }
+  });
+});
+
+describe("isSameText", () => {
+  it("is true for a save that changed nothing at all", () => {
+    expect(isSameText("A one. B two.", "A one. B two.")).toBe(true);
+  });
+
+  it("is true for a reflow, a zero-width space and an NFD paste", () => {
+    expect(isSameText("A one. B two.", "  A one.\u200B  B two. ")).toBe(true);
+    const accented = "Cliché wins. Ёlka verte.";
+    expect(isSameText(accented, accented.normalize("NFD"))).toBe(true);
+  });
+
+  it("is FALSE when a newline became a space, which the gate reads as an edit", () => {
+    // The live defect this function exists for. A whole-body comparison
+    // collapses the newline and calls this the same text, so the save filed no
+    // version row — while `allSentencesAi`, which splits FIRST, saw two units
+    // become one and opened the publish gate. One edit, two answers: the draft
+    // approved and shipped with nothing recording who authorised it.
+    const lines = "Notre collection est arrivée\nVenez la découvrir en boutique.";
+    const joined = lines.replace("\n", " ");
+    expect(normalizeForComparison(lines)).toBe(normalizeForComparison(joined));
+    expect(isSameText(lines, joined)).toBe(false);
+    // ...and the other way round, since a save can go either direction.
+    expect(isSameText(joined, lines)).toBe(false);
+  });
+
+  it("is false for a reorder, which the gate cannot see but a history must", () => {
+    // `allSentencesAi` calls a reordered post untouched on purpose (the module
+    // header's accepted false positive). It is still a real edit, and 2c has to
+    // be able to restore what came before it — so the whole-body half of this
+    // comparison is load-bearing too, in the other direction.
+    expect(isSameText("A one. B two.", "B two. A one.")).toBe(false);
+  });
+
+  it("is false for the ordinary edits, in both directions", () => {
+    expect(isSameText("A one. B two.", "A one. Mine now.")).toBe(false);
+    expect(isSameText("A one. B two.", "A one. B two. C three.")).toBe(false);
+    expect(isSameText("A one. B two.", "A one.")).toBe(false);
+    expect(isSameText("A one. B two.", "   ")).toBe(false);
+    expect(isSameText("   ", "A one. B two.")).toBe(false);
+  });
+
+  it("is symmetric, however asymmetric the multiset consumption looks", () => {
+    const bodies = [
+      "A one. B two.",
+      "B two. A one.",
+      "A one.\nB two.",
+      "A one. B two. B two.",
+      "A one.",
+      "   ",
+      "just a hook line",
+    ];
+    for (const a of bodies) {
+      for (const b of bodies) expect(isSameText(a, b)).toBe(isSameText(b, a));
+    }
+  });
+
+  /**
+   * The property the version writer actually needs, pinned as a theorem rather
+   * than as examples: **a save this calls "the same text" cannot have moved the
+   * publish gate's verdict.** Everything else is noise in a history; this one is
+   * a publish nobody authorised.
+   *
+   * It fails on the whole-body comparison this replaced — `X\nY` and `X Y`
+   * normalise identically and the gate answers differently on them — which is
+   * exactly the pair the corpus below carries.
+   */
+  it("never calls two bodies the same when the gate can tell them apart", () => {
+    const full = "Alpha one. Beta two.";
+    const bodies = [
+      full,
+      `${full} `,
+      "Alpha one.  Beta two.",
+      "Alpha one.\nBeta two.",
+      "Alpha one. Beta two",
+      "Alpha one.\nBeta two",
+      "Alpha one Beta two.",
+      "Beta two. Alpha one.",
+      "Alpha one.",
+      "Alpha one. Beta two. Alpha one.",
+      "Alpha one.\u200B Beta two.",
+      full.normalize("NFD"),
+      "Un vrai bijou\nÀ découvrir en boutique.",
+      "Un vrai bijou À découvrir en boutique.",
+      "   ",
+    ];
+    const evidence: [readonly string[], string | null][] = [
+      [[full], full],
+      [[full, "Beta two."], full],
+      [["Alpha one.\nBeta two."], "Alpha one.\nBeta two."],
+      [["Un vrai bijou\nÀ découvrir en boutique."], "Un vrai bijou\nÀ découvrir en boutique."],
+      [[], null],
+    ];
+    let pairedDistinctStrings = 0;
+    let separatedByTheNewlineAlone = 0;
+    for (const a of bodies) {
+      for (const b of bodies) {
+        if (a !== b && normalizeForComparison(a) === normalizeForComparison(b) && !isSameText(a, b))
+          separatedByTheNewlineAlone++;
+        if (!isSameText(a, b)) continue;
+        if (a !== b) pairedDistinctStrings++;
+        for (const [rows, first] of evidence) {
+          expect(allSentencesAi(a, rows, first)).toBe(allSentencesAi(b, rows, first));
+        }
+      }
+    }
+    // Neither half of the corpus is vacuous: it really does call distinct
+    // strings the same text, and it really does separate pairs the old
+    // whole-body comparison could not tell apart.
+    expect(pairedDistinctStrings).toBeGreaterThan(0);
+    expect(separatedByTheNewlineAlone).toBeGreaterThan(0);
   });
 });
 

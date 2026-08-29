@@ -14,8 +14,17 @@
  * unit that should have been two repaints untouched AI text as human-written the
  * moment a neighbour is edited. `allSentencesAi` and `aiSentenceMask` are
  * derived from the same split for the same reason — there is ONE question here,
- * "is every sentence still the model's", and the publish gate, the origin badge
- * and the per-sentence dimming are three grains of it rather than three rules.
+ * "is every sentence still the model's", read at TWO grains rather than as
+ * separate rules: whole-text for the publish gate and the origin badge, which
+ * make the very same call, and per-sentence for the dimming. (It used to say
+ * three grains, and that stopped being true when the badge stopped asking
+ * whole-body equality and started asking the gate's own question.)
+ *
+ * One more consumer reads this split without asking that question:
+ * `isSameText`, which the api calls to decide whether a save is a new version
+ * of anything. It is not provenance — it compares two human bodies — but it
+ * MUST see a change wherever the gate would, so it is derived here rather than
+ * spelled out again at the call site.
  */
 
 // Zero-width space and byte-order mark are invisible spacing that no human
@@ -395,12 +404,15 @@ export function dimSpans(current: string, aiVersions: readonly string[]): DimSpa
  * boundary, so a body-level equality can claim "untouched" for a post whose
  * every sentence the mask calls human.
  *
- * **Superseded in production by `allSentencesAi`, and deliberately kept.** It
- * cannot see a refine — a fragment never equals a whole body — so nothing that
- * answers the gate's or the badge's question may call it again. What it is
- * still for is the corpus test that pins the direction of every disagreement
- * between the two formulas: the old answer has to stay computable for the new
- * one to be provably no laxer.
+ * **Superseded in production AS THE GATE'S QUESTION by `allSentencesAi`, and
+ * deliberately kept.** It cannot see a refine — a fragment never equals a whole
+ * body — so nothing that answers the gate's or the badge's question may call it
+ * again. What it is still for is the corpus test that pins the direction of
+ * every disagreement between the two formulas (the old answer has to stay
+ * computable for the new one to be provably no laxer), and `isSameText`, which
+ * asks something else with it: not "did the MODEL write this" but "are these
+ * two bodies the same text", where one version row is exactly the reference and
+ * a refine cannot arise.
  */
 export function isUntouchedAi(current: string, aiVersion: string): boolean {
   const currentSentences = splitSentences(current);
@@ -411,6 +423,41 @@ export function isUntouchedAi(current: string, aiVersion: string): boolean {
   // A deletion is a human act even though nothing new appeared.
   if (currentSentences.length !== aiSentences.length) return false;
   return aiSentenceMask(current, aiVersion).every((isAi) => isAi);
+}
+
+/**
+ * Are these two bodies the same text — to the history AND to the publish gate?
+ *
+ * The question a save asks before filing a version row, and it takes BOTH
+ * lenses, because neither implies the other and each is blind where the other
+ * sees:
+ *
+ * - `normalizeForComparison` collapses every whitespace run, so it cannot see
+ *   the newline that the splitter treats as a sentence boundary. Swapping a
+ *   U+000A for a space is nothing to it and decisive to `allSentencesAi`, on
+ *   exactly the line-structured social copy the splitter is written for. A
+ *   version writer judging with it alone let the edit that OPENS the publish
+ *   gate go unrecorded — `Notre collection est arrivée\nVenez la découvrir en
+ *   boutique.` re-saved with a space approves, and ships the model's adapted
+ *   text byte for byte with no row naming the human act that authorised it.
+ * - The sentence multiset cannot see a REORDER: `A. B.` and `B. A.` hold the
+ *   same sentences, and the gate says untouched there on purpose (the module
+ *   header's accepted false positive). It is still a real edit, and 2c's
+ *   history has to be able to restore what came before it.
+ *
+ * So "the same text" means neither reader can tell the two apart, and every
+ * disagreement between them files a row. That is the safe side of both: a
+ * version row nobody needed is noise in a history, a version row nobody wrote
+ * is a publish nobody authorised.
+ *
+ * Symmetric, though it does not look it: equal sentence counts plus every
+ * sentence of one consumed from the other's multiset is multiset equality.
+ */
+export function isSameText(previous: string, next: string): boolean {
+  return (
+    normalizeForComparison(next) === normalizeForComparison(previous) &&
+    isUntouchedAi(next, previous)
+  );
 }
 
 /**

@@ -10,7 +10,7 @@ import {
   allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
-  normalizeForComparison,
+  isSameText,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -276,12 +276,16 @@ function collectAiEvidence<K, R extends { body: string; scope: VersionScopeValue
  *   and `content_versions.body` is `NOT NULL`: there is no row shape for "no
  *   body", and inventing one (the empty string, or the item body it now falls
  *   back to) would file text the author did not write as text they did.
- * - Unchanged under `normalizeForComparison` — the Save button pressed twice,
- *   or a reflow. This is deliberately the SAME comparison the publish gate and
- *   the origin badge judge a human touch by (`allSentencesAi` normalises each
- *   sentence through it): a save that moves no verdict must not leave a version
- *   claiming it did, and two notions of "changed" in one file would eventually
- *   disagree about the same keystroke.
+ * - The same text — the Save button pressed twice, or a reflow. `isSameText`,
+ *   and NOT `normalizeForComparison` on the whole body, which is what this used
+ *   to be: that comparison collapses every whitespace run, so it cannot see the
+ *   newline the splitter treats as a sentence boundary, while the gate and the
+ *   badge (`allSentencesAi`) split first and can see nothing else. Swapping one
+ *   U+000A for a space in line-structured copy was therefore invisible here and
+ *   decisive there — the one edit that turns a 409 into an approved publish,
+ *   filed as no edit at all. `isSameText` answers with BOTH lenses, so a save
+ *   that moves the gate's verdict always leaves a row, and one that changes the
+ *   text only for the history (a reorder) does too.
  *
  * `previous === null` is a change by construction — a first override where the
  * channel had none is new text, and there is nothing to compare it against.
@@ -289,7 +293,7 @@ function collectAiEvidence<K, R extends { body: string; scope: VersionScopeValue
 function humanVersionBody(previous: string | null, next: string | null | undefined): string | null {
   if (next === undefined || next === null) return null;
   if (previous === null) return next;
-  return normalizeForComparison(next) === normalizeForComparison(previous) ? null : next;
+  return isSameText(previous, next) ? null : next;
 }
 
 /** The `ai` version bodies of one item, by level, oldest first. */
@@ -597,10 +601,36 @@ export class ContentRepository {
    * save missing from it.
    *
    * Called INSIDE the caller's transaction, after the body write and under the
-   * locks the caller already holds — so a refused edit leaves no history of
-   * itself, and the FK targets (`content_items`, and the adaptation when there
-   * is one) are rows this transaction already holds `FOR UPDATE`, adding no new
-   * lock to the documented order.
+   * locks the caller already holds, so a refused edit leaves no history of
+   * itself.
+   *
+   * **An INSERT here is a lock on both FK targets, and the invariant is that
+   * the caller already holds them.** An earlier draft of this comment claimed
+   * the insert "adds no new lock to the documented order"; that is not what a
+   * foreign key does. Postgres takes `FOR KEY SHARE` on every referenced row —
+   * `content_items`, and the adaptation when `adaptationId` is set — and it is
+   * a real lock, measured rather than reasoned about: in psql it waited 3.1 s
+   * behind a concurrent `SELECT ... FOR UPDATE` on the parent, and two
+   * transactions deadlock outright when one locks `content_items` first and
+   * then inserts an adaptation-level row while the other holds the adaptation.
+   *
+   * The claim happens to be TRUE of both callers today, and only because of
+   * what they lock: `update` writes `adaptationId: null` under the item's own
+   * `FOR UPDATE`, and `updateAdaptation` takes the adaptation's `FOR UPDATE`
+   * BEFORE the item's (`lockAdaptations`' order), so in both cases every row
+   * this insert touches is already held in a strictly stronger mode and the
+   * FK's own lock is a no-op.
+   *
+   * So the rule a future writer has to keep is not "this is free" but:
+   *
+   *   **An adaptation-level version row may only be written from a transaction
+   *   that ALREADY holds that adaptation's `FOR UPDATE`.**
+   *
+   * 2b-2's "refine an override" is the obvious way to break it — a path that
+   * locks the item, calls the model, and files a `fragment` row against an
+   * adaptation it never locked takes `content_items` before `adaptations`,
+   * which is precisely the inversion `lockAdaptations` documents as a genuine
+   * deadlock against the worker's `markPublished`.
    *
    * Invisible to every read that asks about provenance: the gate, the origin
    * badge and the lens all filter `origin = 'ai'`, because a version the author
@@ -1024,6 +1054,12 @@ export class ContentRepository {
    * parent item (`recomputeItemStatus`), so writing the item first here would
    * give the two sides opposite lock orders — a genuine deadlock whenever a
    * publish finishes at the same moment as an approve or reject.
+   *
+   * "Writing `content_items`" includes writing anything that REFERENCES an
+   * adaptation: a `content_versions` insert takes `FOR KEY SHARE` on both FK
+   * targets, so filing an adaptation-level version row from a transaction
+   * holding only the item's lock inverts this order exactly as an UPDATE
+   * would. See `recordHumanVersion`, which states that invariant in full.
    *
    * `ORDER BY id` for the same reason one level down. Without it Postgres is
    * free to return an item's adaptations in any order, so two concurrent

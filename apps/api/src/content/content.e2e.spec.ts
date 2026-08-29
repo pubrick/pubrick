@@ -292,6 +292,90 @@ describe.skipIf(!url)("content e2e", () => {
     return rows;
   }
 
+  /**
+   * Writes an item's body straight to the row.
+   *
+   * A fixture, never a save: the API's own PATCH is the thing under test in
+   * half this file, and going through it would file the very version row the
+   * assertion is about.
+   */
+  async function setItemBody(itemId: string, body: string): Promise<void> {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.update(schema.contentItems).set({ body }).where(eq(schema.contentItems.id, itemId));
+    await pool.end();
+  }
+
+  /** Another org, with a brand and channel of its own, and its `org_id`. */
+  async function strangerOrg(): Promise<{ orgId: string; channelId: string }> {
+    const stranger = await orgAgent();
+    const { channelId } = await brandWithChannel(stranger);
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM channels WHERE id = '${channelId}'`))
+      .rows as { org_id: string }[];
+    await pool.end();
+    return { orgId: row?.org_id as string, channelId };
+  }
+
+  /**
+   * A version row carrying ANOTHER org's `org_id` while pointing at this item —
+   * the shape a writer that passed the wrong orgId leaves behind.
+   *
+   * A stranger's 404 cannot pin any of the org filters on the version table:
+   * the stranger is refused at the ITEM lookup and never reaches those reads.
+   * This row is what they actually defend against, and it has to be planted
+   * from underneath the API, because no endpoint will write it.
+   */
+  async function otherOrgVersionRow(itemId: string, body: string): Promise<void> {
+    const { orgId } = await strangerOrg();
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db
+      .insert(schema.contentVersions)
+      .values({ orgId, contentItemId: itemId, adaptationId: null, body, origin: "ai" });
+    await pool.end();
+  }
+
+  /**
+   * The same shape one table over: another org's adaptation of this item.
+   *
+   * `adaptations.org_id` references only the organization, so nothing in the
+   * database stops the row from existing — the gate's own `org_id` predicate is
+   * the whole defence.
+   */
+  async function otherOrgAdaptation(itemId: string, body: string): Promise<string> {
+    const { orgId, channelId } = await strangerOrg();
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const inserted = await db
+      .insert(schema.adaptations)
+      .values({ orgId, contentItemId: itemId, channelId, body, origin: "human" })
+      .returning({ id: schema.adaptations.id });
+    await pool.end();
+    return inserted[0]?.id as string;
+  }
+
+  /** One `ai` version row at an adaptation's level, owned by the ITEM's org. */
+  async function addAdaptationVersion(
+    itemId: string,
+    adaptationId: string,
+    body: string,
+  ): Promise<void> {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+      .rows as { org_id: string }[];
+    await db.insert(schema.contentVersions).values({
+      orgId: row?.org_id as string,
+      contentItemId: itemId,
+      adaptationId,
+      body,
+      origin: "ai",
+    });
+    await pool.end();
+  }
+
   /** The signed-in user behind an agent — what `created_by` must record. */
   async function sessionUserId(agent: request.Agent): Promise<string> {
     const session = await agent.get("/api/auth/get-session").expect(200);
@@ -1193,13 +1277,20 @@ describe.skipIf(!url)("content e2e", () => {
       // and that stopped being true when the gate started asking whether EVERY
       // SENTENCE is the model's: the mask now ORs across every `ai` row, and
       // only the deletion clause's anchor is a single row (the first with
-      // `scope = 'full'`). What the fixture still pins is the `origin` filter —
-      // the human's own first attempt sorts before both `ai` rows, and a gate
-      // that took "the first row" of any origin, or that let a human row into
-      // the mask, would compare this body against text it was never equal to
-      // and call that a human touch. Timestamps are explicit, not
-      // `defaultNow()`, so the order does not depend on the database's session
-      // timezone.
+      // `scope = 'full'`). What the fixture pins is the `origin` filter, and it
+      // pins it through that anchor: the human's own first attempt sorts before
+      // both `ai` rows, and it is THREE sentences long. Let it into the
+      // evidence and it becomes the first `full` row, so a two-sentence body
+      // counts as a deletion, the gate reads a human touch that never happened,
+      // and this unopened AI draft publishes.
+      //
+      // The three sentences are the whole fixture. With a one-sentence human
+      // row — which is what this test carried until the count clause existed —
+      // dropping the `origin` filter changes nothing: the mask only ever grows
+      // by OR-ing, and `2 >= 1` holds, so the test passed either way and the
+      // comment above it was describing a guard it did not exercise.
+      // Timestamps are explicit, not `defaultNow()`, so the order does not
+      // depend on the database's session timezone.
       const { createDb, schema } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
@@ -1218,7 +1309,7 @@ describe.skipIf(!url)("content e2e", () => {
           orgId,
           contentItemId: itemId,
           adaptationId: null,
-          body: "The human's own first attempt.",
+          body: "Mon premier jet. Écrit à la main. Avant le modèle.",
           origin: "human",
           createdAt: new Date("2026-08-01T10:00:00Z"),
         },
@@ -1390,11 +1481,17 @@ describe.skipIf(!url)("content e2e", () => {
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
     });
 
-    it("whitespace and Unicode composition are not a human touch — both sides normalise the same way", async () => {
+    it("a reflow and an NFD paste are not a human touch — both sides normalise the same way", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
       const { itemId } = await aiDraft(agent, brandId, [channelId]);
 
+      // Titled for what it exercises: extra SPACES and Unicode composition.
+      // "Whitespace" in general is not true of this claim — U+000A is a
+      // sentence boundary, so turning one into a space IS a human touch here,
+      // and the version-writing test "records the newline a human turned into
+      // a space" is where that half lives.
+      //
       // A reflow and a copy-paste that arrived decomposed. Raw string equality
       // anywhere in the rule would read this as a human edit and let an
       // untouched AI draft through.
@@ -1421,6 +1518,56 @@ describe.skipIf(!url)("content e2e", () => {
         .delete(schema.contentVersions)
         .where(eq(schema.contentVersions.contentItemId, itemId));
       await pool.end();
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("does not let another org's version row put a hand-typed draft behind the refusal", async () => {
+      // The gate's OWN org filter, on the read that decides whether the gate is
+      // even entered. Nothing about this draft is the model's, so clause 1 lets
+      // it straight out — unless a row belonging to somebody else is counted as
+      // evidence about it. Then the gate enters, that row IS the body, nobody
+      // has opened it, and a draft the author typed by hand is refused as an
+      // unread AI one, in a message telling them to edit text they wrote.
+      //
+      // The query moved above the bail-out with this increment, which is what
+      // made a foreign row enough to change the ANSWER rather than just the
+      // work done to reach it.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+
+      await otherOrgVersionRow(itemId, HUMAN_BODY);
+
+      expect(await firstOpenedAt(itemId)).toBeNull();
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    });
+
+    it("does not let another org's adaptation vouch that a channel was edited", async () => {
+      // The same wrong-`org_id` shape, one table over, in the dangerous
+      // direction: a channel whose text reads human-written makes
+      // `everyChannelIsAi` false, and an AI draft nobody has opened publishes.
+      //
+      // It takes BOTH rows to move the verdict, and that is worth saying out
+      // loud, because it is what the filter is really guarding. A foreign
+      // adaptation on its own is harmless: its level has no `ai` evidence, so
+      // `allSentencesAi` takes the missing-evidence branch and answers "still
+      // the model's" — the fail-safe doing its job. The row that makes the
+      // foreign channel judgeable is an `ai` version at ITS level carrying THIS
+      // org's `org_id` — one writer passing the wrong org to the adaptation and
+      // the right one to the version, which is exactly the class of bug the
+      // repository's "every read is scoped" convention exists for.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const foreign = await otherOrgAdaptation(itemId, "Je l'ai réécrit moi-même pour ce canal.");
+      await addAdaptationVersion(itemId, foreign, "Le modèle a écrit ce canal.");
 
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
       expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
@@ -1695,22 +1842,7 @@ describe.skipIf(!url)("content e2e", () => {
       // passed the wrong orgId would leave behind — so that row is written here
       // and this org's response must not contain it. Drop
       // `eq(contentVersions.orgId, orgId)` and this is the test that fails.
-      const stranger = await orgAgent();
-      const strangerBrand = await stranger.post("/api/brands").send({ name: "B" }).expect(201);
-
-      const { createDb, schema } = await import("@pubrick/db");
-      const { db, pool } = createDb(url as string);
-      const [strangerRow] = (
-        await db.execute(`SELECT org_id FROM brands WHERE id = '${strangerBrand.body.id}'`)
-      ).rows as { org_id: string }[];
-      await db.insert(schema.contentVersions).values({
-        orgId: strangerRow?.org_id as string,
-        contentItemId: itemId,
-        adaptationId: null,
-        body: "Another org's words.",
-        origin: "ai",
-      });
-      await pool.end();
+      await otherOrgVersionRow(itemId, "Another org's words.");
 
       const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
       expect(fetched.body.aiVersionBodies.item).toEqual([AI_BODY]);
@@ -1889,7 +2021,7 @@ describe.skipIf(!url)("content e2e", () => {
       expect(listed.find((item) => item.id === created.body.id)?.bodyIsAiVerbatim).toBe(true);
     });
 
-    it("compares the card's badge against the ITEM's ai versions, not a channel's", async () => {
+    it("compares the badge against the ITEM's own ai rows — not a channel's, not a human's", async () => {
       // An adapter rewrites the text for its platform, so an adaptation's `ai`
       // body never matches the master body. Letting one into the item's
       // reference would make every card read "human-edited".
@@ -1897,11 +2029,58 @@ describe.skipIf(!url)("content e2e", () => {
       const { brandId, channelId } = await brandWithChannel(agent);
       const { itemId } = await aiDraft(agent, brandId, [channelId]);
 
+      const listedVerdict = async () => {
+        const listed = (await agent.get("/api/content").expect(200)).body as {
+          id: string;
+          bodyIsAiVerbatim: boolean;
+        }[];
+        return listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim;
+      };
+      expect(await listedVerdict()).toBe(true);
+
+      // The direction an untouched draft cannot pin, and the one that inverts
+      // the product's claim: the author's own rewrite, which HAPPENS to be the
+      // text the adapter wrote for the channel. Two sentences, so the deletion
+      // clause cannot rescue the verdict either. Widen either filter on the
+      // card's query — `adaptation_id IS NULL`, or `origin = 'ai'`, which would
+      // admit the author's own version row as evidence that the MODEL wrote
+      // this — and the author's own words are captioned "AI-drafted".
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: aiAdapted(0) })
+        .expect(200);
+      expect(await listedVerdict()).toBe(false);
+      // ...and the same question on the screen that card opens, where the
+      // evidence is keyed by LEVEL in TypeScript rather than filtered in SQL.
+      // Collapse that key and the card and the screen disagree again — the
+      // exact split this increment exists to close.
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.bodyIsAiVerbatim).toBe(
+        false,
+      );
+    });
+
+    it("answers the badge from version rows this org owns, on the card and on the item", async () => {
+      // `get`'s twin, one query over: a stranger's 404 cannot pin either org
+      // filter, because the stranger never reaches these reads. A row carrying
+      // another org's `org_id` while pointing at this item is what they defend
+      // against — and reading it here would caption a rewrite the author typed
+      // as the model's own text.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const myOwn = "J'ai tout réécrit. Chaque phrase est la mienne.";
+      await agent.patch(`/api/content/${itemId}`).send({ body: myOwn }).expect(200);
+      await otherOrgVersionRow(itemId, myOwn);
+
       const listed = (await agent.get("/api/content").expect(200)).body as {
         id: string;
         bodyIsAiVerbatim: boolean;
       }[];
-      expect(listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim).toBe(true);
+      expect(listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim).toBe(false);
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.bodyIsAiVerbatim).toBe(
+        false,
+      );
     });
 
     /**
@@ -2002,6 +2181,54 @@ describe.skipIf(!url)("content e2e", () => {
       expect(await versionRows(itemId)).toHaveLength(1);
     });
 
+    /**
+     * The save that a whole-body comparison could not see, end to end.
+     *
+     * `normalizeForComparison` collapses every whitespace run, so swapping one
+     * U+000A for a space is nothing to it. The gate and the badge SPLIT first,
+     * and a newline is a sentence boundary — so that same keystroke is the one
+     * thing that turns their 409 into an approval. Two definitions of "did the
+     * body change" in one file, and the lax one owned the version writer: the
+     * model's text shipped, byte for byte, with no row naming the human act
+     * that authorised it.
+     *
+     * Line-structured copy, because that is what the splitter is written for
+     * and what social posts actually look like.
+     */
+    it("records the newline a human turned into a space — the save that opens the gate", async () => {
+      const agent = await orgAgent();
+      const userId = await sessionUserId(agent);
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const lines = "Notre collection est arrivée\nVenez la découvrir en boutique.";
+      await setItemBody(itemId, lines);
+      await addItemVersions(itemId, [{ body: lines }], { replaceExisting: true });
+
+      // Nobody has read it and every sentence is still the model's.
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+
+      const joined = lines.replace("\n", " ");
+      await agent.patch(`/api/content/${itemId}`).send({ body: joined }).expect(200);
+
+      // The row that says who did it. Without it the publish below has no
+      // author anywhere in the database.
+      expect((await versionRows(itemId)).filter((row) => row.origin === "human")).toEqual([
+        {
+          adaptationId: null,
+          body: joined,
+          title: null,
+          origin: "human",
+          scope: "full",
+          createdBy: userId,
+        },
+      ]);
+
+      // ...and the gate really does open on it, which is why the row matters.
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(1);
+    });
+
     it("writes no version for a title-only edit, and none for a cleared override", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
@@ -2095,19 +2322,39 @@ describe.skipIf(!url)("content e2e", () => {
       .send({ brandId, body: "Mine", channelIds: [channelId] })
       .expect(201);
 
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+
     expect((await b.get("/api/content").expect(200)).body).toHaveLength(0);
-    await b.get(`/api/content/${created.body.id}`).expect(404);
-    await b.post(`/api/content/${created.body.id}/approve`).send({}).expect(404);
+    await b.get(`/api/content/${itemId}`).expect(404);
+    await b.post(`/api/content/${itemId}/approve`).send({}).expect(404);
     // reject is no longer a status flip — it cancels jobs and rewrites
     // adaptations — so it needs the same isolation guarantee as approve.
-    await b.post(`/api/content/${created.body.id}/reject`).send({}).expect(404);
+    await b.post(`/api/content/${itemId}/reject`).send({}).expect(404);
     // ...and neither can org B stamp org A's read receipt, which would open
     // org A's publish gate for a draft nobody in org A has seen.
-    await b.post(`/api/content/${created.body.id}/opened`).expect(404);
+    await b.post(`/api/content/${itemId}/opened`).expect(404);
+
+    // PATCH, at both levels — and the 404 is NOT what pins it. Drop
+    // `eq(contentItems.orgId, orgId)` from `requireEditableItem` and every
+    // response above is still exactly what it is now: the item write is
+    // org-scoped and matches nothing, and the reread at the end of `update` is
+    // org-scoped and 404s. What lands underneath is a `content_versions` row
+    // against org A's item, stamped with org B's `org_id` and org B's user —
+    // a cross-tenant WRITE hidden behind a 404, and a row that would then
+    // appear in a history someone restores from. So the rows are the assertion.
+    await b.patch(`/api/content/${itemId}`).send({ body: "Not yours." }).expect(404);
+    await b
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({ body: "Nor is this." })
+      .expect(404);
+    expect(await versionRows(itemId)).toEqual([]);
 
     // ...and org A's item was not touched by any of that.
-    const mine = await a.get(`/api/content/${created.body.id}`).expect(200);
+    const mine = await a.get(`/api/content/${itemId}`).expect(200);
     expect(mine.body.status).toBe("draft");
     expect(mine.body.adaptations[0].status).toBe("pending");
+    expect(mine.body.body).toBe("Mine");
+    expect(mine.body.adaptations[0].body).toBeNull();
   });
 });

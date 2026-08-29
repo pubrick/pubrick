@@ -35,6 +35,7 @@ export {
   allSentencesAi,
   type DimSpan,
   dimSpans,
+  isSameText,
   isUntouchedAi,
   normalizeForComparison,
   normalizeNewlines,
