@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   aiSentenceMask,
+  aiSentenceMaskAny,
+  dimSpans,
   isUntouchedAi,
   normalizeForComparison,
   splitSentenceSpans,
@@ -326,6 +328,132 @@ describe("aiSentenceMask", () => {
     expect(aiSentenceMask(ai.normalize("NFD"), ai.normalize("NFC"))).toEqual([true, true]);
     const ru = "Ёлка зелёная. Снег белый.";
     expect(aiSentenceMask(ru.normalize("NFD"), ru.normalize("NFC"))).toEqual([true, true]);
+  });
+});
+
+describe("aiSentenceMaskAny", () => {
+  it("ORs the per-version masks", () => {
+    const v1 = "Alpha one. Beta two.";
+    const v2 = "Gamma three.";
+    expect(aiSentenceMaskAny("Alpha one. Gamma three. Mine here.", [v1, v2])).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it("keeps each version's multiset counting — a duplicate is not licensed twice", () => {
+    // Concatenating the references would mark BOTH copies as AI. Per-version
+    // masking keeps the promise aiSentenceMask makes on its own.
+    expect(aiSentenceMaskAny("Alpha one. Alpha one.", ["Alpha one. Beta two."])).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it("does not let two versions license a duplicate the human wrote", () => {
+    // The mutation this pins: `aiSentenceMask(current, aiVersions.join("\n"))`.
+    // The single-version duplicate case above CANNOT catch it — joining one
+    // string changes nothing — so the counting defect only shows with two
+    // references that share a sentence. Concatenated, the pool holds two
+    // `Alpha one.` and dims both copies; each version wrote it once, so the
+    // second copy is the human's.
+    expect(
+      aiSentenceMaskAny("Alpha one. Alpha one.", [
+        "Alpha one. Beta two.",
+        "Alpha one. Gamma three.",
+      ]),
+    ).toEqual([true, false]);
+  });
+
+  it("marks nothing when there are no AI versions", () => {
+    expect(aiSentenceMaskAny("Anything at all.", [])).toEqual([false]);
+  });
+});
+
+describe("dimSpans", () => {
+  it("does not let a whitespace-only span consume a mask flag", () => {
+    // A leading blank line has no preceding span to attach to, so the partition
+    // emits it alone while the sentence list drops it. Zipping by index would
+    // dim the blank line and never dim the last sentence.
+    const ai = "Hello. World.";
+    const text = `\n\n${ai}`;
+    const spans = dimSpans(text, [ai]);
+    expect(spans.map((s) => text.slice(s.start, s.end))).toEqual(["\n\n", "Hello. ", "World."]);
+    expect(spans.map((s) => s.ai)).toEqual([false, true, true]);
+  });
+
+  it("stays a lossless partition", () => {
+    const text = "Alpha one. Beta two.\n\nGamma three.";
+    expect(
+      dimSpans(text, [])
+        .map((s) => text.slice(s.start, s.end))
+        .join(""),
+    ).toBe(text);
+  });
+
+  it("counts a zero-width character as blank, exactly as splitSentences does", () => {
+    // `String.trim()` leaves U+200B and U+FEFF standing, so a blank line
+    // carrying one would look like content, consume a flag, and shift every
+    // later span — the same off-by-one the blank line above pins, reached by a
+    // character nobody can see. The module's own whitespace class covers them.
+    const ai = "Hello. World.";
+    const text = `\n\u200B\uFEFF\n${ai}`;
+    const spans = dimSpans(text, [ai]);
+    expect(spans.map((s) => text.slice(s.start, s.end))).toEqual([
+      "\n\u200B\uFEFF\n",
+      "Hello. ",
+      "World.",
+    ]);
+    expect(spans.map((s) => s.ai)).toEqual([false, true, true]);
+  });
+
+  it("dims nothing in a body that is entirely whitespace", () => {
+    // No sentence at all, so the mask is empty and every span must fall back to
+    // human rather than read off the end of it.
+    for (const text of ["   ", "\n\n", "\u200B"]) {
+      const spans = dimSpans(text, ["Hello."]);
+      expect(spans.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+      expect(spans.every((s) => !s.ai)).toBe(true);
+    }
+  });
+
+  it("has no spans at all for an empty body", () => {
+    expect(dimSpans("", ["Hello."])).toEqual([]);
+  });
+
+  it("keeps a trailing separator on the sentence it ends, still dimmed", () => {
+    // The partition swallows the trailing whitespace run into the span it
+    // closes, so a trailing blank line is not a span of its own — asserted here
+    // so a splitter change that starts emitting one is caught by this module,
+    // where the alignment decision lives.
+    const ai = "Hello. World.";
+    const text = `${ai}\n\n`;
+    const spans = dimSpans(text, [ai]);
+    expect(spans.map((s) => text.slice(s.start, s.end))).toEqual(["Hello. ", "World.\n\n"]);
+    expect(spans.map((s) => s.ai)).toEqual([true, true]);
+  });
+
+  it("gives every non-blank span exactly one flag, in order", () => {
+    // The invariant the whole helper rests on: splitSentences is splitSentenceSpans
+    // minus the blank pieces, so non-blank spans and mask entries correspond
+    // one to one. If that ever stops holding, this fails before a consumer
+    // paints the wrong words.
+    const texts = [
+      "\n\nHello. World.",
+      "One. Two! Three?\n\nFour.",
+      "  Leading spaces. Then more.",
+      "今天很好。Tomorrow is better.\n\n\nDone.",
+      "\n \u200B \n Mixed blanks.\n\nAnd text. ",
+    ];
+    for (const text of texts) {
+      const spans = dimSpans(text, []);
+      expect(spans.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+      const nonBlank = spans.filter(
+        (s) => normalizeForComparison(text.slice(s.start, s.end)) !== "",
+      );
+      expect(nonBlank.length).toBe(splitSentences(text).length);
+    }
   });
 });
 

@@ -257,6 +257,64 @@ export function aiSentenceMask(current: string, aiVersion: string): boolean[] {
 }
 
 /**
+ * One flag per sentence of `current`: true when that sentence is still exactly
+ * what *some* AI version wrote.
+ *
+ * The dimming reference is every `ai` version, not one of them: increment 2b's
+ * refine rows add a second. They are NOT concatenated — `aiSentenceMask`
+ * consumes each AI sentence at most once on purpose, and a concatenated
+ * reference breaks that counting, dimming a human's own duplicate of a sentence
+ * the AI wrote once. OR-ing per-version masks keeps every version's own count.
+ *
+ * (The badge asks a different question of the same rows and gets its own
+ * formula — `bodies.some(b => isUntouchedAi(body, b))`, never this one. See the
+ * design's §3: `isUntouchedAi` short-circuits on a sentence-count mismatch, so
+ * a concatenated reference always answers false there.)
+ */
+export function aiSentenceMaskAny(current: string, aiVersions: readonly string[]): boolean[] {
+  const sentenceCount = splitSentences(current).length;
+  const combined = new Array<boolean>(sentenceCount).fill(false);
+  for (const version of aiVersions) {
+    const mask = aiSentenceMask(current, version);
+    for (let i = 0; i < combined.length; i++) {
+      if (mask[i]) combined[i] = true;
+    }
+  }
+  return combined;
+}
+
+/** A span of the partition with its dimming decision already made. */
+export interface DimSpan extends SentenceSpan {
+  ai: boolean;
+}
+
+/**
+ * The partition of `current`, each span carrying whether it is still AI text.
+ *
+ * This exists so the alignment between the two lists is decided **once**. The
+ * partition and the sentence list do not index-align: `splitSentences` drops
+ * every piece that is blank, and a blank piece is emitted whenever there is no
+ * preceding span for a whitespace run to attach to — a leading blank line, most
+ * commonly. `"\n\nHello. World."` is three spans and two sentences, so zipping
+ * the mask on by index dims the blank line and never dims the last sentence.
+ * Silent, plausible-looking, and a one-line mistake in every consumer that
+ * repeats it.
+ *
+ * A blank span therefore consumes no mask entry and is never dimmed. "Blank" is
+ * this module's own whitespace class, the one `splitSentences` filters with:
+ * `String.trim()` leaves U+200B and U+FEFF standing, and a blank line carrying
+ * an invisible character would consume a flag and shift every span after it.
+ */
+export function dimSpans(current: string, aiVersions: readonly string[]): DimSpan[] {
+  const mask = aiSentenceMaskAny(current, aiVersions);
+  let sentenceIndex = 0;
+  return splitSentenceSpans(current).map((span) => {
+    if (!trimSpace(current.slice(span.start, span.end))) return { ...span, ai: false };
+    return { ...span, ai: mask[sentenceIndex++] ?? false };
+  });
+}
+
+/**
  * True when nothing in `current` has been touched by a human.
  *
  * Derived from the same split as `aiSentenceMask`, never from a whole-body
