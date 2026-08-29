@@ -108,6 +108,53 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   `POST /api/content/:id/opened`, never as a side effect of a GET (the public API
   and the MCP server would trip it), and the run screen must not auto-forward to
   the finished draft — that would satisfy the read signal with no human present.
+- **Three provenance references, one per question.** "One function, so the badge
+  and the gate cannot disagree" stops being true as soon as a level has more than
+  one `ai` `content_versions` row (increment 2b's refine rows write the second),
+  so each question names its own reference and its own formula:
+  - **the gate** — may this be approved? — the **first** `ai` row per level,
+    `isUntouchedAi` (`ContentRepository.requireHumanInvolvement`);
+  - **the badge** — **any** `ai` row: `bodies.some(b => isUntouchedAi(body, b))`
+    (`apps/web/src/lib/origin.ts`; `GET /api/content/:id` returns the rows as
+    `aiVersionBodies`, the LIST endpoint does not, so a card can only ever show
+    the three badges that need no reference text);
+  - **the lens** — which sentences dim — **all** `ai` rows: `aiSentenceMaskAny`,
+    an index-wise OR of one `aiSentenceMask` per version.
+
+  Today there is exactly one `ai` row per level, so all three coincide and the
+  wrong choice looks right in every test you would think to write.
+- **Never mask against a concatenation of versions.** `aiSentenceMask` consumes
+  each AI sentence at most once on purpose — a human's second copy of a sentence
+  the AI wrote once stays human — and joining the versions destroys that count,
+  dimming the human's own duplicate. That is why the multi-version helper is
+  `aiSentenceMaskAny(current, versions)`, OR-ing per-version masks so each keeps
+  its own multiset; replacing it with `aiSentenceMask(current, versions.join())`
+  is a silent provenance inversion, not a simplification. The badge cannot take a
+  joined reference either: `isUntouchedAi` short-circuits on a sentence-count
+  mismatch, so a concatenation always answers `false` and every AI draft would
+  read as human-edited.
+- **Pair spans with flags only through `dimSpans`.** The partition and the mask
+  do not index-align — `splitSentences` drops blank pieces, so
+  `"\n\nHello. World."` is three spans and two sentences, and zipping the mask on
+  by index dims the blank line and never dims the last sentence. Silent, and
+  plausible enough to survive review. `dimSpans(current, aiVersions)` decides
+  that alignment once, in `@pubrick/shared` (a blank span consumes no flag and is
+  never dimmed, "blank" being the module's own whitespace class, which includes
+  U+200B). No consumer may re-zip `aiSentenceMaskAny` onto `splitSentenceSpans`
+  itself.
+- **`splitSentenceSpans` is a lossless partition, and anything rendering text
+  beside a textarea must render from it.** Every character of the input belongs
+  to exactly one span — separators included, each attached to the span it ends —
+  so the spans rejoin into the input character for character; `splitSentences` is
+  the trimmed, blank-dropping view derived from it, never a second splitter.
+  `DimmedTextarea`'s overlay renders `value.slice(start, end)` per span for that
+  reason: a dropped space or newline moves the overlay's wrap points and slides
+  every highlight off the words it describes. jsdom has no layout, so the tests
+  can prove the character-identity of overlay and value but not the alignment —
+  which is exactly why the lossless property is the thing to protect. Those
+  offsets are recomputed from the current text on every render and never
+  persisted; a stored offset rots on the first edit, a derived one is a loop
+  index.
 - **The fact-checker verifies nothing** until increment 3 gives it sources: it
   lists claims. No instruction, schema, endpoint or UI string may suggest a check
   happened. `CLAIMS_TO_VERIFY_LABEL` (`@pubrick/shared`, re-exported by

@@ -270,6 +270,22 @@ and an editor toggle dimming still-untouched AI sentences. Enables the
 honest rule: nothing publishes with zero human edits AND zero human
 read-time. This is a differentiator; invest here.
 
+**Shipped decision: the lens is off by default.** The editor toggle that dims
+still-AI sentences starts off, and that is a choice rather than a leftover.
+This section argues for on (AI text is *visibly* AI); §2.3 keeps the writing
+surface calm and argues for off. What breaks the tie is that the claim is
+already being made elsewhere: the origin badge states it at a glance on every
+card and on the item screen, with no interaction and nothing added to the
+editor. The lens is the detail view — *which* sentences, not *whether* — so it
+is opt-in, per screen, and never on at the moment a person sits down to write.
+The trade accepted with it: a writer who never finds the toggle sees the badge
+and not the sentences, and on a card the badge cannot say *human-edited* at all
+(the list endpoint returns no reference text). Revisit it as a per-user
+preference rather than by flipping the default, and revisit it deliberately —
+if the badge ever stops being on every card, the argument above no longer
+holds. (Provenance-lens design §5; the default itself is one `useState(false)`
+in `app/[locale]/content/[id]/page.tsx`.)
+
 ### 5.4 Brand voice as a named, per-brand object (Jasper) — `ADOPT-WITH-FEATURE` (brand knowledge)
 
 ([Brand Voice](https://www.jasper.ai/blog/introducing-brand-voice),
