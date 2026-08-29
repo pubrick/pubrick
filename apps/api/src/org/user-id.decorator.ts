@@ -22,7 +22,13 @@ type AuthSession = Awaited<ReturnType<typeof auth.api.getSession>>;
  */
 export const UserId = createParamDecorator((_data: unknown, ctx: ExecutionContext): string => {
   const session = ctx.switchToHttp().getRequest().session as AuthSession | undefined;
-  const userId = session?.user.id;
+  // `?.` on BOTH hops. Guarding only the first was a guard against the shape
+  // that cannot happen (better-auth returns null, and `null?.user` is fine)
+  // while leaving the one that can: a request carrying a session object with no
+  // `user` — a half-written mock, a future guard that attaches its own shape —
+  // threw a bare `TypeError` from inside a param decorator, which Nest reports
+  // as an unexplained 500 instead of the sentence below.
+  const userId = session?.user?.id;
   if (typeof userId !== "string" || userId.length === 0) {
     throw new InternalServerErrorException("UserId used on a route without the auth guard");
   }
