@@ -10,6 +10,7 @@ import {
   allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
+  normalizeForComparison,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -259,6 +260,36 @@ function collectAiEvidence<K, R extends { body: string; scope: VersionScopeValue
     byLevel.set(level, evidence);
   }
   return byLevel;
+}
+
+/**
+ * The body a human save should be remembered by, or `null` for a save that is
+ * not a new version of anything.
+ *
+ * Three ways to write no row, and each is a real request the product makes
+ * constantly rather than a corner:
+ *
+ * - `undefined` — the field is not in this PATCH at all. A title-only edit
+ *   leaves the body exactly as it was, and a version of an unchanged body is
+ *   history of an edit nobody made.
+ * - `null` — a cleared per-channel override. It removes text and writes none,
+ *   and `content_versions.body` is `NOT NULL`: there is no row shape for "no
+ *   body", and inventing one (the empty string, or the item body it now falls
+ *   back to) would file text the author did not write as text they did.
+ * - Unchanged under `normalizeForComparison` — the Save button pressed twice,
+ *   or a reflow. This is deliberately the SAME comparison the publish gate and
+ *   the origin badge judge a human touch by (`allSentencesAi` normalises each
+ *   sentence through it): a save that moves no verdict must not leave a version
+ *   claiming it did, and two notions of "changed" in one file would eventually
+ *   disagree about the same keystroke.
+ *
+ * `previous === null` is a change by construction — a first override where the
+ * channel had none is new text, and there is nothing to compare it against.
+ */
+function humanVersionBody(previous: string | null, next: string | null | undefined): string | null {
+  if (next === undefined || next === null) return null;
+  if (previous === null) return next;
+  return normalizeForComparison(next) === normalizeForComparison(previous) ? null : next;
 }
 
 /** The `ai` version bodies of one item, by level, oldest first. */
@@ -530,27 +561,81 @@ export class ContentRepository {
    * lock nothing else afterwards, and because `updateAdaptation` (which does
    * lock both) takes the `adaptations` lock first — the same order as
    * `approve`/`reject` and the worker (see `lockAdaptations`).
+   *
+   * Returns the body it locked, because `update` has to know whether this save
+   * actually changed the text. Read here rather than in a second SELECT: the
+   * lock is already held, so this is the one read that cannot be stale by the
+   * time the write lands — and a version row written against a body some other
+   * transaction had already replaced would record an edit that never happened.
    */
-  private async requireEditableItem(tx: Tx, orgId: string, id: string): Promise<void> {
+  private async requireEditableItem(tx: Tx, orgId: string, id: string): Promise<{ body: string }> {
     const rows = await tx
-      .select({ status: schema.contentItems.status })
+      .select({ status: schema.contentItems.status, body: schema.contentItems.body })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1)
       .for("update");
     const item = rows[0];
     if (!item) throw new NotFoundException("Content item not found");
-    if (isEditableItemStatus(item.status)) return;
+    if (isEditableItemStatus(item.status)) return { body: item.body };
     throw new ConflictException(PINNED_ITEM_MESSAGE[item.status]);
   }
 
-  async update(orgId: string, id: string, data: ContentUpdate) {
+  /**
+   * The author's own save, kept — a `full` row, `origin: 'human'`, stamped with
+   * the user who typed it.
+   *
+   * Until this existed, exactly one thing wrote `content_versions`: the
+   * worker's terminal write, always `origin: 'ai'`. No human action wrote a row
+   * at all, so a version history had nothing to list and Restore nothing to
+   * restore to.
+   *
+   * `scope: 'full'` because a save replaces the whole body; `fragment` belongs
+   * to a refine's accepted proposal. `title` is left null, exactly as the
+   * worker's own rows leave it: a row is written only when the BODY changed, so
+   * a title carried along here would be a title history with every title-only
+   * save missing from it.
+   *
+   * Called INSIDE the caller's transaction, after the body write and under the
+   * locks the caller already holds — so a refused edit leaves no history of
+   * itself, and the FK targets (`content_items`, and the adaptation when there
+   * is one) are rows this transaction already holds `FOR UPDATE`, adding no new
+   * lock to the documented order.
+   *
+   * Invisible to every read that asks about provenance: the gate, the origin
+   * badge and the lens all filter `origin = 'ai'`, because a version the author
+   * typed is not evidence that the model wrote a sentence.
+   */
+  private async recordHumanVersion(
+    tx: Tx,
+    row: {
+      orgId: string;
+      contentItemId: string;
+      adaptationId: string | null;
+      body: string;
+      createdBy: string;
+    },
+  ): Promise<void> {
+    await tx.insert(schema.contentVersions).values({ ...row, origin: "human", scope: "full" });
+  }
+
+  async update(orgId: string, id: string, data: ContentUpdate, userId: string) {
     await db.transaction(async (tx) => {
-      await this.requireEditableItem(tx, orgId, id);
+      const current = await this.requireEditableItem(tx, orgId, id);
       await tx
         .update(schema.contentItems)
         .set(data)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+      const versionBody = humanVersionBody(current.body, data.body);
+      if (versionBody !== null) {
+        await this.recordHumanVersion(tx, {
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          body: versionBody,
+          createdBy: userId,
+        });
+      }
     });
     return this.get(orgId, id);
   }
@@ -563,18 +648,28 @@ export class ContentRepository {
    * Both conditions are checked, not just the item's: the two can disagree
    * after a partial fan-out, where one channel published and the item is still
    * `approved`.
+   *
+   * A changed override leaves a version row of its own, at the ADAPTATION's
+   * level — the same rule as `update`, one level down, and the level matters:
+   * filing one channel's text as the master body's would make a history that
+   * restores the wrong text into the wrong place. Spec §6 says so explicitly
+   * because the design's earlier draft was silent about this method.
    */
   async updateAdaptation(
     orgId: string,
     contentItemId: string,
     adaptationId: string,
     data: AdaptationUpdate,
+    userId: string,
   ) {
     return db.transaction(async (tx) => {
       // `adaptations` before `content_items` — the lock order every other
-      // writer of this pair uses (see `lockAdaptations`).
+      // writer of this pair uses (see `lockAdaptations`). `body` comes back for
+      // the same reason `requireEditableItem` returns the item's: it is the
+      // text this save is compared against, read under the lock that makes the
+      // comparison hold until the write lands.
       const locked = await tx
-        .select({ status: schema.adaptations.status })
+        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
         .from(schema.adaptations)
         .where(
           and(
@@ -606,6 +701,17 @@ export class ContentRepository {
         .returning(ADAPTATION_COLUMNS);
       const updated = rows[0];
       if (!updated) throw new NotFoundException("Adaptation not found");
+
+      const versionBody = humanVersionBody(current.body, data.body);
+      if (versionBody !== null) {
+        await this.recordHumanVersion(tx, {
+          orgId,
+          contentItemId,
+          adaptationId,
+          body: versionBody,
+          createdBy: userId,
+        });
+      }
       return updated;
     });
   }

@@ -22,6 +22,7 @@ import {
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
+import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
 
@@ -48,23 +49,30 @@ export class ContentController {
     return this.content.get(orgId, id);
   }
 
+  /**
+   * `@UserId()` because a save that changes the body leaves a `content_versions`
+   * row behind, and that row records WHO typed it — the history increment 2c
+   * lists and restores from.
+   */
   @Patch(":id")
   update(
     @OrgId() orgId: string,
+    @UserId() userId: string,
     @Param("id", ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(contentUpdateSchema)) body: ContentUpdate,
   ) {
-    return this.content.update(orgId, id, body);
+    return this.content.update(orgId, id, body, userId);
   }
 
   @Patch(":id/adaptations/:adaptationId")
   updateAdaptation(
     @OrgId() orgId: string,
+    @UserId() userId: string,
     @Param("id", ParseUUIDPipe) id: string,
     @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
     @Body(new ZodValidationPipe(adaptationUpdateSchema)) body: AdaptationUpdate,
   ) {
-    return this.content.updateAdaptation(orgId, id, adaptationId, body);
+    return this.content.updateAdaptation(orgId, id, adaptationId, body, userId);
   }
 
   /**

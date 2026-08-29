@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -262,6 +262,40 @@ describe.skipIf(!url)("content e2e", () => {
       })),
     );
     await pool.end();
+  }
+
+  /**
+   * EVERY version row of one item, both levels and BOTH origins, oldest first.
+   *
+   * Deliberately unfiltered, unlike every read in the repository: these tests
+   * are about the rows a human save leaves behind, and a helper that filtered
+   * `origin = 'ai'` the way the gate does could not tell "no human row was
+   * written" from "the human row is invisible to the gate" — which are the two
+   * separate things this file has to pin.
+   */
+  async function versionRows(itemId: string) {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db
+      .select({
+        adaptationId: schema.contentVersions.adaptationId,
+        body: schema.contentVersions.body,
+        title: schema.contentVersions.title,
+        origin: schema.contentVersions.origin,
+        scope: schema.contentVersions.scope,
+        createdBy: schema.contentVersions.createdBy,
+      })
+      .from(schema.contentVersions)
+      .where(eq(schema.contentVersions.contentItemId, itemId))
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
+    await pool.end();
+    return rows;
+  }
+
+  /** The signed-in user behind an agent — what `created_by` must record. */
+  async function sessionUserId(agent: request.Agent): Promise<string> {
+    const session = await agent.get("/api/auth/get-session").expect(200);
+    return session.body.user.id as string;
   }
 
   async function firstOpenedAt(itemId: string): Promise<string | null> {
@@ -1280,6 +1314,45 @@ describe.skipIf(!url)("content e2e", () => {
       expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
     });
 
+    it("a human save leaves a row the gate cannot see: same refusal, same sentence", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // The one shape where letting a `human` row count as evidence would
+      // CHANGE an answer, which is why the assertion is on this shape and not
+      // on an ordinary draft. With the item's only `ai` row a fragment there is
+      // no `ai` full row, so the gate takes its missing-evidence branch and
+      // says the refusal cannot be edited away. A human save then writes a
+      // `full` row — and it is the FIRST full row this level has ever had, so a
+      // gate that read it would find a reference equal to the body in front of
+      // it, take the other branch, and print the other sentence.
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }], {
+        replaceExisting: true,
+      });
+      const before = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(before.status).toBe(409);
+      expect(before.body.message).toMatch(/editing the body cannot clear this refusal/i);
+
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Chaque phrase ici est de moi. Le modèle n'a rien écrit." })
+        .expect(200);
+      expect(await versionRows(itemId)).toContainEqual(
+        expect.objectContaining({ origin: "human", scope: "full", adaptationId: null }),
+      );
+
+      const after = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(after.status).toBe(409);
+      expect(after.body.message).toBe(before.body.message);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+
+      // The other half of "invisible": the lens's reference text, read through
+      // the same `origin = 'ai'` filter, is untouched by the save.
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.aiVersionBodies.item).toEqual([AI_FRAGMENT]);
+    });
+
     it("tells an AI draft that already published about the POST, not about reading it", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
@@ -1867,6 +1940,149 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
       // The adaptation PATCH answers with the adaptation row itself.
       expect(override.body.body).toBe("Override one.\nOverride two.");
+    });
+  });
+
+  /**
+   * The other half of the history: until now exactly one thing wrote
+   * `content_versions`, the worker's terminal write, always `origin: 'ai'`. No
+   * human action wrote a row at all — so the version history increment 2c
+   * renders had nothing to show, and Restore nothing to restore to.
+   */
+  describe("a human edit leaves a version behind", () => {
+    it("records a version when a human changes the body, and none when nothing changed", async () => {
+      const agent = await orgAgent();
+      const userId = await sessionUserId(agent);
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Mine", body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+
+      // Creating a draft is not a save: the body is already the row, and a
+      // version of it would be history of an edit nobody made.
+      expect(await versionRows(itemId)).toHaveLength(0);
+
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Voici ma version éditée." })
+        .expect(200);
+      const afterEdit = await versionRows(itemId);
+      expect(afterEdit).toEqual([
+        {
+          adaptationId: null,
+          body: "Voici ma version éditée.",
+          // Not written, exactly as the worker's own rows do not write it: the
+          // rule is "only when the BODY changed", so a title carried along here
+          // would be a title history with the title-only saves missing from it.
+          title: null,
+          origin: "human",
+          scope: "full",
+          createdBy: userId,
+        },
+      ]);
+
+      // Saving the same text again is the Save button pressed twice, and the
+      // commonest thing a form does. It is not a version.
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Voici ma version éditée." })
+        .expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+
+      // Nor is a reflow: the comparison is `normalizeForComparison`, the same
+      // one the gate and the badge judge a human touch by, so a collapsed
+      // space, a zero-width space or an NFD paste writes no row either — as
+      // none of them moves a verdict.
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "  Voici   ma\tversion \u200Béditée. ".normalize("NFD") })
+        .expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+    });
+
+    it("writes no version for a title-only edit, and none for a cleared override", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Mine", body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+
+      const titled = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ title: "A better headline" })
+        .expect(200);
+      expect(titled.body.title).toBe("A better headline");
+      expect(await versionRows(itemId)).toHaveLength(0);
+
+      // An override, then the emptied textarea the shipped UI sends as `null`
+      // (content/[id]/page.tsx). Clearing removes text and writes none, and
+      // `content_versions.body` is NOT NULL — there is no row shape for it.
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "My own words for this channel." })
+        .expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: null })
+        .expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+    });
+
+    it("records a channel override at that channel's level, not the item's", async () => {
+      // `updateAdaptation` is governed by the same rule as `update` — the point
+      // the spec's earlier draft was silent on. The row must name the
+      // adaptation, or 2c's history would file one channel's text as the
+      // master body's and Restore would put it there.
+      const agent = await orgAgent();
+      const userId = await sessionUserId(agent);
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+      const adaptationId = adaptationIds[0] as string;
+
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Ma propre version pour ce canal." })
+        .expect(200);
+
+      const rows = await versionRows(itemId);
+      expect(rows.filter((row) => row.origin === "human")).toEqual([
+        {
+          adaptationId,
+          body: "Ma propre version pour ce canal.",
+          title: null,
+          origin: "human",
+          scope: "full",
+          createdBy: userId,
+        },
+      ]);
+
+      // Same override saved again: no row, one level down, for the same reason.
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Ma propre version pour ce canal." })
+        .expect(200);
+      expect((await versionRows(itemId)).filter((row) => row.origin === "human")).toHaveLength(1);
+    });
+
+    it("writes nothing when the edit is refused", async () => {
+      // The row goes in the SAME transaction as the body write, so a 409 must
+      // leave no history of an edit that never landed.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+      const before = await versionRows(itemId);
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Too late." }).expect(409);
+      expect(await versionRows(itemId)).toEqual(before);
     });
   });
 
