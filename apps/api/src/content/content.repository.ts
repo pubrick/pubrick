@@ -116,14 +116,34 @@ const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
  * The 409 for the product's headline promise: nothing publishes that no human
  * opened or touched.
  *
- * Written for the operator, not the log: it names the two things that clear the
- * refusal, because both are one act away and neither is discoverable from
+ * Written for the operator, not the log: it names the things that clear the
+ * refusal, because each is one act away and none is discoverable from
  * "409 Conflict". The web app effectively never sees this — its item page fires
  * `POST /:id/opened` on render — which is exactly why it must read well for the
  * callers that will: the public API, the MCP server, and a script.
+ *
+ * TWO sentences, because one could not be true of both shapes the widened gate
+ * refuses (`requireHumanInvolvement`, clause 1) — the same reason
+ * `PINNED_ITEM_MESSAGE` above is keyed by status. Editing clears the refusal
+ * only where the body has a COMPLETE `ai` version to be judged against: with
+ * none, `allSentencesAi` takes its missing-evidence branch and answers "still
+ * the model's" for every possible body, so a caller told to edit could rewrite
+ * every word and be refused again, forever. That is not a corner: it is the
+ * ordinary shape of a hand-typed draft whose CHANNEL text a refine verb wrote,
+ * and it is exactly the case that the widening makes reachable.
+ *
+ * The second sentence promises only what always works — opening it. Editing one
+ * channel's override does clear this shape too, but only when that channel has
+ * a complete `ai` version of its own, so the message does not offer it.
  */
 const UNREAD_AI_DRAFT_MESSAGE =
   "No one has read this AI-written draft yet; open it, or edit it, before approving";
+
+/** The same refusal where editing cannot lift it — see above. */
+const UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE =
+  "No one has read the AI-written text in this content yet; open it before approving — " +
+  "editing the body cannot clear this refusal, because no complete AI version of the body " +
+  "was ever recorded";
 
 function isEditableItemStatus(status: ContentStatusValue): status is EditableItemStatus {
   return EDITABLE_ITEM_STATUSES.some((editable) => editable === status);
@@ -645,19 +665,28 @@ export class ContentRepository {
    * Three clauses, all of which must hold for the refusal — any one of them
    * being false is a human in the loop, and approval proceeds:
    *
-   * 1. `origin === "ai"`. A human-written item is nobody's business here, and
-   *    this clause is what keeps it out: a human draft has no version rows at
-   *    all, so every "is this still the AI's text?" question below would answer
-   *    "cannot prove otherwise" and lock the product's ordinary flow.
-   *    KNOWN LIMIT, deliberately left as the spec writes it: the gate is the
-   *    ITEM's origin, so a human-written item carrying AI-WRITTEN ADAPTATIONS —
-   *    the "AI-adapted" badge spec §6 anticipates — never reaches the checks
-   *    below, and its channel text could ship unread. Nothing produces that
-   *    shape today (the terminal write always marks the item `ai` too), and
-   *    increment 2's refine verbs are what would. Widening the gate to "any
-   *    first `ai` version row exists for this item or its adaptations" closes
-   *    it, at the cost of refusing a draft whose body a human typed themselves
-   *    until they open it.
+   * 1. THE MODEL WROTE SOMETHING HERE: the item's `origin` is `ai`, OR an `ai`
+   *    version row exists at ANY level of it — the item's own body or any
+   *    adaptation's. A wholly human item is nobody's business here, and this
+   *    clause is what keeps it out: it has no `ai` rows at all, so every "is
+   *    this still the AI's text?" question below would answer "cannot prove
+   *    otherwise" and lock the product's ordinary flow.
+   *    The adaptation half is spec §5, closing the limit this comment used to
+   *    record: entering on the ITEM's origin alone let a human-written item
+   *    carrying AI-WRITTEN ADAPTATIONS skip every check below and ship its
+   *    channel text unread. Nothing produced that shape when the gate was
+   *    written (the terminal write marks the item `ai` too); increment 2b-2's
+   *    refine verbs on a hand-typed draft produce it immediately.
+   *    The origin half is NOT redundant with the row half, and dropping it
+   *    would be a hole rather than a simplification: an `ai` item whose version
+   *    rows a worker bug never wrote has no rows to find, and "no evidence"
+   *    must refuse, not walk out of the gate (see "missing evidence" below).
+   *    `adaptations.origin` is deliberately NOT a third disjunct — it defaults
+   *    to `human`, so it can only fail to enter, but the version row is the
+   *    evidence this rule is actually made of and the column is not.
+   *    The cost, paid knowingly: a draft whose body a human typed themselves is
+   *    refused until they open it, and for that shape ONLY opening it helps —
+   *    see `UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE`, which says so.
    * 2. `first_opened_at IS NULL` — nobody has opened it (`markOpened`).
    * 3. EVERY SENTENCE of the text is still the model's, AT BOTH LEVELS. The
    *    item body against the item's own `ai` rows, and EVERY adaptation against
@@ -720,7 +749,6 @@ export class ContentRepository {
     // `requireItem` already 404'd a missing row; a delete racing this read is
     // harmless (the writes below it match nothing).
     if (!item) return;
-    if (item.origin !== "ai") return;
 
     // The `ai` version rows are the provenance evidence. Filtered on origin
     // because increment 2 appends human versions to the same table — a version
@@ -743,6 +771,15 @@ export class ContentRepository {
         ),
       )
       .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
+
+    // Clause 1, and the reason this query moved ABOVE the bail-out: the rows
+    // that answer "did the model write any of this" are the same rows the
+    // checks are made of, so the gate asks for them once. `contentItemId` is
+    // set on an adaptation's version rows too, so this one list is "the item or
+    // any of its adaptations" — no second query, and no chance of the entry and
+    // the evidence disagreeing about which rows exist.
+    if (item.origin !== "ai" && versions.length === 0) return;
+
     /**
      * Every `ai` body per level for the mask, and each level's first `full` row
      * for the deletion clause — the same collector the badge reads through, so
@@ -787,7 +824,23 @@ export class ContentRepository {
     );
 
     if (nobodyOpened && bodyIsAi && everyChannelIsAi) {
-      throw new ConflictException(UNREAD_AI_DRAFT_MESSAGE);
+      // Which refusal is the true one is decided by ONE fact: whether the body
+      // has a complete `ai` version to be judged against. With one, an edit is
+      // a real recovery — a sentence of the author's own, or a deletion, and
+      // `bodyIsAi` turns false. Without one, `allSentencesAi` short-circuits on
+      // missing evidence and no body a caller could type would ever answer
+      // differently, so telling them to edit it is telling them to do something
+      // that cannot work. Read off the collected evidence rather than off
+      // `item.origin`, because the shapes that cannot be edited out are not
+      // only the hand-typed one: an `ai` item whose version rows are missing
+      // altogether, or whose only `ai` row is a refine `fragment`, are the same
+      // dead end and get the same sentence.
+      const bodyEvidence = aiEvidence.get(null) ?? NO_AI_EVIDENCE;
+      throw new ConflictException(
+        bodyEvidence.firstFullBody === undefined
+          ? UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE
+          : UNREAD_AI_DRAFT_MESSAGE,
+      );
     }
   }
 

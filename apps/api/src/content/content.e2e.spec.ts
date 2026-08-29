@@ -148,6 +148,63 @@ describe.skipIf(!url)("content e2e", () => {
     return { itemId, adaptationIds: ordered.map((a) => a.id) };
   }
 
+  /** The author's own words, typed into the create form. No model wrote this. */
+  const HUMAN_BODY = "J'écris ce texte moi-même. Voici les nouvelles du jour.";
+
+  /**
+   * A HAND-TYPED item whose CHANNEL text the model wrote: `content_items`
+   * stays `origin = 'human'` with no version row of its own, and the adaptation
+   * gets the AI's text plus the `ai` version row that records it.
+   *
+   * The shape increment 2b-2's refine verbs produce the first time anyone runs
+   * one on a draft they typed, and the shape the gate used to walk straight
+   * past — it entered on the ITEM's origin, so every check below it was skipped
+   * and this item's channel text could ship with nobody having read a word.
+   *
+   * Deliberately not `aiDraft` with a tweak: what makes this shape what it is
+   * is precisely what `aiDraft` writes and this does not.
+   */
+  async function handTypedWithAiAdaptation(
+    agent: request.Agent,
+    brandId: string,
+    channelIds: string[],
+  ) {
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, title: "My own title", body: HUMAN_BODY, channelIds })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+    const ordered = channelIds.map(
+      (channelId) => adaptations.find((a) => a.channelId === channelId) as { id: string },
+    );
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+      .rows as { org_id: string }[];
+    const orgId = row?.org_id as string;
+
+    for (const [index, adaptation] of ordered.entries()) {
+      await db
+        .update(schema.adaptations)
+        .set({ origin: "ai", body: aiAdapted(index) })
+        .where(eq(schema.adaptations.id, adaptation.id));
+    }
+    await db.insert(schema.contentVersions).values(
+      ordered.map((adaptation, index) => ({
+        orgId,
+        contentItemId: itemId,
+        adaptationId: adaptation.id,
+        body: aiAdapted(index),
+        origin: "ai" as const,
+      })),
+    );
+    await pool.end();
+
+    return { itemId, adaptationIds: ordered.map((a) => a.id) };
+  }
+
   async function publishJobCount(adaptationId: string): Promise<number> {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
@@ -1294,6 +1351,86 @@ describe.skipIf(!url)("content e2e", () => {
 
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
       expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("refuses a hand-typed item whose channel text the model wrote, until someone opens it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await handTypedWithAiAdaptation(agent, brandId, [
+        channelId,
+      ]);
+
+      // The gate's entry is the whole test: `content_items.origin` is `human`
+      // here, so a gate entered on the ITEM's origin never looks at anything —
+      // and what this item would actually publish is the ADAPTATION's body,
+      // every word of it the model's, with nobody having read it.
+      const res = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/editing the body cannot clear this refusal/i);
+
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("draft");
+      expect(after.body.adaptations[0].status).toBe("pending");
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("means what it says: rewriting that item's body does NOT clear the refusal", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await handTypedWithAiAdaptation(agent, brandId, [channelId]);
+
+      // The cost the widening pays, pinned so the message cannot drift back to
+      // promising it: with no `ai` version of the BODY, `allSentencesAi` takes
+      // its missing-evidence branch and answers "still the model's" for every
+      // body there is. The author can replace every word — as here — and be
+      // refused again. This is exactly why the sentence they are shown offers
+      // opening it and nothing else.
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Chaque mot ici est le mien. Rien de tout cela ne vient du modèle." })
+        .expect(200);
+
+      const res = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/editing the body cannot clear this refusal/i);
+    });
+
+    it("approves that same hand-typed item once someone opens it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await handTypedWithAiAdaptation(agent, brandId, [channelId]);
+
+      // The one recovery the message promises, and it has to work: one click,
+      // no edit, and the AI-written channel text goes out having been read.
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(approved.body.adaptations[0].status).toBe("queued");
+    });
+
+    it("leaves an ordinary human draft alone: no ai row anywhere is no gate", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Mine", body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+
+      // The counterweight to the three above, and the thing the widening must
+      // NOT break: an item nobody generated, never opened, with a `human`
+      // version row of its own (what increment 2's saves append) and a
+      // hand-typed override. The gate reads `ai` rows and there are none, so it
+      // must not even ask its questions — every one of them would answer
+      // "cannot prove otherwise" and refuse the product's ordinary flow.
+      await addItemVersions(itemId, [{ body: HUMAN_BODY, origin: "human" }]);
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "My own words for this channel." })
+        .expect(200);
+
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(approved.body.adaptations[0].status).toBe("queued");
     });
 
     it("stamps the read receipt once: a second POST is still 204 and does not move the timestamp", async () => {
