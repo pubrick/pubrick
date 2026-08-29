@@ -529,8 +529,18 @@ export class ContentRepository {
    *
    * Comparison is `isUntouchedAi`, never string equality: it normalises
    * whitespace and Unicode composition, so a stray space or an NFD paste is not
-   * a human touch — and the same function draws the per-sentence mask in the
-   * UI, so the badge and this gate cannot disagree.
+   * a human touch.
+   *
+   * It shares that function with the UI but NOT its reference, and the
+   * difference is deliberate. Three questions, three references: this gate
+   * reads the FIRST `ai` row ("has any human been involved at all?"), the
+   * origin badge reads ANY row, and the editor's dim mask reads ALL of them.
+   * They coincide today because a generation writes exactly one row per level;
+   * they stop coinciding the moment increment 2b's refine verbs write a second,
+   * and using one reference for all three would then be silently wrong. An
+   * earlier version of this comment claimed the badge and the gate "cannot
+   * disagree" because one function serves both — that was never the reason, and
+   * it is no longer true.
    *
    * Missing evidence refuses. An `ai` item with no version row to compare
    * against reads as untouched, and an adaptation with no version row of its
