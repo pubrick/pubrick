@@ -415,6 +415,14 @@ export function isUntouchedAi(current: string, aiVersion: string): boolean {
  * | What does the badge say? | **any** `ai` row | this |
  * | Which sentences dim? | **all** `ai` rows | `aiSentenceMaskAny` |
  *
+ * **This table describes today's callers, and increment 2b-1 collapses its top
+ * two rows.** `allSentencesAi` below asks one question — is every sentence the
+ * model's — for both the gate and the badge, because whole-body equality reads
+ * an accepted refine as a human touch (design §2). Until those callers move,
+ * this function is still the badge's, and the table is still true of the code
+ * that runs; when they move, this function loses its last caller and goes with
+ * it. Do not add a new caller to it.
+ *
  * `some`, never the first row and never a concatenation. `isUntouchedAi`
  * short-circuits on a sentence-count mismatch, so a joined reference always
  * answers false and would read every AI draft as human-edited; the gate's
@@ -460,10 +468,18 @@ export function matchesAnyAiVersion(current: string, aiVersions: readonly string
  * every sentence of that row still appear in the text. Membership is the
  * tempting spelling and it is wrong: a refine REPLACES one of the full row's
  * sentences, so under membership every accepted proposal reads as a deletion and
- * the increment closes nothing. Given clause 2 the two are the same question
- * anyway — every sentence of `current` is by then either the full row's or a
- * fragment's, so "at least as many sentences as the full row had" says exactly
- * "as many fragment-sourced sentences arrived as full-row sentences left".
+ * the increment closes nothing. For a body that has PASSED clause 2 the two are
+ * the same question — every sentence of such a body matched some row, so "at
+ * least as many sentences as the full row had" says exactly "as many
+ * fragment-sourced sentences arrived as full-row sentences left". That
+ * equivalence is conditional on clause 2, and clause 2 is where the limits
+ * below live; it says nothing about a body clause 2 has already refused.
+ *
+ * The row it counts against is `firstFullRow`, NEVER `aiRows[0]`. The rows
+ * arrive unordered (the badge's query has no `ORDER BY`, deliberately: "any"
+ * has no first), so `aiRows[0]` can be a one-sentence fragment — and then
+ * `n >= 1` is true for every body, clause 3 is a no-op, and every deletion
+ * publishes. The two arguments exist separately for exactly this reason.
  *
  * An empty or whitespace-only body has no sentence to judge and takes the
  * refusing answer, as `isUntouchedAi` does for an empty draft with no version.
@@ -471,23 +487,58 @@ export function matchesAnyAiVersion(current: string, aiVersions: readonly string
  * DOES have one, where it reads the emptying as the human act it probably is:
  * this module errs towards refusing, and the recovery is one click. The branch
  * is reachable — `bodyText` is `min(1)` and does not trim, so `"   "` stores.
+ * A full row that is itself blank is degenerate evidence and refuses too, for
+ * §3's reason: without a countable reference this cannot tell a deletion from a
+ * rewrite, and the mask would mark every sentence human against nothing.
  *
- * One known limit, and it is the only case here that errs unsafe: a refine
- * whose fragment replaces TWO sentences with one is indistinguishable from a
- * deletion, because a fragment row does not record what it replaced. That body
- * reads human-edited and opens the gate. 2b-2 closes it — by refusing a
- * proposal that shortens the sentence count, or by storing what was replaced.
- * The mirror case errs safe: a fragment appended while another sentence is
- * deleted keeps the count and reads untouched.
+ * **The disagreement with `isUntouchedAi` has a direction, and it is a theorem
+ * rather than a sample.** For non-empty rows and a full row with at least one
+ * sentence: if this answers true with `n(current) > 0`, the mask is all-true, so
+ * every sentence of `current` consumed a distinct sentence of some row —
+ * against the single-row shape all live data has, that forces
+ * `n(current) <= n(ai)`, which with clause 3's `n(current) >= n(ai)` gives
+ * equality, which is exactly the old `true`. So `new = false ∧ old = true` is
+ * unsatisfiable: every disagreement runs the refusing way, and every one of them
+ * has `n(current) = 0`. Pinned over a generated corpus, not over examples.
+ *
+ * **Three known limits, and all three err UNSAFE — they read the model's own
+ * text as human-edited, which opens the gate and captions the badge
+ * "Human-edited".** Every one of them is a fragment that does not line up with
+ * a sentence boundary, and none is closable here, because a fragment row does
+ * not record what it replaced. 2b-2 owns them: re-split at Accept and require
+ * every unit of the merged body to be attributable, or refuse the proposal.
+ *
+ *   a. **An unterminated fragment fuses with its neighbour.** "Make this hook
+ *      punchier" is precisely the verb that returns text with no terminator, so
+ *      the merged body's partition is NOT the union of the rows' partitions:
+ *      `Punchier hook` spliced into `Alpha one. Beta two. Gamma three.` yields
+ *      the unit `Punchier hook Gamma three.`, which is in no row. Measured on a
+ *      sweep of 108 pure refines (12 fragment shapes × 3 rows × each position):
+ *      10 read human-edited, all of this shape, and all with a space separator —
+ *      a newline-structured body is immune, because a newline is a boundary
+ *      whatever the fragment ends with.
+ *   b. **A splice can reshape the unit AROUND it.** `1. Get bread.` is a list
+ *      marker plus a sentence; the marker belonged to the old unit and the
+ *      sentence to the fragment, so neither row contains the result.
+ *   c. **A fragment replacing TWO sentences with one** is indistinguishable
+ *      from a deletion, and fails clause 3 rather than clause 2.
+ *
+ * The mirror case errs safe and is pinned as such: a fragment appended while
+ * another sentence is deleted keeps the count and reads untouched.
  */
 export function allSentencesAi(
   current: string,
   aiRows: readonly string[],
-  firstFullRow: string | undefined,
+  firstFullRow: string | null | undefined,
 ): boolean {
-  if (aiRows.length === 0 || firstFullRow === undefined) return true;
+  // `== null`, not `=== undefined`: a caller reading this off a row naturally
+  // produces `null`, and a strict check would let it through to throw here
+  // rather than take the fail-safe branch it obviously belongs in.
+  if (aiRows.length === 0 || firstFullRow == null) return true;
+  const reference = splitSentences(firstFullRow);
+  if (reference.length === 0) return true;
   const sentences = splitSentences(current);
   if (sentences.length === 0) return true;
   if (!aiSentenceMaskAny(current, aiRows).every((isAi) => isAi)) return false;
-  return sentences.length >= splitSentences(firstFullRow).length;
+  return sentences.length >= reference.length;
 }

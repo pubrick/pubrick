@@ -339,6 +339,18 @@ describe("aiSentenceMask", () => {
     const ru = "Ёлка зелёная. Снег белый.";
     expect(aiSentenceMask(ru.normalize("NFD"), ru.normalize("NFC"))).toEqual([true, true]);
   });
+
+  it("normalises the REFERENCE side too, not only the body", () => {
+    // Both cases above put the odd form on the body side, where the lookup key
+    // is normalised anyway — so dropping `normalizeForComparison` from the
+    // version's own key loop leaves them green. The reference is the side that
+    // arrives in whatever form the model, or a writer predating a rule, left it
+    // in; unnormalised, every sentence reads human, which is the direction that
+    // opens the publish gate.
+    const ai = "Cliché wins. Buy now.";
+    expect(aiSentenceMask(ai.normalize("NFC"), ai.normalize("NFD"))).toEqual([true, true]);
+    expect(aiSentenceMask("First sentence.", " First   sentence. ")).toEqual([true]);
+  });
 });
 
 describe("aiSentenceMaskAny", () => {
@@ -866,35 +878,157 @@ describe("allSentencesAi", () => {
     ).toBe(true);
   });
 
-  it("never opens a gate isUntouchedAi held shut", () => {
-    // The safety property of the whole change, stated once: for the one-row
-    // shape that is all live data has, the new formula refuses everywhere the
-    // old one refused. Every defect this module has ever had ran the other way
-    // — untouched AI reading as human — so this is the direction worth pinning.
-    // The converse does NOT hold, and must not: the refined body and the
-    // whitespace-only body are exactly where the new answer is `true` and the
-    // old one `false`.
-    const pairs: Array<[string, string]> = [
-      ["A one. B two.", "A one. B two."],
-      ["A one.  B two. ", "A one. B two."],
-      ["A one. Mine.", "A one. B two."],
-      ["A one. B two. C three.", "A one. B two."],
-      ["A one. C three.", "A one. B two. C three."],
-      ["B two. A one.", "A one. B two."],
-      ["Same. Same.", "Same. Other."],
-      ["", "A one."],
-      ["   ", "A one."],
-      ["", ""],
-      ["Hook line Body line", "Hook line\nBody line"],
-      ["Cliché wins.".normalize("NFD"), "Cliché wins."],
-      ["今天很好。Tomorrow is worse.", "今天很好。Tomorrow is better."],
-      ["Купите воду, еду и т.д. Я переписал.", "Купите воду, еду и т.д. Потом идём."],
-      ["Buy now.\u200B Second one.", "Buy now. Second one."],
+  it("counts against the first FULL row, not against aiRows[0]", () => {
+    // The two arguments are not interchangeable and nothing else here can tell
+    // them apart — every other case passes the full row first. They arrive in
+    // this order for real: the badge's version query has no `ORDER BY` on
+    // purpose ("any" has no first), so a fragment can be `aiRows[0]`. Counting
+    // against a one-sentence fragment makes `n >= 1` true for every body:
+    // clause 3 becomes a no-op and every deletion publishes.
+    expect(allSentencesAi("Alpha one. Gamma three.", ["Beta two.", full], full)).toBe(false);
+  });
+
+  it("takes the fail-safe branch for a null full row, not an exception", () => {
+    // A caller reading this off a row produces `null` as naturally as
+    // `undefined` — the gate's own first-version map is keyed `string | null`.
+    // A strict `=== undefined` would let it reach `splitSentences(null)` and
+    // throw, turning missing evidence into a 500 instead of a refusal.
+    expect(allSentencesAi("Anything at all.", [full], null)).toBe(true);
+  });
+
+  it("refuses when the full row is itself blank — degenerate evidence is not evidence", () => {
+    // Fails OPEN without the guard: the mask marks every sentence human against
+    // a row with no sentences in it, so a blank reference would read "the human
+    // wrote all of it" and publish. §3 puts partial evidence with no evidence,
+    // and a row that yields no sentence is a reference nothing can be counted
+    // against.
+    for (const blank of ["", "   ", "\n", "\u200B"]) {
+      expect(allSentencesAi("Alpha one. Beta two.", [blank], blank)).toBe(true);
+    }
+  });
+
+  it("survives a reference row stored NFD, or double-spaced", () => {
+    // The row side of the comparison is normalised too. Dropping that
+    // normalisation marks every sentence human — the publishing direction — and
+    // it is the reference, not the body, that arrives in whatever form the model
+    // or an older writer left it in.
+    const nfc = "Cliché wins. Ёлка зелёная.";
+    expect(allSentencesAi(nfc, [nfc.normalize("NFD")], nfc.normalize("NFD"))).toBe(true);
+    expect(allSentencesAi("Alpha one. Beta two.", ["Alpha  one.  Beta two."], "Alpha  one.")).toBe(
+      true,
+    );
+  });
+
+  /**
+   * KNOWN UNSAFE LIMITS — pinned so they cannot be mistaken for correctness.
+   *
+   * All three are one root cause: the merged body's partition is not the union
+   * of the rows' partitions, so a fragment that does not line up with a sentence
+   * boundary leaves a unit no row contains. The answer is `false` on text that
+   * is 100% the model's — the gate publishes it and the badge reads
+   * "Human-edited", the exact inversion this increment exists to prevent.
+   *
+   * They are not closable here: a fragment row does not record what it replaced.
+   * 2b-2 owns them — re-split at Accept and require every unit of the merged
+   * body to be attributable, or refuse the proposal. Change these expectations
+   * only together with that work.
+   */
+  it("KNOWN UNSAFE LIMIT: an unterminated fragment fuses with its neighbour", () => {
+    // "Make this hook punchier" is exactly the verb that returns text with no
+    // terminator. Measured over 108 pure refines (12 fragment shapes × 3 rows ×
+    // each position), 10 land here — all with a space separator. A
+    // newline-structured body is immune, because a newline is a boundary
+    // whatever the fragment ends with; that asymmetry is asserted too, so a
+    // splitter change cannot quietly widen the hole.
+    const spliced = "Alpha one. Punchier hook Gamma three.";
+    expect(splitSentences(spliced)).toEqual(["Alpha one.", "Punchier hook Gamma three."]);
+    expect(allSentencesAi(spliced, [full, "Punchier hook"], full)).toBe(false);
+
+    const lines = "Alpha one.\nBeta two.\nGamma three.";
+    expect(
+      allSentencesAi("Alpha one.\nPunchier hook\nGamma three.", [lines, "Punchier hook"], lines),
+    ).toBe(true);
+  });
+
+  it("KNOWN UNSAFE LIMIT: a splice can reshape the unit around it", () => {
+    // The list marker belonged to the old unit and the sentence to the
+    // fragment, so `1. Get bread.` is in neither row. A TERMINATED fragment,
+    // still missed — which is why the case above is not the whole of it.
+    const listed = "Steps:\n1. Buy bread.\n2. Sell it.";
+    const spliced = "Steps:\n1. Get bread. Fast.\n2. Sell it.";
+    expect(splitSentences(spliced)).toContain("1. Get bread.");
+    expect(allSentencesAi(spliced, [listed, "Get bread. Fast."], listed)).toBe(false);
+  });
+
+  it("KNOWN UNSAFE LIMIT: a fragment replacing two sentences with one reads as a deletion", () => {
+    // This one fails clause 3 rather than clause 2, and is indistinguishable
+    // from the human trimming the draft.
+    expect(allSentencesAi("Alpha one. One tighter line.", [full, "One tighter line."], full)).toBe(
+      false,
+    );
+  });
+
+  it("never opens a gate isUntouchedAi held shut, over a generated corpus", () => {
+    // The property the whole change rests on, and it is a theorem rather than a
+    // sample: for non-empty rows and a reference with at least one sentence,
+    // `new = false` while `old = true` is unsatisfiable. If the new formula says
+    // true with sentences present, the mask is all-true, so each sentence
+    // consumed a distinct sentence of the single row — forcing
+    // n(current) <= n(ai), which with clause 3's n(current) >= n(ai) is
+    // equality, which is exactly the old `true`. So every disagreement runs the
+    // refusing way, AND every one of them has an empty body; both are asserted.
+    //
+    // Generated rather than listed. A hand-written pair passes vacuously
+    // whenever `isUntouchedAi` is false, and the list this replaced had nine of
+    // fifteen doing exactly that. `exercised` counts the pairs that actually
+    // reach the implication, and is asserted for the same reason: a corpus that
+    // stopped producing matching bodies would leave this green and empty.
+    const alphabet = ["Alphá one.", "Beta twö.", "Gamma three.", "Mine own."];
+    const bodies: string[] = [];
+    const grow = (prefix: string[], depth: number): void => {
+      bodies.push(prefix.join(" "));
+      if (prefix.length > 1) bodies.push(prefix.join("\n"));
+      if (depth === 0) return;
+      for (const word of alphabet) grow([...prefix, word], depth - 1);
+    };
+    grow([], 4);
+    // Noise no human typed: reflow, a decomposed paste, an invisible space.
+    const noise: Array<(text: string) => string> = [
+      (text) => text,
+      (text) => `  ${text.replace(/ /g, "   ")} `,
+      (text) => text.normalize("NFD"),
+      (text) => text.replace(/\. /g, ".\u200B "),
     ];
-    for (const [current, ai] of pairs) {
-      if (isUntouchedAi(current, ai)) {
-        expect(allSentencesAi(current, [ai], ai), `${current} / ${ai}`).toBe(true);
+    const references = [
+      "Alphá one. Beta twö. Gamma three.",
+      "Alphá one.\nBeta twö.",
+      "Alphá one. Alphá one.",
+      "Gamma three.",
+      "Alphá one. Beta twö. Gamma three. Mine own.",
+    ];
+
+    let exercised = 0;
+    const openedWhatWasShut: string[] = [];
+    const unexplainedDisagreement: string[] = [];
+    for (const reference of references) {
+      for (const body of bodies) {
+        for (const applyNoise of noise) {
+          const current = applyNoise(body);
+          const before = isUntouchedAi(current, reference);
+          const after = allSentencesAi(current, [reference], reference);
+          const where = `${JSON.stringify(current)} / ${JSON.stringify(reference)}`;
+          if (before) {
+            exercised++;
+            if (!after) openedWhatWasShut.push(where);
+          }
+          if (after !== before && splitSentences(current).length > 0) {
+            unexplainedDisagreement.push(where);
+          }
+        }
       }
     }
+    expect(openedWhatWasShut).toEqual([]);
+    expect(unexplainedDisagreement).toEqual([]);
+    expect(exercised).toBeGreaterThan(250);
   });
 });
