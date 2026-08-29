@@ -33,5 +33,7 @@ export {
   aiSentenceMask,
   isUntouchedAi,
   normalizeForComparison,
+  type SentenceSpan,
+  splitSentenceSpans,
   splitSentences,
 } from "./provenance.js";

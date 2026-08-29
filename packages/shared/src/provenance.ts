@@ -105,8 +105,16 @@ function startsNewSentence(text: string, from: number): boolean {
   return true;
 }
 
+/** A half-open range of `text`, `text.slice(start, end)`. */
+export interface SentenceSpan {
+  start: number;
+  end: number;
+}
+
 /**
- * Splits text into sentences.
+ * Splits text into sentence spans: a gapless, ordered partition of the input,
+ * where every character belongs to exactly one span and the spans rejoin into
+ * the input character for character.
  *
  * Terminators are `.!?。！？…`. A boundary is a terminator — optionally followed
  * by closing wrappers, see `CLOSERS` — followed by whitespace or end of input;
@@ -114,22 +122,44 @@ function startsNewSentence(text: string, from: number): boolean {
  * its own, since CJK writes no space there. A newline is also a boundary:
  * social copy is line-structured and a hook line is its own unit.
  *
+ * Separators — the space after a terminator, the newline itself — belong to the
+ * span they *end*, never to the one that follows. The overlay dims a span whole,
+ * so a leading separator would dim the gap in front of a human's sentence and
+ * read as part of the AI's.
+ *
+ * These offsets are derived, not stored: recomputed from the current text on
+ * every use and never persisted. The offsets this module's header refuses are
+ * saved ones, which rot on the first edit; a derived one is a loop index.
+ *
  * Languages with no sentence terminator at all — Thai, for instance — yield a
- * single sentence. That is a known limit, not a bug to paper over: provenance
+ * single span. That is a known limit, not a bug to paper over: provenance
  * there degrades to whole-body comparison and the UI hides the per-sentence
  * view rather than pretending to a granularity it does not have.
  */
-export function splitSentences(text: string): string[] {
-  const out: string[] = [];
+export function splitSentenceSpans(text: string): SentenceSpan[] {
+  const spans: SentenceSpan[] = [];
   let start = 0;
+
+  /**
+   * Closes the current span at `boundaryEnd`, extended over the whitespace run
+   * that follows it, and returns the index the scan resumes from. Swallowing
+   * that run is what keeps the partition gapless: the old code left it to be
+   * trimmed off the front of the next piece, which is precisely the text that
+   * went missing.
+   */
+  const cutAt = (boundaryEnd: number): number => {
+    let end = boundaryEnd;
+    while (end < text.length && isSpace(text[end] as string)) end++;
+    spans.push({ start, end });
+    start = end;
+    return end;
+  };
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i] as string;
 
     if (char === "\n") {
-      const piece = trimSpace(text.slice(start, i));
-      if (piece) out.push(piece);
-      start = i + 1;
+      i = cutAt(i + 1) - 1;
       continue;
     }
 
@@ -182,15 +212,26 @@ export function splitSentences(text: string): string[] {
       continue;
     }
 
-    const piece = trimSpace(text.slice(start, end + 1));
-    if (piece) out.push(piece);
-    start = end + 1;
-    i = end;
+    i = cutAt(end + 1) - 1;
   }
 
-  const tail = trimSpace(text.slice(start));
-  if (tail) out.push(tail);
-  return out;
+  if (start < text.length) spans.push({ start, end: text.length });
+  return spans;
+}
+
+/**
+ * Splits text into sentences: the trimmed view of `splitSentenceSpans`, with
+ * empty pieces dropped. Derived from the partition rather than computed beside
+ * it, so the overlay's spans and the provenance comparison can never disagree
+ * about where a sentence ends.
+ */
+export function splitSentences(text: string): string[] {
+  const pieces: string[] = [];
+  for (const span of splitSentenceSpans(text)) {
+    const piece = trimSpace(text.slice(span.start, span.end));
+    if (piece) pieces.push(piece);
+  }
+  return pieces;
 }
 
 /**

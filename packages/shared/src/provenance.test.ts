@@ -3,6 +3,7 @@ import {
   aiSentenceMask,
   isUntouchedAi,
   normalizeForComparison,
+  splitSentenceSpans,
   splitSentences,
 } from "./provenance.js";
 
@@ -151,6 +152,104 @@ describe("splitSentences", () => {
     for (const sample of samples) {
       expect(stripped(splitSentences(sample).join(""))).toBe(stripped(sample));
     }
+  });
+});
+
+describe("splitSentenceSpans", () => {
+  const corpus = [
+    "Hello. World.\n\nSecond line here. Done.",
+    "One sentence only",
+    "",
+    "   ",
+    "Цена ниже, т.е. выгодно. Берите.",
+    "今天很好。明天更好。",
+    "See example.com/x for 2.5x more.",
+    "Hook line\nBody line",
+    "Trailing newline.\n",
+    "Ends without terminator",
+    "**Big news.** We ship today.",
+    "1. First\n2. Second",
+    // Beyond the brief: the shapes most likely to make a partition leak.
+    "\n",
+    "\n\n\n",
+    "\t \u200B\uFEFF",
+    "Line one\r\nLine two",
+    "Windows.\r\n\r\nSecond para.\r\n",
+    ". Leading terminator.",
+    "...",
+    "Ends mid-abbreviation, т.е.",
+    "Bring water, etc.",
+    "Mr.",
+    "Готово!🔥 Дальше поехали.",
+    'He said "Hello."   Then left.',
+    "Wait... Really?!",
+    "Buy now.\u200B Second one.",
+    "Buy now.\uFEFFSecond one.",
+    "  Leading space. Trailing space.  ",
+    "\n\nHello. World.",
+    "  \n Hello. World.",
+    "Hello.今天很好。",
+    "「こんにちは。」次へ。",
+    "สวัสดีครับ ยินดีต้อนรับ",
+    "A.\n \n B.",
+    "Use the .* wildcard here.",
+    "- One item.\n- Two item.",
+    "Buy now. #sale #deal",
+  ];
+
+  it("partitions the input losslessly — every character, exactly once, in order", () => {
+    for (const text of corpus) {
+      const spans = splitSentenceSpans(text);
+      // Rejoining the slices must reproduce the input byte for byte. This is
+      // the assertion the overlay depends on: it renders these slices, so any
+      // character the partition drops is a character the highlight misplaces.
+      expect(spans.map((s) => text.slice(s.start, s.end)).join(""), text).toBe(text);
+      let cursor = 0;
+      for (const span of spans) {
+        expect(span.start, text).toBe(cursor);
+        expect(span.end, text).toBeGreaterThanOrEqual(span.start);
+        cursor = span.end;
+      }
+      expect(cursor, text).toBe(text.length);
+    }
+  });
+
+  it("keeps splitSentences as the trimmed view of the same partition", () => {
+    // Trimmed with the module's own whitespace class, which counts the
+    // zero-width space and the BOM that `String.trim()` leaves behind. With a
+    // bare `.trim()` a body of nothing but invisible spacing reads as a
+    // disagreement between the two views when there is none.
+    const trimSpace = (piece: string) =>
+      piece.replace(/^[\s\u200B\uFEFF]+|[\s\u200B\uFEFF]+$/gu, "");
+    for (const text of corpus) {
+      const fromSpans = splitSentenceSpans(text)
+        .map((s) => trimSpace(text.slice(s.start, s.end)))
+        .filter((piece) => piece.length > 0);
+      expect(fromSpans, text).toEqual(splitSentences(text));
+    }
+  });
+
+  it("can leave a whitespace-only span, so spans do not index-align with sentences", () => {
+    // A leading blank line has no preceding span to attach to, so the
+    // partition must emit it on its own — while `splitSentences` drops it.
+    // The overlay therefore cannot zip `aiSentenceMask` onto spans by index:
+    // here that would dim the blank line and leave the last sentence undimmed,
+    // sliding every flag one position off the sentence it describes.
+    expect(
+      splitSentenceSpans("\n\nHello. World.").map((s) => "\n\nHello. World.".slice(s.start, s.end)),
+    ).toEqual(["\n\n", "Hello. ", "World."]);
+    expect(splitSentences("\n\nHello. World.")).toEqual(["Hello.", "World."]);
+  });
+
+  it("attaches each separator to the preceding span, never to the following one", () => {
+    // The overlay dims a span as a unit. A span that opens with the space or
+    // newline the previous sentence ended on would dim the gap in front of a
+    // human's sentence, and the eye reads that gap as part of the AI's.
+    expect(
+      splitSentenceSpans("Hello. World.\n\nDone.").map((s) =>
+        "Hello. World.\n\nDone.".slice(s.start, s.end),
+      ),
+    ).toEqual(["Hello. ", "World.\n\n", "Done."]);
   });
 });
 
