@@ -58,7 +58,15 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  * that neither layer has quietly stopped receiving it.
  */
 export const MIRRORED_METRICS = [
-  "box-border min-h-24 w-full border px-3 py-2",
+  // `block`, not the UA's inline-block: an inline-level textarea sits on the
+  // text baseline, so its wrapper is ~6px taller than the control and the
+  // overlay — absolutely positioned to the wrapper — inherits that slack.
+  // Measured in Chrome: wrapper 224px, textarea 218px, both layers still
+  // starting at the same origin, so it costs no alignment today. It is fixed
+  // anyway because it makes the two boxes differ for a reason unrelated to
+  // anything in this component, which is how a later scroll or height
+  // calculation acquires a 6px error nobody can explain.
+  "block box-border min-h-24 w-full border px-3 py-2",
   "font-sans text-sm font-normal tracking-normal normal-case [word-spacing:normal] [tab-size:4]",
   "whitespace-pre-wrap break-words",
   "[scrollbar-gutter:stable]",
