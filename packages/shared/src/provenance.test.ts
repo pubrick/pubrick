@@ -4,7 +4,9 @@ import {
   aiSentenceMaskAny,
   dimSpans,
   isUntouchedAi,
+  matchesAnyAiVersion,
   normalizeForComparison,
+  normalizeNewlines,
   splitSentenceSpans,
   splitSentences,
 } from "./provenance.js";
@@ -616,5 +618,92 @@ describe("normalizeForComparison", () => {
     // untouched AI — the direction that unlocks the publish gate.
     expect(normalizeForComparison("Buy now")).not.toBe(normalizeForComparison("Buynow"));
     expect(isUntouchedAi("Buynow. Second one.", "Buy now. Second one.")).toBe(false);
+  });
+});
+
+describe("normalizeNewlines", () => {
+  /**
+   * The one character class the overlay cannot survive, and the reason this
+   * function exists rather than living inside the splitter.
+   *
+   * A `<textarea>` strips CR from its API value while the React string keeps
+   * it, so a body carrying one makes the mirror render a different number of
+   * characters than the field it sits on. Establishing the canonical form here,
+   * and calling it from the DTOs, means no body reaches storage — or the
+   * screen, or the publish gate — in a form the two layers disagree about.
+   */
+  it("rewrites CRLF, a lone CR and a trailing CR to U+000A", () => {
+    expect(normalizeNewlines("One.\r\nTwo.")).toBe("One.\nTwo.");
+    expect(normalizeNewlines("One.\rTwo.")).toBe("One.\nTwo.");
+    expect(normalizeNewlines("One.\r")).toBe("One.\n");
+    expect(normalizeNewlines("\rOne.")).toBe("\nOne.");
+  });
+
+  it("turns one CRLF into ONE newline, not two", () => {
+    // `\r\n?` and not `\r|\n`: the greedy-first alternation is what stops a
+    // CRLF from becoming a blank line, which would be a paragraph break the
+    // author never typed — and a sentence boundary the splitter then honours.
+    expect(normalizeNewlines("A.\r\nB.")).toHaveLength("A.\nB.".length);
+    expect(splitSentences("A.\r\n\r\nB.")).toEqual(
+      splitSentences(normalizeNewlines("A.\r\n\r\nB.")),
+    );
+  });
+
+  it("leaves text with no CR untouched, byte for byte", () => {
+    const text = "Alpha one.\n\nBeta two.\tTabbed.\u200B";
+    expect(normalizeNewlines(text)).toBe(text);
+  });
+
+  it("makes a CRLF body and its LF twin the same string, so the mask cannot differ", () => {
+    const ai = "Alpha one.\nBeta two.";
+    expect(normalizeNewlines("Alpha one.\r\nBeta two.")).toBe(ai);
+    expect(isUntouchedAi(normalizeNewlines("Alpha one.\r\nBeta two."), ai)).toBe(true);
+  });
+});
+
+/**
+ * The badge's reference — design §3's middle row. See `matchesAnyAiVersion`'s
+ * docstring for why each of the three questions gets its own.
+ */
+describe("matchesAnyAiVersion", () => {
+  it("is true while the body still matches the only ai version", () => {
+    expect(matchesAnyAiVersion("Alpha one. Beta two.", ["Alpha one. Beta two."])).toBe(true);
+  });
+
+  it("is true when the body matches a LATER version, not the first", () => {
+    // The fixture that tells §3's rule apart from the publish gate's. Reading
+    // only the first row here would flip an accepted refinement to
+    // "human-edited" the moment 2b writes the second row.
+    expect(
+      matchesAnyAiVersion("A later AI refinement.", [
+        "The model's first attempt.",
+        "A later AI refinement.",
+      ]),
+    ).toBe(true);
+  });
+
+  it("is false only when the body matches none of them", () => {
+    expect(
+      matchesAnyAiVersion("I rewrote the whole thing.", [
+        "The model's first attempt.",
+        "A later AI refinement.",
+      ]),
+    ).toBe(false);
+  });
+
+  it("is true with no versions at all — missing evidence is not evidence of an edit", () => {
+    // The fail-safe, and the one an `Array.some` would get backwards. An item
+    // whose version row was never written must keep reading AI-drafted;
+    // answering "human-edited" would over-claim human authorship on a body
+    // nobody has touched.
+    expect(matchesAnyAiVersion("Whatever this is.", [])).toBe(true);
+  });
+
+  it("never answers a concatenation of the versions", () => {
+    // `isUntouchedAi` short-circuits on a sentence-count mismatch, so a joined
+    // reference always answers false and would read every AI draft as edited.
+    const versions = ["Alpha one.", "Beta two."];
+    expect(matchesAnyAiVersion("Alpha one.", versions)).toBe(true);
+    expect(isUntouchedAi("Alpha one.", versions.join("\n"))).toBe(false);
   });
 });

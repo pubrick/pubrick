@@ -10,6 +10,7 @@ import {
   type ContentCreate,
   type ContentUpdate,
   isUntouchedAi,
+  matchesAnyAiVersion,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -235,6 +236,48 @@ export class ContentRepository {
       );
   }
 
+  /**
+   * The item-level `ai` version bodies for many items at once, keyed by item.
+   *
+   * `list` needs the badge's answer for every card, and the badge's answer is a
+   * comparison against these bodies. One `IN` query rather than a read per
+   * item: this is already an N+1 for adaptations, and the cure for that is not
+   * a second one.
+   *
+   * `adaptation_id IS NULL` because the card's badge is about the MASTER body.
+   * A channel override's provenance is a detail of the item screen, and joining
+   * an adaptation's AI text into the item's reference would compare a body
+   * against text the adapter rewrote for a platform — which never matches, so
+   * every card would read "human-edited".
+   */
+  private async itemAiVersionBodies(
+    orgId: string,
+    itemIds: string[],
+  ): Promise<Map<string, string[]>> {
+    const byItem = new Map<string, string[]>();
+    if (itemIds.length === 0) return byItem;
+    const rows = await db
+      .select({
+        contentItemId: schema.contentVersions.contentItemId,
+        body: schema.contentVersions.body,
+      })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          inArray(schema.contentVersions.contentItemId, itemIds),
+          isNull(schema.contentVersions.adaptationId),
+          eq(schema.contentVersions.origin, "ai"),
+        ),
+      );
+    for (const row of rows) {
+      const bodies = byItem.get(row.contentItemId) ?? [];
+      bodies.push(row.body);
+      byItem.set(row.contentItemId, bodies);
+    }
+    return byItem;
+  }
+
   async list(orgId: string, status?: string) {
     if (status !== undefined && !(schema.CONTENT_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException(
@@ -250,9 +293,16 @@ export class ContentRepository {
         )
       : eq(schema.contentItems.orgId, orgId);
     const items = await db.select(ITEM_COLUMNS).from(schema.contentItems).where(where);
+    // No ORDER BY on the version rows, unlike `aiVersionRows`: the badge asks
+    // whether the body matches ANY of them, and "any" does not have a first.
+    const aiBodies = await this.itemAiVersionBodies(
+      orgId,
+      items.map((item) => item.id),
+    );
     return Promise.all(
       items.map(async (item) => ({
         ...item,
+        bodyIsAiVerbatim: matchesAnyAiVersion(item.body, aiBodies.get(item.id) ?? []),
         adaptations: await this.adaptationsFor(orgId, item.id),
       })),
     );
@@ -312,20 +362,37 @@ export class ContentRepository {
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
     ]);
+    /**
+     * The provenance lens's reference text. Returned rather than a
+     * server-computed mask because the browser would have to split the
+     * current text identically to align a mask to it anyway (spec §4), and
+     * two splitters that must agree are two splitters that will stop
+     * agreeing.
+     */
+    const aiVersionBodies = groupAiVersionBodies(
+      adaptations.map((adaptation) => adaptation.id),
+      aiVersions,
+    );
     return {
       ...item,
       adaptations,
       /**
-       * The provenance lens's reference text. Returned rather than a
-       * server-computed mask because the browser would have to split the
-       * current text identically to align a mask to it anyway (spec §4), and
-       * two splitters that must agree are two splitters that will stop
-       * agreeing.
+       * The origin badge's answer — computed here rather than in the browser,
+       * because the QUEUE has to be able to give it too and the queue has no
+       * reference text to compute it from (see `itemAiVersionBodies`). Before
+       * this field, a rewritten item's card read "AI-drafted" while its own
+       * detail screen said "Human-edited" one click later, which is the exact
+       * claim design §5 leans on to ship the lens off by default: the badge
+       * already carries it at a glance on every card.
+       *
+       * Off the SAME `aiVersionBodies.item` the lens is handed, so the badge
+       * and the dimming cannot come to answer about different rows.
+       * `matchesAnyAiVersion` is design §3's middle row, fail-safe included: no
+       * version rows means `true`, so an item whose reference was never written
+       * keeps reading AI-drafted instead of over-claiming an edit nobody made.
        */
-      aiVersionBodies: groupAiVersionBodies(
-        adaptations.map((adaptation) => adaptation.id),
-        aiVersions,
-      ),
+      bodyIsAiVerbatim: matchesAnyAiVersion(item.body, aiVersionBodies.item),
+      aiVersionBodies,
     };
   }
 

@@ -114,6 +114,7 @@
     "backToQueue": "Volver a la cola",
     "bodyLabel": "Texto",
     "lensToggle": "Resaltar el texto de la IA",
+    "lensLegend": "Las frases atenuadas son exactamente lo que escribió la IA. Si no hay nada atenuado, todas las frases son tuyas.",
     "saveBody": "Guardar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Déjalo vacío para usar el texto de arriba",

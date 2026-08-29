@@ -38,6 +38,7 @@ type ContentItem = {
   title: string | null;
   status: ContentStatus;
   origin: ContentOrigin;
+  bodyIsAiVerbatim: boolean;
   adaptations: Adaptation[];
 };
 
@@ -59,8 +60,9 @@ function item(
   status: ContentStatus,
   adaptations: Adaptation[] = [],
   origin: ContentOrigin = "human",
+  bodyIsAiVerbatim = true,
 ): ContentItem {
-  return { id, title, status, origin, adaptations };
+  return { id, title, status, origin, bodyIsAiVerbatim, adaptations };
 }
 
 const BRAND_ID = "66666666-6666-4666-8666-666666666666";
@@ -626,6 +628,35 @@ describe("origin badges (Task 10)", () => {
     expect(await row("Generated post")).toHaveTextContent(en.Content.origin.ai);
     expect(await row("Typed post, AI channel copy")).toHaveTextContent(en.Content.origin.aiAdapted);
     expect(await row("Typed post")).toHaveTextContent(en.Content.origin.human);
+  });
+
+  /**
+   * The fourth badge, ON THE CARD — which is the design's own argument for
+   * shipping the lens off by default: "the badge already carries the claim at a
+   * glance on every card". It did not. The card had no reference text, so a
+   * rewritten item read "AI-drafted" here and "Human-edited" one click later.
+   *
+   * The list now carries `bodyIsAiVerbatim`, a boolean the API computes with
+   * the same `matchesAnyAiVersion` the item response uses — a verdict, not the
+   * version bodies, which a badge has no use for.
+   */
+  it("labels a rewritten AI draft human-edited on the card, not only on the item screen", async () => {
+    const calls: Call[] = [];
+    const items = [
+      item("c1", "Rewritten post", "draft", [], "ai", false),
+      item("c2", "Untouched post", "draft", [], "ai", true),
+    ];
+    installHandlers(calls, () => items);
+
+    render(<ContentQueuePage />);
+
+    const row = async (title: string) => {
+      const link = await screen.findByRole("link", { name: title });
+      return link.closest("li") as HTMLElement;
+    };
+
+    expect(await row("Rewritten post")).toHaveTextContent(en.Content.origin.humanEdited);
+    expect(await row("Untouched post")).toHaveTextContent(en.Content.origin.ai);
   });
 });
 

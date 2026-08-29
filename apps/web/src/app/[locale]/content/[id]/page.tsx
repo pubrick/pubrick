@@ -58,11 +58,22 @@ type ContentItem = {
   updatedAt: string;
   adaptations: Adaptation[];
   /**
+   * Whether the SAVED body still matches some `ai` version — the origin
+   * badge's verdict, and the same field every queue card carries.
+   *
+   * A verdict rather than a mask, and about the saved body rather than the
+   * draft in the textarea: the badge describes what the API is holding, and it
+   * changes when a save does.
+   */
+  bodyIsAiVerbatim: boolean;
+  /**
    * The lens's reference text: every `ai` version body, for the item and for
-   * each adaptation under its own id. Computing the mask here rather than
-   * asking the server for one is deliberate (design §4) — a server-computed
-   * mask would still have to be aligned to a split done in the browser, and
-   * two splitters that must agree are two splitters that will stop agreeing.
+   * each adaptation under its own id. The MASK is computed here rather than
+   * asked of the server (design §4) — a server-computed mask would still have
+   * to be aligned to a split done in the browser, and two splitters that must
+   * agree are two splitters that will stop agreeing. That argument is about
+   * per-sentence flags and does not reach the badge above, which is one
+   * boolean with nothing to align.
    */
   aiVersionBodies: AiVersionBodies;
 };
@@ -273,6 +284,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {t("lensToggle")}
         </label>
       </div>
+      {/*
+        What dim MEANS, on screen, only while the lens is on.
+
+        Without it the lens has an unreadable success state: turn it on, see
+        nothing change, and there is no way to tell "every sentence here is
+        yours" from "the highlighting is broken" — and the first is the
+        commonest case on a post the author has actually worked on. It sits
+        under the toggle rather than in a tooltip because it is the answer to
+        the question the toggle just raised.
+      */}
+      {lens && (
+        <p data-testid="lens-legend" className="mb-4 text-sm text-fg-tertiary">
+          {t("lensLegend")}
+        </p>
+      )}
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}

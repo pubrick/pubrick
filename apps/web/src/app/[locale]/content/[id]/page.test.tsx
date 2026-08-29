@@ -1,4 +1,9 @@
-import { adaptationUpdateSchema, contentApproveSchema, MAX_BODY_LENGTH } from "@pubrick/shared";
+import {
+  adaptationUpdateSchema,
+  contentApproveSchema,
+  MAX_BODY_LENGTH,
+  matchesAnyAiVersion,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContentOrigin } from "@/lib/origin";
@@ -45,6 +50,7 @@ type ContentItem = {
   createdAt: string;
   updatedAt: string;
   adaptations: Adaptation[];
+  bodyIsAiVerbatim: boolean;
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
 };
 
@@ -67,20 +73,31 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
 }
 
 function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
-  return {
+  const merged = {
     id: "c1",
     brandId: "b1",
     title: "Launch post",
     body: "Hello world",
-    status: "draft",
-    origin: "human",
+    status: "draft" as ContentStatus,
+    origin: "human" as ContentOrigin,
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
-    adaptations: [],
+    adaptations: [] as Adaptation[],
     // The real GET always carries this key; `[]` is what it holds for an item
     // with no `ai` version rows (a human-written draft).
-    aiVersionBodies: { item: [], adaptations: {} },
+    aiVersionBodies: { item: [] as string[], adaptations: {} as Record<string, string[]> },
     ...overrides,
+  };
+  return {
+    ...merged,
+    /**
+     * Derived here the way `ContentRepository.get` derives it, rather than
+     * spelled out per fixture: the badge's verdict and the lens's reference
+     * text come from the same rows in the real response, and a fixture that
+     * let them disagree would be testing a payload the API cannot produce.
+     */
+    bodyIsAiVerbatim:
+      overrides.bodyIsAiVerbatim ?? matchesAnyAiVersion(merged.body, merged.aiVersionBodies.item),
   };
 }
 
@@ -737,6 +754,25 @@ describe("the provenance lens (design §5)", () => {
     // this is the only way to see it.
     expect(overlay?.textContent).toBe(body.value);
     expect(overlay?.querySelector("[data-ai]")).toHaveAttribute("data-ai", "true");
+  });
+
+  /**
+   * The lens has an unreadable success state without this line: turn it on,
+   * see nothing change, and there is nothing on screen that tells "every
+   * sentence here is yours" apart from "the highlighting is broken" — and the
+   * first is the commonest case on a post the author has worked on.
+   */
+  it("says what dimmed MEANS, and only while the lens is on", async () => {
+    installBaseHandlers({ current: lensFixture() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    expect(screen.queryByTestId("lens-legend")).not.toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole("checkbox", { name: en.Publish.lensToggle }));
+
+    expect(screen.getByTestId("lens-legend")).toHaveTextContent(en.Publish.lensLegend);
   });
 
   it("dims each override against its OWN adaptation's versions, never the item's", async () => {

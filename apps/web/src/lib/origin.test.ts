@@ -31,110 +31,70 @@ describe("deriveOrigin", () => {
 });
 
 /**
- * The fourth badge, and the reference it is allowed to read.
+ * The fourth badge.
  *
- * Design §3 is the authority: the badge asks "does the body still match ANY
- * `ai` row", while the publish gate asks a different question of the same rows
- * and reads only the FIRST one. In increment 2a there is exactly one `ai` row
- * per level, so the two coincide and a wrong choice here would look correct —
- * until 2b's refine rows write the second, at which point the gate's rule would
- * flip an accepted refinement to "human-edited" with nothing to notice it.
+ * The comparison behind it — "does the body still match ANY `ai` row", design
+ * §3's middle reference — is `matchesAnyAiVersion` in `@pubrick/shared`, run by
+ * the API and delivered as `bodyIsAiVerbatim`. Its own tests live beside it.
+ * What is left for this function is the mapping, and the fail-safe.
  */
 describe("deriveOrigin — human-edited (design §3, §5)", () => {
-  it("reads human-edited once an ai body matches no ai version", () => {
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: { item: ["The AI wrote this."], adaptations: {} },
-        body: "I rewrote it.",
-      }),
-    ).toBe("humanEdited");
+  it("reads human-edited once the api reports the body is no longer verbatim", () => {
+    expect(deriveOrigin({ origin: "ai", adaptations: [], bodyIsAiVerbatim: false })).toBe(
+      "humanEdited",
+    );
   });
 
-  it("still reads ai-drafted while the body matches any ai version", () => {
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: { item: ["The AI wrote this."], adaptations: {} },
-        body: "The AI wrote this.",
-      }),
-    ).toBe("ai");
+  it("still reads ai-drafted while the body is verbatim", () => {
+    expect(deriveOrigin({ origin: "ai", adaptations: [], bodyIsAiVerbatim: true })).toBe("ai");
   });
 
   /**
-   * ANY, not the first. Two `ai` rows where the body matches the SECOND is the
-   * only fixture that can tell §3's rule apart from the gate's, and it is the
-   * shape 2b creates on the first accepted refinement.
-   */
-  it("reads ai-drafted when the body matches a later ai version, not the first", () => {
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: {
-          item: ["The AI wrote this.", "A later AI refinement."],
-          adaptations: {},
-        },
-        body: "A later AI refinement.",
-      }),
-    ).toBe("ai");
-  });
-
-  it("reads human-edited only when the body matches none of several ai versions", () => {
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: {
-          item: ["The AI wrote this.", "A later AI refinement."],
-          adaptations: {},
-        },
-        body: "Neither of those.",
-      }),
-    ).toBe("humanEdited");
-  });
-
-  /**
-   * Missing evidence is not evidence of an edit. An `ai` item whose version
-   * rows are absent — an older payload, the LIST endpoint (which returns no
-   * `aiVersionBodies` at all), a row that was never written — must keep reading
+   * Missing evidence is not evidence of an edit. An `ai` item with no verdict
+   * — a payload written before the field existed — must keep reading
    * "AI-drafted". Answering "human-edited" there would over-claim human
    * authorship on a body no human has touched, which is the single direction
    * this whole feature is not allowed to fail in.
+   *
+   * `=== false` and not `!bodyIsAiVerbatim` for exactly that reason: the two
+   * differ only on `undefined`, and only in the unsafe direction.
    */
-  it("keeps reading ai-drafted when there is no reference text to compare against", () => {
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: { item: [], adaptations: {} },
-        body: "Whatever this is.",
-      }),
-    ).toBe("ai");
-    // The list screen's shape: an item with a body but no version bodies.
-    expect(deriveOrigin({ origin: "ai", adaptations: [], body: "Whatever this is." })).toBe("ai");
-    // ...and version bodies with no body to compare them to.
-    expect(
-      deriveOrigin({
-        origin: "ai",
-        adaptations: [],
-        aiVersionBodies: { item: ["The AI wrote this."], adaptations: {} },
-      }),
-    ).toBe("ai");
+  it("keeps reading ai-drafted when the api gave no verdict at all", () => {
+    expect(deriveOrigin({ origin: "ai", adaptations: [] })).toBe("ai");
+    expect(deriveOrigin({ origin: "ai", adaptations: [], bodyIsAiVerbatim: undefined })).toBe("ai");
   });
 
-  it("leaves a human-written item alone, whatever ai version bodies it carries", () => {
-    // A human item's badge is decided by its adaptations, never by the item's
-    // own version rows: `humanEdited` is a refinement of `ai`, not of `human`.
+  it("shows the badge on a queue card, which carries the same boolean", () => {
+    // The whole point of a boolean rather than the version bodies: the LIST
+    // response can afford it, so a rewritten item reads "Human-edited" on the
+    // card and on the screen it opens — design §5's argument for shipping the
+    // lens off by default is that the badge already carries the claim on every
+    // card, and it did not until the list carried this field.
+    const listRow = {
+      origin: "ai" as const,
+      adaptations: [{ origin: "ai" as const }],
+      bodyIsAiVerbatim: false,
+    };
+    expect(deriveOrigin(listRow)).toBe("humanEdited");
+  });
+
+  it("leaves a human-written item alone, whatever the verdict on its body says", () => {
+    // A human item's badge is decided by its adaptations, never by a
+    // comparison against AI version rows: `humanEdited` is a refinement of
+    // `ai`, not of `human`.
     expect(
       deriveOrigin({
         origin: "human",
         adaptations: [{ origin: "ai" }],
-        aiVersionBodies: { item: ["Something else entirely."], adaptations: {} },
-        body: "I typed this.",
+        bodyIsAiVerbatim: false,
       }),
     ).toBe("aiAdapted");
+    expect(
+      deriveOrigin({
+        origin: "human",
+        adaptations: [{ origin: "human" }],
+        bodyIsAiVerbatim: false,
+      }),
+    ).toBe("human");
   });
 });

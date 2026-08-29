@@ -58,6 +58,13 @@ type ContentItem = {
   title: string | null;
   status: ContentStatus;
   origin: ContentOrigin;
+  /**
+   * Whether the saved body still matches some `ai` version — the origin
+   * badge's fourth value, answered by the API so a CARD can show it too. The
+   * list deliberately does not carry the version bodies themselves: a badge
+   * needs a verdict, not the text behind it.
+   */
+  bodyIsAiVerbatim: boolean;
   adaptations: Adaptation[];
 };
 

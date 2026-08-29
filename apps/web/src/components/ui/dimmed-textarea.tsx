@@ -1,6 +1,6 @@
 "use client";
 
-import { dimSpans } from "@pubrick/shared";
+import { dimSpans, normalizeNewlines } from "@pubrick/shared";
 import type { TextareaHTMLAttributes, UIEvent } from "react";
 import { useCallback, useId, useMemo, useRef, useState } from "react";
 
@@ -17,10 +17,17 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  *
  *  - both render `MIRRORED_METRICS` — every property that decides where a
  *    glyph lands (design §7);
- *  - the overlay renders `value.slice(start, end)` for a **gapless** partition,
+ *  - the overlay renders `text.slice(start, end)` for a **gapless** partition,
  *    so its `textContent` is character-identical to the textarea's `value`. A
  *    dropped space or newline is a highlight sliding off the words it
  *    describes, and it is the one thing a layout-less jsdom can still prove;
+ *  - the text both layers render is `normalizeNewlines(value)`, because a
+ *    `<textarea>` strips CR from its API value while a React string keeps it —
+ *    so a raw `value` is the one input that can break the identity above from
+ *    *outside* the partition. The DTO layer already stores bodies CR-free
+ *    (`normalizeNewlines`' docstring in `@pubrick/shared` has the mechanism);
+ *    this is the belt for text that arrived by another road — a model's own
+ *    output, a row written before that rule existed;
  *  - `dir` is passed to both rather than inherited, so an RTL first character
  *    flips them together.
  *
@@ -43,8 +50,14 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  * content box and its wrap points move, while the overlay's do not. Reserving
  * the gutter on both keeps the two content boxes the same width whether or not
  * the scrollbar is showing.
+ *
+ * Exported so a test can assert it REACHES both elements. Comparing the two
+ * class strings to each other would be the tautology design §8 rules out —
+ * without layout it proves nothing about alignment. Comparing each against the
+ * shared constant proves something else, and the higher-consequence thing:
+ * that neither layer has quietly stopped receiving it.
  */
-const MIRRORED_METRICS = [
+export const MIRRORED_METRICS = [
   "box-border min-h-24 w-full border px-3 py-2",
   "font-sans text-sm font-normal tracking-normal normal-case [word-spacing:normal] [tab-size:4]",
   "whitespace-pre-wrap break-words",
@@ -113,6 +126,26 @@ export function DimmedTextarea({
   const lensOn = dimmed && !composing;
 
   /**
+   * What both layers render, and what the counter counts.
+   *
+   * A `<textarea>` strips CR from its API value, so handing the element a
+   * string containing one guarantees `textarea.value` and the overlay's
+   * `textContent` are different lengths — the single failure this component's
+   * design says jsdom can prove, arriving from outside the partition. The
+   * counter would be wrong by the same amount, and React's `onChange` reads
+   * the DOM's already-normalised value, so the first keystroke anywhere in the
+   * field would rewrite every CR out of the document with no edit to show for
+   * it.
+   *
+   * Normalised for rendering only; the parent is not called to tell it. A
+   * render that fires `onChange` is a render with a side effect, and the
+   * canonical form is established at the DTO boundary, where every writer
+   * passes (see `normalizeNewlines`). This makes the screen honest about text
+   * that reached it another way.
+   */
+  const text = useMemo(() => normalizeNewlines(value), [value]);
+
+  /**
    * `dimSpans` decides the alignment between the partition and the sentence
    * mask **once**, in shared. Never re-zip `aiSentenceMaskAny` onto
    * `splitSentenceSpans` here: the two lists do not index-align (a leading
@@ -120,13 +153,15 @@ export function DimmedTextarea({
    * while leaving the last sentence undimmed — silently, and plausibly.
    */
   const spans = useMemo(
-    () => (lensOn ? dimSpans(value, aiVersions) : null),
-    [lensOn, value, aiVersions],
+    () => (lensOn ? dimSpans(text, aiVersions) : null),
+    [lensOn, text, aiVersions],
   );
 
   const denominator = displayLimit ?? maxLength;
   const showCounter = Boolean(showCount) && denominator != null;
-  const overLimit = denominator != null && value.length > denominator;
+  // Strictly over. At exactly the limit the text still fits, and colouring it
+  // as a problem would send the author hunting for one that is not there.
+  const overLimit = denominator != null && text.length > denominator;
   const counterId = `${textareaId}-count`;
   // Merge with a caller-supplied aria-describedby rather than overwrite it —
   // the counter is one of possibly several descriptions (e.g. a hint too).
@@ -146,8 +181,16 @@ export function DimmedTextarea({
   // top of a textarea that is not: no scroll event fires for a layer that did
   // not exist yet, so the first sync happens as the overlay attaches. Every
   // later one rides the textarea's `scroll` event, which browsers also emit
-  // for scrolling they do themselves. jsdom has no layout, so both sides are
-  // always 0 here and the alignment is verified in a browser (design §8).
+  // for scrolling they do themselves.
+  //
+  // This IS testable in jsdom, and the note that used to sit here saying
+  // otherwise ("both sides are always 0") was plausible and wrong. jsdom has no
+  // layout, so it never *generates* a scroll offset — but it stores a written
+  // `scrollTop` verbatim and reads it back, which is all the propagation these
+  // two lines do. A test writes the offset itself and fires the event. What
+  // still belongs in a browser (design §8) is whether the synced offset lands
+  // the two layers on the same pixel row; that needs wrapping, and wrapping
+  // needs layout.
   const attachOverlay = useCallback((overlay: HTMLDivElement | null) => {
     overlayRef.current = overlay;
     const textarea = textareaRef.current;
@@ -170,7 +213,7 @@ export function DimmedTextarea({
           id={textareaId}
           dir={dir}
           disabled={disabled}
-          value={value}
+          value={text}
           maxLength={maxLength}
           aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.value)}
@@ -239,7 +282,7 @@ export function DimmedTextarea({
                 data-ai={String(span.ai)}
                 className={span.ai ? "text-fg-dim" : undefined}
               >
-                {value.slice(span.start, span.end)}
+                {text.slice(span.start, span.end)}
               </span>
             ))}
             {/* A trailing newline's empty last line keeps its height from a
@@ -256,7 +299,7 @@ export function DimmedTextarea({
           data-over-limit={overLimit ? "" : undefined}
           className={`text-right text-xs ${overLimit ? "text-danger" : "text-fg-tertiary"}`}
         >
-          {value.length} / {denominator}
+          {text.length} / {denominator}
         </span>
       )}
     </div>

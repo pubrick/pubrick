@@ -279,12 +279,17 @@ card and on the item screen, with no interaction and nothing added to the
 editor. The lens is the detail view — *which* sentences, not *whether* — so it
 is opt-in, per screen, and never on at the moment a person sits down to write.
 The trade accepted with it: a writer who never finds the toggle sees the badge
-and not the sentences, and on a card the badge cannot say *human-edited* at all
-(the list endpoint returns no reference text). Revisit it as a per-user
-preference rather than by flipping the default, and revisit it deliberately —
-if the badge ever stops being on every card, the argument above no longer
-holds. (Provenance-lens design §5; the default itself is one `useState(false)`
-in `app/[locale]/content/[id]/page.tsx`.)
+and not the sentences. All four badge values DO reach the card — the list
+endpoint returns `bodyIsAiVerbatim`, a verdict rather than the version text —
+because "the badge already carries the claim on every card" is the argument, so
+it had to be true; a card that read *AI-drafted* for a body the item screen
+called *human-edited* would be a worse untruth than the one the lens removes.
+Revisit the default as a per-user preference rather than by flipping it, and
+revisit it deliberately — if the badge ever stops being on every card, the
+argument above no longer holds. When the lens IS on, a one-line legend says
+what dim means: without it, "nothing is dimmed" cannot be told apart from
+"the highlighting is broken". (Provenance-lens design §5; the default itself is
+one `useState(false)` in `app/[locale]/content/[id]/page.tsx`.)
 
 ### 5.4 Brand voice as a named, per-brand object (Jasper) — `ADOPT-WITH-FEATURE` (brand knowledge)
 

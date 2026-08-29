@@ -114,6 +114,7 @@
     "backToQueue": "Voltar à fila",
     "bodyLabel": "Texto",
     "lensToggle": "Destacar o texto da IA",
+    "lensLegend": "As frases esmaecidas são exatamente o que a IA escreveu. Se nada estiver esmaecido, todas as frases são suas.",
     "saveBody": "Salvar texto",
     "overridesTitle": "Ajustes por canal",
     "overridePlaceholder": "Deixe em branco para usar o texto acima",

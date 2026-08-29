@@ -114,10 +114,12 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   so each question names its own reference and its own formula:
   - **the gate** — may this be approved? — the **first** `ai` row per level,
     `isUntouchedAi` (`ContentRepository.requireHumanInvolvement`);
-  - **the badge** — **any** `ai` row: `bodies.some(b => isUntouchedAi(body, b))`
-    (`apps/web/src/lib/origin.ts`; `GET /api/content/:id` returns the rows as
-    `aiVersionBodies`, the LIST endpoint does not, so a card can only ever show
-    the three badges that need no reference text);
+  - **the badge** — **any** `ai` row: `matchesAnyAiVersion` (`@pubrick/shared`),
+    run by `ContentRepository` and delivered as the boolean `bodyIsAiVerbatim`
+    on **both** `GET /api/content/:id` and the LIST rows, so a queue card shows
+    the same badge as the screen it opens. Ship the verdict, never the version
+    text: a badge has no use for the bodies, and a list that carried them would
+    be shipping every version of every item to draw four words;
   - **the lens** — which sentences dim — **all** `ai` rows: `aiSentenceMaskAny`,
     an index-wise OR of one `aiSentenceMask` per version.
 
@@ -147,7 +149,7 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   to exactly one span — separators included, each attached to the span it ends —
   so the spans rejoin into the input character for character; `splitSentences` is
   the trimmed, blank-dropping view derived from it, never a second splitter.
-  `DimmedTextarea`'s overlay renders `value.slice(start, end)` per span for that
+  `DimmedTextarea`'s overlay renders `text.slice(start, end)` per span for that
   reason: a dropped space or newline moves the overlay's wrap points and slides
   every highlight off the words it describes. jsdom has no layout, so the tests
   can prove the character-identity of overlay and value but not the alignment —
@@ -155,6 +157,17 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   offsets are recomputed from the current text on every render and never
   persisted; a stored offset rots on the first edit, a derived one is a loop
   index.
+- **A body's newlines are U+000A, and that is settled at the DTO.** A
+  `<textarea>` strips CR from its API value while a React string keeps it, so a
+  stored CR makes the overlay render more characters than the field holds —
+  highlights slide, the counter reports a length no deleting can reach, and the
+  first keystroke anywhere rewrites every CR out of the document through
+  `onChange`. `contentCreateSchema`, `contentUpdateSchema` and
+  `adaptationUpdateSchema` pipe their `body` through `normalizeNewlines`
+  (`@pubrick/shared`) — normalise first, bound by `MAX_BODY_LENGTH` second, so
+  the limit measures what is stored. Any new body-bearing DTO does the same;
+  `DimmedTextarea` normalises again on the way to the screen for text that
+  arrived by another road, and that belt is not a substitute for the boundary.
 - **The fact-checker verifies nothing** until increment 3 gives it sources: it
   lists claims. No instruction, schema, endpoint or UI string may suggest a check
   happened. `CLAIMS_TO_VERIFY_LABEL` (`@pubrick/shared`, re-exported by

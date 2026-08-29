@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { and, eq, isNull } from "drizzle-orm";
@@ -1247,6 +1248,69 @@ describe.skipIf(!url)("content e2e", () => {
       expect(fetched.body.aiVersionBodies.item).toEqual([AI_BODY, "A later AI refinement."]);
     });
 
+    /**
+     * The tiebreak in `aiVersionRows`' ORDER BY, which the fixtures above
+     * cannot exercise: they give every row its own timestamp, so `created_at`
+     * alone already totally orders them and `asc(id)` could be deleted with
+     * nothing turning red. The worker writes an item's versions and all its
+     * adaptations' in ONE transaction, where `now()` is identical across them —
+     * that is the shape this seeds, and the ids are chosen so heap order and id
+     * order DISAGREE. Without the tiebreak the result is whatever the planner
+     * felt like; with it, it is the same list every time.
+     */
+    it("orders same-instant version rows by id, so 'oldest first' is a total order", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+        .rows as { org_id: string }[];
+      const orgId = row?.org_id as string;
+      await db
+        .delete(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.contentItemId, itemId),
+            isNull(schema.contentVersions.adaptationId),
+          ),
+        );
+      const sameInstant = new Date("2026-08-01T10:00:00Z");
+      // Fresh ids, then sorted: the pair must be unique per run (this database
+      // is not reset between them) and their ORDER must be known.
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
+      // Inserted high-id first, so heap order is ["second", "first"] while id
+      // order is the reverse. Only the tiebreak can tell the two apart.
+      await db.insert(schema.contentVersions).values([
+        {
+          id: highId,
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "Written second by id.",
+          origin: "ai",
+          createdAt: sameInstant,
+        },
+        {
+          id: lowId,
+          orgId,
+          contentItemId: itemId,
+          adaptationId: null,
+          body: "Written first by id.",
+          origin: "ai",
+          createdAt: sameInstant,
+        },
+      ]);
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.aiVersionBodies.item).toEqual([
+        "Written first by id.",
+        "Written second by id.",
+      ]);
+    });
+
     it("returns empty lists for a human-written item, which has no ai versions", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
@@ -1331,6 +1395,116 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(201);
       expect(human.body.origin).toBe("human");
       expect(human.body.adaptations[0].origin).toBe("human");
+    });
+
+    /**
+     * The origin badge's fourth value, on the CARD as well as on the item.
+     *
+     * Design §5 ships the lens off by default on the strength of one sentence:
+     * the badge already carries the claim at a glance on every card. It could
+     * not — the list has no reference text — so a rewritten item read
+     * "AI-drafted" in the queue and "Human-edited" one click later. The list
+     * carries the VERDICT instead: a boolean the api computes with the same
+     * `matchesAnyAiVersion` the item response uses, and none of the version
+     * text a badge would have no use for.
+     */
+    it("answers the badge on the list too, not only on the item", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const bodyIsAiVerbatim = async () => {
+        const listed = (await agent.get("/api/content").expect(200)).body as {
+          id: string;
+          bodyIsAiVerbatim: boolean;
+        }[];
+        return listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim;
+      };
+
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.bodyIsAiVerbatim).toBe(
+        true,
+      );
+      expect(await bodyIsAiVerbatim()).toBe(true);
+
+      const edited = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "I rewrote the whole thing myself." })
+        .expect(200);
+
+      expect(edited.body.bodyIsAiVerbatim).toBe(false);
+      // The card and the screen it opens now agree.
+      expect(await bodyIsAiVerbatim()).toBe(false);
+    });
+
+    it("keeps reading verbatim when there is no ai version to compare against", async () => {
+      // Missing evidence is not evidence of an edit: a human-written item has
+      // no version rows at all, and must not read as one somebody edited.
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "I typed this myself.", channelIds: [channelId] })
+        .expect(201);
+
+      expect(created.body.bodyIsAiVerbatim).toBe(true);
+      const listed = (await agent.get("/api/content").expect(200)).body as {
+        id: string;
+        bodyIsAiVerbatim: boolean;
+      }[];
+      expect(listed.find((item) => item.id === created.body.id)?.bodyIsAiVerbatim).toBe(true);
+    });
+
+    it("compares the card's badge against the ITEM's ai versions, not a channel's", async () => {
+      // An adapter rewrites the text for its platform, so an adaptation's `ai`
+      // body never matches the master body. Letting one into the item's
+      // reference would make every card read "human-edited".
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const listed = (await agent.get("/api/content").expect(200)).body as {
+        id: string;
+        bodyIsAiVerbatim: boolean;
+      }[];
+      expect(listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim).toBe(true);
+    });
+
+    /**
+     * The character a `<textarea>` silently drops.
+     *
+     * The API stored a CRLF body verbatim, and the provenance lens renders its
+     * overlay from the React string while the field holds the DOM's normalised
+     * value — so the two layers laid down different numbers of characters, the
+     * counter reported a length the field did not have, and the first keystroke
+     * anywhere rewrote every CR out of the document. The DTOs normalise, which
+     * is the boundary the public API, the MCP server and a script all cross.
+     */
+    it("stores a CRLF body with plain newlines, whatever the caller sent", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Line one.\r\nLine two.", channelIds: [channelId] })
+        .expect(201);
+
+      expect(created.body.body).toBe("Line one.\nLine two.");
+      const fetched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+      expect(fetched.body.body).toBe("Line one.\nLine two.");
+      expect(fetched.body.body).not.toContain("\r");
+
+      const patched = await agent
+        .patch(`/api/content/${created.body.id}`)
+        .send({ body: "Edited one.\rEdited two." })
+        .expect(200);
+      expect(patched.body.body).toBe("Edited one.\nEdited two.");
+
+      const adaptationId = fetched.body.adaptations[0].id as string;
+      const override = await agent
+        .patch(`/api/content/${created.body.id}/adaptations/${adaptationId}`)
+        .send({ body: "Override one.\r\nOverride two." })
+        .expect(200);
+      // The adaptation PATCH answers with the adaptation row itself.
+      expect(override.body.body).toBe("Override one.\nOverride two.");
     });
   });
 

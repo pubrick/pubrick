@@ -42,6 +42,36 @@ export function normalizeForComparison(text: string): string {
   return text.normalize("NFC").replace(SPACE_RUN, " ").trim();
 }
 
+/**
+ * Rewrites CRLF and a lone CR to U+000A — the canonical form of every body
+ * this module reasons about.
+ *
+ * This is not cosmetic, and it does not belong to the splitter. A `<textarea>`
+ * **strips CR from its API value**: give the element `"One.\r\nTwo."` and
+ * `textarea.value` is nine characters, not ten. The provenance lens renders an
+ * overlay from slices of the *React string*, so a CR anywhere in a body makes
+ * the two layers render different character streams — every highlight after it
+ * slides off the words it describes, and the character counter reports a
+ * length the field does not hold. Worse, React's `onChange` reads the DOM's
+ * normalised value, so a single keystroke anywhere in the field silently
+ * rewrites every CR out of the document.
+ *
+ * So the canonical form is established **at the DTO boundary**, where every
+ * writer passes: the public API, the MCP server and a script all reach
+ * `content_items.body` through the same schemas. Normalising there covers the
+ * publish gate, the mask and the overlay at once — a reference version and the
+ * body compared against it are both stored CR-free, and neither can be the
+ * odd one out. `DimmedTextarea` normalises again on the way to the screen, for
+ * text that arrived by some other road (a model's own output, a row predating
+ * this rule).
+ *
+ * `\r\n?` and not `\r\n|\r`: the first alternative of an alternation wins, so
+ * the optional-`\n` form is the one that cannot turn a CRLF into two newlines.
+ */
+export function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 // Abbreviations that end in a period. A title is always followed by the
 // capitalised name it introduces, so it never ends a sentence. The rest are
 // ordinarily mid-sentence but idiomatically sentence-final too (`и т.д.`,
@@ -143,12 +173,17 @@ export interface SentenceSpan {
  *
  * Two more known limits, both measured rather than assumed:
  *
- * Only U+000A is treated as a line boundary. A textarea normalises CRLF on the
- * way in, so that pair is covered, but U+2028 and U+2029 survive a paste and
- * are *not* boundaries here — two lines joined by one fuse into a single unit,
- * so editing the second half repaints the untouched first half as
- * human-written. That is under-splitting, the unsafe direction, and it is the
- * first thing to fix if a real body ever arrives carrying one.
+ * Only U+000A is treated as a line boundary. CR is covered because it is
+ * *removed* upstream, by `normalizeNewlines` at the DTO boundary — never
+ * because a textarea deals with it. The earlier note here claimed the
+ * opposite ("a textarea normalises CRLF on the way in, so that pair is
+ * covered"), and it had the consequence backwards: that normalisation happens
+ * inside the DOM's value only, which is precisely what makes the overlay and
+ * the textarea disagree about how many characters there are. U+2028 and U+2029
+ * do survive a paste and are *not* boundaries here — two lines joined by one
+ * fuse into a single unit, so editing the second half repaints the untouched
+ * first half as human-written. That is under-splitting, the unsafe direction,
+ * and it is the first thing to fix if a real body ever arrives carrying one.
  *
  * A CJK terminator is a boundary whatever follows it, so a combining mark
  * sitting on `。` is cut from its base: `好。` + `\u0300more` splits the
@@ -368,4 +403,30 @@ export function isUntouchedAi(current: string, aiVersion: string): boolean {
   // A deletion is a human act even though nothing new appeared.
   if (currentSentences.length !== aiSentences.length) return false;
   return aiSentenceMask(current, aiVersion).every((isAi) => isAi);
+}
+
+/**
+ * The badge's question, and the third of the design's three references:
+ * is `current` still *some* AI version verbatim?
+ *
+ * | Question | Reference | Formula |
+ * |---|---|---|
+ * | May this be approved? (the gate) | the **first** `ai` row per level | `isUntouchedAi` |
+ * | What does the badge say? | **any** `ai` row | this |
+ * | Which sentences dim? | **all** `ai` rows | `aiSentenceMaskAny` |
+ *
+ * `some`, never the first row and never a concatenation. `isUntouchedAi`
+ * short-circuits on a sentence-count mismatch, so a joined reference always
+ * answers false and would read every AI draft as human-edited; the gate's
+ * first-row rule would read an accepted refinement as the human's own writing.
+ *
+ * **No versions means true**, and that is the fail-safe direction rather than
+ * an accident of `Array.some`. No reference text is no evidence of an edit,
+ * and no evidence of an edit is not evidence of one: answering false there
+ * would over-claim human authorship on a body nobody touched. Every function
+ * in this module errs that way, and callers must not "improve" this one.
+ */
+export function matchesAnyAiVersion(current: string, aiVersions: readonly string[]): boolean {
+  if (aiVersions.length === 0) return true;
+  return aiVersions.some((aiVersion) => isUntouchedAi(current, aiVersion));
 }

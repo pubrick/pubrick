@@ -114,6 +114,7 @@
     "backToQueue": "Back to queue",
     "bodyLabel": "Body",
     "lensToggle": "Highlight AI text",
+    "lensLegend": "Dimmed sentences are still exactly what the AI wrote. Nothing dimmed means every sentence is yours.",
     "saveBody": "Save body",
     "overridesTitle": "Per-channel overrides",
     "overridePlaceholder": "Leave empty to use the item body above",
