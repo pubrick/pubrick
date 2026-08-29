@@ -32,6 +32,7 @@ export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js"
 export {
   aiSentenceMask,
   aiSentenceMaskAny,
+  allSentencesAi,
   type DimSpan,
   dimSpans,
   isUntouchedAi,

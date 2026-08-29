@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aiSentenceMask,
   aiSentenceMaskAny,
+  allSentencesAi,
   dimSpans,
   isUntouchedAi,
   matchesAnyAiVersion,
@@ -705,5 +706,195 @@ describe("matchesAnyAiVersion", () => {
     const versions = ["Alpha one.", "Beta two."];
     expect(matchesAnyAiVersion("Alpha one.", versions)).toBe(true);
     expect(isUntouchedAi("Alpha one.", versions.join("\n"))).toBe(false);
+  });
+});
+
+/**
+ * The one question the gate and the badge both ask once refine verbs exist.
+ * `true` means "still the model's", which REFUSES an unread draft; `false` says
+ * a human was involved and opens the gate. Every case below is written with
+ * that direction in mind — a wrong `false` here is a published draft nobody
+ * read.
+ */
+describe("allSentencesAi", () => {
+  const full = "Alpha one. Beta two. Gamma three.";
+
+  it("is true while every sentence is still the model's", () => {
+    expect(allSentencesAi(full, [full], full)).toBe(true);
+  });
+
+  it("is true after a refine — the fragment covers the sentence that changed", () => {
+    // The body now equals NO stored row, which is exactly what broke the old
+    // equality question: it read a human touch that never happened.
+    const refined = "Alpha one. A tighter second line. Gamma three.";
+    expect(allSentencesAi(refined, [full, "A tighter second line."], full)).toBe(true);
+  });
+
+  it("is false as soon as one sentence is the human's own", () => {
+    const edited = "Alpha one. I wrote this myself. Gamma three.";
+    expect(allSentencesAi(edited, [full, "A tighter second line."], full)).toBe(false);
+  });
+
+  it("is false when a sentence was deleted — a deletion is a human act", () => {
+    // Trimming an over-long draft is the commonest API-side edit. Without this
+    // clause the mask reports "all AI" for any subset and the caller is refused.
+    expect(allSentencesAi("Alpha one. Gamma three.", [full], full)).toBe(false);
+  });
+
+  it("refuses when there is no evidence at all", () => {
+    expect(allSentencesAi("Anything.", [], undefined)).toBe(true);
+  });
+
+  it("refuses when the only evidence is a fragment — the full row is missing", () => {
+    expect(allSentencesAi("Alpha one. Beta two.", ["Beta two."], undefined)).toBe(true);
+  });
+
+  it("refuses with no rows at all, even were a full row somehow supplied", () => {
+    // The other half of the fail-safe, and the half the case above cannot pin:
+    // with no rows the `firstFullRow === undefined` check answers true for free,
+    // so dropping `aiRows.length === 0` looks harmless. It is not — the mask
+    // marks every sentence human against an empty reference, and this function
+    // would report "the human wrote all of it" on the strength of no evidence
+    // whatsoever. The caller cannot produce this pair today (a full row IS one
+    // of the rows), which is exactly why the guard needs pinning here.
+    expect(allSentencesAi("Anything.", [], full)).toBe(true);
+  });
+
+  it("refuses on a fragment-only level even when the body matches the fragment", () => {
+    // The other half of the missing-evidence branch, and the half a
+    // `firstFullRow === undefined` check could be dropped without noticing: with
+    // no full row there is no count to compare against, so a body that is
+    // exactly the fragment is still unjudgeable. `isUntouchedAi` against that
+    // fragment would answer true here for the wrong reason — it has no idea a
+    // whole draft went missing.
+    expect(allSentencesAi("Beta two.", ["Beta two."], undefined)).toBe(true);
+  });
+
+  it("is true when a refine ADDED a sentence instead of replacing one", () => {
+    // The clause is "nothing was deleted", not "the length never moved". A
+    // proposal that appends — a CTA, a closing line — leaves every sentence
+    // some row's and nothing missing, so the draft is still unread AI. Written
+    // as an equality this reads human-edited and publishes it, which is the
+    // inversion the whole increment exists to prevent; a longer body is only
+    // ever a human's when the mask says so, and then clause 2 has already
+    // answered.
+    expect(
+      allSentencesAi(`${full} A tighter second line.`, [full, "A tighter second line."], full),
+    ).toBe(true);
+  });
+
+  it("is false when a human deleted a sentence AND a refine was accepted", () => {
+    // The count clause is not "did anything change" — it still sees the
+    // deletion through an accepted refine, because one fragment cannot pay for
+    // two missing sentences.
+    expect(
+      allSentencesAi("Alpha one. A tighter second line.", [full, "A tighter second line."], full),
+    ).toBe(false);
+  });
+
+  it("is false when the body keeps only one of the model's three sentences", () => {
+    expect(allSentencesAi("Alpha one.", [full], full)).toBe(false);
+  });
+
+  it("judges a full row that is itself a single sentence", () => {
+    const solo = "Just the one line.";
+    expect(allSentencesAi(solo, [solo], solo)).toBe(true);
+    expect(allSentencesAi(`${solo} And mine.`, [solo], solo)).toBe(false);
+    // A one-sentence body, refined: the fragment IS the whole row's worth.
+    expect(allSentencesAi("A tighter line.", [solo, "A tighter line."], solo)).toBe(true);
+  });
+
+  it("is true for a reordered body — the module's accepted false positive", () => {
+    // Documented in the module header: a reordered post reads as untouched.
+    // Under-claiming human authorship, which refuses rather than publishes.
+    expect(allSentencesAi("Gamma three. Alpha one. Beta two.", [full], full)).toBe(true);
+  });
+
+  it("is false when a human duplicated a sentence the model wrote once", () => {
+    // The multiset in `aiSentenceMask` is what catches this; a set would credit
+    // the second copy to an AI original that does not exist.
+    expect(allSentencesAi("Alpha one. Alpha one. Beta two. Gamma three.", [full], full)).toBe(
+      false,
+    );
+    // And a duplicate that hides a deletion behind an unchanged sentence count.
+    expect(allSentencesAi("Alpha one. Alpha one. Gamma three.", [full], full)).toBe(false);
+  });
+
+  it("is true across whitespace-only, zero-width and Unicode-composition noise", () => {
+    expect(allSentencesAi("  Alpha one.\u200B  Beta two.   Gamma three. ", [full], full)).toBe(
+      true,
+    );
+    const accented = "Cliché wins. Ёлка зелёная.";
+    expect(allSentencesAi(accented.normalize("NFD"), [accented.normalize("NFC")], accented)).toBe(
+      true,
+    );
+  });
+
+  it("is false when a human joined two lines into one", () => {
+    // A newline is a sentence boundary, so joining lines is a structural edit:
+    // one unit the mask has never seen, and one sentence fewer than the row.
+    expect(
+      allSentencesAi("Hook line Body line", ["Hook line\nBody line"], "Hook line\nBody line"),
+    ).toBe(false);
+  });
+
+  it("refuses a body that is empty or entirely whitespace", () => {
+    // No sentence to judge is no evidence, and `true` blocks publishing — the
+    // answer `isUntouchedAi` gives an empty draft with no version at all. It
+    // DISAGREES with `isUntouchedAi("   ", full)`, which reads the emptying as
+    // the human act it probably is; refusing is this module's direction, and
+    // the recovery is one click. A whitespace-only body is storable (`bodyText`
+    // is `min(1)` and does not trim), so this branch is reachable.
+    for (const body of ["", "   ", "\n\n", "\u200B"]) {
+      expect(allSentencesAi(body, [full], full)).toBe(true);
+    }
+    expect(isUntouchedAi("   ", full)).toBe(false);
+  });
+
+  it("accepts one false positive: a fragment appended while a sentence was deleted", () => {
+    // The count is unchanged and every sentence is some row's, so this reads
+    // untouched though a human did delete `Gamma three.`. Refusing is the safe
+    // side of the ledger; the unsafe mirror — a refine that replaces two
+    // sentences with one — is named in the function's docstring as 2b-2's to
+    // close, because a fragment row does not record what it replaced.
+    expect(
+      allSentencesAi(
+        "Alpha one. Beta two. A tighter second line.",
+        [full, "A tighter second line."],
+        full,
+      ),
+    ).toBe(true);
+  });
+
+  it("never opens a gate isUntouchedAi held shut", () => {
+    // The safety property of the whole change, stated once: for the one-row
+    // shape that is all live data has, the new formula refuses everywhere the
+    // old one refused. Every defect this module has ever had ran the other way
+    // — untouched AI reading as human — so this is the direction worth pinning.
+    // The converse does NOT hold, and must not: the refined body and the
+    // whitespace-only body are exactly where the new answer is `true` and the
+    // old one `false`.
+    const pairs: Array<[string, string]> = [
+      ["A one. B two.", "A one. B two."],
+      ["A one.  B two. ", "A one. B two."],
+      ["A one. Mine.", "A one. B two."],
+      ["A one. B two. C three.", "A one. B two."],
+      ["A one. C three.", "A one. B two. C three."],
+      ["B two. A one.", "A one. B two."],
+      ["Same. Same.", "Same. Other."],
+      ["", "A one."],
+      ["   ", "A one."],
+      ["", ""],
+      ["Hook line Body line", "Hook line\nBody line"],
+      ["Cliché wins.".normalize("NFD"), "Cliché wins."],
+      ["今天很好。Tomorrow is worse.", "今天很好。Tomorrow is better."],
+      ["Купите воду, еду и т.д. Я переписал.", "Купите воду, еду и т.д. Потом идём."],
+      ["Buy now.\u200B Second one.", "Buy now. Second one."],
+    ];
+    for (const [current, ai] of pairs) {
+      if (isUntouchedAi(current, ai)) {
+        expect(allSentencesAi(current, [ai], ai), `${current} / ${ai}`).toBe(true);
+      }
+    }
   });
 });

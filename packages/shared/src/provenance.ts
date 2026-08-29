@@ -430,3 +430,64 @@ export function matchesAnyAiVersion(current: string, aiVersions: readonly string
   if (aiVersions.length === 0) return true;
   return aiVersions.some((aiVersion) => isUntouchedAi(current, aiVersion));
 }
+
+/**
+ * Is every sentence of `current` something the model wrote?
+ *
+ * The question the gate and the badge both ask, and the same evidence the lens
+ * paints per sentence — read here at the grain of the whole text. `true` means
+ * still the model's, and therefore REFUSES an unread draft; `false` says a
+ * human was involved and opens the gate.
+ *
+ * It replaces the whole-body equality both used to ask, which increment 2b's
+ * refine verbs break: an accepted proposal merges a fragment into the body, the
+ * body then equals no stored row, and equality reads a human touch that never
+ * happened — the gate publishing a draft nobody read, the badge captioning the
+ * model's own words "Human-edited".
+ *
+ * Three clauses, and each is load-bearing:
+ *   1. No evidence refuses. An `ai` item whose version rows are missing must not
+ *      become approvable, and the mask alone would report every sentence human.
+ *      A level with only fragments is also missing its evidence: `firstFullRow`
+ *      undefined means we cannot tell a deletion from a rewrite.
+ *   2. Nothing new is human — the mask, OR-ed across every `ai` row so an
+ *      accepted proposal's fragment covers the sentence it replaced.
+ *   3. Nothing was deleted. The mask has no notion of count, so a strict subset
+ *      of the model's sentences would otherwise read "all AI" and refuse a
+ *      caller who trimmed the draft — with a message telling them to edit it.
+ *
+ * Clause 3 **counts** against the level's first `full` row; it does not ask that
+ * every sentence of that row still appear in the text. Membership is the
+ * tempting spelling and it is wrong: a refine REPLACES one of the full row's
+ * sentences, so under membership every accepted proposal reads as a deletion and
+ * the increment closes nothing. Given clause 2 the two are the same question
+ * anyway — every sentence of `current` is by then either the full row's or a
+ * fragment's, so "at least as many sentences as the full row had" says exactly
+ * "as many fragment-sourced sentences arrived as full-row sentences left".
+ *
+ * An empty or whitespace-only body has no sentence to judge and takes the
+ * refusing answer, as `isUntouchedAi` does for an empty draft with no version.
+ * That is a deliberate disagreement with `isUntouchedAi` on an empty body that
+ * DOES have one, where it reads the emptying as the human act it probably is:
+ * this module errs towards refusing, and the recovery is one click. The branch
+ * is reachable — `bodyText` is `min(1)` and does not trim, so `"   "` stores.
+ *
+ * One known limit, and it is the only case here that errs unsafe: a refine
+ * whose fragment replaces TWO sentences with one is indistinguishable from a
+ * deletion, because a fragment row does not record what it replaced. That body
+ * reads human-edited and opens the gate. 2b-2 closes it — by refusing a
+ * proposal that shortens the sentence count, or by storing what was replaced.
+ * The mirror case errs safe: a fragment appended while another sentence is
+ * deleted keeps the count and reads untouched.
+ */
+export function allSentencesAi(
+  current: string,
+  aiRows: readonly string[],
+  firstFullRow: string | undefined,
+): boolean {
+  if (aiRows.length === 0 || firstFullRow === undefined) return true;
+  const sentences = splitSentences(current);
+  if (sentences.length === 0) return true;
+  if (!aiSentenceMaskAny(current, aiRows).every((isAi) => isAi)) return false;
+  return sentences.length >= splitSentences(firstFullRow).length;
+}
