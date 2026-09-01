@@ -222,6 +222,30 @@ export class GenerateService {
       checkpoints: { ...run.steps },
       usage,
       signal,
+      // The signal is polled at the step boundary (see `runStep`) and is
+      // DELIBERATELY not passed into `ctx` as `abortSignal`. `StepContext`
+      // accepts one and `callStep` forwards it, so `abortSignal: state.signal`
+      // is a one-token edit that looks like finishing the job. It is a
+      // regression, and the chain is short:
+      //
+      //   - an abort inside the SDK throws an `AbortError`;
+      //   - `classifyAiError` maps that to a `PermanentError` — correct there,
+      //     because a caller that withdrew its request must not be billed for
+      //     a retry;
+      //   - but `handle` treats EVERY `PermanentError` as a terminal run
+      //     failure: `recordFailure`, then return normally, completing the job;
+      //   - and pg-boss aborts on expiry BEFORE the re-dispatched delivery
+      //     claims, so the losing handler still holds the fence. Its
+      //     `recordFailure` lands (`status = 'running'` and the fence still
+      //     match), the run goes to `failed`, and the re-dispatch's `claim` —
+      //     `status in ('queued','running')` — then refuses it.
+      //
+      // Net: an expired delivery permanently kills a run that today resumes by
+      // itself from its checkpoints, and tells the user "the model call was
+      // cancelled before it finished" about something nobody cancelled. The
+      // signal means "this DELIVERY is over", not "this RUN is over"; only the
+      // step-boundary poll reads it that way. An in-flight call is left to
+      // finish so the work it is already paying for gets checkpointed.
       ctx: {
         brand: context.brand,
         brief: input.text,
