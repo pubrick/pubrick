@@ -5,6 +5,7 @@ import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
   PermanentError,
+  preferredCredential,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -433,24 +434,32 @@ export class GenerateRepository {
   /**
    * The org's BYOK key, decrypted.
    *
-   * Increment 1 records no provider on a run — there is no per-run model choice —
-   * so an org holding keys for both providers gets a deterministic answer rather
-   * than a coin flip: the oldest key it configured, tie-broken by provider name.
-   * Deterministic matters more than clever here, because a resume must reach the
-   * same provider the first attempt billed.
+   * Nothing records a provider on a run — there is no per-run model choice — so
+   * an org holding keys for both providers gets a deterministic answer rather
+   * than a coin flip: `preferredCredential` (`@pubrick/shared`), the oldest key
+   * it configured, tie-broken by provider name. Deterministic matters more than
+   * clever here, because a resume must reach the same provider the first
+   * attempt billed.
+   *
+   * The rule used to be an `ORDER BY … LIMIT 1` only this repository could see,
+   * and the api now needs the same answer for an editor-side call. It is an
+   * ordering rather than a query — an org has at most two rows, one per
+   * provider — so all of them are selected and sorted by the shared comparator,
+   * and `AiCredentialsRepository.credential` sorts by the very same function.
+   * Two `ORDER BY` clauses in two packages would be two things that must agree
+   * with nothing making them.
    */
   async credential(orgId: string): Promise<AiCredential | undefined> {
     const rows = await db
       .select({
         provider: schema.aiCredentials.provider,
+        createdAt: schema.aiCredentials.createdAt,
         credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
         defaultModel: schema.aiCredentials.defaultModel,
       })
       .from(schema.aiCredentials)
-      .where(eq(schema.aiCredentials.orgId, orgId))
-      .orderBy(asc(schema.aiCredentials.createdAt), asc(schema.aiCredentials.provider))
-      .limit(1);
-    const row = rows[0];
+      .where(eq(schema.aiCredentials.orgId, orgId));
+    const row = preferredCredential(rows);
     if (!row) return undefined;
 
     let apiKey: string;

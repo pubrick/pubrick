@@ -9,6 +9,7 @@ import {
   costTotals,
   decryptJson,
   encryptJson,
+  preferredCredential,
   summarizeCost,
   toLedgerCostUsd,
 } from "@pubrick/shared";
@@ -191,8 +192,8 @@ export class AiCredentialsRepository {
   }
 
   /**
-   * Internal use only (the generation worker and the Test action). Never expose
-   * through a controller — this is the one method that returns the key.
+   * Internal use only (the Test action). Never expose through a controller —
+   * this and `credential` are the only methods that return the key.
    */
   async getDecrypted(orgId: string, provider: AiProviderId): Promise<AiCredential> {
     const rows = await db
@@ -207,7 +208,51 @@ export class AiCredentialsRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw new NotFoundException("No API key stored for this provider");
+    return this.decrypt(provider, row);
+  }
 
+  /**
+   * The org's key for a call that names no provider — an editor-side model call,
+   * where the user chose text to work on and not a vendor to bill.
+   *
+   * The choice is `preferredCredential` (`@pubrick/shared`): the oldest key the
+   * org configured, tie-broken by provider name. `GenerateRepository.credential`
+   * sorts with the same function over the same rows, and that is the whole
+   * point — a draft generated against Google and refined against OpenRouter is a
+   * bill the user cannot explain, and nothing on a run or a draft records which
+   * vendor produced it.
+   *
+   * Returns `undefined` for "this org has no key", following the worker's
+   * contract rather than `getDecrypted`'s `NotFoundException`. The two differ
+   * honestly: asking for a *named* provider that is not stored is a 404 about a
+   * resource the caller addressed, while asking for "whatever this org uses" is
+   * a question with a legitimate empty answer that the caller has to render.
+   */
+  async credential(orgId: string): Promise<AiCredential | undefined> {
+    const rows = await db
+      .select({
+        provider: schema.aiCredentials.provider,
+        createdAt: schema.aiCredentials.createdAt,
+        credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
+        defaultModel: schema.aiCredentials.defaultModel,
+      })
+      .from(schema.aiCredentials)
+      .where(eq(schema.aiCredentials.orgId, orgId));
+    const row = preferredCredential(rows);
+    if (!row) return undefined;
+    return this.decrypt(row.provider, row);
+  }
+
+  /**
+   * The decrypt, in one place, because both readers of the secret column reach
+   * it through here. A `decryptJson` per caller is how one of them ends up
+   * reading a different env var, or forgetting that the blob can fail to open
+   * at all — which `test` classifies as `unreadable_key` off the throw.
+   */
+  private decrypt(
+    provider: AiProviderId,
+    row: { credentialsEncrypted: string; defaultModel: string | null },
+  ): AiCredential {
     const { apiKey } = decryptJson<{ apiKey: string }>(
       row.credentialsEncrypted,
       env.APP_ENCRYPTION_KEY,

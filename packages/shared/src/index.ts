@@ -1,4 +1,9 @@
 export {
+  type CredentialOrderRow,
+  compareCredentialOrder,
+  preferredCredential,
+} from "./ai-credential-order.js";
+export {
   AI_COST_SOURCES,
   type AiCostSource,
   type CostRow,

@@ -2,11 +2,22 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
 import { createDb, schema } from "@pubrick/db";
-import type { CostSummary } from "@pubrick/shared";
+import {
+  type AiProviderId,
+  type CostSummary,
+  encryptJson,
+  preferredCredential,
+} from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AiCredentialProbe, type ProbeOutcome } from "./ai-credentials.probe";
+
+// Type-only: `ai-credentials.repository` reaches `../db`, which validates env at
+// module load, and `beforeAll` is where DATABASE_URL is set. Same rule the app
+// module below follows — the class is imported dynamically, after that.
+type AiCredentialsRepositoryCtor =
+  typeof import("./ai-credentials.repository").AiCredentialsRepository;
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -16,6 +27,7 @@ const SECRET_KEY = "sk-live-never-leak-this-0123456789";
 describe.skipIf(!url)("ai credentials e2e", () => {
   let app: INestApplication;
   let direct: ReturnType<typeof createDb>;
+  let repo: InstanceType<AiCredentialsRepositoryCtor>;
 
   /**
    * The one seam that would otherwise call Google or OpenRouter for real. §8 of
@@ -50,6 +62,12 @@ describe.skipIf(!url)("ai credentials e2e", () => {
     // request and closes it when that request ends, killing any other request
     // in flight (see content.e2e.spec.ts for the measurement).
     await app.listen(0);
+    // The same module record `AppModule` already pulled in, so the class is the
+    // identical DI token Nest registered.
+    const { AiCredentialsRepository } = (await import("./ai-credentials.repository")) as {
+      AiCredentialsRepository: AiCredentialsRepositoryCtor;
+    };
+    repo = app.get(AiCredentialsRepository);
 
     direct = createDb(url as string);
   });
@@ -636,6 +654,115 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         kind: "exact",
         usd: 1,
       });
+    });
+  });
+
+  /**
+   * The CHOICE, which is the half that must not diverge from the worker.
+   *
+   * `GenerateRepository.credential` answers the same question in the other Nest
+   * process, and the only thing keeping the two answers equal is that both sort
+   * with `preferredCredential` (`@pubrick/shared`). So the oracle below is that
+   * comparator, run over the rows Postgres actually holds — a hardcoded
+   * "expect openrouter" would stay green for a repository that had stopped
+   * consulting the ordering entirely and simply returned whichever row came
+   * back first.
+   */
+  describe("the credential a provider-less call reaches", () => {
+    /** The key stored for `provider`, so a wrong CHOICE cannot look right. */
+    function keyFor(provider: AiProviderId) {
+      return `${SECRET_KEY}-${provider}`;
+    }
+
+    async function storeKey(orgId: string, provider: AiProviderId, createdAt: Date) {
+      await direct.db.insert(schema.aiCredentials).values({
+        orgId,
+        provider,
+        credentialsEncrypted: encryptJson(
+          { apiKey: keyFor(provider) },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+        defaultModel: `${provider}-default`,
+        createdAt,
+      });
+    }
+
+    /**
+     * What the shared rule says about the rows this org has, read back from the DB.
+     *
+     * Also asserts the answer does not depend on the ORDER the rows arrive in.
+     * Neither repository orders its select — an org has at most two rows — so
+     * Postgres is free to return them either way (an index scan on
+     * `(org_id, provider)` yields provider order; a seq scan yields heap order),
+     * and it does not have to make the same choice for both apps. A rule that
+     * leaned on row order would leave the api and the worker agreeing by query
+     * plan, which is not agreement at all.
+     */
+    async function ruleSays(orgId: string) {
+      const rows = await direct.db
+        .select({
+          provider: schema.aiCredentials.provider,
+          createdAt: schema.aiCredentials.createdAt,
+        })
+        .from(schema.aiCredentials)
+        .where(eq(schema.aiCredentials.orgId, orgId));
+      const picked = preferredCredential(rows);
+      expect(preferredCredential([...rows].reverse())).toBe(picked);
+      return picked;
+    }
+
+    it("returns the key the comparator picks — the oldest, not the newest", async () => {
+      const { orgId } = await orgAgent();
+      // Stored newest-first, so "returns the last row inserted" is a distinct
+      // wrong answer from "returns the oldest".
+      await storeKey(orgId, "google", new Date("2026-06-01T10:00:00.000Z"));
+      await storeKey(orgId, "openrouter", new Date("2026-01-01T10:00:00.000Z"));
+
+      const picked = await ruleSays(orgId);
+      expect(picked?.provider).toBe("openrouter");
+
+      const credential = await repo.credential(orgId);
+      expect(credential?.provider).toBe(picked?.provider);
+      // The chosen ROW was decrypted, not merely its provider name reported.
+      expect(credential?.apiKey).toBe(keyFor("openrouter"));
+      expect(credential?.defaultModel).toBe("openrouter-default");
+    });
+
+    it("breaks a tie exactly where the comparator does", async () => {
+      const { orgId } = await orgAgent();
+      // One instant for both rows: only the provider tie-break can decide, and
+      // it is the branch a `created_at`-only ordering would leave to the planner.
+      const sameInstant = new Date("2026-03-03T12:00:00.000Z");
+      await storeKey(orgId, "openrouter", sameInstant);
+      await storeKey(orgId, "google", sameInstant);
+
+      const picked = await ruleSays(orgId);
+      expect(picked?.provider).toBe("google");
+
+      const credential = await repo.credential(orgId);
+      expect(credential?.provider).toBe(picked?.provider);
+      expect(credential?.apiKey).toBe(keyFor("google"));
+    });
+
+    it("yields undefined for an org with no key, rather than a 404", async () => {
+      const { orgId } = await orgAgent();
+      expect(await ruleSays(orgId)).toBeUndefined();
+      // The worker's contract: "this org has no key" is an answer the caller
+      // renders, not an exception. `getDecrypted` still throws for a NAMED
+      // provider, because that is a request for a resource that is not there.
+      await expect(repo.credential(orgId)).resolves.toBeUndefined();
+      await expect(repo.getDecrypted(orgId, "google")).rejects.toThrow();
+    });
+
+    it("never reaches another org's key", async () => {
+      const a = await orgAgent();
+      const b = await orgAgent();
+      await storeKey(a.orgId, "google", new Date("2026-01-01T10:00:00.000Z"));
+      await storeKey(b.orgId, "openrouter", new Date("2025-01-01T10:00:00.000Z"));
+
+      // b's key is older than a's; an unscoped select would hand a the wrong org's.
+      expect((await repo.credential(a.orgId))?.apiKey).toBe(keyFor("google"));
+      expect((await repo.credential(b.orgId))?.apiKey).toBe(keyFor("openrouter"));
     });
   });
 });

@@ -49,6 +49,8 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   let eq: typeof import("drizzle-orm").eq;
   let encryptJson: typeof import("@pubrick/shared").encryptJson;
   let boss: PgBossInstance;
+  let repo: InstanceType<GenerateRepositoryCtor>;
+  let preferredCredential: typeof import("@pubrick/shared").preferredCredential;
   let seq = 0;
 
   /**
@@ -67,7 +69,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     schema = dbModule.schema;
     ({ db, pool } = dbModule.createDb(url as string));
     ({ eq } = await import("drizzle-orm"));
-    ({ encryptJson } = await import("@pubrick/shared"));
+    ({ encryptJson, preferredCredential } = await import("@pubrick/shared"));
 
     const { PgBoss } = await import("pg-boss");
     boss = new (PgBoss as PgBossCtor)(url as string);
@@ -90,7 +92,8 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
 
     // The real wiring, registered exactly the way main.ts does — only the queue
     // names and the model factory differ.
-    const generate = new GenerateService(new GenerateRepository(), () => active.model as never, 0);
+    repo = new GenerateRepository();
+    const generate = new GenerateService(repo, () => active.model as never, 0);
     const publish = new PublishService(new PublishRepository());
     await new queueModule.QueueService(publish, generate).registerAll(boss, {
       publish: TEST_PUBLISH_QUEUE,
@@ -373,4 +376,120 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .where(eq(schema.usageLedger.runId, seeded.runId));
     expect(ledger).toHaveLength(2);
   }, 40_000);
+
+  /**
+   * The provider a run reaches, against the real table.
+   *
+   * The rule is `preferredCredential` (`@pubrick/shared`), and the api's
+   * `AiCredentialsRepository.credential` sorts with the same function — that
+   * shared call is the only thing keeping a resumed run and an editor-side
+   * refine on one vendor's bill. So the oracle is the comparator itself, over
+   * the rows Postgres holds, rather than a literal provider name that would
+   * stay green for a repository which had stopped consulting the ordering.
+   */
+  describe("credential", () => {
+    async function seedOrg(): Promise<string> {
+      seq += 1;
+      const orgId = `gen-e2e-cred-${Date.now()}-${seq}`;
+      await db
+        .insert(schema.organization)
+        .values({ id: orgId, name: "Credential E2E Org", slug: orgId, createdAt: new Date() });
+      return orgId;
+    }
+
+    /** The key stored for `provider`, so a wrong CHOICE cannot look right. */
+    function keyFor(provider: "google" | "openrouter") {
+      return `key-for-${provider}`;
+    }
+
+    async function storeKey(
+      orgId: string,
+      provider: "google" | "openrouter",
+      createdAt: Date,
+    ): Promise<void> {
+      await db.insert(schema.aiCredentials).values({
+        orgId,
+        provider,
+        credentialsEncrypted: encryptJson(
+          { apiKey: keyFor(provider) },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+        defaultModel: `${provider}-default`,
+        createdAt,
+      });
+    }
+
+    /**
+     * What the shared rule says about the rows this org has, read back from the DB.
+     *
+     * Also asserts the answer does not depend on the ORDER the rows arrive in.
+     * Neither repository orders its select — an org has at most two rows — so
+     * Postgres is free to return them either way (an index scan on
+     * `(org_id, provider)` yields provider order; a seq scan yields heap order),
+     * and it does not have to make the same choice for both apps. A rule that
+     * leaned on row order would leave the api and the worker agreeing by query
+     * plan, which is not agreement at all.
+     */
+    async function ruleSays(orgId: string) {
+      const rows = await db
+        .select({
+          provider: schema.aiCredentials.provider,
+          createdAt: schema.aiCredentials.createdAt,
+        })
+        .from(schema.aiCredentials)
+        .where(eq(schema.aiCredentials.orgId, orgId));
+      const picked = preferredCredential(rows);
+      expect(preferredCredential([...rows].reverse())).toBe(picked);
+      return picked;
+    }
+
+    it("reaches the key the comparator picks — the oldest, not the newest", async () => {
+      const orgId = await seedOrg();
+      // Newest stored first, so "the last row inserted" is a distinct wrong answer.
+      await storeKey(orgId, "google", new Date("2026-06-01T10:00:00.000Z"));
+      await storeKey(orgId, "openrouter", new Date("2026-01-01T10:00:00.000Z"));
+
+      const picked = await ruleSays(orgId);
+      expect(picked?.provider).toBe("openrouter");
+
+      const credential = await repo.credential(orgId);
+      expect(credential?.provider).toBe(picked?.provider);
+      // The chosen ROW was decrypted, not merely its provider name reported.
+      expect(credential?.apiKey).toBe(keyFor("openrouter"));
+      expect(credential?.defaultModel).toBe("openrouter-default");
+    });
+
+    it("breaks a tie exactly where the comparator does", async () => {
+      const orgId = await seedOrg();
+      // One instant for both rows: only the provider tie-break can decide, and
+      // it is the branch a `created_at`-only ordering would leave to the planner.
+      const sameInstant = new Date("2026-03-03T12:00:00.000Z");
+      await storeKey(orgId, "openrouter", sameInstant);
+      await storeKey(orgId, "google", sameInstant);
+
+      const picked = await ruleSays(orgId);
+      expect(picked?.provider).toBe("google");
+
+      const credential = await repo.credential(orgId);
+      expect(credential?.provider).toBe(picked?.provider);
+      expect(credential?.apiKey).toBe(keyFor("google"));
+    });
+
+    it("returns undefined for an org with no key", async () => {
+      const orgId = await seedOrg();
+      expect(await ruleSays(orgId)).toBeUndefined();
+      await expect(repo.credential(orgId)).resolves.toBeUndefined();
+    });
+
+    it("never reaches another org's key", async () => {
+      const mine = await seedOrg();
+      const theirs = await seedOrg();
+      await storeKey(mine, "google", new Date("2026-01-01T10:00:00.000Z"));
+      // Older than mine: an unscoped select would sort it to the front.
+      await storeKey(theirs, "openrouter", new Date("2025-01-01T10:00:00.000Z"));
+
+      expect((await repo.credential(mine))?.apiKey).toBe(keyFor("google"));
+      expect((await repo.credential(theirs))?.apiKey).toBe(keyFor("openrouter"));
+    });
+  });
 });
