@@ -42,6 +42,12 @@ export {
  * loosened the boundary — it does not, and it is `callStep` staying private
  * that keeps all three true. Reach it any other way and you are writing a
  * `run` by hand, which is the thing being prevented.
+ *
+ * What the export DOES hand over is `role`: caller-supplied text that lands
+ * verbatim in the system half, so "untrusted text never reaches `instructions`"
+ * (CLAUDE.md) is now a rule an out-of-package caller keeps by convention. The
+ * split is the machinery for keeping it — anything a user typed or a model
+ * produced goes in `material`, never in `role`.
  */
 export { defineStep, type Material } from "./prompt.js";
 export { RESEARCHER, type ResearchOutput, researchSchema } from "./researcher.js";
