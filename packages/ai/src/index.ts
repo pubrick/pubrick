@@ -1,5 +1,9 @@
 export { classifyAiError } from "./classify.js";
-export { type GenerateStructuredArgs, generateStructured } from "./generate.js";
+export {
+  type GenerateStructuredArgs,
+  generateStructured,
+  type ModelCallOptions,
+} from "./generate.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,

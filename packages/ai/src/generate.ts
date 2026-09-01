@@ -17,7 +17,59 @@ import {
   type UsageSink,
 } from "./usage.js";
 
-export type GenerateStructuredArgs<T> = {
+/**
+ * The knobs a model call takes that are not the call itself: how hard to try,
+ * where to report a lost ledger row, what time it is, and how to stop.
+ *
+ * Named as one type because they travel as one set — `StepContext` carries
+ * exactly these four so that `callStep` can forward exactly these four. The
+ * type keeps the set in step; only the forwarding tests keep it forwarded.
+ */
+export type ModelCallOptions = {
+  /**
+   * Called when `onUsage` itself fails. A ledger write that fails must not
+   * destroy generated text we have already paid for, so the failure is routed
+   * here instead of being thrown; it defaults to a loud log, matching how the
+   * publisher reports a delivered post it could not record.
+   */
+  onUsageError?: (error: unknown, record: UsageRecord) => void;
+  /**
+   * Transport retries inside a single attempt. The SDK's default (2) is right
+   * in production; tests set 0 so a retryable status fails immediately instead
+   * of sitting through real exponential backoff.
+   *
+   * This has nothing to do with the repair retry below: `maxRetries` never sees
+   * a schema violation. Every physical call these retries make is metered.
+   */
+  maxRetries?: number;
+  /** Injectable clock, so the price table's effective dates are testable. */
+  now?: () => Date;
+  /**
+   * Cancels the call, and is threaded into BOTH attempts — the repair retry
+   * re-enters the same path, so a signal given to one and not the other still
+   * buys a second call.
+   *
+   * ⚠ What an aborted call WRITES is not one row, and what the org is then
+   * SHOWN is not the truth. The recorder pushes a record per PHYSICAL round
+   * trip, so an abort after dispatch leaves one `status = 'errored'`,
+   * `cost_source = 'unknown'`, zero-token row per round trip already made — up
+   * to six by default with two logical attempts and the SDK's own retries. Each
+   * of those round trips may have been billed in full: the provider can have
+   * finished the work and started answering when we hung up.
+   *
+   * Zero tokens is what puts them in `cost-display.ts`'s IGNORED bucket, whose
+   * whole premise is that such a row cost nothing — true of a 429 the provider
+   * rejected before counting anything, NOT true of an abort. So `spend()`
+   * neither adds them to the total nor counts them as unpriced, which means the
+   * settings figure understates real spend AND does not gain the "≥" that
+   * exists to say a total is only a floor. Nothing here can fix that: the
+   * ledger row cannot tell the two cases apart. It is why a caller must set
+   * `maxRetries` deliberately rather than inherit the default of two.
+   */
+  abortSignal?: AbortSignal;
+};
+
+export type GenerateStructuredArgs<T> = ModelCallOptions & {
   model: LanguageModel;
   /**
    * Whose key is paying. Taken from the credential rather than parsed out of the
@@ -37,24 +89,6 @@ export type GenerateStructuredArgs<T> = {
   instructions: string;
   prompt: string;
   onUsage: UsageSink;
-  /**
-   * Called when `onUsage` itself fails. A ledger write that fails must not
-   * destroy generated text we have already paid for, so the failure is routed
-   * here instead of being thrown; it defaults to a loud log, matching how the
-   * publisher reports a delivered post it could not record.
-   */
-  onUsageError?: (error: unknown, record: UsageRecord) => void;
-  /**
-   * Transport retries inside a single attempt. The SDK's default (2) is right
-   * in production; tests set 0 so a retryable status fails immediately instead
-   * of sitting through real exponential backoff.
-   *
-   * This has nothing to do with the repair retry below: `maxRetries` never sees
-   * a schema violation. Every physical call these retries make is metered.
-   */
-  maxRetries?: number;
-  /** Injectable clock, so the price table's effective dates are testable. */
-  now?: () => Date;
 };
 
 /**
@@ -119,6 +153,21 @@ async function attempt<T>(
   attemptNumber: number,
   clock: () => Date,
 ): Promise<T> {
+  // Before the recorder exists, so a call that never happened leaves no row.
+  //
+  // The check is ours because the SDK does not make it. Measured against
+  // ai@7.0.83: `generateText` hands the signal to the provider and nothing
+  // else, so an already-aborted signal still reaches `doGenerate`, and a
+  // provider that ignores it answers — and bills — normally. Its own
+  // `throwIfAborted` runs only from the SECOND step of a multi-step call
+  // onwards, and a structured call has exactly one step.
+  //
+  // Here rather than at the top of `generateStructured`, because it must guard
+  // BOTH attempts: an abort while the first call is in flight must not buy the
+  // repair call. `throwIfAborted` throws the signal's own reason, which
+  // `classifyAiError` turns into the cancellation sentence.
+  args.abortSignal?.throwIfAborted();
+
   const recorder = createCallRecorder(modelIdOf(args.model));
 
   let value: T;
@@ -129,6 +178,9 @@ async function attempt<T>(
       instructions: args.instructions,
       prompt,
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
+      // The in-flight half of the same rule: a signal that fires after dispatch
+      // has to reach the provider, and this attempt may be either of the two.
+      abortSignal: args.abortSignal,
       // Per call, never registerTelemetry: the global registry has no
       // unregister, so a sink registered once would outlive its run and leak
       // into the next test file. Per-call integrations replace the global list.

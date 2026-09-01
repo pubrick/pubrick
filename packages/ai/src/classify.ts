@@ -29,6 +29,15 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
 
   const cause = unwrapRetry(error);
 
+  // Permanent, and a sentence of its own. A cancelled call is not a failure the
+  // provider had anything to do with, so it is not an `APICallError` and used
+  // to fall through to the bare branch below — which would show a user the
+  // DOM's own words, "This operation was aborted": true, and about nothing they
+  // recognise as having done. Permanent rather than transient because nobody is
+  // waiting for the answer any more; a retry would spend money on a result the
+  // caller has already withdrawn its request for.
+  if (isAbortError(cause)) return new PermanentError(CANCELLED);
+
   if (APICallError.isInstance(cause) && cause.isRetryable === true) {
     return new TransientError(cause.message, retryAfterSeconds(cause.responseHeaders));
   }
@@ -38,6 +47,37 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
   }
 
   return new PermanentError(messageOf(cause));
+}
+
+/**
+ * What a cancelled call is reported as.
+ *
+ * The worker writes this into a run's `error` column and the API returns it, so
+ * it is the sentence a person reads.
+ */
+const CANCELLED = "the model call was cancelled before it finished";
+
+/**
+ * Did this end because someone cancelled it?
+ *
+ * Keyed on `name`, never on the message: the message differs by construction
+ * site — `AbortController#abort()` gives "This operation was aborted", while an
+ * abort landing inside the SDK's own retry backoff gives
+ * `DOMException("Delay was aborted", "AbortError")` — and a provider whose 500
+ * body merely mentioned aborting would otherwise be reported as a cancellation
+ * nobody asked for. `DOMException` is the usual carrier, but runtimes differ,
+ * so anything named `AbortError` counts.
+ *
+ * Written here rather than imported: the SDK's own `isAbortError` lives in
+ * `@ai-sdk/provider-utils`, which this package does not depend on, and it also
+ * folds in `TimeoutError`, which is a different thing said in the same shape.
+ */
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
 }
 
 /**

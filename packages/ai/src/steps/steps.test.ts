@@ -1,5 +1,11 @@
 import type { LanguageModelV4Prompt } from "@ai-sdk/provider";
-import { MAX_BODY_LENGTH, PermanentError, PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
+import {
+  MAX_BODY_LENGTH,
+  PermanentError,
+  PLATFORM_MAX_TEXT_LENGTH,
+  TransientError,
+} from "@pubrick/shared";
+import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -738,5 +744,121 @@ describe("the context split", () => {
       true,
     ]);
     expect([3, 4].map((i) => halvesOf(model, i).user.includes(BRIEF))).toEqual([false, false]);
+  });
+});
+
+describe("what a step's context lets its caller bound", () => {
+  // `callStep` forwarded six of `generateStructured`'s nine arguments and
+  // dropped `maxRetries`, `onUsageError` and `now`. The gap was not cosmetic: no
+  // step could bound its retries, so the one API-side caller that needed to —
+  // the credential probe — set `maxRetries: 0` by bypassing steps entirely, and
+  // with it the prompt boundary and the metering that live on that path. A
+  // hand-written forwarding list is exactly the thing that quietly stops being
+  // complete, so each of the four is pinned by a behaviour here.
+
+  const ECHO: Step<{ text: string }, { body: string }> = defineStep({
+    name: "echo",
+    schema: z.object({ body: z.string().min(1) }),
+    role: ["You echo the draft back."],
+    material: (_ctx, input) => [{ label: "DRAFT", text: input.text }],
+  });
+
+  function contextWith(model: MockLanguageModelV4, extra: Partial<StepContext>): StepContext {
+    return {
+      brand: { name: "Kettle and Co", voice: VOICE, audience: AUDIENCE, contentLanguage: "en" },
+      model,
+      provider: "google",
+      onUsage: vi.fn(),
+      ...extra,
+    };
+  }
+
+  /** A model that always fails retryably, counting the round trips it is given. */
+  function alwaysRetryable() {
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      modelId: "gemini-3.7-flash",
+      doGenerate: async () => {
+        calls += 1;
+        throw new APICallError({
+          message: "boom",
+          url: "https://example.invalid",
+          requestBodyValues: {},
+          statusCode: 500,
+          // Honoured ahead of the exponential backoff, so the retries this test
+          // is trying NOT to see would still be quick if they happened.
+          responseHeaders: { "retry-after-ms": "1" },
+        });
+      },
+    });
+    return { model, calls: () => calls };
+  }
+
+  it("bounds a step's transport retries with ctx.maxRetries", async () => {
+    const { model, calls } = alwaysRetryable();
+
+    await expect(
+      ECHO.run(contextWith(model, { maxRetries: 0 }), { text: DRAFT_MARKER }),
+    ).rejects.toBeInstanceOf(TransientError);
+
+    // One round trip, not the SDK's default of three. Every one of those three
+    // is billed, and this is the only lever that stops them.
+    expect(calls()).toBe(1);
+  });
+
+  it("hands ctx.abortSignal to the step's model call", async () => {
+    const { model, calls } = alwaysRetryable();
+    const controller = new AbortController();
+    controller.abort();
+
+    const error = await ECHO.run(contextWith(model, { abortSignal: controller.signal }), {
+      text: DRAFT_MARKER,
+    }).catch((e) => e);
+
+    expect(calls()).toBe(0);
+    expect(error).toBeInstanceOf(PermanentError);
+    expect((error as PermanentError).message).toBe(
+      "the model call was cancelled before it finished",
+    );
+  });
+
+  it("routes a step's failed ledger write to ctx.onUsageError", async () => {
+    const onUsageError = vi.fn();
+    const model = jsonModel(JSON.stringify({ body: "echoed" }));
+
+    const output = await ECHO.run(
+      contextWith(model, {
+        onUsage: () => {
+          throw new Error("db down");
+        },
+        onUsageError,
+      }),
+      { text: DRAFT_MARKER },
+    );
+
+    // Without the forwarding this is a console.error nobody can observe, and a
+    // caller that wanted to count its own lost rows had no way to.
+    expect(output).toEqual({ body: "echoed" });
+    expect(onUsageError).toHaveBeenCalledTimes(1);
+    expect(onUsageError.mock.calls[0]?.[1]).toMatchObject({ status: "ok" });
+  });
+
+  it("prices a step's call against ctx.now", async () => {
+    // A date BEFORE the price table's first window, so the assertion is
+    // structural — "the table knew no rate then" — rather than a number that
+    // the real clock will eventually agree with on its own. A future date would
+    // make this test quietly vacuous the day the calendar reached it.
+    const onUsage = vi.fn();
+    const model = jsonModel(JSON.stringify({ body: "echoed" }));
+
+    await ECHO.run(contextWith(model, { onUsage, now: () => new Date("1969-01-01") }), {
+      text: DRAFT_MARKER,
+    });
+
+    expect(onUsage.mock.calls[0]?.[0]).toMatchObject({
+      modelId: "gemini-3.7-flash",
+      costUsd: null,
+      costSource: "unknown",
+    });
   });
 });

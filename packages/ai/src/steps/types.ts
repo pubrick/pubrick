@@ -1,5 +1,6 @@
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import type { ZodType } from "zod";
+import type { ModelCallOptions } from "../generate.js";
 import type { AiProvider } from "../provider.js";
 import type { UsageRecord } from "../usage.js";
 
@@ -59,8 +60,15 @@ export type StepUsageSink = (
  * steps read it as material text, `string | undefined` is a compile error in
  * each of them, and the obvious repair is `?? ""` in three places. An empty
  * brief is exactly the value a later reader mistakes for a real one.
+ *
+ * `ModelCallOptions` is the same four knobs `generateStructured` takes —
+ * `maxRetries`, `onUsageError`, `now`, `abortSignal` — and `callStep` forwards
+ * every one of them. They belong to the caller and not to the step: how many
+ * retries a call is worth, and whether it can still be cancelled, are questions
+ * only the thing that started it can answer. Three of the four were dropped on
+ * the way through until 2026-09-02, so no step could be bounded at all.
  */
-export type StepContext = {
+export type StepContext = ModelCallOptions & {
   brand: StepBrand;
   model: LanguageModelV4;
   provider: AiProvider;

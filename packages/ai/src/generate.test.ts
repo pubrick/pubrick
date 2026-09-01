@@ -562,6 +562,204 @@ describe("generateStructured", () => {
     });
   });
 
+  describe("cancellation", () => {
+    // Measured against ai@7.0.83, not assumed from the docs: `generateText` does
+    // NOT check the signal before dispatching. An already-aborted signal still
+    // reaches `doGenerate`, and a provider that ignores it answers normally —
+    // the SDK's own `throwIfAborted` runs only from its SECOND step onwards, and
+    // a structured call has exactly one step. So the pre-dispatch check is ours,
+    // and the first two tests here are what say so.
+
+    /** The sentence a cancelled call is reported with. Pinned in classify.test.ts. */
+    const CANCELLED = "the model call was cancelled before it finished";
+
+    /** A model that honours the signal, the way a real fetch-based provider does. */
+    function signalHonouringModel(reply: (call: number) => string) {
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async (options) => {
+          calls += 1;
+          const text = reply(calls);
+          options.abortSignal?.throwIfAborted();
+          return {
+            content: [{ type: "text" as const, text }],
+            finishReason: stop,
+            usage,
+            warnings: [],
+          };
+        },
+      });
+      return { model, calls: () => calls };
+    }
+
+    it("dispatches nothing when the signal is already aborted", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const { model, calls } = signalHonouringModel(() => '{"headline":"never asked"}');
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        onUsage: vi.fn(),
+      }).catch((e) => e);
+
+      expect(calls()).toBe(0);
+      expect(error).toBeInstanceOf(PermanentError);
+      expect((error as PermanentError).message).toBe(CANCELLED);
+    });
+
+    it("writes no ledger row when the signal fires before dispatch, because nothing was spent", async () => {
+      // `textModel` ignores the signal entirely, which is the point: a provider
+      // that WOULD have answered must not be reached at all. If the check ever
+      // moved inside the SDK's hands, this row would appear.
+      const rows: UsageRecord[] = [];
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        generateStructured({
+          ...base,
+          model: textModel('{"headline":"never asked"}'),
+          abortSignal: controller.signal,
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(PermanentError);
+
+      expect(rows).toEqual([]);
+    });
+
+    it("records one errored, zero-token row per round trip already made", async () => {
+      // A single generateStructured makes up to two logical attempts, each of
+      // which the SDK may retry — six billed round trips by default. The
+      // recorder pushes a record per PHYSICAL call, so an abort after dispatch
+      // leaves one zero-token row per round trip, and each of those round trips
+      // may have been billed in full: the provider can have finished the work
+      // and started answering when we hung up.
+      //
+      // KNOWN CONSEQUENCE, stated rather than hidden — and measured against
+      // `spend()` rather than assumed. These rows carry no tokens, which is
+      // what puts them in `cost-display.ts`'s IGNORED bucket, whose premise is
+      // that such a row cost nothing. So they are not summed as $0: they are
+      // dropped, and they do not raise the unpriced count either, so the
+      // settings figure understates real spend WITHOUT gaining the "≥" that
+      // exists to say a total is only a floor. The row cannot tell an abort
+      // from a 429 rejected before counting, so nothing here can fix it; it is
+      // why a caller must set `maxRetries` deliberately.
+      //
+      // The shape those rows have is what this test pins.
+      const rows: UsageRecord[] = [];
+      const controller = new AbortController();
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async (options) => {
+          calls += 1;
+          if (calls === 1) {
+            // `retry-after-ms` beats the exponential backoff, so the SDK's own
+            // retry lands in a millisecond rather than two seconds. Without it
+            // this test would have to sit through real backoff to reach a
+            // second round trip.
+            throw new APICallError({
+              message: "boom",
+              url: "https://example.invalid",
+              requestBodyValues: {},
+              statusCode: 500,
+              responseHeaders: { "retry-after-ms": "1" },
+            });
+          }
+          controller.abort();
+          options.abortSignal?.throwIfAborted();
+          return {
+            content: [{ type: "text" as const, text: '{"headline":"never returned"}' }],
+            finishReason: stop,
+            usage,
+            warnings: [],
+          };
+        },
+      });
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        onUsage: (record) => {
+          rows.push(record);
+        },
+      }).catch((e) => e);
+
+      expect(calls).toBe(2);
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.status)).toEqual(["errored", "errored"]);
+      expect(rows.every((r) => r.inputTokens === 0 && r.outputTokens === 0)).toBe(true);
+      expect(rows.every((r) => r.costUsd === null && r.costSource === "unknown")).toBe(true);
+      expect((error as PermanentError).message).toBe(CANCELLED);
+    });
+
+    it("does not buy the repair call when the signal fires between the attempts", async () => {
+      // The repair retry re-enters the same path. A signal checked only on the
+      // way into the first attempt still pays for a second round trip.
+      //
+      // The abort fires from the ledger sink, which runs once the first round
+      // trip has already come back: the signal is genuinely between the two
+      // attempts rather than during either of them, which is the case a
+      // once-only check cannot see.
+      const rows: UsageRecord[] = [];
+      const controller = new AbortController();
+      const { model, calls } = signalHonouringModel(() => "not json at all");
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        onUsage: (record) => {
+          rows.push(record);
+          controller.abort();
+        },
+      }).catch((e) => e);
+
+      expect(calls()).toBe(1);
+      expect((error as PermanentError).message).toBe(CANCELLED);
+      // The one round trip that DID happen counted tokens before the schema
+      // violation was known, so its row is errored but not zero.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ attempt: 1, status: "errored", inputTokens: 10 });
+    });
+
+    it("hands the signal to the repair call itself, so a second call cannot outrun it", async () => {
+      // The other half of the same rule: the pre-dispatch check cannot see an
+      // abort that fires while the repair call is in flight, so the SDK must
+      // have the signal on that call too.
+      const rows: UsageRecord[] = [];
+      const controller = new AbortController();
+      const { model, calls } = signalHonouringModel((call) => {
+        if (call === 1) return "not json at all";
+        controller.abort();
+        return '{"headline":"second call outran the abort"}';
+      });
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        onUsage: (record) => {
+          rows.push(record);
+        },
+      }).catch((e) => e);
+
+      expect(calls()).toBe(2);
+      expect(error).toBeInstanceOf(PermanentError);
+      expect((error as PermanentError).message).toBe(CANCELLED);
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.attempt)).toEqual([1, 2]);
+      expect(rows.map((r) => r.inputTokens)).toEqual([10, 0]);
+      expect(rows.every((r) => r.status === "errored")).toBe(true);
+    });
+  });
+
   it("never registers its telemetry sink globally", async () => {
     // Per-call integrations, not registerTelemetry: the global registry has no
     // unregister, so a sink registered once would still be listening in the next

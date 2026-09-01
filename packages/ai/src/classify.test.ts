@@ -97,6 +97,57 @@ describe("classifyAiError", () => {
     expect(classifyAiError(transient)).toBe(transient);
   });
 
+  describe("a cancelled call", () => {
+    // An AbortError is not an APICallError, so without its own branch it fell
+    // through to a bare permanent error and the user was shown the DOM's own
+    // sentence, "This operation was aborted" — true, and about nothing they
+    // recognise as having done.
+    const CANCELLED = "the model call was cancelled before it finished";
+
+    it("gets its own sentence, not the DOM's", () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const classified = classifyAiError(controller.signal.reason);
+
+      expect(classified).toBeInstanceOf(PermanentError);
+      expect(classified.message).toBe(CANCELLED);
+      expect(classified.message).not.toContain("This operation was aborted");
+    });
+
+    it("is permanent, because nobody is waiting for the answer any more", () => {
+      // Not transient: a retry would spend money on a result the caller has
+      // already withdrawn its request for.
+      const controller = new AbortController();
+      controller.abort();
+      expect(classifyAiError(controller.signal.reason)).not.toBeInstanceOf(TransientError);
+    });
+
+    it("recognises the abort the SDK raises from inside its own retry backoff", () => {
+      // Measured: aborting while `retryWithExponentialBackoff` is sleeping
+      // rejects with `DOMException("Delay was aborted", "AbortError")` — another
+      // message, another construction site, the same cancellation.
+      expect(classifyAiError(new DOMException("Delay was aborted", "AbortError")).message).toBe(
+        CANCELLED,
+      );
+    });
+
+    it("recognises an AbortError that is a plain Error rather than a DOMException", () => {
+      // Runtimes differ on which class they use; the name is what they agree on.
+      const error = new Error("The user aborted a request.");
+      error.name = "AbortError";
+      expect(classifyAiError(error).message).toBe(CANCELLED);
+    });
+
+    it("does not mistake an ordinary error that merely mentions aborting", () => {
+      // The branch keys on `name`, never on the message text, or a provider
+      // whose 500 body happened to say "aborted" would be reported as a
+      // cancellation the user never asked for.
+      const classified = classifyAiError(new Error("upstream aborted the connection"));
+      expect(classified.message).toBe("upstream aborted the connection");
+    });
+  });
+
   it("handles a thrown non-error", () => {
     expect(classifyAiError("just a string")).toBeInstanceOf(PermanentError);
     expect(classifyAiError("just a string").message).toBe("just a string");

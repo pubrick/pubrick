@@ -125,7 +125,16 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
   };
 }
 
-/** One step's model call. Private: `defineStep` is the only way to reach it. */
+/**
+ * One step's model call. Private: `defineStep` is the only way to reach it.
+ *
+ * The step decides the schema, the role lines and the material; everything else
+ * is the caller's, and all of it is forwarded. Until 2026-09-02 this dropped
+ * `maxRetries`, `onUsageError` and `now` — six of nine arguments made it through
+ * — so no step could bound its retries, and the credential probe set
+ * `maxRetries: 0` by calling `generateStructured` directly instead, giving up
+ * the prompt boundary and the metering that live on this path to get it.
+ */
 async function callStep<O>(
   ctx: StepContext,
   args: {
@@ -142,5 +151,9 @@ async function callStep<O>(
     instructions: instructionsFor(ctx, args.role),
     prompt: materialFor(args.material),
     onUsage: (record) => ctx.onUsage(record, args.attribution),
+    onUsageError: ctx.onUsageError,
+    maxRetries: ctx.maxRetries,
+    now: ctx.now,
+    abortSignal: ctx.abortSignal,
   });
 }
