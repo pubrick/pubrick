@@ -109,6 +109,22 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
 
 const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel" };
 
+/**
+ * A `datetime-local` value the schedule field will still accept tomorrow.
+ *
+ * These tests used to hardcode one, and it worked until the day the wall clock
+ * passed it: the field refuses a past instant, so the change event was dropped,
+ * the button stayed disabled and the failure surfaced as "no approve call was
+ * made" — a green suite that turns red on a calendar boundary and says nothing
+ * about why. Anything a test schedules is relative to now.
+ */
+function scheduleValue(daysAhead = 1): string {
+  const when = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+  when.setHours(10, 30, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
 type Call = { path: string; method: string; body?: string };
 
 /** Records every call and answers GETs for the item/channels out of `served`. */
@@ -234,7 +250,7 @@ describe("rendering by adaptation status (Step 1)", () => {
   });
 
   it("renders the scheduled time for a scheduled adaptation", async () => {
-    const scheduledAt = "2026-09-01T10:00:00.000Z";
+    const scheduledAt = new Date(`${scheduleValue()}:00`).toISOString();
     const item = makeItem({
       adaptations: [makeAdaptation({ status: "scheduled", scheduledAt })],
     });
@@ -327,7 +343,7 @@ describe("approve now (Step 2)", () => {
     await screen.findByText(en.Content.status.draft);
 
     fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
-      target: { value: "2026-09-01T10:30" },
+      target: { value: scheduleValue() },
     });
 
     await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.approveNow }));
@@ -357,7 +373,7 @@ describe("approve with a schedule (Step 3)", () => {
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     await screen.findByText(en.Content.status.draft);
 
-    const chosen = "2026-09-01T10:30";
+    const chosen = scheduleValue();
     fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
       target: { value: chosen },
     });
@@ -409,7 +425,7 @@ describe("approve with a schedule (Step 3)", () => {
     // Filling the date is what enables it — the button is not disabled for
     // some unrelated reason (e.g. a status check) that happens to hold here.
     fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
-      target: { value: "2026-09-01T10:30" },
+      target: { value: scheduleValue() },
     });
     await waitFor(() => {
       expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeEnabled();
