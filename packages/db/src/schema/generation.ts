@@ -211,6 +211,23 @@ export const usageLedger = pgTable(
     index("usage_ledger_org_id_idx").on(t.orgId),
     /** The finished draft shows a cost summed over one run's rows. */
     index("usage_ledger_run_id_idx").on(t.runId),
+    /**
+     * "What did refining this draft cost" filters on `content_item_id` alone —
+     * a refine has no run, so neither index above can serve it. `spend()` sums
+     * by `org_id` and is why nothing has needed this yet; the first per-draft
+     * query is the editor's, and the index is cheaper to add now, while the
+     * column's own migration lane is open, than after the ledger is big enough
+     * for the sequential scan to read as a slow page rather than a missing
+     * index.
+     *
+     * `adaptation_id` gets none, deliberately. Every index is paid for on
+     * INSERT, and this is the hot insert path — one row per physical model
+     * call, written in its own transaction ahead of the step's checkpoint. A
+     * btree indexes NULLs too, so an index on a column no writer sets buys
+     * that per-row cost to serve one all-NULL entry. Whoever lets a refine
+     * target an adaptation writes the column, and adds its index then.
+     */
+    index("usage_ledger_content_item_id_idx").on(t.contentItemId),
   ],
 );
 

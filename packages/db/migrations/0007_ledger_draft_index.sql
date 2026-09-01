@@ -1,0 +1,1 @@
+CREATE INDEX "usage_ledger_content_item_id_idx" ON "usage_ledger" USING btree ("content_item_id");

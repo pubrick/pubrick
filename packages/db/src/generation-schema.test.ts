@@ -1,3 +1,4 @@
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import { schema } from "./index.js";
 
@@ -51,5 +52,26 @@ describe("generation schema", () => {
   it("lets a ledger row name the draft it was spent on", () => {
     expect(schema.usageLedger.contentItemId.notNull).toBe(false);
     expect(schema.usageLedger.adaptationId.notNull).toBe(false);
+  });
+
+  /**
+   * The per-draft cost query "what did refining this draft cost" filters on
+   * `content_item_id` and nothing else — `spend()` sums by `org_id` alone, so
+   * the ledger's existing indexes cannot serve it. It is added while the
+   * column's own migration lane is open, before the ledger is large enough for
+   * the sequential scan to be noticed as a bug rather than a slow page.
+   *
+   * `adaptation_id` deliberately gets NO index. Every index is paid for on
+   * INSERT, and the ledger's insert path is the hot one — one row per physical
+   * model call, written in its own transaction before the step's checkpoint. A
+   * btree also indexes NULLs, so an index on a column no writer sets is a
+   * per-row cost bought for one entry: the all-NULL leaf. Whoever lets a refine
+   * target an adaptation writes that column, and should add the index in the
+   * same change — deleting the second assertion here, deliberately.
+   */
+  it("indexes the draft a ledger row names, and only that", () => {
+    const indexes = getTableConfig(schema.usageLedger).indexes.map((i) => i.config.name);
+    expect(indexes).toContain("usage_ledger_content_item_id_idx");
+    expect(indexes).not.toContain("usage_ledger_adaptation_id_idx");
   });
 });

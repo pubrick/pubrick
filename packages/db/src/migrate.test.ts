@@ -14,6 +14,9 @@ const url = process.env.TEST_DATABASE_URL;
 /** The migration whose additivity is proved below, by name rather than by index. */
 const ADDITIVE_MIGRATION = "0006_authorship";
 
+/** The index-only migration proved additive AND non-vacuous below. */
+const INDEX_MIGRATION = "0007_ledger_draft_index";
+
 /**
  * Copies the migrations folder minus `tag` and everything after it, so a
  * database can be brought to the schema as it stood *before* that migration.
@@ -266,6 +269,100 @@ describe.skipIf(!url)("runMigrations", () => {
       expect(ledgers.rows).toEqual([
         { ...seeded.ledger, content_item_id: null, adaptation_id: null },
       ]);
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  // 0007 adds an index and nothing else, which is precisely why an end-state
+  // assertion after runMigrations() would prove nothing: it cannot tell 0007
+  // from an empty file that some later migration happened to cover. So the
+  // index's ABSENCE at 0006 is asserted first — that is the check the previous
+  // migration task found its own test was missing — and the rows the index is
+  // built over are real, written through the columns 0006 added, and compared
+  // field for field afterwards. `CREATE INDEX` takes a lock and rewrites
+  // nothing; this is the assertion that says so rather than assuming it.
+  it("adds the ledger's draft index without touching the rows it indexes", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(INDEX_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: pg.QueryResultRow[];
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const pre = await pool.query(
+          "SELECT indexname FROM pg_indexes WHERE tablename = 'usage_ledger'",
+        );
+        // If 0006 already created it, "0007 added it" would be a lie and the
+        // assertion below would pass over an empty migration file.
+        expect(pre.rows.map((r) => r.indexname)).not.toContain("usage_ledger_content_item_id_idx");
+        // The columns themselves must be there, or the seed below cannot fill
+        // them and the index would be proved over rows that never used it.
+        const cols = await pool.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'usage_ledger' AND column_name IN ('content_item_id','adaptation_id')",
+        );
+        expect(cols.rows).toHaveLength(2);
+
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('org_index', 'Indexed', 'indexed')",
+        );
+        const brand = await pool.query(
+          "INSERT INTO brands (org_id, name) VALUES ('org_index', 'Brand') RETURNING id",
+        );
+        const channel = await pool.query(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('org_index', $1, 'telegram', 'Notes', 'blob') RETURNING id",
+          [brand.rows[0].id],
+        );
+        const item = await pool.query(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('org_index', $1, 'the body') RETURNING id",
+          [brand.rows[0].id],
+        );
+        const adaptation = await pool.query(
+          "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_index', $1, $2) RETURNING id",
+          [item.rows[0].id, channel.rows[0].id],
+        );
+        // One row of each kind the ledger holds: a refine, which is what the
+        // index is for, and an ordinary in-run call, which names no draft and
+        // must come back naming none.
+        const ledger = await pool.query(
+          `INSERT INTO usage_ledger (org_id, step, provider, model_id, cost_usd, cost_source, status, content_item_id, adaptation_id)
+             VALUES ('org_index', 'refine', 'google', 'gemini-3-flash', 0.000420, 'price_table', 'ok', $1, $2),
+                    ('org_index', 'writer', 'google', 'gemini-3-flash', 0.001234, 'price_table', 'ok', NULL, NULL)
+           RETURNING id, step, model_id, cost_usd, cost_source, status, content_item_id, adaptation_id, created_at`,
+          [item.rows[0].id, adaptation.rows[0].id],
+        );
+        seeded = [...ledger.rows].sort((a, b) => String(a.step).localeCompare(String(b.step)));
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const rows = await after.query(
+        "SELECT id, step, model_id, cost_usd, cost_source, status, content_item_id, adaptation_id, created_at FROM usage_ledger ORDER BY step",
+      );
+      const idx = await after.query(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'usage_ledger'",
+      );
+      await after.end();
+
+      expect(rows.rows).toEqual(seeded);
+      const byName = new Map(idx.rows.map((r) => [r.indexname as string, r.indexdef as string]));
+      // Presence first, then shape: an empty 0007 leaves `get` undefined, and
+      // `toContain` on undefined reports an argument-type complaint rather than
+      // the missing index — an unreadable failure for the one test written to
+      // catch a migration that did nothing.
+      expect([...byName.keys()]).toContain("usage_ledger_content_item_id_idx");
+      expect(byName.get("usage_ledger_content_item_id_idx")).toContain("(content_item_id)");
+      // `adaptation_id` gets none, and that is a decision rather than an
+      // oversight: every index is paid for on the ledger's hot INSERT path —
+      // one row per physical model call — and a btree indexes NULLs, so an
+      // index on a column no writer sets buys a per-row cost for a single
+      // all-NULL entry. Whoever lets a refine target an adaptation writes that
+      // column, and adds the index in the same change.
+      expect([...byName.keys()]).not.toContain("usage_ledger_adaptation_id_idx");
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();
