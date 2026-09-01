@@ -18,10 +18,21 @@ export type CredentialOrderRow = {
  *
  * Nothing records a provider on a run — there is no per-run model choice — so
  * an org holding keys for both providers needs a deterministic answer rather
- * than a coin flip. Deterministic matters more than clever: a resumed run must
- * reach the provider its first attempt billed, and a draft's refine must reach
- * the provider its generation billed. A generation billed to Google and a
- * refine of the same draft billed to OpenRouter is a bill nobody can explain.
+ * than a coin flip. Deterministic matters more than clever: while the org's set
+ * of keys is unchanged, a resumed run reaches the provider its first attempt
+ * billed, and a draft's refine reaches the provider its generation billed. A
+ * generation billed to Google and a refine of the same draft billed to
+ * OpenRouter is a bill nobody can explain.
+ *
+ * That qualifier is the honest limit of what an ordering can give, and it is
+ * not theoretical. Nothing pins a provider on a run: the worker re-resolves the
+ * credential on every delivery, and deleting a key fails only the runs still
+ * `queued` (`AiCredentialsRepository.delete`). So a `running` run whose chosen
+ * key is removed mid-flight finishes on the other one — its checkpointed steps
+ * billed to one vendor and the rest to the other. No ordering can prevent that;
+ * only recording the provider on the run could, and no column does. Nothing
+ * tests the mid-run switch either, so read the guarantee as exactly what this
+ * comparator gives: one stable answer for one unchanged set of rows.
  *
  * It lives here, in the package both apps already depend on, because the rule
  * is an ORDERING and not a query. `ai_credentials` has a unique index on

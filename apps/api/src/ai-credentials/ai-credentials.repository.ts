@@ -222,6 +222,11 @@ export class AiCredentialsRepository {
    * bill the user cannot explain, and nothing on a run or a draft records which
    * vendor produced it.
    *
+   * One ordering over one unchanged set of rows is the whole of the guarantee:
+   * because nothing records the vendor, changing the set changes the answer for
+   * work already under way. `preferredCredential` states the limit; the case
+   * that reaches it is a `running` run whose key is deleted.
+   *
    * Returns `undefined` for "this org has no key", following the worker's
    * contract rather than `getDecrypted`'s `NotFoundException`. The two differ
    * honestly: asking for a *named* provider that is not stored is a 404 about a

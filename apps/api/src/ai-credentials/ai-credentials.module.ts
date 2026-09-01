@@ -20,6 +20,10 @@ import { AiCredentialsRepository } from "./ai-credentials.repository";
  * and no run or draft records the vendor that produced it. So the choice is one
  * function, `preferredCredential` (`@pubrick/shared`), and both repositories
  * sort with it.
+ *
+ * What one function CAN buy is one answer for one unchanged set of keys — not a
+ * provider pinned for the life of a run, which would take a column no table
+ * has. `preferredCredential` documents where the line falls.
  */
 @Module({
   controllers: [AiCredentialsController],

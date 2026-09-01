@@ -438,8 +438,14 @@ export class GenerateRepository {
    * an org holding keys for both providers gets a deterministic answer rather
    * than a coin flip: `preferredCredential` (`@pubrick/shared`), the oldest key
    * it configured, tie-broken by provider name. Deterministic matters more than
-   * clever here, because a resume must reach the same provider the first
-   * attempt billed.
+   * clever here, because a resume reaches the same provider the first attempt
+   * billed — for as long as the org's set of keys is unchanged, which is the
+   * whole of the guarantee. `execute` calls this on EVERY delivery, and
+   * `AiCredentialsRepository.delete` fails only the runs still `queued`, so a
+   * `running` run whose chosen key is deleted mid-flight resumes on the other
+   * provider with its earlier steps billed to the first. Nothing on a run
+   * records a provider, so nothing can pin it; see the note on
+   * `preferredCredential`.
    *
    * The rule used to be an `ORDER BY … LIMIT 1` only this repository could see,
    * and the api now needs the same answer for an editor-side call. It is an
