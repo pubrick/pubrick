@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
-import type { Step } from "./types.js";
+import type { RunStepContext, Step } from "./types.js";
 
 /**
  * The plan a post is written from.
@@ -30,7 +30,7 @@ export type ResearchOutput = z.infer<typeof researchSchema>;
  * field the writer would have to be told to treat as a subtraction is the same
  * instruction spread over two places.
  */
-export const RESEARCHER: Step<void, ResearchOutput> = defineStep({
+export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep({
   name: "researcher",
   schema: researchSchema,
   role: [
@@ -41,5 +41,5 @@ export const RESEARCHER: Step<void, ResearchOutput> = defineStep({
     "- keyPoints: the points the post must make, in the order they should be made.",
     "- avoid: what to leave out — what this audience already knows, claims you cannot support, and the clichés this subject attracts.",
   ],
-  material: (ctx) => [{ label: "BRIEF", text: ctx.brief }],
+  material: (ctx: RunStepContext) => [{ label: "BRIEF", text: ctx.brief }],
 });

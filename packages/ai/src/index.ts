@@ -27,6 +27,7 @@ export {
   type Platform,
   RESEARCHER,
   type ResearchOutput,
+  type RunStepContext,
   researchSchema,
   type Step,
   type StepAttribution,

@@ -2,7 +2,7 @@ import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
-import type { Step } from "./types.js";
+import type { RunStepContext, Step } from "./types.js";
 
 /**
  * The master draft.
@@ -33,7 +33,7 @@ export function planMaterial(research: ResearchOutput): string {
 }
 
 /** Step 2 — write the master draft the channels are adapted from. */
-export const WRITER: Step<WriterInput, DraftOutput> = defineStep({
+export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep({
   name: "writer",
   schema: draftSchema,
   role: [
@@ -42,7 +42,7 @@ export const WRITER: Step<WriterInput, DraftOutput> = defineStep({
     "Make every point in the plan, in its order, and add nothing the brief or the plan does not support.",
     `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
   ],
-  material: (ctx, input) => [
+  material: (ctx: RunStepContext, input) => [
     { label: "BRIEF", text: ctx.brief },
     // Not re-parsed here: a resumed run reads this from a jsonb checkpoint, and
     // the place to validate that is the run, which can classify the failure. A

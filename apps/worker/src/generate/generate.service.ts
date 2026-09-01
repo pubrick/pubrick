@@ -6,10 +6,10 @@ import {
   EDITOR,
   FACTCHECK,
   RESEARCHER,
+  type RunStepContext,
   resolveModel,
   type Step,
   type StepAttribution,
-  type StepContext,
   type UsageRecord,
   WRITER,
 } from "@pubrick/ai";
@@ -86,7 +86,7 @@ type RunState = {
   runId: string;
   brandId: string;
   fence: string;
-  ctx: StepContext;
+  ctx: RunStepContext;
   checkpoints: ClaimedRun["steps"];
   /** Ledger rows produced per step key, mirrored into that step's checkpoint. */
   usage: Map<string, UsageRecord[]>;
@@ -273,7 +273,16 @@ export class GenerateService {
    * the end means the handler that lost has already spent the money before
    * finding out.
    */
-  private async runStep<I, O>(state: RunState, step: Step<I, O>, input: I): Promise<O | Stopped> {
+  private async runStep<I, O>(
+    state: RunState,
+    // A run always has a brief, so it can drive both kinds of step. The
+    // assignability only runs this way: `Step<I, O, StepContext>` — the
+    // fact-checker and the adapters — satisfies this parameter, while a step
+    // that needs a brief could not be passed to a `Step<I, O, StepContext>`
+    // parameter at all.
+    step: Step<I, O, RunStepContext>,
+    input: I,
+  ): Promise<O | Stopped> {
     const resumed = this.resume(state, step);
     if (resumed !== undefined) return resumed;
 
@@ -330,7 +339,7 @@ export class GenerateService {
    * does not parse is treated as a cache miss and the step is re-run — a schema
    * that changed under an in-flight run should cost one call, not brick the run.
    */
-  private resume<I, O>(state: RunState, step: Step<I, O>): O | undefined {
+  private resume<I, O>(state: RunState, step: Step<I, O, RunStepContext>): O | undefined {
     const checkpoint = state.checkpoints[step.name];
     if (checkpoint?.status !== "succeeded") return undefined;
 

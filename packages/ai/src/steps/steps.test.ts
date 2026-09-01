@@ -2,6 +2,7 @@ import type { LanguageModelV4Prompt } from "@ai-sdk/provider";
 import { MAX_BODY_LENGTH, PermanentError, PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { UsageRecord } from "../usage.js";
 import {
   adaptationLimit,
@@ -9,14 +10,18 @@ import {
   CLAIMS_TO_VERIFY_LABEL,
   EDITOR,
   FACTCHECK,
+  type FactcheckInput,
+  type FactcheckOutput,
   type Platform,
   RESEARCHER,
   type ResearchOutput,
+  type RunStepContext,
+  type Step,
   type StepAttribution,
   type StepContext,
   WRITER,
 } from "./index.js";
-import { instructionsFor } from "./prompt.js";
+import { defineStep, instructionsFor } from "./prompt.js";
 
 // The V4 provider spec's usage shape is nested, and `finishReason` is an object
 // `{ unified, raw }` — a bare string passes vitest and fails `tsc`. Both traps
@@ -55,7 +60,7 @@ const research: ResearchOutput = {
   avoid: [AVOID_MARKER],
 };
 
-function contextFor(model: MockLanguageModelV4, onUsage = vi.fn()): StepContext {
+function contextFor(model: MockLanguageModelV4, onUsage = vi.fn()): RunStepContext {
   return {
     brand: {
       name: "Kettle and Co",
@@ -447,7 +452,7 @@ describe("the prompt boundary", () => {
   // an assertion passes whichever way round the two are.
   const cases: Array<{
     label: string;
-    run: (ctx: StepContext) => Promise<unknown>;
+    run: (ctx: RunStepContext) => Promise<unknown>;
     reply: string;
     material: string[];
   }> = [
@@ -601,5 +606,137 @@ describe("the prompt boundary", () => {
     const quoted = text.match(/language with code (".*")\./)?.[1];
     expect(quoted).toBeTruthy();
     expect(JSON.parse(quoted ?? '""')).toBe(breakout);
+  });
+});
+
+describe("the context split", () => {
+  /**
+   * A caller that has no brief: the API's editor-side call is the first, and it
+   * will not be the last. There is no `brief` key here AT ALL — not an empty
+   * string, which is precisely the value a later reader would mistake for a
+   * brief someone actually typed.
+   */
+  function brieflessContextFor(model: MockLanguageModelV4, onUsage = vi.fn()): StepContext {
+    return {
+      brand: { name: "Kettle and Co", voice: VOICE, audience: AUDIENCE, contentLanguage: "en" },
+      model,
+      provider: "google",
+      onUsage,
+    };
+  }
+
+  it("runs the steps that need no brief from a context that has none", async () => {
+    const model = jsonModel(JSON.stringify({ claims: [] }), JSON.stringify({ body: "short" }));
+    const onUsage = vi.fn();
+    const ctx = brieflessContextFor(model, onUsage);
+
+    // Both of these are `Step<…, StepContext>`, so `ctx` is all they may ask
+    // for. That this compiles is half the assertion; that it produces real
+    // output and a real ledger row is the other half.
+    expect(await FACTCHECK.run(ctx, { body: DRAFT_MARKER })).toEqual({ claims: [] });
+    expect(await adapterFor(channel).run(ctx, { body: DRAFT_MARKER })).toEqual({ body: "short" });
+    expect(onUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives a newly defined step the base context, so a brief is not silently in scope", async () => {
+    // The type argument is the assertion: `Step<I, O>` defaults to the BASE
+    // context. A step written tomorrow that reaches for `ctx.brief` without
+    // saying `RunStepContext` does not compile — which is the whole point of
+    // the default being the narrow one.
+    const ECHO: Step<{ text: string }, { body: string }> = defineStep({
+      name: "echo",
+      schema: z.object({ body: z.string().min(1) }),
+      role: ["You echo the draft back."],
+      material: (_ctx, input) => [{ label: "DRAFT", text: input.text }],
+    });
+    const model = jsonModel(JSON.stringify({ body: "echoed" }));
+
+    expect(await ECHO.run(brieflessContextFor(model), { text: DRAFT_MARKER })).toEqual({
+      body: "echoed",
+    });
+  });
+
+  it("will not call a brief-taking step with a context that has no brief", () => {
+    const briefless = brieflessContextFor(jsonModel());
+
+    // Never invoked: these exist to be TYPE-CHECKED. Each `@ts-expect-error` is
+    // the pin — if `brief` went back to being optional, or moved onto the base
+    // context, the suppressed error would disappear and `tsc` would fail the
+    // directive as unused. The three are exactly the steps that read the brief
+    // as material text; `?? ""` in three places is the repair this split exists
+    // to make unavailable.
+    const uncallable: Array<() => Promise<unknown>> = [
+      // @ts-expect-error the researcher plans FROM the brief and has nothing without one
+      () => RESEARCHER.run(briefless, undefined),
+      // @ts-expect-error the writer puts the brief in front of the model as material
+      () => WRITER.run(briefless, { research }),
+      // @ts-expect-error the editor keeps the brief in force at the edit
+      () => EDITOR.run(briefless, { research, body: DRAFT_MARKER }),
+    ];
+
+    expect(uncallable).toHaveLength(3);
+  });
+
+  it("will not let a brief-taking step stand in for one that needs no brief", () => {
+    // Variance, not just a missing property. `Step.run` is a function-typed
+    // PROPERTY rather than a method for this line alone: method parameters are
+    // bivariant even under `strictFunctionTypes`, so written as a method this
+    // assignment would compile and the researcher could then be handed a
+    // context with no brief by anything holding a `Step<…, StepContext>`.
+    // @ts-expect-error a step that needs a brief is not a step that runs without one
+    const asBaseStep: Step<void, ResearchOutput> = RESEARCHER;
+    // The reverse direction must keep compiling: a run always has a brief, so
+    // it can drive the steps that do not need one. This is how the worker's
+    // loop takes all five.
+    const asRunStep: Step<FactcheckInput, FactcheckOutput, RunStepContext> = FACTCHECK;
+
+    expect(asBaseStep.name).toBe("researcher");
+    expect(asRunStep.name).toBe("factcheck");
+  });
+
+  it("runs all five roles from one run context, exactly as before", async () => {
+    const attributions: StepAttribution[] = [];
+    const model = jsonModel(
+      JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }),
+      JSON.stringify({ body: "master" }),
+      JSON.stringify({ body: "edited", changes: [] }),
+      JSON.stringify({ claims: [] }),
+      JSON.stringify({ body: "short" }),
+    );
+    const ctx = contextFor(
+      model,
+      vi.fn((_record: UsageRecord, attribution: StepAttribution) => {
+        attributions.push(attribution);
+      }),
+    );
+
+    const plan = await RESEARCHER.run(ctx, undefined);
+    const draft = await WRITER.run(ctx, { research: plan });
+    const edited = await EDITOR.run(ctx, { research: plan, body: draft.body });
+    const checked = await FACTCHECK.run(ctx, { body: edited.body });
+    const adapted = await adapterFor(channel).run(ctx, { body: edited.body });
+
+    expect([plan.angle, draft.body, edited.body, checked.claims, adapted.body]).toEqual([
+      "a",
+      "master",
+      "edited",
+      [],
+      "short",
+    ]);
+    expect(attributions).toEqual([
+      { step: "researcher" },
+      { step: "writer" },
+      { step: "editor" },
+      { step: "factcheck" },
+      { step: `adapter:${channel.id}`, channelId: channel.id },
+    ]);
+    // The brief still reaches exactly the three steps that read it, and still
+    // reaches none of the two that do not.
+    expect([0, 1, 2].map((i) => halvesOf(model, i).user.includes(BRIEF))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect([3, 4].map((i) => halvesOf(model, i).user.includes(BRIEF))).toEqual([false, false]);
   });
 });

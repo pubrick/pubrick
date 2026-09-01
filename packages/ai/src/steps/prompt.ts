@@ -92,14 +92,21 @@ export function materialFor(blocks: readonly Material[]): string {
  *   lines and material separately and has no say in where either one goes;
  * - a step cannot emit a ledger row without its own name attached.
  */
-export function defineStep<I, O>(spec: {
+export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
   name: string;
   schema: ZodType<O>;
   /** Set only by the adapter, whose calls are made once per channel. */
   channelId?: string;
   role: readonly string[];
-  material: (ctx: StepContext, input: I) => readonly Material[];
-}): Step<I, O> {
+  /**
+   * `C` is inferred from this callback's own annotation, so a step declares
+   * what it needs where it reads it: a `material` that touches `ctx.brief`
+   * annotates `RunStepContext` and the resulting step cannot be run without
+   * one. Left unannotated, `C` falls to the base context and `ctx.brief` does
+   * not exist — the default is the narrow one on purpose.
+   */
+  material: (ctx: C, input: I) => readonly Material[];
+}): Step<I, O, C> {
   const attribution: StepAttribution =
     spec.channelId === undefined
       ? { step: spec.name }

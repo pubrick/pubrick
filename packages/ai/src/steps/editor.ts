@@ -2,7 +2,7 @@ import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
-import type { Step } from "./types.js";
+import type { RunStepContext, Step } from "./types.js";
 import { planMaterial } from "./writer.js";
 
 /**
@@ -30,7 +30,7 @@ export type EditorInput = { research: ResearchOutput; body: string };
  * force at the edit; an editor holding only the draft cannot tell a deliberate
  * omission from a missing point.
  */
-export const EDITOR: Step<EditorInput, EditOutput> = defineStep({
+export const EDITOR: Step<EditorInput, EditOutput, RunStepContext> = defineStep({
   name: "editor",
   schema: editSchema,
   role: [
@@ -41,7 +41,7 @@ export const EDITOR: Step<EditorInput, EditOutput> = defineStep({
     "- body: the edited post, complete, ready to read.",
     "- changes: what you changed, one short plain-language line each, for the human who approves this. If you changed nothing, return an empty list rather than inventing an edit.",
   ],
-  material: (ctx, input) => [
+  material: (ctx: RunStepContext, input) => [
     { label: "BRIEF", text: ctx.brief },
     { label: "PLAN", text: planMaterial(input.research) },
     { label: "DRAFT", text: input.body },

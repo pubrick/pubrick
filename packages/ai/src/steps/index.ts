@@ -26,6 +26,7 @@ export {
 } from "./factcheck.js";
 export { RESEARCHER, type ResearchOutput, researchSchema } from "./researcher.js";
 export type {
+  RunStepContext,
   Step,
   StepAttribution,
   StepBrand,
