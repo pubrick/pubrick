@@ -110,13 +110,20 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
 const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel" };
 
 /**
- * A `datetime-local` value the schedule field will still accept tomorrow.
+ * A `datetime-local` value that is still in the future when the test runs.
  *
- * These tests used to hardcode one, and it worked until the day the wall clock
- * passed it: the field refuses a past instant, so the change event was dropped,
- * the button stayed disabled and the failure surfaced as "no approve call was
- * made" — a green suite that turns red on a calendar boundary and says nothing
- * about why. Anything a test schedules is relative to now.
+ * Any date a test sends to approve MUST be in the future, because
+ * `contentApproveSchema` refines `scheduledAt` against `Date.now()` — and the
+ * pin below parses the request body back through that very schema. So a
+ * hardcoded date rots: these tests held `2026-09-01T10:30` and went red the day
+ * the wall clock passed it, with one `ZodError: scheduledAt must be in the
+ * future` from the round-trip assertion — a suite that turns red on a calendar
+ * boundary while the screen it covers is fine.
+ *
+ * It is the SCHEMA that refuses a past instant, not the field and not the
+ * button: the input carries no `min`, and the button's `disabled` is
+ * `isPublished || !scheduledAt`, which a past value satisfies like any other.
+ * Everything up to the request works with a stale date; only the DTO objects.
  */
 function scheduleValue(daysAhead = 1): string {
   const when = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
