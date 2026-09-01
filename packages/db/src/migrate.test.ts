@@ -40,13 +40,40 @@ async function migrationsFolderBefore(tag: string): Promise<string> {
   return dir;
 }
 
-/** Creates a throwaway database on the same server and returns its url + a dropper. */
+/**
+ * The throwaway databases this file makes, and the millisecond stamp in each
+ * name. The stamp is what lets a later run judge a leftover's age without
+ * having recorded anything about it — matching and parsing come from one
+ * expression, so a rename cannot leave the sweep matching names it can no
+ * longer read.
+ */
+const FRESH_DATABASE = /^pubrick_fresh_(\d+)_\d+$/;
+
+/**
+ * How old a leftover must be before a later run drops it. Far longer than any
+ * run of this suite, so the sweep can never take a database a CONCURRENT run is
+ * still using — `WITH (FORCE)` would terminate its connections mid-migration.
+ */
+const STALE_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * Creates a throwaway database on the same server and returns its url + a
+ * dropper.
+ *
+ * The dropper runs from a `finally`, which covers a failing assertion but not a
+ * killed process: Ctrl-C or a vitest timeout kill leaves the database behind,
+ * and each call site leaks one. So creation also sweeps — any `pubrick_fresh_*`
+ * older than `STALE_AFTER_MS` is dropped first, which makes the next run clean
+ * up after the last one that died. Best effort by design: a sweep that cannot
+ * drop something is not a reason to fail a migration test.
+ */
 async function withFreshDatabase(
   baseUrl: string,
 ): Promise<{ url: string; drop: () => Promise<void> }> {
   const name = `pubrick_fresh_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const admin = new pg.Client({ connectionString: baseUrl });
   await admin.connect();
+  await dropStaleDatabases(admin);
   await admin.query(`CREATE DATABASE "${name}"`);
   await admin.end();
   const fresh = new URL(baseUrl);
@@ -60,6 +87,24 @@ async function withFreshDatabase(
       await cleanup.end();
     },
   };
+}
+
+/** Drops whatever a killed run left behind. Never throws: see `withFreshDatabase`. */
+async function dropStaleDatabases(admin: pg.Client): Promise<void> {
+  try {
+    const { rows } = await admin.query<{ datname: string }>("SELECT datname FROM pg_database");
+    const cutoff = Date.now() - STALE_AFTER_MS;
+    for (const { datname } of rows) {
+      const stamp = FRESH_DATABASE.exec(datname);
+      if (stamp === null || Number(stamp[1]) > cutoff) continue;
+      // Interpolated, but only ever a name this regex just matched: digits and
+      // the literal prefix, so there is nothing here to quote out of.
+      await admin.query(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`);
+    }
+  } catch {
+    // A leftover we could not drop is a leftover; the test it would have been
+    // cleaning up for has not started yet and is none the worse for it.
+  }
 }
 
 describe.skipIf(!url)("runMigrations", () => {
