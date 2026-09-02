@@ -23,7 +23,7 @@ export function Select({ label, id, className, children, ...rest }: SelectProps)
       <select
         id={selectId}
         className={[
-          "h-9 rounded-control border border-border bg-panel px-3 text-sm text-fg",
+          "h-9 rounded-control border border-border-strong bg-panel px-3 text-sm text-fg",
           "disabled:pointer-events-none disabled:opacity-50",
           className,
         ]

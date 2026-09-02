@@ -6,32 +6,55 @@
  * Dark theme redefines ONLY the semantic layer.
  */
 :root {
-  /* — primitives — */
+  /* — primitives —
+     Every value here is pinned by src/test/color-contrast.test.ts, which reads
+     this file and computes WCAG ratios for the pairs the semantic layer below
+     actually puts on screen. Change a primitive and that test tells you which
+     pair you broke. */
   --ink: #0f0f0f;
   --paper: #f5f6f7;
-  --brick-500: #e67131;
-  --brick-600: #d4642a;
+  /* One brick — hue 21°, saturation 78% — at five lightnesses. Which of them
+     is "the accent" is a property of the ground, not of the brand: on paper
+     only the deep bricks carry text and white labels at AA, on a dark panel
+     only the bright ones do. The hue never moves, so the accent reads as the
+     same colour in both themes. */
   --brick-100: #fdeee4;
-  --brick-700: #b45309;
+  --brick-300: #f09a66;
+  --brick-400: #f0885a;
+  --brick-500: #e67131;
+  --brick-700: #b14d16;
+  --brick-800: #9f4513;
   --gray-50: #fafbfb;
   --gray-100: #f0f1f3;
   --gray-200: #e6e8ea;
   --gray-300: #d6d9dc;
-  --gray-500: #98a1a8;
-  --gray-600: #66707a;
+  --gray-400: #7c8792;
+  --gray-500: #646e77;
+  --gray-600: #4d545c;
   --gray-800: #2c3136;
   --green-100: #eaf4ee;
-  --green-700: #2e7d4f;
+  --green-700: #2c774b;
   --blue-100: #eef1f6;
-  --blue-700: #5b7a99;
+  --blue-700: #506b86;
   --red-100: #fbecec;
+  --red-400: #e08b85;
   --red-700: #b3403a;
 
   /* — semantic: ground & text — */
   --color-bg: #ffffff;
   --color-bg-sunken: var(--paper);
   --color-panel: #ffffff;
+  /* Two border roles, deliberately far apart in contrast. `--color-border`
+     draws the seams BETWEEN surfaces — card edge, modal rim, row rule — which
+     WCAG 1.4.11 does not measure: the surface it outlines is already told
+     apart by its own background and shadow, and pushing these seams to 3:1
+     would turn a quiet document into a wireframe. `--color-border-strong`
+     draws the boundary OF a control — the text field, the select, the
+     textarea — where the border is the only thing saying "you can type here",
+     so it clears 3:1 against both the control's own fill and the ground
+     around it. */
   --color-border: var(--gray-200);
+  --color-border-strong: var(--gray-400);
   --color-border-soft: var(--gray-100);
   --color-fg: var(--ink);
   --color-fg-secondary: var(--gray-600);
@@ -42,8 +65,13 @@
      --color-fg-secondary because the role is provenance, not hierarchy, and
      the two must be tunable apart. */
   --color-fg-dim: var(--gray-600);
-  --color-accent: var(--brick-500);
-  --color-accent-hover: var(--brick-600);
+  --color-accent: var(--brick-700);
+  --color-accent-hover: var(--brick-800);
+  /* The label ON an accent fill. Not the literal `white`: the light theme's
+     accent is dark enough to carry white, the dark theme's is a bright brick
+     that can only carry ink. A primary button's label is 14px semibold —
+     normal text — so it owes 4.5:1 on both. */
+  --color-accent-fg: #ffffff;
   --color-accent-soft: var(--brick-100);
   --color-accent-soft-fg: var(--brick-700);
   --color-danger: var(--red-700);
@@ -75,23 +103,28 @@
     --color-bg-sunken: #0f0f0f;
     --color-panel: #1b1d1f;
     --color-border: #2b2e31;
+    --color-border-strong: #6b7278;
     --color-border-soft: #232629;
     --color-fg: #f5f6f7;
     --color-fg-secondary: #a3abb2;
-    --color-fg-tertiary: #7c848c;
+    --color-fg-tertiary: #878f97;
     --color-fg-dim: #a3abb2;
+    --color-accent: var(--brick-500);
+    --color-accent-hover: var(--brick-400);
+    --color-accent-fg: var(--ink);
+    --color-danger: var(--red-400);
     --color-accent-soft: #3a2417;
-    --color-accent-soft-fg: #f09a66;
+    --color-accent-soft-fg: var(--brick-300);
     --status-draft-bg: #26292c;
     --status-draft-fg: #a3abb2;
     --status-review-bg: #3a2417;
-    --status-review-fg: #f09a66;
+    --status-review-fg: var(--brick-300);
     --status-scheduled-bg: #1d2733;
     --status-scheduled-fg: #8fb0cf;
     --status-published-bg: #17291e;
     --status-published-fg: #6fbf8f;
     --status-failed-bg: #331b1a;
-    --status-failed-fg: #e08b85;
+    --status-failed-fg: var(--red-400);
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
     --shadow-popover: 0 8px 28px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
     --color-overlay: rgb(0 0 0 / 0.6);
@@ -103,23 +136,28 @@
   --color-bg-sunken: #0f0f0f;
   --color-panel: #1b1d1f;
   --color-border: #2b2e31;
+  --color-border-strong: #6b7278;
   --color-border-soft: #232629;
   --color-fg: #f5f6f7;
   --color-fg-secondary: #a3abb2;
-  --color-fg-tertiary: #7c848c;
+  --color-fg-tertiary: #878f97;
   --color-fg-dim: #a3abb2;
+  --color-accent: var(--brick-500);
+  --color-accent-hover: var(--brick-400);
+  --color-accent-fg: var(--ink);
+  --color-danger: var(--red-400);
   --color-accent-soft: #3a2417;
-  --color-accent-soft-fg: #f09a66;
+  --color-accent-soft-fg: var(--brick-300);
   --status-draft-bg: #26292c;
   --status-draft-fg: #a3abb2;
   --status-review-bg: #3a2417;
-  --status-review-fg: #f09a66;
+  --status-review-fg: var(--brick-300);
   --status-scheduled-bg: #1d2733;
   --status-scheduled-fg: #8fb0cf;
   --status-published-bg: #17291e;
   --status-published-fg: #6fbf8f;
   --status-failed-bg: #331b1a;
-  --status-failed-fg: #e08b85;
+  --status-failed-fg: var(--red-400);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-popover: 0 8px 28px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
   --color-overlay: rgb(0 0 0 / 0.6);
@@ -142,7 +180,12 @@
  * `.gallery-light` mirrors it for the light side, re-using the same
  * primitives the base :root block above already points at for each entry;
  * only the handful with no named primitive (plain white, the shadow
- * literals) are restated.
+ * literals) are restated. It must restate EVERY token the dark block
+ * redefines — accent, accent-hover, accent-fg and danger included, which the
+ * dark theme has to move for contrast — or the light half of the gallery
+ * inherits the dark values from the real root whenever the OS is dark.
+ * `color-contrast.test.ts` compares the two key sets and fails on a token
+ * present in one and missing from the other.
  *
  * These two selectors do ship in the production CSS even though /design
  * 404s there. That is deliberate: `.gallery-dark` shares the dark theme's
@@ -165,11 +208,16 @@
   --color-bg-sunken: var(--paper);
   --color-panel: #ffffff;
   --color-border: var(--gray-200);
+  --color-border-strong: var(--gray-400);
   --color-border-soft: var(--gray-100);
   --color-fg: var(--ink);
   --color-fg-secondary: var(--gray-600);
   --color-fg-tertiary: var(--gray-500);
   --color-fg-dim: var(--gray-600);
+  --color-accent: var(--brick-700);
+  --color-accent-hover: var(--brick-800);
+  --color-accent-fg: #ffffff;
+  --color-danger: var(--red-700);
   --color-accent-soft: var(--brick-100);
   --color-accent-soft-fg: var(--brick-700);
   --status-draft-bg: var(--gray-100);
@@ -194,6 +242,7 @@
   --color-bg-sunken: var(--color-bg-sunken);
   --color-panel: var(--color-panel);
   --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
   --color-border-soft: var(--color-border-soft);
   --color-fg: var(--color-fg);
   --color-fg-secondary: var(--color-fg-secondary);
@@ -201,6 +250,7 @@
   --color-fg-dim: var(--color-fg-dim);
   --color-accent: var(--color-accent);
   --color-accent-hover: var(--color-accent-hover);
+  --color-accent-fg: var(--color-accent-fg);
   --color-accent-soft: var(--color-accent-soft);
   --color-accent-soft-fg: var(--color-accent-soft-fg);
   --color-danger: var(--color-danger);
@@ -236,6 +286,19 @@ body {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
   }
+}
+
+/*
+ * The one call site that cannot reach the token: the landing page mirrors
+ * Button's primary classes on an <a> (`bg-accent … text-white`) by hand
+ * rather than through `buttonClasses()`, and a literal `text-white` is wrong
+ * in the dark theme, where the accent is a bright brick that only carries
+ * ink. Un-layered and two classes deep, so it outranks Tailwind's utility;
+ * in the light theme `--color-accent-fg` IS white, so it changes nothing
+ * there. Delete this rule the day that page calls `buttonClasses()`.
+ */
+.bg-accent.text-white {
+  color: var(--color-accent-fg);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -42,7 +42,7 @@ export function Textarea({
         maxLength={maxLength}
         aria-describedby={describedBy}
         className={[
-          "min-h-24 rounded-control border border-border bg-panel px-3 py-2 text-sm text-fg",
+          "min-h-24 rounded-control border border-border-strong bg-panel px-3 py-2 text-sm text-fg",
           "placeholder:text-fg-tertiary",
           "disabled:pointer-events-none disabled:opacity-50",
           className,

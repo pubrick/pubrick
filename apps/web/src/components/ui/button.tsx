@@ -10,10 +10,14 @@ export type ButtonProps = {
   className?: string;
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">;
 
-// primary = accent bg / white text; secondary = panel bg + border;
+// primary = accent bg / accent-fg label; secondary = panel bg + border;
 // ghost = no border; danger = ghost shape with danger-colored text.
+// The primary label is `text-accent-fg`, never a literal `text-white`: the
+// accent is a deep brick in the light theme (which carries white) and a
+// bright one in the dark theme (which can only carry ink), and a 14px
+// semibold label is normal text owing 4.5:1 on both.
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: "border border-transparent bg-accent text-white hover:bg-accent-hover",
+  primary: "border border-transparent bg-accent text-accent-fg hover:bg-accent-hover",
   secondary: "border border-border bg-panel text-fg hover:bg-bg-sunken",
   ghost: "border border-transparent bg-transparent text-fg hover:bg-bg-sunken",
   danger: "border border-transparent bg-transparent text-danger hover:bg-bg-sunken",
