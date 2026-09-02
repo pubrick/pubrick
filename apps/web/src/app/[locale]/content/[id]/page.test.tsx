@@ -5,11 +5,13 @@ import {
   MAX_BODY_LENGTH,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
+import { UNKNOWN_OUTCOME_PREFIX } from "@/lib/adaptations";
 import type { ContentOrigin } from "@/lib/origin";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
+import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import ContentItemPage from "./page";
 
@@ -965,5 +967,289 @@ describe("the fourth origin badge (design §3)", () => {
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
 
     expect(await screen.findByText(en.Content.origin.ai)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Finding 1: the screen did not re-read after its own mutation settled.
+ *
+ * The reviewer pressed "Publish now", the worker failed the send 200ms later,
+ * and eight seconds on the screen still read Approved / Queued. Everything
+ * here is about the two halves of a poll — that it asks again, and that it
+ * stops asking.
+ */
+describe("re-reading while a post is on its way out (Finding 1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  function itemReads(calls: Call[]): number {
+    return calls.filter((c) => c.method === "GET" && c.path === "/api/content/c1").length;
+  }
+
+  it("shows the failure that lands after the approval, with no reload", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.getAllByText(en.Content.adaptationStatus.queued).length).toBeGreaterThan(0);
+    const before = itemReads(calls);
+
+    // The worker's write, 200ms after the click in the reviewer's session.
+    served.current = makeItem({
+      status: "failed",
+      adaptations: [makeAdaptation({ status: "failed", lastError: "Unauthorized" })],
+    });
+    await advance(POLL_INTERVAL_MS);
+
+    expect(itemReads(calls)).toBe(before + 1);
+    expect(screen.queryByText(en.Content.adaptationStatus.queued)).not.toBeInTheDocument();
+    expect(screen.getAllByText(en.Content.adaptationStatus.failed).length).toBeGreaterThan(0);
+    expect(within(resultsList()).getByRole("alert")).toHaveTextContent("Unauthorized");
+  });
+
+  it("asks again and again for as long as the adaptation is publishing", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "publishing" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(itemReads(calls)).toBe(1);
+
+    await advance(POLL_INTERVAL_MS);
+    expect(itemReads(calls)).toBe(2);
+    await advance(POLL_INTERVAL_MS);
+    expect(itemReads(calls)).toBe(3);
+  });
+
+  it("never starts when nothing is in flight — a settled item is read once", async () => {
+    const served = {
+      current: makeItem({
+        status: "draft",
+        adaptations: [makeAdaptation({ status: "pending" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await advance(20 * POLL_INTERVAL_MS);
+
+    expect(itemReads(calls)).toBe(1);
+  });
+
+  it("stops the moment the last adaptation settles — a poll that never stops is its own defect", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    served.current = makeItem({
+      status: "published",
+      adaptations: [makeAdaptation({ status: "published", externalUrl: "https://t.me/main/42" })],
+    });
+    await advance(POLL_INTERVAL_MS);
+    const settled = itemReads(calls);
+    expect(settled).toBe(2);
+
+    await advance(20 * POLL_INTERVAL_MS);
+    expect(itemReads(calls)).toBe(settled);
+  });
+
+  it("does not poll a scheduled post: its due date can be days away", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [
+          makeAdaptation({ status: "scheduled", scheduledAt: "2027-01-01T10:00:00.000Z" }),
+        ],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await advance(20 * POLL_INTERVAL_MS);
+
+    expect(itemReads(calls)).toBe(1);
+  });
+
+  it("does not throw away what is being typed while it polls", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const body = screen.getByLabelText(en.Publish.bodyLabel);
+    fireEvent.change(body, { target: { value: "A sentence the author is still writing" } });
+    const override = screen.getByPlaceholderText(en.Publish.overridePlaceholder);
+    fireEvent.change(override, { target: { value: "and one for this channel" } });
+
+    served.current = { ...served.current };
+    await advance(3 * POLL_INTERVAL_MS);
+    expect(itemReads(calls)).toBeGreaterThan(1);
+
+    expect(body).toHaveValue("A sentence the author is still writing");
+    expect(override).toHaveValue("and one for this channel");
+  });
+});
+
+/**
+ * Finding 2: a send whose outcome was never learned is neither a success nor a
+ * failure, and this screen used to round it to failure — the operator's only
+ * clue was the worker's English log line printed as an error.
+ */
+describe("an outcome nobody knows (Finding 2)", () => {
+  const workerSentence =
+    `${UNKNOWN_OUTCOME_PREFIX} the post was sent to the platform but the outcome could not be ` +
+    "confirmed (an earlier attempt was interrupted after the post was sent to the platform and " +
+    "never reported back). A copy may already be live — check the channel before re-approving, " +
+    "because re-approving will send again.";
+
+  function unknownItem() {
+    return makeItem({
+      status: "failed",
+      adaptations: [makeAdaptation({ status: "failed", lastError: workerSentence })],
+    });
+  }
+
+  it("says the outcome is unknown, and never says it failed", async () => {
+    installBaseHandlers({ current: unknownItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const results = resultsList();
+    expect(within(results).getByText(en.Content.adaptationStatus.unknown)).toBeInTheDocument();
+    expect(within(results).queryByText(en.Content.adaptationStatus.failed)).not.toBeInTheDocument();
+  });
+
+  it("tells the operator what to do, in their own language, not the worker's log line", async () => {
+    installBaseHandlers({ current: unknownItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    expect(within(resultsList()).getByRole("alert")).toHaveTextContent(en.Content.unknownOutcome);
+    expect(screen.queryByText(workerSentence)).not.toBeInTheDocument();
+  });
+
+  it("wears neither the failed red nor the published green", async () => {
+    installBaseHandlers({ current: unknownItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const badge = within(resultsList()).getByText(en.Content.adaptationStatus.unknown);
+    expect(badge.className).toContain("var(--status-review-bg)");
+    expect(badge.className).not.toContain("var(--status-failed-bg)");
+    expect(badge.className).not.toContain("var(--status-published-bg)");
+  });
+
+  it("still shows a real failure's own error, so the two are not merged", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "failed",
+          adaptations: [makeAdaptation({ status: "failed", lastError: "Unauthorized" })],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const results = resultsList();
+    expect(within(results).getByText(en.Content.adaptationStatus.failed)).toBeInTheDocument();
+    expect(within(results).getByRole("alert")).toHaveTextContent("Unauthorized");
+    expect(
+      within(results).queryByText(en.Content.adaptationStatus.unknown),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("the rest of the review's web findings", () => {
+  it("keeps exactly one control in the header's primary slot", async () => {
+    installBaseHandlers({ current: makeItem({ status: "draft" }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const header = screen.getByRole("banner");
+    expect(within(header).getByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
+    expect(within(header).getAllByRole("button")).toHaveLength(1);
+    // Reject did not disappear — it moved next to the other approval path.
+    expect(within(header).queryByRole("button", { name: en.Publish.reject })).toBeNull();
+    expect(screen.getByRole("button", { name: en.Publish.reject })).toBeEnabled();
+  });
+
+  it("renders the item's own status as a badge, like every other status in the product", async () => {
+    installBaseHandlers({ current: makeItem({ status: "draft" }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const badge = await screen.findByText(en.Content.status.draft);
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge.className).toContain("var(--status-draft-bg)");
+  });
+
+  it("names the per-channel override field with something other than its placeholder", async () => {
+    installBaseHandlers({ current: makeItem({ adaptations: [makeAdaptation()] }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.overridesTitle });
+
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(field).toBe(screen.getByPlaceholderText(en.Publish.overridePlaceholder));
+  });
+
+  it("says the channel names failed to load instead of quietly showing UUIDs", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    installBaseHandlers(served, [], (path, method) => {
+      if (method === "GET" && path.startsWith("/api/channels")) {
+        throw new ApiError(502, "Bad Gateway");
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(en.Content.channelsUnavailable)).toBeInTheDocument();
+    });
+    // The list still renders, by id, rather than looking like an empty one.
+    expect(within(resultsList()).getByText("ch1")).toBeInTheDocument();
   });
 });

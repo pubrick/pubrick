@@ -74,7 +74,8 @@
       "queued": "En cola",
       "publishing": "Publicando",
       "published": "Publicado",
-      "failed": "Fallido"
+      "failed": "Fallido",
+      "unknown": "Resultado desconocido"
     },
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "origin": {
@@ -82,7 +83,10 @@
       "humanEdited": "Editado por una persona",
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por una persona"
-    }
+    },
+    "unknownOutcome": "Se envió, pero la plataforma nunca lo confirmó. Revisa el canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
+    "channelsUnavailable": "No se pudieron cargar los nombres de los canales, así que se muestran por ID.",
+    "tryAgain": "Reintentar"
   },
   "ContentNew": {
     "title": "Nueva publicación",
@@ -128,7 +132,8 @@
     "linkUnavailable": "publicado — enlace no disponible",
     "viewPost": "Ver publicación",
     "scheduledFor": "Programado para",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "overrideLabel": "Texto propio para {channel}"
   },
   "SettingsPage": {
     "title": "Ajustes",

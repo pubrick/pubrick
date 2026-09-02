@@ -74,7 +74,8 @@
       "queued": "Queued",
       "publishing": "Publishing",
       "published": "Published",
-      "failed": "Failed"
+      "failed": "Failed",
+      "unknown": "Outcome unknown"
     },
     "genericError": "Something went wrong. Please try again.",
     "origin": {
@@ -82,7 +83,10 @@
       "humanEdited": "Human-edited",
       "aiAdapted": "AI-adapted",
       "human": "Human-written"
-    }
+    },
+    "unknownOutcome": "Sent, but the platform never confirmed it. Check the channel before approving again — approving sends another copy.",
+    "channelsUnavailable": "Channel names could not be loaded, so channels are shown by ID.",
+    "tryAgain": "Try again"
   },
   "ContentNew": {
     "title": "New post",
@@ -128,7 +132,8 @@
     "linkUnavailable": "published — link unavailable",
     "viewPost": "View post",
     "scheduledFor": "Scheduled for",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "overrideLabel": "Override for {channel}"
   },
   "SettingsPage": {
     "title": "Settings",

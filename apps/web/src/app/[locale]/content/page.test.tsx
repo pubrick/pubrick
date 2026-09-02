@@ -1,7 +1,8 @@
 import { runCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTENT_LIST_POLL_INTERVAL_MS, UNKNOWN_OUTCOME_PREFIX } from "@/lib/adaptations";
 import type { ContentOrigin } from "@/lib/origin";
 import { OPEN_RUNS_POLL_INTERVAL_MS, type Run } from "@/lib/runs";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -665,5 +666,234 @@ describe("no active organization redirects to onboarding", () => {
       expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Finding 1, the list half: the queue re-read its cards only when a RUN left
+ * the open strip, so a generation landing was live and a delivery was not.
+ */
+describe("re-reading the cards while a post is on its way out (Finding 1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  function contentReads(calls: Call[]): number {
+    return calls.filter((c) => c.method === "GET" && c.path.startsWith("/api/content")).length;
+  }
+
+  async function renderQueue() {
+    render(<ContentQueuePage />);
+    await act(async () => {});
+  }
+
+  it("re-reads the content itself, not only when a run leaves the open list", async () => {
+    const calls: Call[] = [];
+    const served = {
+      current: [item("c1", "Launch post", "approved", [adaptation({ status: "queued" })])],
+    };
+    installHandlers(calls, () => served.current);
+
+    await renderQueue();
+    expect(screen.getByText(en.Content.adaptationStatus.queued)).toBeInTheDocument();
+    const before = contentReads(calls);
+
+    served.current = [
+      item("c1", "Launch post", "failed", [
+        adaptation({ status: "failed", lastError: "Unauthorized" }),
+      ]),
+    ];
+    await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+
+    expect(contentReads(calls)).toBe(before + 1);
+    expect(screen.queryByText(en.Content.adaptationStatus.queued)).not.toBeInTheDocument();
+  });
+
+  it("does not poll a list with nothing in flight", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Draft post", "draft", [adaptation({ status: "pending" })]),
+      item("c2", "Done post", "published", [adaptation({ status: "published" })]),
+    ]);
+
+    await renderQueue();
+    expect(contentReads(calls)).toBe(1);
+
+    await advance(20 * CONTENT_LIST_POLL_INTERVAL_MS);
+    expect(contentReads(calls)).toBe(1);
+  });
+
+  it("stops once the last delivery settles", async () => {
+    const calls: Call[] = [];
+    const served = {
+      current: [item("c1", "Launch post", "approved", [adaptation({ status: "publishing" })])],
+    };
+    installHandlers(calls, () => served.current);
+
+    await renderQueue();
+    served.current = [
+      item("c1", "Launch post", "published", [adaptation({ status: "published" })]),
+    ];
+    await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+    const settled = contentReads(calls);
+    expect(settled).toBe(2);
+
+    await advance(20 * CONTENT_LIST_POLL_INTERVAL_MS);
+    expect(contentReads(calls)).toBe(settled);
+  });
+});
+
+describe("failures come first, and look like failures (Finding 3)", () => {
+  function sectionHeadings(): string[] {
+    return screen
+      .getAllByRole("heading", { level: 2 })
+      .map((h) => h.textContent ?? "")
+      .filter((text) => text !== en.Runs.stripsTitle);
+  }
+
+  it("puts the Failed section above every other section", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Draft post", "draft"),
+      item("c2", "Approved post", "approved"),
+      item("c3", "Published post", "published"),
+      item("c4", "Broken post", "failed"),
+    ]);
+
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "Broken post" });
+
+    expect(sectionHeadings()[0]).toBe(en.Content.status.failed);
+  });
+
+  it("colors the failed post's own title, not just a chip on one channel line", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Broken post", "failed", [adaptation({ status: "failed" })]),
+      item("c2", "Fine post", "draft"),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    const broken = await screen.findByRole("link", { name: "Broken post" });
+    expect(broken.className).toContain("text-danger");
+    expect(screen.getByRole("link", { name: "Fine post" }).className).not.toContain("text-danger");
+  });
+
+  it("offers a way back to the post, which is where retrying lives", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Broken post", "failed", [adaptation({ status: "failed" })]),
+      item("c2", "Fine post", "draft"),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    const broken = await screen.findByRole("link", { name: "Broken post" });
+    const brokenRow = broken.closest("li");
+    if (!brokenRow) throw new Error("failed item <li> not found");
+    const retry = within(brokenRow).getByRole("link", { name: en.Content.tryAgain });
+    expect(retry).toHaveAttribute("href", "/en/content/c1");
+
+    // Not on a post that did not fail: a retry affordance on a draft is an
+    // invitation to do something that has not gone wrong.
+    const fineRow = screen.getByRole("link", { name: "Fine post" }).closest("li");
+    if (!fineRow) throw new Error("draft item <li> not found");
+    expect(within(fineRow).queryByRole("link", { name: en.Content.tryAgain })).toBeNull();
+  });
+});
+
+describe("an outcome nobody knows, on the list (Finding 2)", () => {
+  const workerSentence = `${UNKNOWN_OUTCOME_PREFIX} the post was sent but nothing came back.`;
+
+  it("reads 'Outcome unknown' and carries the advice, not the worker's log line", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Launch post", "failed", [
+        adaptation({ status: "failed", lastError: workerSentence }),
+      ]),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    await screen.findByRole("link", { name: "Launch post" });
+    const row = screen.getByRole("link", { name: "Launch post" }).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    expect(within(row).getByText(en.Content.adaptationStatus.unknown)).toBeInTheDocument();
+    expect(within(row).getByText(en.Content.unknownOutcome)).toBeInTheDocument();
+    expect(within(row).queryByText(en.Content.adaptationStatus.failed)).not.toBeInTheDocument();
+    expect(screen.queryByText(workerSentence)).not.toBeInTheDocument();
+  });
+
+  it("leaves a real failure red", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Launch post", "failed", [
+        adaptation({ status: "failed", lastError: "Unauthorized" }),
+      ]),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    const row = (await screen.findByRole("link", { name: "Launch post" })).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    const badge = within(row).getByText(en.Content.adaptationStatus.failed);
+    expect(badge.className).toContain("var(--status-failed-bg)");
+    expect(within(row).queryByText(en.Content.adaptationStatus.unknown)).toBeNull();
+  });
+});
+
+describe("reads that used to fail in silence (Finding 4)", () => {
+  it("says the channel names failed to load instead of quietly showing UUIDs", async () => {
+    const calls: Call[] = [];
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const init = args[1] as RequestInit | undefined;
+      const method = init?.method ?? "GET";
+      calls.push({ path, method });
+      if (method === "GET" && path === "/api/channels") throw new ApiError(502, "Bad Gateway");
+      if (method === "GET" && path === "/api/runs?state=open") return [];
+      if (method === "GET" && path.startsWith("/api/content")) {
+        return [item("c1", "Launch post", "draft", [adaptation({ status: "published" })])];
+      }
+      throw new Error(`unhandled request in test: ${method} ${path}`);
+    });
+
+    render(<ContentQueuePage />);
+
+    expect(await screen.findByText(en.Content.channelsUnavailable)).toBeInTheDocument();
+    // ...and the list still renders, by id, rather than looking like an empty one.
+    expect(screen.getByRole("link", { name: "Launch post" })).toBeInTheDocument();
+  });
+
+  it("says so when the open-runs read fails, instead of dropping the strips without a word", async () => {
+    const calls: Call[] = [];
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const init = args[1] as RequestInit | undefined;
+      const method = init?.method ?? "GET";
+      calls.push({ path, method });
+      if (method === "GET" && path === "/api/channels") return noChannels;
+      if (method === "GET" && path === "/api/runs?state=open") {
+        throw new ApiError(502, "Bad Gateway");
+      }
+      if (method === "GET" && path.startsWith("/api/content")) return [];
+      throw new Error(`unhandled request in test: ${method} ${path}`);
+    });
+
+    render(<ContentQueuePage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(en.Content.genericError);
+    });
   });
 });

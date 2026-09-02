@@ -11,26 +11,20 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { Input } from "@/components/ui/input";
-import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { usePoll } from "@/hooks/use-poll";
+import {
+  type AdaptationStatus,
+  CONTENT_BADGE_STATUS,
+  type ContentStatus,
+  DELIVERY_BADGE_STATUS,
+  deliveryOutcome,
+  hasAdaptationInFlight,
+} from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
-
-type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
-type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
-
-// Spec §2.4's five status colors. "queued"/"publishing" share "scheduled"'s
-// blue — their own translated labels are unaffected, only the color is
-// shared — matching the mapping used on the queue screen.
-const ADAPTATION_BADGE_STATUS: Record<AdaptationStatus, StatusBadgeStatus> = {
-  pending: "draft",
-  scheduled: "scheduled",
-  queued: "scheduled",
-  publishing: "scheduled",
-  published: "published",
-  failed: "failed",
-};
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -86,6 +80,15 @@ type ContentItem = {
  */
 const NO_AI_VERSIONS: readonly string[] = [];
 
+/**
+ * When this screen may stop asking: when nothing on it can change without a
+ * human (see `hasAdaptationInFlight`).
+ *
+ * Module-level so it is a stable `usePoll` dependency — the hook's contract —
+ * and so the answer is the same function the queue asks.
+ */
+const itemSettled = (item: ContentItem) => !hasAdaptationInFlight(item.adaptations);
+
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Publish");
@@ -93,12 +96,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const locale = useLocale();
   const router = useRouter();
 
-  const [item, setItem] = useState<ContentItem | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
   const [scheduledAt, setScheduledAt] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   /**
    * The lens, off by default (design §5).
    *
@@ -116,31 +119,96 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(errorMessage(err, t("genericError")));
+      setActionError(errorMessage(err, t("genericError")));
     },
     [router, locale, t],
   );
 
-  const load = useCallback(() => {
-    return api<ContentItem>(`/api/content/${id}`)
-      .then((it) => {
-        setItem(it);
-        setBodyDraft(it.body);
-        setOverrideDrafts(Object.fromEntries(it.adaptations.map((a) => [a.id, a.body ?? ""])));
-        return api<Channel[]>(`/api/channels?brandId=${it.brandId}`).then(setChannels);
-      })
-      .catch(handleError);
-  }, [id, handleError]);
+  /**
+   * The item, re-read for as long as a post is on its way out.
+   *
+   * This screen used to read once per mutation and then sit still. Press
+   * "Publish now", have the worker fail the send 200ms later, and the screen
+   * kept saying "Approved / Queued" until a full reload — on the one screen
+   * where the person who pressed the button is looking, which is the worst
+   * possible place for a publish failure to be invisible.
+   *
+   * `no-store` for the reason every poll in this app sets it: a poll answered
+   * out of the browser's cache is a poll that cannot see the change it exists
+   * to see.
+   */
+  const fetchItem = useCallback(
+    () => api<ContentItem>(`/api/content/${id}`, { cache: "no-store" }),
+    [id],
+  );
+  const { data: item, error: pollError, refresh: reload } = usePoll(fetchItem, itemSettled);
 
+  // An account with no active organization belongs in onboarding rather than
+  // on an item it can never load. In an effect because this failure arrives
+  // from the poll rather than from a call this component awaited — the same
+  // shape the run receipt uses.
   useEffect(() => {
-    // load() now returns its promise (see below) so the four mutation
-    // handlers can await the reload instead of firing it and moving on.
-    // useEffect requires void | (() => void), so the promise is discarded
-    // here rather than returned directly — otherwise React treats it as an
-    // attempted cleanup function and throws on unmount ("destroy is not a
-    // function").
-    load();
-  }, [load]);
+    if (pollError instanceof ApiError && pollError.noActiveOrg) {
+      router.replace(`/${locale}/onboarding`);
+    }
+  }, [pollError, router, locale]);
+
+  /**
+   * Channel names, in their own request rather than chained onto the item's.
+   *
+   * Two reasons. The poll re-reads the item every couple of seconds while a
+   * post is going out, and channel names do not change on that cadence — a
+   * chained fetch would double every tick. And a failure here must not read as
+   * "this brand has no channels": the labels degrade to raw UUIDs, so the
+   * screen says so out loud instead of quietly showing identifiers where names
+   * belong.
+   */
+  const brandId = item?.brandId ?? null;
+  useEffect(() => {
+    if (!brandId) return;
+    let stale = false;
+    api<Channel[]>(`/api/channels?brandId=${brandId}`)
+      .then((cs) => {
+        if (stale) return;
+        setChannels(cs);
+        setChannelsFailed(false);
+      })
+      .catch((err) => {
+        // Except when the account has no active organization: the item read
+        // fails the same way, the redirect is already under way, and an alert
+        // on the way out is noise about a screen the reader never had.
+        if (!stale) setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [brandId]);
+
+  /**
+   * The editable drafts are seeded ONCE per item, not on every read.
+   *
+   * Re-seeding from each response is what the single-shot `load()` could
+   * afford and a poll cannot: a re-read landing while somebody is typing would
+   * throw their sentence away every two seconds. The saves already leave the
+   * draft equal to what they sent, so there is nothing a re-seed would fix —
+   * except for an adaptation this screen has never seen, which is added below
+   * without touching the ones it has.
+   */
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!item) return;
+    if (seededFor.current !== item.id) {
+      seededFor.current = item.id;
+      setBodyDraft(item.body);
+      setOverrideDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.body ?? ""])));
+      return;
+    }
+    setOverrideDrafts((prev) => {
+      const added = item.adaptations.filter((a) => !(a.id in prev));
+      if (added.length === 0) return prev;
+      return { ...prev, ...Object.fromEntries(added.map((a) => [a.id, a.body ?? ""])) };
+    });
+  }, [item]);
 
   /**
    * The read receipt: the one signal that says a human looked at this draft.
@@ -166,34 +234,34 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }, [id]);
 
   async function saveBody() {
-    setError(null);
+    setActionError(null);
     try {
       await api(`/api/content/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ body: bodyDraft }),
       });
-      await load();
+      await reload();
     } catch (err) {
       handleError(err);
     }
   }
 
   async function saveOverride(adaptationId: string) {
-    setError(null);
+    setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}`, {
         method: "PATCH",
         body: JSON.stringify({ body: value.trim() === "" ? null : value }),
       });
-      await load();
+      await reload();
     } catch (err) {
       handleError(err);
     }
   }
 
   async function approve(withSchedule: boolean) {
-    setError(null);
+    setActionError(null);
     try {
       await api(`/api/content/${id}/approve`, {
         method: "POST",
@@ -201,17 +269,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           withSchedule && scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {},
         ),
       });
-      await load();
+      await reload();
     } catch (err) {
       handleError(err);
     }
   }
 
   async function reject() {
-    setError(null);
+    setActionError(null);
     try {
       await api(`/api/content/${id}/reject`, { method: "POST", body: JSON.stringify({}) });
-      await load();
+      await reload();
     } catch (err) {
       handleError(err);
     }
@@ -233,6 +301,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
   }
 
+  /**
+   * What the user just did wins over what the poll is complaining about: a
+   * rejected approval must not be replaced two seconds later by a generic
+   * re-read failure, and the other order is how a 409 disappears before it is
+   * read.
+   *
+   * "No active organization" is the one poll failure that is NOT shown: the
+   * effect above is already replacing this route with onboarding, and an alert
+   * about it would be an error message on the way out of a screen the reader
+   * was never entitled to.
+   */
+  const pollErrorMessage =
+    pollError && !(pollError instanceof ApiError && pollError.noActiveOrg)
+      ? errorMessage(pollError, t("genericError"))
+      : null;
+  const error = actionError ?? pollErrorMessage;
+
   if (!item) {
     return (
       <AppShell title={tc("untitled")}>
@@ -250,15 +335,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   return (
     <AppShell
       title={item.title || tc("untitled")}
+      /*
+       * ONE control in the primary slot (constitution: never two primary
+       * buttons on one screen). It used to hold Approve AND Reject side by
+       * side, with a comment in the markup claiming both were "this screen's
+       * primary actions" — a screen may have one. Approve is it: it is the
+       * verb the queue sends people here to perform. Reject keeps the same
+       * weight it always had (a danger-styled button) down in the decision
+       * card, next to the other approval path.
+       */
       primaryAction={
-        <div className="flex items-center gap-2">
-          <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
-            {t("approveNow")}
-          </Button>
-          <Button variant="danger" onClick={reject} disabled={isPublished}>
-            {t("reject")}
-          </Button>
-        </div>
+        <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
+          {t("approveNow")}
+        </Button>
       }
     >
       <p className="mb-3">
@@ -267,7 +356,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         </Link>
       </p>
       <div className="mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-fg-secondary">
-        {tc(`status.${item.status}`)}
+        {/*
+          A badge, like every other status in the product. It was plain text
+          here alone, which made the one screen that decides a post's fate the
+          one screen where its state did not look like a state.
+        */}
+        <StatusBadge status={CONTENT_BADGE_STATUS[item.status]}>
+          {tc(`status.${item.status}`)}
+        </StatusBadge>
         <OriginBadge origin={deriveOrigin(item)} />
         {/*
           The lens switch: one control for the whole screen (constitution: one
@@ -313,6 +409,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {error}
         </p>
       )}
+      {/*
+        A failed read says so. Without this the only visible consequence of a
+        dead `GET /api/channels` is that every channel is labelled with its own
+        UUID and every counter falls back to the widest limit — a screen that
+        looks merely odd rather than broken, which is how the reader ends up
+        debugging their own eyesight instead of retrying.
+      */}
+      {channelsFailed && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {tc("channelsUnavailable")}
+        </p>
+      )}
 
       <Card className="mb-6">
         <DimmedTextarea
@@ -339,11 +447,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <Card key={a.id}>
             <div className="mb-3 flex items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
-              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
-                {tc(`adaptationStatus.${a.status}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
+                {tc(`adaptationStatus.${deliveryOutcome(a)}`)}
               </StatusBadge>
             </div>
             <DimmedTextarea
+              /*
+               * Named for a screen reader, which the placeholder above it was
+               * not doing: a placeholder is the field's hint, it disappears the
+               * moment there is text in it, and a field whose only name is the
+               * hint has no name at all once it is filled in. The visible
+               * heading is the channel; the name says what the field does to
+               * it.
+               */
+              aria-label={t("overrideLabel", { channel: channelLabel(a.channelId) })}
               value={overrideDrafts[a.id] ?? ""}
               onChange={(value) => setOverrideDrafts({ ...overrideDrafts, [a.id]: value })}
               /*
@@ -377,15 +494,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       </div>
 
       {/*
+        The rest of the decision. "Publish now" is the header's one primary
+        action; the other two paths live here — "Approve with schedule" because
+        it is meaningless away from the date field it reads, and Reject because
+        the constitution allows exactly one control in the primary slot and
+        Approve is it. Reject keeps its danger styling, so nothing about its
+        weight changed except where it sits.
+
         A published item has nothing left to decide: the post is live in the
         channel, and the api answers both endpoints with a 409 (see
         ContentRepository.requireNotPublished). Offering the buttons anyway is
         offering a choice that no longer exists, so they are disabled and the
         reason is spelled out rather than left to be discovered by clicking.
-        Approve/Reject moved into the AppShell header (constitution: they are
-        this screen's primary actions) — only the schedule row still lives
-        here, since "Approve with schedule" is a secondary path next to the
-        date field it depends on.
       */}
       <Card className="mb-6">
         {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
@@ -405,6 +525,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           >
             {t("approveScheduled")}
           </Button>
+          <Button variant="danger" onClick={reject} disabled={isPublished}>
+            {t("reject")}
+          </Button>
         </div>
       </Card>
 
@@ -417,8 +540,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           >
             <div className="flex flex-wrap items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
-              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
-                {tc(`adaptationStatus.${a.status}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
+                {tc(`adaptationStatus.${deliveryOutcome(a)}`)}
               </StatusBadge>
             </div>
             {a.status === "published" &&
@@ -438,7 +561,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   {a.externalUrl ?? t("linkUnavailable")}
                 </span>
               ))}
-            {a.status === "failed" && a.lastError && (
+            {/*
+              An outcome nobody knows, in the reader's language and in our own
+              words — not the worker's English sentence, which is a log line
+              that happens to be readable. It says the one thing a person can
+              act on: look at the channel first, because approving again sends
+              a second copy.
+            */}
+            {deliveryOutcome(a) === "unknown" && (
+              <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                {tc("unknownOutcome")}
+              </p>
+            )}
+            {deliveryOutcome(a) === "failed" && a.lastError && (
               <p role="alert" className="text-sm text-danger">
                 {a.lastError}
               </p>

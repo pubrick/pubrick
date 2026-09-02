@@ -6,13 +6,22 @@ import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { OriginBadge } from "@/components/origin-badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconPlus } from "@/components/ui/icons";
 import { Segmented } from "@/components/ui/segmented";
-import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
+import {
+  type AdaptationStatus,
+  CONTENT_LIST_POLL_INTERVAL_MS,
+  CONTENT_STATUSES,
+  type ContentStatus,
+  DELIVERY_BADGE_STATUS,
+  deliveryOutcome,
+  hasAdaptationInFlight,
+} from "@/lib/adaptations";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
@@ -25,23 +34,20 @@ import {
   runFailureMessage,
 } from "@/lib/runs";
 
-type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
-type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
+/** The filter tabs, in lifecycle order — a picker, not a priority list. */
+const STATUSES: readonly ContentStatus[] = CONTENT_STATUSES;
 
-const STATUSES: ContentStatus[] = ["draft", "approved", "rejected", "published", "failed"];
-
-// Spec §2.4's five status colors, mapped from every adaptation status that
-// exists today. "queued"/"publishing" both read as the same in-flight blue
-// as "scheduled" — their own labels still come through unchanged, only the
-// color is shared.
-const ADAPTATION_BADGE_STATUS: Record<AdaptationStatus, StatusBadgeStatus> = {
-  pending: "draft",
-  scheduled: "scheduled",
-  queued: "scheduled",
-  publishing: "scheduled",
-  published: "published",
-  failed: "failed",
-};
+/**
+ * The SECTIONS, with failures first (dossier §3.4: "the failure section always
+ * sorts first"). The api already sorts failed runs to the top of the strip and
+ * says why; posts were the half that did not get it, so a post whose send
+ * broke sat below every draft, every approval and every success — last heading
+ * on the page, and on a long queue below the fold entirely.
+ */
+const GROUP_STATUSES: readonly ContentStatus[] = [
+  "failed",
+  ...CONTENT_STATUSES.filter((s) => s !== "failed"),
+];
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -89,16 +95,32 @@ const fetchOpenRuns = () => api<Run[]>("/api/runs?state=open", { cache: "no-stor
  */
 const openListNeverSettles = () => false;
 
+/**
+ * The content list, on the other hand, DOES settle: it stops being re-read the
+ * moment no post is on its way out.
+ *
+ * The queue used to re-read its cards only when a run left the open list — so
+ * a generation landing was live and a DELIVERY was not. A post could go
+ * queued → failed with the list still showing "Queued" until a reload, which
+ * is the same hole the item screen had, one screen wider.
+ *
+ * Module-level, so it is a stable `usePoll` dependency, and it asks the same
+ * question the item screen asks (`hasAdaptationInFlight`) so the two cannot
+ * decide differently about the same row.
+ */
+const contentSettled = (items: ContentItem[]) =>
+  !items.some((item) => hasAdaptationInFlight(item.adaptations));
+
 export default function ContentQueuePage() {
   const t = useTranslations("Content");
   const tr = useTranslations("Runs");
   const locale = useLocale();
   const router = useRouter();
 
-  const [items, setItems] = useState<ContentItem[] | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelsFailed, setChannelsFailed] = useState(false);
   const [status, setStatus] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -106,25 +128,38 @@ export default function ContentQueuePage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(errorMessage(err, t("genericError")));
+      setActionError(errorMessage(err, t("genericError")));
     },
     [router, locale, t],
   );
 
-  const loadContent = useCallback(() => {
-    api<ContentItem[]>(`/api/content${status ? `?status=${status}` : ""}`)
-      .then(setItems)
-      .catch(handleError);
-  }, [status, handleError]);
+  // `no-store` for the same reason the runs poll sets it.
+  const fetchContent = useCallback(
+    () =>
+      api<ContentItem[]>(`/api/content${status ? `?status=${status}` : ""}`, { cache: "no-store" }),
+    [status],
+  );
+  const {
+    data: items,
+    error: contentError,
+    refresh: refreshContent,
+  } = usePoll(fetchContent, contentSettled, { intervalMs: CONTENT_LIST_POLL_INTERVAL_MS });
 
   useEffect(() => {
-    loadContent();
-  }, [loadContent]);
-
-  useEffect(() => {
+    // A failed read must not look like a list with no names in it. Without
+    // this the only symptom of a dead GET /api/channels is that every row is
+    // labelled with a UUID, which reads as a data problem rather than as the
+    // request that it is.
     api<Channel[]>("/api/channels")
-      .then(setChannels)
-      .catch(() => {});
+      .then((cs) => {
+        setChannels(cs);
+        setChannelsFailed(false);
+      })
+      // Except when the account has no active organization: every request on
+      // this screen fails that way at once, the effect below is already
+      // leaving for onboarding, and three alerts on the way out is noise about
+      // one thing.
+      .catch((err) => setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg)));
   }, []);
 
   const {
@@ -144,14 +179,15 @@ export default function ContentQueuePage() {
     const ids = runs.map((run) => run.id);
     const gone = openRunIds.current.some((id) => !ids.includes(id));
     openRunIds.current = ids;
-    if (gone) loadContent();
-  }, [runs, loadContent]);
+    if (gone) refreshContent();
+  }, [runs, refreshContent]);
 
   useEffect(() => {
-    if (runsError instanceof ApiError && runsError.noActiveOrg) {
+    const failure = runsError ?? contentError;
+    if (failure instanceof ApiError && failure.noActiveOrg) {
       router.replace(`/${locale}/onboarding`);
     }
-  }, [runsError, router, locale]);
+  }, [runsError, contentError, router, locale]);
 
   /**
    * Start the run again from the same brief, and clear the one being retried.
@@ -170,7 +206,7 @@ export default function ContentQueuePage() {
    * its own Dismiss, which is a far smaller thing to be wrong about.
    */
   async function tryAgain(run: Run) {
-    setError(null);
+    setActionError(null);
     try {
       const created = await api<Run>("/api/runs", {
         method: "POST",
@@ -197,7 +233,7 @@ export default function ContentQueuePage() {
   }
 
   async function dismissRun(run: Run) {
-    setError(null);
+    setActionError(null);
     try {
       await api(`/api/runs/${run.id}/dismiss`, { method: "POST" });
       // Drop it from the rendered list the moment the write is known to have
@@ -265,17 +301,42 @@ export default function ContentQueuePage() {
     );
   }
 
+  /**
+   * One post's card.
+   *
+   * A failed post is drawn as one: the title takes the danger color and the
+   * row carries a retry affordance, which the run strips have had all along
+   * and the posts below them did not — the failure was a red chip on one
+   * channel line, in the last section of the page.
+   *
+   * That affordance is a LINK to the post, not an approve button on the list.
+   * The retry itself is Approve, and Approve lives on the item screen — one
+   * place (constitution), and the place where the person can first read WHY it
+   * failed. It matters most for the outcome that is not a failure at all: an
+   * adaptation whose send was never confirmed must be checked against the
+   * channel before anybody approves it again, because approving sends a second
+   * copy. A one-click retry in a list is exactly how that second copy happens.
+   */
   function renderItem(item: ContentItem) {
+    const failed = item.status === "failed";
     return (
       <li key={item.id} className="border-b border-border-soft py-3 last:border-b-0">
         <span className="flex flex-wrap items-center gap-2">
           <Link
             href={`/${locale}/content/${item.id}`}
-            className="text-[15px] font-semibold text-fg hover:text-accent"
+            className={`text-[15px] font-semibold hover:text-accent ${failed ? "text-danger" : "text-fg"}`}
           >
             {item.title || t("untitled")}
           </Link>
           <OriginBadge origin={deriveOrigin(item)} />
+          {failed && (
+            <Link
+              href={`/${locale}/content/${item.id}`}
+              className={buttonClasses("secondary", "sm", "ml-auto")}
+            >
+              {t("tryAgain")}
+            </Link>
+          )}
         </span>
         <ul className="mt-1.5 flex flex-col gap-1">
           {item.adaptations.map((a) => (
@@ -284,9 +345,18 @@ export default function ContentQueuePage() {
               className="flex flex-wrap items-center gap-1.5 text-[13px] text-fg-tertiary"
             >
               {channelLabel(a.channelId)} —{" "}
-              <StatusBadge status={ADAPTATION_BADGE_STATUS[a.status]}>
-                {t(`adaptationStatus.${a.status}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
+                {t(`adaptationStatus.${deliveryOutcome(a)}`)}
               </StatusBadge>
+              {/*
+                Said here and not only on the item screen: "check the channel
+                before approving again" is advice about an action that starts
+                on THIS list, and a badge alone does not carry it. Our sentence,
+                not the worker's log line.
+              */}
+              {deliveryOutcome(a) === "unknown" && (
+                <span className="w-full text-[var(--status-review-fg)]">{t("unknownOutcome")}</span>
+              )}
               {a.status === "published" &&
                 a.externalUrl &&
                 (isLinkableUrl(a.externalUrl) ? (
@@ -313,12 +383,30 @@ export default function ContentQueuePage() {
 
   const groups = status
     ? [[status as ContentStatus, items ?? []] as const]
-    : STATUSES.map((s) => [s, (items ?? []).filter((i) => i.status === s)] as const);
+    : GROUP_STATUSES.map((s) => [s, (items ?? []).filter((i) => i.status === s)] as const);
 
   const filterOptions = [
     { value: "", label: t("filterAll") },
     ...STATUSES.map((s) => ({ value: s, label: t(`status.${s}`) })),
   ];
+
+  /**
+   * Every read this screen makes now says so when it fails.
+   *
+   * `runsError` used to be consulted for one thing only — the onboarding
+   * redirect — so a dead `GET /api/runs` removed the strips and said nothing:
+   * a generation in progress simply stopped existing on the screen watching
+   * it. `contentError` is new and had no way to be silent, but it gets the
+   * same treatment for the same reason. What the user just did still wins over
+   * a background re-read, and "no active organization" stays unspoken because
+   * the effect above is already leaving for onboarding.
+   */
+  const readError = contentError ?? runsError;
+  const readErrorMessage =
+    readError && !(readError instanceof ApiError && readError.noActiveOrg)
+      ? errorMessage(readError, t("genericError"))
+      : null;
+  const error = actionError ?? readErrorMessage;
 
   const openRuns = runs ?? [];
   // "Nothing here yet" is only true when there is no work in flight either —
@@ -339,6 +427,11 @@ export default function ContentQueuePage() {
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
+        </p>
+      )}
+      {channelsFailed && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {t("channelsUnavailable")}
         </p>
       )}
 

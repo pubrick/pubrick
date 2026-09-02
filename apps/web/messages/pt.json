@@ -74,7 +74,8 @@
       "queued": "Na fila",
       "publishing": "Publicando",
       "published": "Publicado",
-      "failed": "Falhou"
+      "failed": "Falhou",
+      "unknown": "Resultado desconhecido"
     },
     "genericError": "Algo deu errado. Tente novamente.",
     "origin": {
@@ -82,7 +83,10 @@
       "humanEdited": "Editado por uma pessoa",
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por uma pessoa"
-    }
+    },
+    "unknownOutcome": "Foi enviado, mas a plataforma nunca confirmou. Verifique o canal antes de aprovar de novo: aprovar envia outra cópia.",
+    "channelsUnavailable": "Não foi possível carregar os nomes dos canais, por isso eles aparecem pelo ID.",
+    "tryAgain": "Tentar de novo"
   },
   "ContentNew": {
     "title": "Nova publicação",
@@ -128,7 +132,8 @@
     "linkUnavailable": "publicado — link indisponível",
     "viewPost": "Ver publicação",
     "scheduledFor": "Agendado para",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "overrideLabel": "Texto próprio para {channel}"
   },
   "SettingsPage": {
     "title": "Configurações",
