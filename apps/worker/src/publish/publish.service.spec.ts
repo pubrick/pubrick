@@ -30,6 +30,14 @@ function publisherStub(publish: unknown, schema: unknown = stubCredentialsSchema
   return { platform: "telegram", publish, credentialsSchema: schema } as never;
 }
 
+/**
+ * The claim `claimSend` hands back in the fixture. A value, not a boolean, so
+ * every assertion below can pin that the SAME claim travels to the release and
+ * to the terminal writes — the fence that stops an overtaken attempt from
+ * deleting a live successor's claim.
+ */
+const CLAIM = { id: "pub-1", attempt: 1 };
+
 function fixture(overrides: Record<string, unknown> = {}) {
   const adaptation = {
     id: "a1",
@@ -51,8 +59,10 @@ function fixture(overrides: Record<string, unknown> = {}) {
     // attempt is fenced on `(publishing, attemptCount)` and the number comes
     // from here.
     markPublishing: vi.fn().mockResolvedValue(1),
-    claimSend: vi.fn().mockResolvedValue(true),
-    releaseSend: vi.fn().mockResolvedValue(undefined),
+    // The claim it wrote, named by its own primary key — not a bare true. Every
+    // later write of this attempt addresses that row through it.
+    claimSend: vi.fn().mockResolvedValue(CLAIM),
+    releaseSend: vi.fn().mockResolvedValue(true),
     markPublished: vi.fn().mockResolvedValue(undefined),
     markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
     // Both answer whether the fenced statement matched a row.
@@ -77,10 +87,12 @@ describe("PublishService.handle", () => {
       { text: "Hello" },
       expect.anything(),
     );
-    expect(repo.markPublished).toHaveBeenCalledWith("o1", "a1", {
-      externalId: "77",
-      externalUrl: "https://t.me/x/77",
-    });
+    expect(repo.markPublished).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      { externalId: "77", externalUrl: "https://t.me/x/77" },
+      CLAIM,
+    );
   });
 
   it("prefers the per-channel body override", async () => {
@@ -113,6 +125,7 @@ describe("PublishService.handle", () => {
       "Forbidden",
       { status: "publishing", attemptCount: 1 },
       "failed",
+      CLAIM,
     );
   });
 
@@ -129,7 +142,10 @@ describe("PublishService.handle", () => {
     // A transient error is KNOWN-not-posted, so the retry pg-boss is about to
     // make has nothing to duplicate — and must not be blocked by this attempt's
     // claim. Holding it would turn every rate limit into "outcome unknown".
-    expect(repo.releaseSend).toHaveBeenCalledWith("o1", "a1");
+    // ...and it hands back ITS OWN claim, named by the id claimSend returned —
+    // not "whatever is in flight for this adaptation", which after a long hang
+    // can be a live successor's (see releaseSend).
+    expect(repo.releaseSend).toHaveBeenCalledWith("o1", CLAIM);
   });
 
   it("still rethrows the transient error when handing the claim back fails", async () => {
@@ -170,6 +186,7 @@ describe("PublishService.handle", () => {
       expect.stringContaining("check the channel before re-approving"),
       { status: "publishing", attemptCount: 1 },
       "unknown",
+      CLAIM,
     );
     // The claim is resolved by markFailed, never handed back: another attempt
     // must not be able to take it.
@@ -181,7 +198,7 @@ describe("PublishService.handle", () => {
   // and its outcome — after, for all anyone here knows, the post went out.
   it("does NOT send when a previous attempt left an unresolved in-flight claim", async () => {
     const { repo } = fixture();
-    repo.claimSend = vi.fn().mockResolvedValue(false);
+    repo.claimSend = vi.fn().mockResolvedValue(null);
     const publish = vi.fn();
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
@@ -193,6 +210,10 @@ describe("PublishService.handle", () => {
       expect.stringContaining("check the channel before re-approving"),
       { status: "publishing", attemptCount: 1 },
       "unknown",
+      // No claim of OUR own: the row being resolved is the predecessor's, and
+      // it can only be addressed the old way, through the adaptation. Passing
+      // a claim here would be naming a row this attempt never wrote.
+      undefined,
     );
   });
 
@@ -251,6 +272,8 @@ describe("PublishService.handle", () => {
       expect.stringContaining("vk"),
       { status: "queued", attemptCount: 0 },
       "failed",
+      // This path runs before `claimSend`, so there is no claim to name.
+      undefined,
     );
   });
 
@@ -328,6 +351,7 @@ describe("PublishService.handle", () => {
       expect.stringContaining("Channel c1 not found"),
       { status: "publishing", attemptCount: 1 },
       "failed",
+      CLAIM,
     );
     expect(repo.recordTransient).not.toHaveBeenCalled();
   });
@@ -481,6 +505,7 @@ describe("PublishService.handle", () => {
       expect.stringContaining("chatId"), // names the offending field, not an opaque platform 400
       { status: "publishing", attemptCount: 1 },
       "failed",
+      CLAIM,
     );
   });
 });
@@ -497,6 +522,9 @@ describe("PublishService.markExhausted", () => {
       "Retries exhausted",
       { status: "publishing", attemptCount: 0 },
       "failed",
+      // The dead-letter delivery is a different run of the process: it holds no
+      // claim, so it resolves whatever is in flight for the adaptation.
+      undefined,
     );
   });
 

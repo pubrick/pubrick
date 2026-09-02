@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { getPublisher, type VerifyResult } from "@pubrick/integrations";
 import { type ChannelCreate, type ChannelUpdate, decryptJson, encryptJson } from "@pubrick/shared";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
@@ -33,6 +33,16 @@ const PUBLIC_COLUMNS = {
  * still live. `pending` and `failed` have no job; `published` is history.
  */
 const OUTSTANDING_STATUSES = ["queued", "scheduled", "publishing"] as const;
+
+/**
+ * Applied in memory rather than as a `WHERE` clause, because the lock set and
+ * the cancel set are no longer the same set: the delete locks EVERY adaptation
+ * its cascade will destroy (`docs/lock-order.md`), and only the outstanding ones
+ * have a job to cancel.
+ */
+function isOutstanding(status: (typeof schema.ADAPTATION_STATUSES)[number]): boolean {
+  return (OUTSTANDING_STATUSES as readonly string[]).includes(status);
+}
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -133,13 +143,38 @@ export class ChannelsRepository {
    * cancels without bumping is one schema change away from a silent
    * "already queued" stall that nothing would explain.
    *
-   * LOCK ORDER: the channel row first, then its adaptations by ascending id.
-   * The channel comes first because `ContentRepository.create` reaches these two
-   * tables in that order too (its adaptation INSERT takes `FOR KEY SHARE` on the
-   * channel it names), and taking adaptations first here would invert that
-   * against a concurrent create. Ascending id for the same reason `approve` and
-   * `reject` use it: two transactions must not walk the same set in opposite
-   * orders.
+   * LOCK ORDER: **`adaptations` (ascending id) BEFORE `channels`** — the
+   * product's one order, written down in `docs/lock-order.md`.
+   *
+   * It used to be the other way round, justified against `ContentRepository.create`
+   * alone, and that inverted it against the publish worker: the worker's terminal
+   * write takes the adaptation with an `UPDATE` and then takes `FOR KEY SHARE` on
+   * THIS channel, for the foreign key of the `publications` row it inserts for the
+   * attempt's outcome. Channel-then-adaptations against adaptations-then-channel,
+   * with `FOR UPDATE` conflicting with `FOR KEY SHARE`, is a cycle — measured, not
+   * reasoned about: this endpoint returned `40P01` while a worker was ending a
+   * retry chain on one of the adaptations about to be cascaded away. The insert
+   * branch it needs is the ORDINARY end of such a chain, because every transient
+   * failure releases the claim, so the terminal write finds nothing to update.
+   *
+   * EVERY adaptation of the channel is locked, not just the outstanding ones. The
+   * cascade destroys all of them, and `docs/lock-order.md` states the rule as
+   * "lock everything the cascade will reach, in the canonical order, before you
+   * issue the delete": the brand delete's identical bug was reproduced through
+   * exactly the rows its outstanding-only filter left out. The cancel loop below
+   * still only acts on the outstanding ones.
+   *
+   * The channel's own lock is taken by the DELETE itself, last, and the 404 is
+   * read off its `RETURNING` rather than from a `SELECT ... FOR UPDATE` — one
+   * statement that both locks and reports, so a channel another request deleted
+   * in the meantime is a 404 here rather than a `{deleted: true}` about nothing.
+   *
+   * What this costs is in `docs/lock-order.md` under "the price of the order":
+   * the channel lock is no longer held while the adaptations are read, so a
+   * content item created AND approved inside the tail of this transaction can
+   * leave a job behind. Unavoidable — the only lock mode that blocks that create
+   * is the one the worker needs — and it costs a job that wakes, finds no row and
+   * returns, never a lost or duplicated post.
    *
    * What survives: the `publications` rows. Migration 0011 relaxed both of their
    * foreign keys to `SET NULL` and stamps the channel's name and platform onto
@@ -148,24 +183,20 @@ export class ChannelsRepository {
    */
   async delete(orgId: string, id: string) {
     await db.transaction(async (tx) => {
-      await this.lockChannel(tx, orgId, id);
-      const outstanding = await tx
+      await this.requireChannel(tx, orgId, id);
+      const doomed = await tx
         .select({
           id: schema.adaptations.id,
+          status: schema.adaptations.status,
           attemptCount: schema.adaptations.attemptCount,
         })
         .from(schema.adaptations)
-        .where(
-          and(
-            eq(schema.adaptations.orgId, orgId),
-            eq(schema.adaptations.channelId, id),
-            inArray(schema.adaptations.status, [...OUTSTANDING_STATUSES]),
-          ),
-        )
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.channelId, id)))
         .orderBy(schema.adaptations.id)
         .for("update");
 
-      for (const adaptation of outstanding) {
+      for (const adaptation of doomed) {
+        if (!isOutstanding(adaptation.status)) continue;
         await this.queue.cancelPublish(tx, adaptation.id, orgId);
         await tx
           .update(schema.adaptations)
@@ -175,21 +206,29 @@ export class ChannelsRepository {
           );
       }
 
-      await tx
+      const deleted = await tx
         .delete(schema.channels)
-        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)));
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
+        .returning({ id: schema.channels.id });
+      if (deleted.length === 0) throw new NotFoundException("Channel not found");
     });
     return { deleted: true };
   }
 
-  /** 404s a channel that is not this org's, and holds the row for the delete. */
-  private async lockChannel(tx: Tx, orgId: string, id: string): Promise<void> {
+  /**
+   * 404s a channel that is not this org's, WITHOUT locking it.
+   *
+   * Unlocked deliberately: the channel's row lock belongs after the adaptations
+   * (`docs/lock-order.md`), and taking it here to answer a 404 is precisely the
+   * inversion that deadlocked against the worker. This read is the cheap 404 for
+   * the ordinary case; the authoritative one is the DELETE's `RETURNING`.
+   */
+  private async requireChannel(tx: Tx, orgId: string, id: string): Promise<void> {
     const rows = await tx
       .select({ id: schema.channels.id })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
-      .limit(1)
-      .for("update");
+      .limit(1);
     if (rows.length === 0) throw new NotFoundException("Channel not found");
   }
 

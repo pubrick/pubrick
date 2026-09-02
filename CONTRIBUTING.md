@@ -16,6 +16,15 @@ Humans and AI agents follow the same gates.
 
 Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`), English only.
 
+## Lock order
+
+Row locks across `brands`, `adaptations`, `channels` and `content_items` are
+taken in that order, product-wide. Before adding a lock — including the ones you
+do not write, like a foreign key's `FOR KEY SHARE` on an insert or a cascading
+delete's — read `docs/lock-order.md` and add yours to it. Two deadlocks got in
+because each side documented its order against a different counterparty; a lock
+order cannot be stated correctly in a comment that can only see one side.
+
 ## Migrations
 
 Never edit an applied migration. See `.claude/skills/db-migrations/SKILL.md`.

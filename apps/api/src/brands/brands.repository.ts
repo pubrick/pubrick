@@ -24,6 +24,15 @@ const PUBLIC_COLUMNS = {
  */
 const OUTSTANDING_ADAPTATIONS = ["queued", "scheduled", "publishing"] as const;
 
+/**
+ * Applied in memory, not as a `WHERE` clause: the lock set and the cancel set
+ * are different sets here. The delete locks every adaptation the cascade will
+ * destroy (`docs/lock-order.md`); only the outstanding ones have a job.
+ */
+function isOutstanding(status: (typeof schema.ADAPTATION_STATUSES)[number]): boolean {
+  return (OUTSTANDING_ADAPTATIONS as readonly string[]).includes(status);
+}
+
 /** Run statuses that still have a generate job behind them. */
 const OUTSTANDING_RUNS = ["queued", "running"] as const;
 
@@ -92,11 +101,30 @@ export class BrandsRepository {
    * canceller keeps — see `ChannelsRepository.delete` for why it is kept even
    * where the row is about to be deleted anyway.
    *
-   * LOCK ORDER: the brand row, then its adaptations by ascending id. Runs are
-   * not locked — `cancelGenerate` acts on the queue, and the run rows are about
-   * to be deleted by the cascade; a run whose handler is mid-step finds its row
-   * gone on the next fenced write and returns, which is the documented ending
-   * for a deleted brand.
+   * LOCK ORDER: the brand row, then EVERY adaptation the cascade will destroy,
+   * by ascending id — `brands` → `adaptations` → `channels`, the product's one
+   * order, written down in `docs/lock-order.md`.
+   *
+   * `channels` is not named in the code because this transaction never locks it
+   * explicitly: `DELETE FROM brands` cascades into it, and a cascade takes its
+   * locks invisibly, in its own scan order, holding whatever the statement
+   * already holds. That is exactly how this method deadlocked. It used to lock
+   * only the OUTSTANDING adaptations, so an adaptation that was `pending` when
+   * that SELECT ran — and which an approve moved into `publishing` a moment
+   * later — was left unlocked; the cascade then took the channel row and reached
+   * for that adaptation while the publish worker held it and was waiting for
+   * `FOR KEY SHARE` on the same channel, for the foreign key of the
+   * `publications` row it was inserting. Reproduced as `40P01` on the DELETE.
+   *
+   * So the lock set is every adaptation reachable from either side, not the ones
+   * with a job to cancel. The cancel loop still acts only on the outstanding
+   * ones; the extra rows are there to be HELD, in the canonical order, before
+   * the cascade can reach them out of it.
+   *
+   * Runs are not locked — `cancelGenerate` acts on the queue, and the run rows
+   * are about to be deleted by the cascade; a run whose handler is mid-step
+   * finds its row gone on the next fenced write and returns, which is the
+   * documented ending for a deleted brand.
    */
   async delete(orgId: string, id: string) {
     await db.transaction(async (tx) => {
@@ -117,13 +145,16 @@ export class BrandsRepository {
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.brandId, id)));
 
-      const outstanding = await tx
-        .select({ id: schema.adaptations.id, attemptCount: schema.adaptations.attemptCount })
+      const doomed = await tx
+        .select({
+          id: schema.adaptations.id,
+          status: schema.adaptations.status,
+          attemptCount: schema.adaptations.attemptCount,
+        })
         .from(schema.adaptations)
         .where(
           and(
             eq(schema.adaptations.orgId, orgId),
-            inArray(schema.adaptations.status, [...OUTSTANDING_ADAPTATIONS]),
             or(
               inArray(schema.adaptations.channelId, brandChannels),
               inArray(schema.adaptations.contentItemId, brandItems),
@@ -133,7 +164,8 @@ export class BrandsRepository {
         .orderBy(schema.adaptations.id)
         .for("update");
 
-      for (const adaptation of outstanding) {
+      for (const adaptation of doomed) {
+        if (!isOutstanding(adaptation.status)) continue;
         await this.queue.cancelPublish(tx, adaptation.id, orgId);
         await tx
           .update(schema.adaptations)

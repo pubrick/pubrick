@@ -417,7 +417,162 @@ describe.skipIf(!url)("channels e2e", () => {
       // by nothing but `org_id` would have taken this one too.
       expect(await publishJobStates(keptAdaptation.id)).toEqual(["created"]);
     });
+
+    /**
+     * THE LOCK ORDER, against the counterparty this method's comment used not to
+     * name: the publish worker (`docs/lock-order.md`).
+     *
+     * This delete used to take the channel `FOR UPDATE` and only then its
+     * adaptations. The worker's terminal write goes the other way and cannot go
+     * any other way: it UPDATEs the adaptation, then inserts the attempt's
+     * outcome into `publications`, whose foreign key takes `FOR KEY SHARE` on
+     * the channel — and `FOR UPDATE` conflicts with `FOR KEY SHARE`. Two
+     * transactions, two tables, opposite orders.
+     *
+     * The interleaving below is the measured one, not an imagined one: the
+     * worker holds the adaptation and is about to insert; the delete arrives and
+     * blocks reaching for that adaptation; the insert then reaches for the
+     * channel. Before the fix Postgres broke the cycle with `40P01` and the
+     * DELETE returned 500. The insert branch it needs is the ORDINARY end of a
+     * retry chain — every transient failure releases its claim, so the terminal
+     * write has no claim left to resolve in place.
+     *
+     * Both transactions must commit. Asserting only the HTTP status would let a
+     * fix that merely moves the deadlock onto the worker pass.
+     */
+    /**
+     * Two shapes, one cycle. The first is the measured one — an attempt ending a
+     * retry chain on a `publishing` adaptation, which this delete DID lock; it
+     * deadlocked anyway, purely on the order. The second is the shape the brand
+     * delete was reproduced through: an adaptation the outstanding-only filter
+     * left out, reached by the cascade AFTER the channel row. Locking every
+     * adaptation the cascade will destroy is what closes that one.
+     */
+    for (const shape of [
+      {
+        name: "ending a retry chain on an adaptation it locked",
+        status: "publishing",
+        // `markFailed`: fenced, and its INSERT branch is the ordinary end of a
+        // retry chain, because every transient failure released its claim.
+        update: `UPDATE adaptations SET status = 'failed', last_error = 'rate limited', updated_at = now()
+                  WHERE id = $1 AND status = 'publishing' AND attempt_count = 1`,
+        outcome: "failed",
+      },
+      {
+        name: "recording a delivery for an adaptation outside the outstanding set",
+        status: "failed",
+        // `markPublished`: unfenced on purpose — a post that went out is a fact,
+        // recorded however the row has moved on since.
+        update: `UPDATE adaptations SET status = 'published', last_error = null, updated_at = now()
+                  WHERE id = $1`,
+        outcome: "published",
+      },
+    ]) {
+      it(`does not deadlock against a worker ${shape.name}`, async () => {
+        const agent = await orgAgent();
+        const brand = await agent.post("/api/brands").send({ name: "Locks" }).expect(201);
+        const channel = await agent
+          .post("/api/channels")
+          .send({
+            brandId: brand.body.id,
+            platform: "telegram",
+            name: "Racing",
+            credentials: { botToken: "333:t", chatId: "@c" },
+          })
+          .expect(201);
+        const item = await agent
+          .post("/api/content")
+          .send({ brandId: brand.body.id, body: "Mid-attempt", channelIds: [channel.body.id] })
+          .expect(201);
+        const adaptationId = item.body.adaptations[0].id as string;
+        await agent.post(`/api/content/${item.body.id}/approve`).send({}).expect(200);
+        await execute(
+          `UPDATE adaptations SET status = '${shape.status}', attempt_count = 1 WHERE id = '${adaptationId}'`,
+        );
+
+        const { createDb } = await import("@pubrick/db");
+        const { pool } = createDb(url as string);
+        const worker = await pool.connect();
+        let deleteStatus = 0;
+        let insertError: string | null = null;
+        try {
+          await worker.query("BEGIN");
+          await worker.query(shape.update, [adaptationId]);
+
+          const deleting = agent
+            .delete(`/api/channels/${channel.body.id}`)
+            .then((res) => res.status);
+          // Not a sleep: the test is only about the interleaving once the delete
+          // is genuinely parked. With the lock order kept it parks on the
+          // adaptation SELECT; without it, inside the channel DELETE.
+          await waitForLockWaiter(["%adaptations%for update%", '%delete from "channels"%']);
+
+          // `resolveClaim`'s INSERT — the foreign key that reaches for the channel.
+          insertError = await worker
+            .query(
+              `INSERT INTO publications (org_id, adaptation_id, channel_id, status, attempt)
+               SELECT org_id, id, channel_id, '${shape.outcome}', attempt_count
+                 FROM adaptations WHERE id = $1`,
+              [adaptationId],
+            )
+            .then(
+              () => null,
+              (error: { code?: string }) => String(error.code),
+            );
+          await worker.query("COMMIT");
+          deleteStatus = await deleting;
+        } finally {
+          await worker.query("ROLLBACK").catch(() => {});
+          worker.release();
+          await pool.end();
+        }
+
+        expect(insertError, "the worker's terminal write was the deadlock victim").toBeNull();
+        expect(deleteStatus, "DELETE /channels/:id was the deadlock victim (40P01 -> 500)").toBe(
+          200,
+        );
+      });
+    }
   });
+
+  /** One statement, on its own pool — the worker's side of the races below. */
+  async function execute(statement: string): Promise<void> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.execute(statement);
+    await pool.end();
+  }
+
+  /**
+   * Waits until some backend is parked on a row lock inside a statement matching
+   * `queryLike` — i.e. until the interleaving under test is a FACT rather than a
+   * hope about how two promises happened to schedule.
+   *
+   * Scoped by the statement text on purpose: `wait_event_type = 'Lock'` alone
+   * would also count a waiter belonging to whichever other spec file vitest is
+   * running beside this one.
+   */
+  async function waitForLockWaiter(patterns: string[]): Promise<void> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const matches = patterns.map((pattern) => `query ILIKE '${pattern}'`).join(" OR ");
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const { rows } = await db.execute(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND (${matches})`,
+        );
+        if ((rows[0] as { n: number }).n > 0) return;
+        if (Date.now() > deadline) throw new Error(`no backend blocked on ${patterns.join(" / ")}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      await pool.end();
+    }
+  }
 
   /** Reads the row a send would read, with the worker's own query. */
   async function storedCredentials(channelId: string): Promise<Record<string, string>> {

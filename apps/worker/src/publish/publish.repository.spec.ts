@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -9,6 +10,7 @@ type PublishRepositoryCtor = typeof import("./publish.repository").PublishReposi
 type PublishRepositoryInstance = InstanceType<PublishRepositoryCtor>;
 type PublishServiceCtor = typeof import("./publish.service").PublishService;
 type PublishServiceInstance = InstanceType<PublishServiceCtor>;
+type SendClaim = import("./publish.repository").SendClaim;
 type Schema = typeof import("@pubrick/db").schema;
 
 /**
@@ -154,6 +156,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   async function seedAdaptation(
     status: "pending" | "queued" | "scheduled" | "publishing" | "published" = "queued",
+    channel: string = channelId,
   ) {
     const [item] = await db
       .insert(schema.contentItems)
@@ -162,7 +165,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const itemId = item?.id as string;
     const [adaptation] = await db
       .insert(schema.adaptations)
-      .values({ orgId, contentItemId: itemId, channelId, status })
+      .values({ orgId, contentItemId: itemId, channelId: channel, status })
       .returning({ id: schema.adaptations.id });
     return adaptation?.id as string;
   }
@@ -279,7 +282,8 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("a call carrying another org's id moves nothing: every writer is a no-op", async () => {
     const adaptationId = await seedAdaptation("queued");
     expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    const claim = await repo.claimSend(orgId, adaptationId);
+    expect(claim).not.toBeNull();
 
     const before = {
       adaptation: await adaptationRow(adaptationId),
@@ -296,10 +300,12 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const fence = { status: "publishing", attemptCount: 1 } as const;
     await repo.markFailed(strangerOrgId, adaptationId, "not your delivery", fence);
     await repo.recordTransient(strangerOrgId, adaptationId, "not your retry", fence);
-    await repo.releaseSend(strangerOrgId, adaptationId);
+    // Even naming the claim by its own primary key, a stranger cannot release
+    // it: `org_id` is still in the predicate.
+    expect(await repo.releaseSend(strangerOrgId, claim as SendClaim)).toBe(false);
     // The two that answer rather than write: a claim another org cannot take.
     expect(await repo.markPublishing(strangerOrgId, adaptationId)).toBeNull();
-    expect(await repo.claimSend(strangerOrgId, adaptationId)).toBe(false);
+    expect(await repo.claimSend(strangerOrgId, adaptationId)).toBeNull();
 
     expect({
       adaptation: await adaptationRow(adaptationId),
@@ -762,6 +768,70 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(pubsAfterSecond).toHaveLength(1);
   });
 
+  /**
+   * A channel of its own, for the tests that DELETE one. The shared fixtures
+   * above are used by every other test in this file, so a delete of either
+   * would make this suite order-dependent.
+   */
+  async function seedDisposableChannel(name: string): Promise<string> {
+    const { encryptJson } = await import("@pubrick/shared");
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name,
+        credentialsEncrypted: encryptJson(
+          { botToken: "9:disposable", chatId: "-99" },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    return channel?.id as string;
+  }
+
+  /** One publications row by its own primary key — the only pointer a delete cannot null. */
+  async function publicationById(id: string) {
+    const [row] = await db.select().from(schema.publications).where(eq(schema.publications.id, id));
+    return row;
+  }
+
+  /**
+   * One item, two stale `publishing` adaptations, inserted so that HEAP order is
+   * the reverse of ID order — the premise of the deadlock the sweep's missing
+   * `ORDER BY` caused. Written with explicit ids because that is the only way to
+   * make the two orders disagree on purpose.
+   */
+  async function seedReversedHeapOrder() {
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Two channels", status: "approved" })
+      .returning({ id: schema.contentItems.id });
+    const itemId = item?.id as string;
+    const run = randomUUID().slice(0, 8);
+    const ids = [2, 1].map((n) => `${run}-0000-4000-8000-${String(n).padStart(12, "0")}`);
+    const channels = [
+      await seedDisposableChannel(`Heap A ${run}`),
+      await seedDisposableChannel(`Heap B ${run}`),
+    ];
+    for (const [index, id] of ids.entries()) {
+      await db.insert(schema.adaptations).values({
+        id,
+        orgId,
+        contentItemId: itemId,
+        channelId: channels[index] as string,
+        status: "publishing",
+        attemptCount: 1,
+      });
+    }
+    // Older than one whole attempt window plus its grace: candidates for the sweep.
+    await db.execute(
+      `UPDATE adaptations SET updated_at = now() - interval '1 day' WHERE content_item_id = '${itemId}'`,
+    );
+    return { itemId, adaptationIds: ids };
+  }
+
   async function publicationsFor(adaptationId: string) {
     return db
       .select()
@@ -773,10 +843,14 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId);
 
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    const claim = await repo.claimSend(orgId, adaptationId);
 
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(1);
+    // The claim it hands back names the row it just wrote — the address every
+    // later write of this attempt uses, and the only one a channel delete
+    // cannot null out.
+    expect(claim).toEqual({ id: pubs[0]?.id, attempt: 1 });
     expect(pubs[0]?.status).toBe("in_flight");
     // Read from adaptations.attempt_count in the same statement, so it cannot
     // drift from the count the claim on the attempt just wrote.
@@ -789,30 +863,30 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("claimSend refuses a second claim while one is unresolved, and writes nothing", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
 
     await repo.markPublishing(orgId, adaptationId); // the redelivery re-claims the attempt
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(false);
+    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
 
     expect(await publicationsFor(adaptationId)).toHaveLength(1);
   });
 
   it("claimSend is org-scoped and reports false for an adaptation that is not there", async () => {
     const adaptationId = await seedAdaptation("queued");
-    expect(await repo.claimSend("some-other-org", adaptationId)).toBe(false);
+    expect(await repo.claimSend("some-other-org", adaptationId)).toBeNull();
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
   });
 
   it("releaseSend hands the claim back so an honest retry can take it again", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId);
-    await repo.claimSend(orgId, adaptationId);
+    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
-    await repo.releaseSend(orgId, adaptationId);
+    expect(await repo.releaseSend(orgId, claim)).toBe(true);
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
 
     await repo.markPublishing(orgId, adaptationId);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
   });
 
   it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
@@ -826,9 +900,9 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId);
-    await repo.claimSend(orgId, adaptationId);
+    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
-    await repo.releaseSend(orgId, adaptationId);
+    expect(await repo.releaseSend(orgId, claim)).toBe(true);
 
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(1);
@@ -861,7 +935,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
   });
 
   it("markFailed resolves the claim to failed rather than leaving one behind", async () => {
@@ -949,10 +1023,267 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(2);
     expect(pubs.map((row) => row.status).sort()).toEqual(["in_flight", "unknown"]);
+  });
+
+  /**
+   * I2: an attempt that has been overtaken must not be able to delete the claim
+   * of the attempt that overtook it.
+   *
+   * The sequence is the one the product actually produces. A claims and hangs
+   * mid-send. The heartbeat supervisor redelivers; B is refused the claim and
+   * resolves A's row to `unknown`, which frees the in-flight slot. The operator
+   * checks the channel and re-approves. C claims and sends. THEN A finally comes
+   * back with a transient error and hands "the claim" back — and before the
+   * fence, the only claim in flight was C's. If C dies before recording, the
+   * redelivery finds no claim and posts a second time, which is exactly what
+   * the in-flight index exists to prevent.
+   */
+  it("releaseSend gives back only THIS attempt's claim, never the one that overtook it", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+    const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+
+    // The redelivered attempt B: refused the claim, records an unknown outcome,
+    // and in doing so RESOLVES the hung attempt's row — the slot is free again.
+    await repo.markFailed(
+      orgId,
+      adaptationId,
+      "outcome unknown",
+      {
+        status: "publishing",
+        attemptCount: 1,
+      },
+      "unknown",
+    );
+    // The operator checks the channel and re-approves; attempt C claims and sends.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(2);
+    const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    expect(live.id).not.toBe(hung.id);
+
+    // A comes back at last. Its release must match its own row — which is no
+    // longer in flight — and nothing else.
+    expect(await repo.releaseSend(orgId, hung)).toBe(false);
+
+    const pubs = await publicationsFor(adaptationId);
+    const stillClaimed = pubs.find((row) => row.id === live.id);
+    expect(stillClaimed?.status, "a live attempt's send claim was deleted by a dead one").toBe(
+      "in_flight",
+    );
+    // ...and a second send is still refused, which is the property that matters.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
+  });
+
+  /**
+   * The same fence as `releaseSend`, one method over — and this one needs it
+   * MORE, because `markPublished` is deliberately unfenced on the adaptation: a
+   * post that went out is a fact, and it is recorded whatever the row says now.
+   *
+   * So an overtaken attempt DOES reach `resolveClaim` here. Addressing the claim
+   * by "whatever is in flight for this adaptation" would have it stamp its own
+   * delivery onto a live successor's claim, freeing the in-flight slot the
+   * successor is relying on. Its own row, by primary key, or a fresh record —
+   * never somebody else's claim.
+   */
+  it("markPublished resolves its OWN claim, never a successor's, when it comes back late", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    // The redelivery reports an unknown outcome, resolving the hung claim.
+    await repo.markFailed(
+      orgId,
+      adaptationId,
+      "outcome unknown",
+      {
+        status: "publishing",
+        attemptCount: 1,
+      },
+      "unknown",
+    );
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublishing(orgId, adaptationId);
+    const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+
+    await repo.markPublished(
+      orgId,
+      adaptationId,
+      { externalId: "11", externalUrl: "https://t.me/x/11" },
+      hung,
+    );
+
+    expect(
+      (await publicationById(live.id))?.status,
+      "a live attempt's send claim was consumed by an overtaken one",
+    ).toBe("in_flight");
+    expect(await publicationById(hung.id)).toMatchObject({ status: "unknown" });
+    const published = (await publicationsFor(adaptationId)).filter(
+      (row) => row.status === "published",
+    );
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ externalId: "11" });
+  });
+
+  /**
+   * I4: the post went live and the channel was deleted before the attempt could
+   * record it. The adaptation cascades away, both of the claim's pointers are
+   * nulled, and the adaptation-scoped write matches nothing — so the receipt
+   * used to be stranded at `in_flight` with no id and no link, for ever, about a
+   * post that is live in someone's channel. Both the changelog and the schema
+   * comment promise the opposite.
+   */
+  it("markPublished still records the delivery when the channel — and so the adaptation — was deleted mid-send", async () => {
+    const disposable = await seedDisposableChannel("Deleted mid-send");
+    const adaptationId = await seedAdaptation("queued", disposable);
+    await repo.markPublishing(orgId, adaptationId);
+    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+
+    // The user deletes the channel while the request is in flight. The cascade
+    // takes the adaptation; `SET NULL` takes both of the claim's pointers; the
+    // BEFORE DELETE trigger stamps the tombstone.
+    await db.delete(schema.channels).where(eq(schema.channels.id, disposable));
+
+    await repo.markPublished(
+      orgId,
+      adaptationId,
+      { externalId: "4242", externalUrl: "https://t.me/gone/4242" },
+      claim,
+    );
+
+    const receipt = await publicationById(claim.id);
+    expect(receipt).toMatchObject({
+      status: "published",
+      externalId: "4242",
+      externalUrl: "https://t.me/gone/4242",
+      attempt: 1,
+      adaptationId: null,
+      channelId: null,
+      // What the tombstone is for: the receipt can still say where the post went.
+      channelName: "Deleted mid-send",
+      channelPlatform: "telegram",
+    });
+  });
+
+  /**
+   * The other half of I4: the attempt never comes back at all. Nothing can
+   * resolve such a claim from the adaptation side — `sweepAbandoned` drives off
+   * `adaptations` and there is no adaptation left to be `publishing` — so
+   * without this pass the row says "an attempt is out there right now" for ever.
+   */
+  it("sweepOrphanedClaims resolves a claim whose adaptation was deleted, and leaves a fresh one alone", async () => {
+    const stale = await seedDisposableChannel("Long gone");
+    const staleAdaptation = await seedAdaptation("queued", stale);
+    await repo.markPublishing(orgId, staleAdaptation);
+    const staleClaim = (await repo.claimSend(orgId, staleAdaptation)) as SendClaim;
+    const fresh = await seedDisposableChannel("Just now");
+    const freshAdaptation = await seedAdaptation("queued", fresh);
+    await repo.markPublishing(orgId, freshAdaptation);
+    const freshClaim = (await repo.claimSend(orgId, freshAdaptation)) as SendClaim;
+    await db.delete(schema.channels).where(eq(schema.channels.id, stale));
+    await db.delete(schema.channels).where(eq(schema.channels.id, fresh));
+    // Only one of them is older than a whole attempt window plus its grace.
+    await db.execute(
+      `UPDATE publications SET created_at = now() - interval '1 day' WHERE id = '${staleClaim.id}'`,
+    );
+
+    const swept = await repo.sweepOrphanedClaims();
+
+    expect(swept.map((row) => row.id)).toContain(staleClaim.id);
+    expect(swept.map((row) => row.id)).not.toContain(freshClaim.id);
+    const resolved = await publicationById(staleClaim.id);
+    expect(resolved).toMatchObject({ status: "unknown", channelName: "Long gone" });
+    expect(String(resolved?.error)).toContain("DELIVERY OUTCOME UNKNOWN");
+    // A live attempt's claim is not somebody else's to resolve.
+    expect((await publicationById(freshClaim.id))?.status).toBe("in_flight");
+    // Nor is an OLD claim whose adaptation still exists: that one is still
+    // reachable from the adaptation side, and `sweepAbandoned` owns it —
+    // including its check that no pg-boss job could still finish the attempt.
+    // This pass is only for the rows that side can never see.
+    const reachable = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, reachable);
+    const reachableClaim = (await repo.claimSend(orgId, reachable)) as SendClaim;
+    await db.execute(
+      `UPDATE publications SET created_at = now() - interval '1 day' WHERE id = '${reachableClaim.id}'`,
+    );
+    expect((await repo.sweepOrphanedClaims()).map((row) => row.id)).not.toContain(
+      reachableClaim.id,
+    );
+    expect((await publicationById(reachableClaim.id))?.status).toBe("in_flight");
+  });
+
+  /**
+   * I8: the sweep walks `adaptations` in the same order as everybody else.
+   *
+   * `ContentRepository.lockAdaptations` takes an item's adaptations
+   * `ORDER BY id FOR UPDATE`, and its own comment says why: two transactions
+   * must not walk one set in opposite orders. The sweep was one bulk UPDATE with
+   * no ORDER BY, so it locked in heap order — which reverses freely — and
+   * `reject` targets `publishing`, exactly the sweep's candidate set. The two
+   * rows below are inserted high-id-first so that heap order IS the reverse of
+   * id order, which is the whole premise.
+   *
+   * Both transactions must commit. Before the fix one of them died with 40P01,
+   * and when it was the api's, a person cancelling a delivery got a 500.
+   */
+  it("sweepAbandoned locks in id order, so it cannot deadlock against an item's ordered lock", async () => {
+    const { itemId, adaptationIds } = await seedReversedHeapOrder();
+    const [low, high] = [...adaptationIds].sort() as [string, string];
+
+    const rejecting = await pool.connect();
+    let sweptOutcome: PromiseSettledResult<unknown>;
+    let rejectError: string | null = null;
+    try {
+      // The api's `reject`, mid-scan: it has locked the first row of its ordered
+      // walk and has not yet reached the second.
+      await rejecting.query("BEGIN");
+      await rejecting.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [low]);
+
+      const sweeping = repo.sweepAbandoned();
+      // The sweeper is now parked on a row lock — on `high` before the fix, on
+      // `low` after it. Either way the interleaving is a fact, not a hope.
+      await waitForLockWaiters("%make_interval%", 1);
+
+      // ...and now `reject` walks on to the rest of its ordered set.
+      rejectError = await rejecting
+        .query(
+          `SELECT id FROM adaptations
+            WHERE content_item_id = $1 AND status IN ('queued','scheduled','publishing')
+            ORDER BY id FOR UPDATE`,
+          [itemId],
+        )
+        .then(
+          () => null,
+          (error: { code?: string }) => String(error.code),
+        );
+      await rejecting.query("COMMIT");
+      [sweptOutcome] = await Promise.allSettled([sweeping]);
+    } finally {
+      await rejecting.query("ROLLBACK").catch(() => {});
+      rejecting.release();
+    }
+
+    expect(
+      rejectError,
+      "reject was the deadlock victim — a 500 for cancelling a delivery",
+    ).toBeNull();
+    expect(sweptOutcome.status, "the sweep was the deadlock victim").toBe("fulfilled");
+    // Nothing was swept: `reject` held `low` throughout, so the sweep's own
+    // re-check under the lock is what decides — and `high` is genuinely stale.
+    expect(await adaptationStatus(high)).toBe("failed");
   });
 
   it("0008 created the in-flight index as a partial unique index on adaptation_id", async () => {

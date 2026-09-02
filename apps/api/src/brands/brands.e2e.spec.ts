@@ -277,6 +277,131 @@ describe.skipIf(!url)("brands e2e", () => {
     });
   });
 
+  /**
+   * THE SAME LOCK CYCLE AS `ChannelsRepository.delete`, reached the other way:
+   * this transaction never names `channels` at all. `DELETE FROM brands`
+   * cascades into it, and a cascade takes its locks invisibly, in its own scan
+   * order, holding everything the statement already holds — then walks on into
+   * `adaptations`. See `docs/lock-order.md`.
+   *
+   * The gap was that the delete locked only the OUTSTANDING adaptations. Any
+   * other one — this test uses a `failed` row, which is what the abandoned-publish
+   * sweep leaves behind — was unlocked, so the cascade reached it channel-first
+   * while the worker held it and was reaching for the channel through the
+   * foreign key of the `publications` row it was inserting. Measured as `40P01`
+   * on the DELETE.
+   *
+   * The worker's transaction here is `markPublished` arriving late: the attempt
+   * that actually posted comes back after something else already moved the row,
+   * and records the delivery anyway. Its UPDATE is deliberately unfenced — that
+   * is what `markPublished` does, because a post that went out is a fact.
+   *
+   * Both sides must commit; asserting the HTTP status alone would pass a fix
+   * that merely made the worker the victim instead.
+   */
+  it("does not deadlock against a worker recording a delivery for an adaptation it is about to cascade", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Cascade" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Racing",
+        credentials: { botToken: "444:t", chatId: "@d" },
+      })
+      .expect(201);
+    const item = await agent
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "Late arrival", channelIds: [channel.body.id] })
+      .expect(201);
+    const adaptationId = item.body.adaptations[0].id as string;
+    // NOT outstanding: no job, nothing for the delete's cancel loop to do — and
+    // so, before the fix, nothing it locked either.
+    await execute(
+      `UPDATE adaptations SET status = 'failed', attempt_count = 1 WHERE id = '${adaptationId}'`,
+    );
+
+    const { createDb } = await import("@pubrick/db");
+    const { pool } = createDb(url as string);
+    const worker = await pool.connect();
+    let deleteStatus = 0;
+    let insertError: string | null = null;
+    try {
+      await worker.query("BEGIN");
+      await worker.query(
+        `UPDATE adaptations SET status = 'published', last_error = null, updated_at = now()
+          WHERE id = $1`,
+        [adaptationId],
+      );
+
+      const deleting = agent.delete(`/api/brands/${brand.body.id}`).then((res) => res.status);
+      // Either statement will do: with the lock order kept the delete parks on
+      // the adaptation SELECT, and without it (the defect) it gets that far and
+      // parks inside the cascade of `delete from brands` instead. Waiting for
+      // one of the two makes this test report the deadlock rather than a
+      // timeout when the order is broken.
+      await waitForLockWaiter(["%adaptations%for update%", '%delete from "brands"%']);
+
+      insertError = await worker
+        .query(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, attempt, external_id)
+           SELECT org_id, id, channel_id, 'published', attempt_count, '777'
+             FROM adaptations WHERE id = $1`,
+          [adaptationId],
+        )
+        .then(
+          () => null,
+          (error: { code?: string }) => String(error.code),
+        );
+      await worker.query("COMMIT");
+      deleteStatus = await deleting;
+    } finally {
+      await worker.query("ROLLBACK").catch(() => {});
+      worker.release();
+      await pool.end();
+    }
+
+    expect(insertError, "the worker's delivery record was the deadlock victim").toBeNull();
+    expect(deleteStatus, "DELETE /brands/:id was the deadlock victim (40P01 -> 500)").toBe(200);
+  });
+
+  /** One statement, on its own pool — the worker's side of the race above. */
+  async function execute(statement: string): Promise<void> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.execute(statement);
+    await pool.end();
+  }
+
+  /**
+   * Waits until some backend is parked on a row lock inside a statement matching
+   * `queryLike` — the interleaving as a fact rather than a hope about promise
+   * scheduling. Scoped by statement text so a waiter belonging to another spec
+   * file running beside this one is not counted.
+   */
+  async function waitForLockWaiter(patterns: string[]): Promise<void> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const matches = patterns.map((pattern) => `query ILIKE '${pattern}'`).join(" OR ");
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const { rows } = await db.execute(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND (${matches})`,
+        );
+        if ((rows[0] as { n: number }).n > 0) return;
+        if (Date.now() > deadline) throw new Error(`no backend blocked on ${patterns.join(" / ")}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
   /** The row `PublishRepository.markPublished` writes when a platform accepts a post. */
   async function recordPublication(adaptationId: string, channelId: string): Promise<string> {
     const { createDb } = await import("@pubrick/db");

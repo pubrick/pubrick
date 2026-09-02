@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { PublishResult } from "@pubrick/integrations";
 import { decryptJson, PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -139,6 +139,31 @@ type ClaimOutcome = {
 };
 
 /**
+ * THE CLAIM THIS ATTEMPT WROTE, named by its own primary key.
+ *
+ * `claimSend` hands one back and every later write of that claim addresses it
+ * through this rather than through `(org, adaptation_id, in_flight)`, for two
+ * independent reasons:
+ *
+ *  1. It is the only address that survives. `publications.adaptation_id` is
+ *     `SET NULL`, so deleting the channel — which cascades the adaptation —
+ *     leaves the claim reachable from nowhere on the adaptation side. A post
+ *     that went live in exactly that window left a receipt stuck at `in_flight`
+ *     with no id and no link, for ever, because `markPublished`'s adaptation
+ *     UPDATE matched nothing and it returned before resolving anything.
+ *  2. It is the only address that is unambiguously OURS. The adaptation-scoped
+ *     predicate matches whatever claim happens to be in flight, which is not
+ *     the same thing at all once an attempt has been overtaken: `releaseSend`
+ *     used it and could therefore delete a LATER attempt's claim, which is how
+ *     a duplicate post gets sent.
+ *
+ * `attempt` rides along because it is what a resolved row records, and it is
+ * read back out of the insert rather than derived, for the same reason
+ * `markPublishing` reads its count back: a derived value is a guess.
+ */
+export type SendClaim = { id: string; attempt: number };
+
+/**
  * Stamps this attempt's terminal outcome onto its `in_flight` claim, or writes
  * a fresh row when the attempt never held one.
  *
@@ -154,12 +179,21 @@ type ClaimOutcome = {
  * `attempt` is written from the RETURNING of the adaptation update in the same
  * transaction, so a resolved claim always carries the attempt number that
  * actually ended, not the one that started.
+ *
+ * WHICH CLAIM IT RESOLVES depends on whether the caller holds one. With a
+ * `SendClaim` it addresses that row by primary key: this attempt's own claim,
+ * and no other attempt's. Without one — the paths that terminate before any
+ * claim was taken, and the sweep, which is cleaning up after an attempt that is
+ * gone — it falls back to "whatever claim is in flight for this adaptation",
+ * which is the right target precisely because the attempt that wrote it is
+ * never coming back to say so itself.
  */
 async function resolveClaim(
   tx: Tx,
   orgId: string,
   adaptationId: string,
   outcome: ClaimOutcome,
+  claim?: SendClaim,
 ): Promise<void> {
   const resolved = await tx
     .update(schema.publications)
@@ -173,7 +207,9 @@ async function resolveClaim(
     .where(
       and(
         eq(schema.publications.orgId, orgId),
-        eq(schema.publications.adaptationId, adaptationId),
+        claim
+          ? eq(schema.publications.id, claim.id)
+          : eq(schema.publications.adaptationId, adaptationId),
         eq(schema.publications.status, "in_flight"),
       ),
     )
@@ -261,6 +297,31 @@ const ABANDONED_FAILED_ERROR =
 
 /** One recovered adaptation, and which of the two verdicts it got. */
 export type SweptAdaptation = { id: string; orgId: string; outcome: "failed" | "unknown" };
+
+/**
+ * What an ORPHANED claim ends as: a receipt whose adaptation was deleted out
+ * from under it while it was still in flight.
+ *
+ * `unknown` rather than `failed`, on the same reasoning as its sibling above and
+ * with one thing less to go on. The claim was written before the platform call,
+ * so a post may be live; and the row that would have told us — the adaptation —
+ * is gone, so nothing can ever narrow it further. What the receipt CAN still say
+ * is where to look: `channel_name` and `channel_platform` were stamped onto it
+ * by the delete trigger, and the channel outside this product did not disappear
+ * when the row describing it did.
+ */
+const ORPHANED_CLAIM_ERROR =
+  "DELIVERY OUTCOME UNKNOWN: an attempt claimed this send and never reported back, and the " +
+  "adaptation it belonged to has since been deleted with its channel or brand, so nothing can " +
+  "resolve it from that side. A copy may be live in the channel this row names.";
+
+/** One resolved orphan, with the tombstone that says where its post may be. */
+export type SweptOrphanedClaim = {
+  id: string;
+  orgId: string;
+  channelName: string | null;
+  channelPlatform: string | null;
+};
 
 @Injectable()
 export class PublishRepository {
@@ -404,40 +465,69 @@ export class PublishRepository {
    * "an attempt is unaccounted for"). The index, not a shared transaction, is
    * what makes two workers racing here safe.
    */
-  async claimSend(orgId: string, adaptationId: string): Promise<boolean> {
+  async claimSend(orgId: string, adaptationId: string): Promise<SendClaim | null> {
     try {
       const result = await db.execute(sql`
         insert into publications (org_id, adaptation_id, channel_id, status, attempt)
         select org_id, id, channel_id, 'in_flight', attempt_count
           from adaptations
          where org_id = ${orgId} and id = ${adaptationId}
+        returning id, attempt
       `);
-      return (result.rowCount ?? 0) > 0;
+      const row = result.rows[0] as { id: string; attempt: number } | undefined;
+      return row ? { id: row.id, attempt: Number(row.attempt) } : null;
     } catch (error) {
-      if (isInFlightClaimConflict(error)) return false;
+      if (isInFlightClaimConflict(error)) return null;
       throw error;
     }
   }
 
   /**
-   * Gives the claim back, for the one ending where that is safe: the platform
-   * (or the connect phase) told us the request was NOT delivered, so a retry
-   * has nothing to duplicate.
+   * Gives THIS ATTEMPT'S claim back, for the one ending where that is safe: the
+   * platform (or the connect phase) told us the request was NOT delivered, so a
+   * retry has nothing to duplicate.
    *
    * Every other ending resolves the claim in place instead — `markPublished`,
    * `markFailed`, `markFailed(..., "unknown")` — because there the attempt has
    * a terminal outcome to record and the row is where it goes.
+   *
+   * FENCED ON THE CLAIM'S OWN PRIMARY KEY, and that is the whole point of the
+   * method taking a `SendClaim` rather than an adaptation id. It used to delete
+   * ANY in-flight claim for the adaptation, which states the opposite rule to
+   * the one `markFailed` states in words a few lines below — a write that no
+   * longer owns the row leaves the claim alone, *because it belongs to whatever
+   * attempt now owns the row, and releasing another attempt's claim is how a
+   * duplicate post gets sent*.
+   *
+   * The sequence that made it real: attempt A claims and hangs mid-send; the
+   * heartbeat supervisor redelivers, and attempt B — refused the claim —
+   * resolves A's row to `unknown`, which frees the in-flight slot; the operator
+   * checks the channel and re-approves; attempt C claims, sends, and is still
+   * recording when A finally comes back with a transient error and deletes the
+   * only claim in flight, which is C's. If C then dies before recording, the
+   * redelivery finds no claim and posts a second time — precisely what the
+   * in-flight index exists to prevent. Addressing the row by the id `claimSend`
+   * returned makes A's release match A's row or nothing at all.
+   *
+   * `status = 'in_flight'` stays in the predicate beside the id: a claim of ours
+   * that someone else has already RESOLVED is a terminal receipt now, and a
+   * terminal receipt is never deleted.
+   *
+   * Returns whether it released, so the caller can say out loud that a release
+   * matched nothing rather than assuming it worked.
    */
-  async releaseSend(orgId: string, adaptationId: string): Promise<void> {
-    await db
+  async releaseSend(orgId: string, claim: SendClaim): Promise<boolean> {
+    const released = await db
       .delete(schema.publications)
       .where(
         and(
           eq(schema.publications.orgId, orgId),
-          eq(schema.publications.adaptationId, adaptationId),
+          eq(schema.publications.id, claim.id),
           eq(schema.publications.status, "in_flight"),
         ),
-      );
+      )
+      .returning({ id: schema.publications.id });
+    return released.length > 0;
   }
 
   /**
@@ -445,8 +535,36 @@ export class PublishRepository {
    * `published` (or, when there is none, logs a fresh `published` row), and
    * promotes the parent content item to `published` once every one of its
    * adaptations has published (never on a partial fan-out).
+   *
+   * AND IT STILL WRITES THE RECEIPT WHEN THE ADAPTATION IS GONE. That is not a
+   * defensive nicety, it is the one case the whole table exists for. The window
+   * is small and entirely ordinary: `claimSend` writes the claim, the platform
+   * accepts the post, the user deletes the channel, `adaptations.channel_id`
+   * cascades the adaptation away and both of the claim's pointers are `SET NULL`
+   * behind it. The adaptation UPDATE below then matches nothing — and the old
+   * code returned there, leaving a row that says `in_flight` with no external id
+   * and no link, for ever, about a post that is live in a customer's channel.
+   * Nothing swept it either: the sweep drives off `adaptations`, and an orphaned
+   * claim is unreachable from that side by construction.
+   *
+   * It contradicted both the changelog and the schema comment on this table,
+   * which promise the receipt outlives the channel WITH ITS ID AND ITS LINK. So
+   * when a claim is held and the adaptation is gone, the claim is resolved to
+   * `published` with the id and the link this call was given, and the trigger
+   * has already stamped `channel_name`/`channel_platform` onto it. What such a
+   * receipt cannot say is which draft it came from — the only path to the
+   * content item was the adaptation — and the schema says so already.
+   *
+   * The orphan branch resolves and stops. There is no insert fallback and there
+   * must not be: `adaptation_id` no longer names a row, so an insert would be a
+   * foreign-key violation, and there is no item left to recompute.
    */
-  async markPublished(orgId: string, adaptationId: string, result: PublishResult): Promise<void> {
+  async markPublished(
+    orgId: string,
+    adaptationId: string,
+    result: PublishResult,
+    claim?: SendClaim,
+  ): Promise<void> {
     await db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
@@ -458,19 +576,61 @@ export class PublishRepository {
           attemptCount: schema.adaptations.attemptCount,
         });
       const updated = rows[0];
-      if (!updated) return;
+      if (!updated) {
+        if (claim) await this.resolveOrphanedClaim(tx, orgId, claim, result);
+        return;
+      }
 
-      await resolveClaim(tx, orgId, adaptationId, {
-        channelId: updated.channelId,
+      await resolveClaim(
+        tx,
+        orgId,
+        adaptationId,
+        {
+          channelId: updated.channelId,
+          status: "published",
+          externalId: result.externalId,
+          externalUrl: result.externalUrl,
+          error: null,
+          attempt: updated.attemptCount,
+        },
+        claim,
+      );
+
+      await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+    });
+  }
+
+  /**
+   * The claim survived; the adaptation did not. Stamps the delivery onto the
+   * row by its own primary key, which is the only pointer a channel or brand
+   * delete does not null out.
+   *
+   * `status = 'in_flight'` is kept in the predicate so this can only ever finish
+   * an UNRESOLVED claim of ours — never rewrite a terminal receipt someone else
+   * already wrote.
+   */
+  private async resolveOrphanedClaim(
+    tx: Tx,
+    orgId: string,
+    claim: SendClaim,
+    result: PublishResult,
+  ): Promise<void> {
+    await tx
+      .update(schema.publications)
+      .set({
         status: "published",
         externalId: result.externalId,
         externalUrl: result.externalUrl,
         error: null,
-        attempt: updated.attemptCount,
-      });
-
-      await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
-    });
+        attempt: claim.attempt,
+      })
+      .where(
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.id, claim.id),
+          eq(schema.publications.status, "in_flight"),
+        ),
+      );
   }
 
   /**
@@ -517,10 +677,18 @@ export class PublishRepository {
    * ONE attempt, and an attempt that the api has already ended — a reject, or a
    * reject and a re-approve — no longer owns the row: writing `failed` over the
    * re-approved row is how a user's decision was silently lost (see
-   * `AttemptFence`). A refused write is not an error and nothing else is done
-   * about it here; in particular an `in_flight` claim is deliberately LEFT
-   * standing, because it belongs to whatever attempt now owns the row and
-   * releasing another attempt's claim is how a duplicate post gets sent.
+   * `AttemptFence`). A refused write is not an error.
+   *
+   * A refused write still resolves THIS ATTEMPT'S OWN CLAIM, when it holds one.
+   * The rule that used to be stated here — leave the claim alone — was written
+   * when the only way to name a claim was "whatever is in flight for this
+   * adaptation", where leaving it standing is genuinely the only safe move,
+   * because the row may be a later attempt's. A `SendClaim` names our row by
+   * primary key, so the ambiguity is gone: if it is still `in_flight` then no
+   * successor has taken it (the index allows one), and finishing it is both
+   * honest — the outcome is ours to report — and necessary, since a claim we
+   * abandon can only ever be swept as `unknown` about a send that we know
+   * never happened. Without a claim in hand the old behaviour stands unchanged.
    */
   async markFailed(
     orgId: string,
@@ -528,6 +696,7 @@ export class PublishRepository {
     error: string,
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
+    claim?: SendClaim,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
       const rows = await tx
@@ -545,16 +714,36 @@ export class PublishRepository {
           attemptCount: schema.adaptations.attemptCount,
         });
       const updated = rows[0];
-      if (!updated) return false;
+      if (!updated) {
+        if (claim) {
+          await tx
+            .update(schema.publications)
+            .set({ status: outcome, error, attempt: claim.attempt })
+            .where(
+              and(
+                eq(schema.publications.orgId, orgId),
+                eq(schema.publications.id, claim.id),
+                eq(schema.publications.status, "in_flight"),
+              ),
+            );
+        }
+        return false;
+      }
 
-      await resolveClaim(tx, orgId, adaptationId, {
-        channelId: updated.channelId,
-        status: outcome,
-        externalId: null,
-        externalUrl: null,
-        error,
-        attempt: updated.attemptCount,
-      });
+      await resolveClaim(
+        tx,
+        orgId,
+        adaptationId,
+        {
+          channelId: updated.channelId,
+          status: outcome,
+          externalId: null,
+          externalUrl: null,
+          error,
+          attempt: updated.attemptCount,
+        },
+        claim,
+      );
 
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
       return true;
@@ -649,6 +838,27 @@ export class PublishRepository {
    * construction rather than by timing, which is the only acceptable direction
    * here: the case it must lose is an attempt that is alive and mid-send.
    *
+   * IT LOCKS IN ASCENDING ID, through a sub-select, and that is not decoration.
+   * A bulk `UPDATE ... WHERE` locks rows in SCAN order — heap order, which
+   * reverses freely as rows are rewritten and has nothing to do with id order.
+   * `ContentRepository.lockAdaptations` walks the same rows `ORDER BY id`, and
+   * its own comment says why: two transactions must not walk one set in
+   * opposite orders. This sweep was the one writer that did not obey it, and
+   * `reject` targets `publishing` — exactly this sweep's candidate set. Measured
+   * on one item with two `publishing` adaptations inserted so heap order
+   * reversed id order: `POST /api/content/:id/reject` and the sweeper formed a
+   * cycle and Postgres killed one of them with `40P01` — a 500 handed to
+   * somebody cancelling a delivery. `UPDATE` takes no `ORDER BY` of its own, so
+   * the ordering lives in a `WHERE id IN (SELECT ... ORDER BY id FOR UPDATE)`
+   * sub-select, which sorts before it locks. See `docs/lock-order.md`.
+   *
+   * The predicate is repeated on the outer UPDATE rather than left to the
+   * sub-select alone. Both halves re-check under the lock — the sub-select's
+   * `FOR UPDATE` re-evaluates its own qual after acquiring each row, and the
+   * outer statement evaluates it again — so the "loses the race by
+   * construction" property above survives the rewrite twice over instead of
+   * resting on one of them.
+   *
    * `attempt_count` is deliberately NOT bumped: `markPublishing` already
    * counted this attempt when it started, and the rule at the top of this file
    * is exactly once per real attempt. Bumping again would make the api derive a
@@ -668,6 +878,21 @@ export class PublishRepository {
        where p.adaptation_id = ${schema.adaptations.id}
          and p.status = 'in_flight'
     )`;
+    // `state < 'completed'` is pg-boss's own spelling for "not terminal"
+    // (`created` < `retry` < `active` < `completed` in its enum), the same
+    // comparison `failJobsById` is guarded by. Cast explicitly: the literal has
+    // to resolve to pgboss's enum type, not to text.
+    const noLiveJob = sql`not exists (
+      select 1
+        from ${sql.raw(PGBOSS_SCHEMA)}.job j
+       where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+         and j.data->>'adaptationId' = ${schema.adaptations.id}::text
+    )`;
+    const abandoned = and(
+      eq(schema.adaptations.status, "publishing"),
+      sql`${schema.adaptations.updatedAt} < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})`,
+      noLiveJob,
+    );
     return db.transaction(async (tx) => {
       const swept = await tx
         .update(schema.adaptations)
@@ -678,18 +903,22 @@ export class PublishRepository {
         })
         .where(
           and(
-            eq(schema.adaptations.status, "publishing"),
-            sql`${schema.adaptations.updatedAt} < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})`,
-            // `state < 'completed'` is pg-boss's own spelling for "not
-            // terminal" (`created` < `retry` < `active` < `completed` in its
-            // enum), the same comparison `failJobsById` is guarded by. Cast
-            // explicitly: the literal has to resolve to pgboss's enum type,
-            // not to text.
-            sql`not exists (
-              select 1
-                from ${sql.raw(PGBOSS_SCHEMA)}.job j
-               where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-                 and j.data->>'adaptationId' = ${schema.adaptations.id}::text
+            abandoned,
+            // The lock order, taken by a sub-select because an UPDATE cannot
+            // carry an ORDER BY. Sorted, then locked: ascending id, the one
+            // order every walker of this table uses.
+            sql`${schema.adaptations.id} in (
+              select a.id from adaptations a
+               where a.status = 'publishing'
+                 and a.updated_at < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})
+                 and not exists (
+                   select 1
+                     from ${sql.raw(PGBOSS_SCHEMA)}.job j
+                    where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+                      and j.data->>'adaptationId' = a.id::text
+                 )
+               order by a.id
+                 for update of a
             )`,
           ),
         )
@@ -720,6 +949,51 @@ export class PublishRepository {
   }
 
   /**
+   * The other half of the recovery, and the half no adaptation-driven sweep can
+   * ever reach: claims whose adaptation was DELETED while they were in flight.
+   *
+   * `publications.adaptation_id` is `SET NULL`, so deleting a channel — which
+   * cascades its adaptations — or a brand leaves an `in_flight` row pointing at
+   * nothing. `sweepAbandoned` above drives off `adaptations` and so cannot see
+   * one, by construction rather than by oversight: there is no adaptation left
+   * to be `publishing`. Left alone, such a row says "an attempt is out there
+   * right now" for ever, about a channel the product no longer has.
+   *
+   * `markPublished` resolves this shape when the attempt lives long enough to
+   * come back — that is the ordinary case and the one that recovers the id and
+   * the link. This is for the attempt that never returns at all.
+   *
+   * SAFETY IS THE AGE, and `created_at` is the only clock these rows have — no
+   * writer renews anything on an in-flight claim. The threshold is the same
+   * `PUBLISH_ABANDONED_AFTER_SECONDS` its sibling uses: pg-boss's whole ceiling
+   * on one attempt, plus a whole further window of grace, against a handler
+   * whose remaining work after the claim is bounded by a platform request and
+   * the recording budget. Twenty minutes against something over a minute.
+   *
+   * No org scope, like its sibling: a maintenance pass over the whole table,
+   * reading nothing out to anybody.
+   */
+  async sweepOrphanedClaims(): Promise<SweptOrphanedClaim[]> {
+    const resolved = await db
+      .update(schema.publications)
+      .set({ status: "unknown", error: ORPHANED_CLAIM_ERROR })
+      .where(
+        and(
+          eq(schema.publications.status, "in_flight"),
+          isNull(schema.publications.adaptationId),
+          sql`${schema.publications.createdAt} < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})`,
+        ),
+      )
+      .returning({
+        id: schema.publications.id,
+        orgId: schema.publications.orgId,
+        channelName: schema.publications.channelName,
+        channelPlatform: schema.publications.channelPlatform,
+      });
+    return resolved;
+  }
+
+  /**
    * Promotes the parent item once EVERY adaptation has reached the same
    * terminal state — `published` when they all published, `failed` when they
    * all failed — and leaves it alone otherwise.
@@ -746,6 +1020,14 @@ export class PublishRepository {
    * already taken its own adaptation's row lock with the UPDATE above, so
    * `adaptations` then `content_items` is the same order the api takes in
    * `approve`/`reject` (`lockAdaptations`) and in `updateAdaptation`.
+   *
+   * That is the tail of the product's one order, `docs/lock-order.md`:
+   * `brands` → `adaptations` → `channels` → `content_items`. The `channels`
+   * step is the one this file never writes down, because it is never taken
+   * explicitly — a `publications` insert takes `FOR KEY SHARE` on the channel
+   * for its foreign key, between the adaptation UPDATE above and this lock.
+   * Leaving it unsaid is exactly how the api's channel delete came to take the
+   * same two rows the other way round.
    *
    * **The siblings are deliberately NOT locked.** Each of these transactions
    * already holds its own adaptation row, so a `FOR UPDATE` on the others would

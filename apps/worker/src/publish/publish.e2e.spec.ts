@@ -464,7 +464,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // The state a killed attempt leaves behind, written through the real
     // repository: the attempt claimed, sent, and never came back.
     expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
-    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
     if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
@@ -634,7 +634,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       const chatId = `-100${Date.now()}${seq}`;
       const { adaptationId } = await seedQueuedAdaptation(chatId);
       expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
-      if (claim) expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+      if (claim) expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
       await db
         .update(schema.adaptations)
         .set({ updatedAt: sql`now() - make_interval(secs => ${secondsAgo})` })
