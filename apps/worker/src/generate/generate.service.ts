@@ -234,6 +234,41 @@ export class GenerateService {
     }
   }
 
+  /**
+   * The scheduled sweep: fail every run that no job can ever move again.
+   *
+   * The state it recovers from is not hypothetical and not reachable by any
+   * other path. pg-boss re-inserts a failed job under the SAME id, so a
+   * heartbeat re-dispatch gives handler B a job id handler A still holds. The
+   * fence does its work — B claims, A stops — but A then returns into pg-boss's
+   * wrapper, which runs `complete()` for that id and lands it on B's live
+   * incarnation. B carries on with a job that is already `completed`; if B then
+   * throws a retryable provider error, `failJobsById`'s `state < 'completed'`
+   * guard makes the failure a no-op. No retry, no dead letter, and therefore no
+   * `markExhausted` — the run stays `running` for ever.
+   *
+   * Never throws, for the same reason `markExhausted` does not: this runs on a
+   * schedule with nobody waiting on it, and a rethrow would only re-deliver the
+   * sweep job to do the same thing again.
+   */
+  async sweepAbandoned(): Promise<void> {
+    try {
+      const swept = await this.repo.sweepAbandoned();
+      for (const run of swept) {
+        // `error`, not `warn`. A swept run means the queue lost a job that was
+        // supposed to move it — the org paid for work that produced nothing and
+        // an operator should go and look at why. It is never routine.
+        this.logger.error(
+          `SWEPT ABANDONED RUN: run ${run.id} sat in "running" two lease periods past its lease ` +
+            "with no pg-boss job left anywhere to move it; failed it so it cannot hold a " +
+            `concurrency slot for ever. orgId=${run.orgId}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(`ABANDONED-RUN SWEEP FAILED: ${messageOf(error)}`);
+    }
+  }
+
   /** The five roles, in order, resuming past whatever already has a checkpoint. */
   private async execute(
     run: ClaimedRun,

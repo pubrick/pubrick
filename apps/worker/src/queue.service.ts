@@ -42,6 +42,36 @@ const DEFAULT_QUEUE_NAMES: QueueNames = {
   generateDeadLetter: GENERATE_DLQ,
 };
 
+/**
+ * How often the abandoned-run sweep runs.
+ *
+ * Five minutes, not one: the sweep is a maintenance pass whose whole design is
+ * to be LATE — a run only becomes a candidate `ABANDONED_GRACE_SECONDS` after
+ * its lease expired, so the poll adds at most a rounding error to a latency
+ * already measured in tens of minutes. Running it every minute would multiply
+ * the table scans by five and change nothing about when a run recovers.
+ */
+export const SWEEP_CRON = "*/5 * * * *";
+
+/**
+ * The sweep's own queue name, DERIVED from the generate queue rather than named
+ * independently.
+ *
+ * Test isolation is the reason, and it is the same reason the pairs above are
+ * overridable at all: turbo runs the api and worker suites concurrently against
+ * one database, and a spec that registers a live consumer must not consume
+ * production's jobs. Deriving means a suite that overrides `generate` gets a
+ * private sweep queue automatically instead of having to remember a fifth name.
+ *
+ * The sweep those consumers perform is the same global pass whichever queue
+ * delivered the tick — `sweepAbandoned` asks whether ANY non-terminal job names
+ * a run, never whether a job on some named queue does — so a spare consumer on
+ * a private queue cannot reach a verdict a production one would not.
+ */
+export function sweepQueueOf(generateQueue: string): string {
+  return `${generateQueue}-sweep`;
+}
+
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
@@ -60,7 +90,10 @@ export class QueueService {
     });
   }
 
-  /** Creates and registers every queue the worker consumes: heartbeat, publish, generate, and their DLQs. */
+  /**
+   * Creates and registers every queue the worker consumes: heartbeat, publish,
+   * generate, their DLQs, and the abandoned-run sweep.
+   */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
 
@@ -107,6 +140,24 @@ export class QueueService {
     // Retries exhausted: the run is stuck with nothing left to move it.
     await boss.work<GenerateJob>(names.generateDeadLetter, { batchSize: 1 }, async ([job]) => {
       if (job) await this.generate.markExhausted(job.data);
+    });
+
+    // And the case where pg-boss will never deliver ANYTHING again. A heartbeat
+    // re-dispatch hands a second handler the same job id; when the first one
+    // returns — correctly, having lost the fence — pg-boss's wrapper completes
+    // that id, which is now the second handler's live incarnation. From then on
+    // the run has no job behind it: a throw cannot fail an already-`completed`
+    // job, so no retry fires and the dead-letter consumer above never runs. The
+    // run would sit at `running` for ever, holding a concurrency slot.
+    //
+    // A cron job rather than a `setInterval` in main.ts, for the reason every
+    // scheduled thing here is one: pg-boss enqueues the tick once and exactly
+    // one replica takes it, so the sweep does not multiply by worker count.
+    const sweepQueue = sweepQueueOf(names.generate);
+    await boss.createQueue(sweepQueue);
+    await boss.schedule(sweepQueue, SWEEP_CRON);
+    await boss.work(sweepQueue, { batchSize: 1 }, async () => {
+      await this.generate.sweepAbandoned();
     });
   }
 }

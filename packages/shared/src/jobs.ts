@@ -98,6 +98,47 @@ export type GenerateJob = { runId: string; orgId: string };
  * `markExhausted` on the publish side. Without it a run whose retries ran out
  * would sit at `running` on the queue strip forever — the silent failure the
  * whole strip exists to prevent.
+ *
+ * WHY `heartbeatSeconds` IS STILL 30, AND WHAT PAYS FOR THAT. The two kinds of
+ * re-dispatch are not equally safe, and the difference is in pg-boss's wrapper
+ * (`Manager#processJobs`), not in this file:
+ *
+ *  - EXPIRY. The wrapper races the handler against
+ *    `resolveWithinSeconds(…, expireInSeconds, ac)`. When the timer wins, the
+ *    race rejects, the wrapper fails that job ITSELF and stops awaiting the
+ *    handler, and `ac` — the handler's `signal` — is aborted. Whatever the
+ *    abandoned handler does afterwards settles nothing: the wrapper is gone.
+ *    Safe.
+ *  - HEARTBEAT. The supervisor's `failJobsByHeartbeat` fails the job from the
+ *    OUTSIDE while the wrapper is still awaiting the handler, and `failJobsBody`
+ *    re-inserts it under the SAME id. Handler B takes it over. When handler A
+ *    finally returns — normally, having correctly lost the fence — the wrapper
+ *    runs `complete(name, [id])`, guarded `state = 'active'`, and the active
+ *    incarnation of that id is B's. B's live job goes `completed` under it, and
+ *    from then on nothing can retry or dead-letter that run: `failJobsById` is
+ *    guarded `state < 'completed'`. NOT safe.
+ *
+ * So raising this number narrows the unsafe window, and it is worth saying
+ * plainly why that is not the fix taken. It cannot CLOSE the window: any
+ * threshold is exceeded by a long enough stall, and a rarer permanent stall is
+ * a permanent stall that gets diagnosed later. It is not free in the other
+ * direction either — a genuinely dead worker's run is stranded for
+ * `heartbeatSeconds` plus a supervise interval before anything re-dispatches
+ * it, so raising this SLOWS the recovery it exists to provide. On the publish
+ * queue it is not even a free parameter: `MARK_PUBLISHED_MAX_ATTEMPTS` is
+ * derived from `PUBLISH_QUEUE_OPTIONS.heartbeatSeconds` and asserted against
+ * it, and `PUBLISH_STOP_TIMEOUT_MS` from that, so raising the publish heartbeat
+ * to five minutes would make every graceful shutdown wait five minutes. And
+ * this whole object is a pinned wire contract between two separately deployable
+ * apps (`apps/api/src/queue/queue.service.spec.ts` asserts it member by
+ * member), so moving a number in it is a cross-app change, not a tuning knob.
+ *
+ * What closes the hole instead is recovery that does not depend on the window
+ * being narrow: the scheduled sweep in `QueueService.registerAll`, which fails
+ * any run left `running` past its lease with no live job behind it. See
+ * `GenerateRepository.sweepAbandoned`. The equivalent state on the publish
+ * queue — an adaptation stuck in `publishing` with no job — is real and is NOT
+ * yet swept.
  */
 export const GENERATE_QUEUE_OPTIONS = {
   retryLimit: 3,

@@ -14,7 +14,7 @@ import {
   type RunFailure,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -60,6 +60,57 @@ function nowSql() {
 function leaseExpiry() {
   return sql`now() + make_interval(secs => ${GENERATE_QUEUE_OPTIONS.expireInSeconds})`;
 }
+
+/**
+ * How long PAST its expired lease a `running` run must lie untouched before the
+ * sweeper is willing to call it abandoned.
+ *
+ * One WHOLE further lease period, read from the same constant `leaseExpiry()`
+ * is built from rather than picked, because the two have to move together: a
+ * grace shorter than the lease would let the sweeper fire while pg-boss is
+ * still entitled to re-dispatch the job, and a grace measured in a unit of its
+ * own would drift the moment `expireInSeconds` changed.
+ *
+ * Why a whole one, when an expired lease already means pg-boss aborted that
+ * delivery (`leaseExpiry` is `expireInSeconds`, so the two moments coincide)?
+ * Because the abort only ASKS the handler to stop: `runStep` polls
+ * `signal.aborted` at the step BOUNDARY and an in-flight model call is
+ * deliberately left to finish, so a handler can legitimately still be inside
+ * one call after its lease has gone. The grace is the room that call is given.
+ * A second lease period is far more than any provider call can occupy, and the
+ * sweeper's write is destructive — it must be late rather than wrong.
+ *
+ * The cost of being generous is bounded and visible: the run sits `failed`
+ * instead of `running` up to `expireInSeconds + ABANDONED_GRACE_SECONDS +
+ * SWEEP_INTERVAL` after the last handler write, and until then it occupies one
+ * of the org's `MAX_CONCURRENT_RUNS` slots. A user who does not want to wait
+ * has always been able to press Cancel; what they could not do before was get
+ * the run out of `running` without pressing it.
+ */
+export const ABANDONED_GRACE_SECONDS = GENERATE_QUEUE_OPTIONS.expireInSeconds;
+
+/**
+ * What a swept run says happened, and why it is not a code of its own.
+ *
+ * A new `RunFailure` member would mean editing `@pubrick/shared`'s DTO and the
+ * four locale files that translate every member — a change across three apps to
+ * draw a distinction only an operator can act on. And the two are the same
+ * sentence to the reader either way: the queue has nothing left that will ever
+ * run this, start it again. The operator's half of the story is not lost, it
+ * is moved to the log line the sweeper writes, which names the mechanism
+ * explicitly and is the only place it belongs.
+ */
+const ABANDONED_FAILURE: RunFailure = "retries_exhausted";
+
+/**
+ * pg-boss's own schema, as `main.ts` configures it: `new PgBoss(url)` with no
+ * `schema` option, whose default is `pgboss`. Named here because the sweeper is
+ * the one query in this repository that reads the QUEUE's tables rather than
+ * ours — it has to, since "is there still a job that could move this run" is a
+ * fact only pg-boss holds, and the alternative (trusting our own lease alone)
+ * is what lets the sweeper fail a run whose retry is merely waiting its 60s.
+ */
+const PGBOSS_SCHEMA = "pgboss";
 
 /** The checkpoint map exactly as `pipeline_runs.steps` types it. */
 export type RunSteps = (typeof schema.pipelineRuns.$inferSelect)["steps"];
@@ -111,6 +162,9 @@ export type StepCheckpoint = {
   usage: UsageRecord[];
   finishedAt: string;
 };
+
+/** One run the sweeper took out of `running`, for the log line that names it. */
+export type SweptRun = { id: string; orgId: string };
 
 /** Rolls the terminal transaction back when its final fenced UPDATE matches nothing. */
 class TerminalFenceLost extends Error {}
@@ -742,5 +796,99 @@ export class GenerateRepository {
       )
       .returning({ id: schema.pipelineRuns.id });
     return rows.length > 0;
+  }
+
+  /**
+   * Fail every run left `running` that no job can ever move again.
+   *
+   * THE HOLE THIS CLOSES. pg-boss re-inserts a failed job under the SAME id
+   * (`failJobsBody`), so a heartbeat re-dispatch hands handler B a job whose id
+   * handler A is still holding. The fence works — B claims, A's next
+   * `beginStep` matches nothing and A returns normally, which is the contract.
+   * But A returns INTO pg-boss's wrapper, and `Manager#processJobs` then runs
+   * `complete(name, jobIds)` for A; `completeJobs` is guarded `state = 'active'`
+   * and the active incarnation of that id is now B's. B's job goes `completed`
+   * while B is still executing. If B then hits a genuinely retryable provider
+   * error and throws, `failJobsById` is guarded `state < 'completed'` and does
+   * nothing at all: no retry, no dead letter, no `markExhausted`. The run sits
+   * at `running` with an error on it, holding one of the org's
+   * `MAX_CONCURRENT_RUNS` slots, until a human presses Cancel.
+   *
+   * Note that A must NOT throw instead of returning — `fail()` is guarded
+   * `state < 'completed'`, so a displaced handler that threw would fail B's
+   * LIVE job and displace it in turn. The return is correct; only the recovery
+   * was missing. This is that recovery, and it is deliberately the LAST line of
+   * defence rather than a race with the handler.
+   *
+   * HOW IT AVOIDS KILLING A LIVE HANDLER — four conditions, and the ordering
+   * Postgres gives the fourth for free:
+   *
+   *  1. `status = 'running'`. A `succeeded`, `failed` or `cancelled` run is
+   *     already terminal, and a `queued` one never had a handler.
+   *  2. `lease_expires_at is not null`. A `running` run with no lease was never
+   *     claimed by anything this repository wrote; there is no evidence to
+   *     reason from, so it is left alone.
+   *  3. The lease expired, AND `ABANDONED_GRACE_SECONDS` has passed on top of
+   *     it. Every write a live handler makes — `claim`, `beginStep`,
+   *     `writeCheckpoint` — renews the lease, so a handler that is working
+   *     cannot be in this set at all; only one that has not touched the run for
+   *     two whole lease periods can be.
+   *  4. NO job anywhere in pg-boss still names this run in a non-terminal
+   *     state. This is the condition that separates "abandoned" from
+   *     "waiting" — a transiently failed run whose retry starts in 60s has a
+   *     `retry` job, and a run on its way to the dead-letter consumer has a
+   *     job on the DLQ. Both are alive and neither is swept.
+   *
+   *     Deliberately NOT scoped to a list of queue names the caller passes in.
+   *     A guard whose safety depends on an argument is a weaker guard, and the
+   *     wrong list here does not degrade the sweep, it makes it destroy live
+   *     runs — in a codebase where specs override queue names precisely so a
+   *     test consumer cannot touch production's jobs, that argument would be
+   *     wrong sooner or later. Asking "does ANY non-terminal job name this
+   *     run" can only ever sweep FEWER runs than asking about two named
+   *     queues, and it cannot be got wrong from the outside. The cost is that
+   *     the subquery cannot prune `pgboss.job`'s LIST partitions by name; the
+   *     candidate set is a handful of rows by construction (a `running` run
+   *     whose lease has been gone for two lease periods) and pg-boss archives
+   *     terminal jobs out of this table, so it stays a handful of small scans
+   *     every five minutes.
+   *
+   * And the race itself: this is ONE statement, so under READ COMMITTED a
+   * concurrent handler write that reaches the row first makes this UPDATE block
+   * on the row lock and then RE-EVALUATE its whole WHERE against the version
+   * that handler committed. The renewed `lease_expires_at` fails condition 3
+   * and the sweep matches nothing. The sweeper loses that race by construction
+   * rather than by timing — which is the property this needs, because a run
+   * whose lease expired while its handler is alive and mid-step is exactly the
+   * case the fence exists for.
+   *
+   * NOT org-scoped, unlike every other query here. It is a maintenance pass
+   * over the whole table with no request and no org to scope to; the house rule
+   * exists to stop one tenant reading another's rows, and this reads no rows
+   * out to anybody.
+   */
+  async sweepAbandoned(): Promise<SweptRun[]> {
+    const rows = await db
+      .update(schema.pipelineRuns)
+      .set({ status: "failed", error: ABANDONED_FAILURE, updatedAt: nowSql() })
+      .where(
+        and(
+          eq(schema.pipelineRuns.status, "running"),
+          isNotNull(schema.pipelineRuns.leaseExpiresAt),
+          sql`${schema.pipelineRuns.leaseExpiresAt} < now() - make_interval(secs => ${ABANDONED_GRACE_SECONDS})`,
+          // `state < 'completed'` is pg-boss's own spelling for "not terminal"
+          // (`created` < `retry` < `active` < `completed` in its enum), the same
+          // comparison `failJobsById` is guarded by. Cast explicitly: the
+          // literal has to resolve to pgboss's enum type, not to text.
+          sql`not exists (
+            select 1
+            from ${sql.raw(PGBOSS_SCHEMA)}.job j
+            where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+              and j.data->>'runId' = ${schema.pipelineRuns.id}::text
+          )`,
+        ),
+      )
+      .returning({ id: schema.pipelineRuns.id, orgId: schema.pipelineRuns.orgId });
+    return rows;
   }
 }

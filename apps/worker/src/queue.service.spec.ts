@@ -8,7 +8,7 @@ import {
   PUBLISH_QUEUE_OPTIONS,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
-import { QueueService } from "./queue.service";
+import { QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
 
 function bossStub() {
   return {
@@ -21,7 +21,7 @@ function bossStub() {
 
 function serviceStub() {
   const publish = { handle: vi.fn(), markExhausted: vi.fn() };
-  const generate = { handle: vi.fn(), markExhausted: vi.fn() };
+  const generate = { handle: vi.fn(), markExhausted: vi.fn(), sweepAbandoned: vi.fn() };
   return { publish, generate, service: new QueueService(publish as never, generate as never) };
 }
 
@@ -108,6 +108,47 @@ describe("QueueService.registerAll", () => {
       data: { runId: "run-1", orgId: "org-1" },
       signal,
     });
+  });
+
+  it("puts the abandoned-run sweep on a schedule and consumes its ticks", async () => {
+    const boss = bossStub();
+    const { generate, service } = serviceStub();
+
+    await service.registerAll(boss as never);
+
+    // Without this the run in the finding's race has nothing left that could
+    // ever move it: its job was completed by the handler that lost the fence,
+    // so no retry fires and the dead-letter consumer above is never reached.
+    // A cron job rather than a timer, so N replicas run one sweep, not N.
+    const sweepQueue = sweepQueueOf(GENERATE_QUEUE);
+    expect(boss.createQueue).toHaveBeenCalledWith(sweepQueue);
+    expect(boss.schedule).toHaveBeenCalledWith(sweepQueue, SWEEP_CRON);
+    expect(boss.work).toHaveBeenCalledWith(sweepQueue, expect.anything(), expect.any(Function));
+
+    const tick = boss.work.mock.calls.find((call) => call[0] === sweepQueue)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    await tick([{ id: "tick-1", data: {} }]);
+    expect(generate.sweepAbandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives an overridden generate queue its own sweep queue, so a spec cannot eat production's ticks", async () => {
+    const boss = bossStub();
+    const { service } = serviceStub();
+
+    await service.registerAll(boss as never, {
+      publish: "publish-x",
+      publishDeadLetter: "publish-x-dlq",
+      generate: "generate-x",
+      generateDeadLetter: "generate-x-dlq",
+    });
+
+    expect(boss.work).toHaveBeenCalledWith(
+      "generate-x-sweep",
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(boss.work.mock.calls.map((call) => call[0])).not.toContain(sweepQueueOf(GENERATE_QUEUE));
   });
 
   it("consumes only the queue pairs it is given, so a test consumer cannot eat production jobs", async () => {
