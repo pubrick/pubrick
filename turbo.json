@@ -12,7 +12,19 @@
     "typecheck": { "dependsOn": ["^build"] },
     "test": {
       "dependsOn": ["^build"],
+      // Strict env mode passes through ONLY what is listed here, whatever the shell or the
+      // CI workflow exports. An undeclared TEST_DATABASE_URL is what let 209 database tests
+      // skip themselves behind a green badge on 2026-08-24 (docs/lessons.md).
+      // CI is listed because db-tier.guard.spec.ts reads it to decide whether a dark tier is
+      // a hard failure. Turbo happens to pass CI through on its own today (measured), but
+      // that is turbo's implementation detail, and an undeclared variable is also OUTSIDE
+      // THE TASK HASH: a cache entry produced locally, with the tier dark and the guard on
+      // its friendly branch, could then be replayed as a CI pass. Declaring it makes the
+      // two environments hash differently, so neither can stand in for the other.
+      // The guard fails if any name here goes missing, so this list is tested, not merely
+      // documented in CLAUDE.md as it was before.
       "env": [
+        "CI",
         "TEST_DATABASE_URL",
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",
