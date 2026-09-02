@@ -2,6 +2,7 @@ import {
   type AiCredentialPublic,
   contentCreateSchema,
   MAX_BODY_LENGTH,
+  MAX_CONCURRENT_RUNS,
   runCreateSchema,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
@@ -457,5 +458,108 @@ describe("no active organization redirects to onboarding", () => {
       expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE REFUSAL A READER ACTUALLY SEES, on a real screen.
+ *
+ * The mapping itself is proved in `lib/api.test.ts`, in all four languages. What
+ * cannot be proved there is that this screen ASKS for it: `errorMessage` still
+ * takes its translator as an optional argument, so a page that forgets to pass
+ * one renders the api's English sentence and every other test stays green. This
+ * is the test that fails when the argument goes missing.
+ *
+ * The two sentences are deliberately close but not equal — the api says
+ * "This brand has no channels; add one before generating", the reader gets
+ * `Errors.brand_has_no_channels` — so asserting one and refuting the other is
+ * exactly the difference between the two paths, and neither can stand in for
+ * the other.
+ *
+ * Rendered in `en` (the harness's locale). That is not a weaker claim than it
+ * looks: what is being pinned here is WHICH STRING the screen reaches for, and
+ * `messages-parity` plus `lib/api.test.ts` carry that key into the other three.
+ */
+describe("a refused generation speaks the product's language, not the server's", () => {
+  const REFUSALS = [
+    {
+      name: "a brand with nothing to publish to",
+      error: new ApiError(
+        400,
+        "This brand has no channels; add one before generating",
+        false,
+        "brand_has_no_channels",
+      ),
+      shown: en.Errors.brand_has_no_channels,
+    },
+    {
+      name: "the admission cap, with the limit the web fills in itself",
+      error: new ApiError(
+        409,
+        "This organization already has 3 generation runs queued or running; wait for one to finish or cancel it",
+        false,
+        "run_limit_reached",
+      ),
+      // MAX_CONCURRENT_RUNS never crossed the wire: the code is nullary and the
+      // number comes from @pubrick/shared on this side.
+      shown: en.Errors.run_limit_reached.replace("{limit}", String(MAX_CONCURRENT_RUNS)),
+    },
+  ];
+
+  it.each(REFUSALS)("renders our sentence for $name", async ({ error, shown }) => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") throw error;
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    expect(await screen.findByText(shown)).toBeInTheDocument();
+    expect(screen.queryByText(error.message)).not.toBeInTheDocument();
+  });
+
+  it("still shows the api's own sentence for a code this build has never heard of", async () => {
+    // A released server can be newer than a cached client. Nothing translates
+    // this, and the honest answer is the specific English sentence rather than
+    // a generic apology — it is ours, so it cannot be quoting an API key.
+    const calls: Call[] = [];
+    const future = new ApiError(
+      409,
+      "This brand is being merged into another right now",
+      false,
+      "brand_merge_in_progress",
+    );
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") throw future;
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    expect(await screen.findByText(future.message)).toBeInTheDocument();
+    expect(screen.queryByText(en.ContentNew.genericError)).not.toBeInTheDocument();
   });
 });

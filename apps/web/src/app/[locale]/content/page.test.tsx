@@ -955,3 +955,45 @@ describe("reads that used to fail in silence (Finding 4)", () => {
     });
   });
 });
+
+/**
+ * The queue's own refusals, in the product's words.
+ *
+ * Dismiss is the one action on this screen that the API can refuse for a reason
+ * a person actually reaches: the strip in front of you says "Cancelled" because
+ * the last poll said so, and the run was retried elsewhere in the meantime. The
+ * api answers 409 `run_not_dismissable_running`.
+ *
+ * Asserted as a PAIR — our sentence present, the api's absent — so this tests
+ * the wiring on this screen rather than the map, which `lib/api.test.ts` already
+ * covers in four languages. Dropping the translator argument from `handleError`
+ * leaves the api's English on screen and fails here.
+ */
+describe("a refused dismiss speaks the product's language, not the server's", () => {
+  const refusal = new ApiError(
+    409,
+    "A running run cannot be dismissed; cancel it first",
+    false,
+    "run_not_dismissable_running",
+  );
+
+  it("shows our sentence for the refusal, and not the api's", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, { current: [run({ status: "cancelled" })] });
+    const withRefusal = mockApi.getMockImplementation() as (...args: unknown[]) => Promise<unknown>;
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const method = (args[1] as RequestInit | undefined)?.method ?? "GET";
+      if (method === "POST" && path.endsWith("/dismiss")) throw refusal;
+      return withRefusal(...args);
+    });
+
+    render(<ContentQueuePage />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.dismiss }));
+
+    expect(await screen.findByText(en.Errors.run_not_dismissable_running)).toBeInTheDocument();
+    expect(screen.queryByText(refusal.message)).not.toBeInTheDocument();
+    // ...and the strip is still there, because the write did not land.
+    expect(screen.getByRole("button", { name: en.Runs.dismiss })).toBeInTheDocument();
+  });
+});

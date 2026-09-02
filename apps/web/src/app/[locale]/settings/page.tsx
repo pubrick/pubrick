@@ -46,6 +46,26 @@ const TEST_FAILURE_KEYS: Record<AiTestFailure, string> = {
   unreadable_key: "aiTestFailUnreadableKey",
 };
 
+/**
+ * What the Test button is showing for one provider.
+ *
+ * THREE states, not two, and the third one is a fix rather than a refinement.
+ * A call that never produced a verdict — a 404 because another tab removed the
+ * key, a 500, a dead network — was being stored in the API's OWN
+ * `{ ok: false, reason }` shape with a SENTENCE where the code belongs, and
+ * then rendered as `t(TEST_FAILURE_KEYS[reason])`: a lookup that misses, so the
+ * reader got nothing at all where the refusal should have been. TypeScript did
+ * not object because the assignment goes through a computed key
+ * (`{ ...prev, [id]: … }`), which switches off the contextual check that would
+ * have caught a `string` standing in for an `AiTestFailure`.
+ *
+ * A provider's verdict and a failed request are different facts, so they now
+ * have different shapes and cannot be confused for one another. `failed` holds
+ * a sentence that is ALREADY translated — `errorMessage` mapped the api's
+ * refusal code, or fell back — which is why nothing looks it up.
+ */
+type TestState = "loading" | AiCredentialTestResult | { failed: string };
+
 /** Vendor names. Wire ids are never shown raw, and brand names are not translated. */
 const PROVIDER_NAMES: Record<AiProviderId, string> = {
   google: "Google",
@@ -59,6 +79,10 @@ const AI_FORM_ID = "ai-credential-form";
 
 export default function SettingsPage() {
   const t = useTranslations("SettingsPage");
+  // The refusals' own namespace — see the queue screen. It is what puts "no API
+  // key is stored for this provider" in the reader's language when a second tab
+  // removed the key between this screen loading and the Test button being hit.
+  const te = useTranslations("Errors");
   const tLanding = useTranslations("Landing");
   const { data: session } = authClient.useSession();
   const { data: organization, isPending: organizationPending } = authClient.useActiveOrganization();
@@ -93,18 +117,16 @@ export default function SettingsPage() {
   // mechanism as onboarding's guard — `disabled` reaches the DOM before a
   // second click can be dispatched, and it takes Enter-in-the-field with it.
   const [saving, setSaving] = useState(false);
-  const [testResults, setTestResults] = useState<
-    Partial<Record<AiProviderId, AiCredentialTestResult | "loading">>
-  >({});
+  const [testResults, setTestResults] = useState<Partial<Record<AiProviderId, TestState>>>({});
 
   // An account with no organization yet is an onboarding state, not an error to
   // shout about on the Settings screen — every other failure gets a sentence.
   const handleAiError = useCallback(
     (err: unknown) => {
       if (err instanceof ApiError && err.noActiveOrg) return;
-      setAiError(errorMessage(err, t("genericError")));
+      setAiError(errorMessage(err, t("genericError"), te));
     },
-    [t],
+    [t, te],
   );
 
   const loadAi = useCallback(() => {
@@ -120,9 +142,9 @@ export default function SettingsPage() {
         // Back to "unknown", not to a stale figure: money on screen has to be
         // either current or absent.
         setSpend(null);
-        setSpendError(errorMessage(err, t("genericError")));
+        setSpendError(errorMessage(err, t("genericError"), te));
       });
-  }, [handleAiError, t]);
+  }, [handleAiError, t, te]);
 
   useEffect(loadAi, [loadAi]);
 
@@ -170,9 +192,11 @@ export default function SettingsPage() {
       // The test was a real, billed call — the org's spend just moved.
       loadAi();
     } catch (err) {
+      // A REQUEST that failed, not a verdict — see `TestState`. Stored under its
+      // own shape so the sentence is rendered as a sentence.
       setTestResults((prev) => ({
         ...prev,
-        [id]: { ok: false, reason: errorMessage(err, t("genericError")) },
+        [id]: { failed: errorMessage(err, t("genericError"), te) },
       }));
     }
   }
@@ -218,6 +242,16 @@ export default function SettingsPage() {
     const result = testResults[id];
     if (result === undefined) return undefined;
     if (result === "loading") return "…";
+    // The request never produced a verdict: `failed` already holds a translated
+    // sentence (`errorMessage` mapped the api's code, or fell back), so it is
+    // rendered, never looked up.
+    if ("failed" in result) {
+      return (
+        <span role="alert" className="text-danger">
+          {result.failed}
+        </span>
+      );
+    }
     if (!result.ok) {
       return (
         <span role="alert" className="text-danger">

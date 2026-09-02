@@ -1,12 +1,13 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { MAX_CONCURRENT_RUNS, RUN_LIST_STATES, type RunCreate } from "@pubrick/shared";
+import {
+  type ApiErrorCode,
+  MAX_CONCURRENT_RUNS,
+  RUN_LIST_STATES,
+  type RunCreate,
+} from "@pubrick/shared";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 
@@ -83,6 +84,23 @@ const NOT_CANCELLABLE_MESSAGE: Record<TerminalStatus, string> = {
 };
 
 /**
+ * The same refusal as the code the web turns into a translated sentence.
+ *
+ * The status is in the code's NAME rather than in an argument, for the reason
+ * the record above is keyed by status at all: "this run has already finished;
+ * its draft is ready" and "there is nothing left to cancel" are three different
+ * true things, and a single code plus a status argument would push the choice
+ * between them into the browser. Total over `TerminalStatus` here as well, so a
+ * new run status is a compile error twice rather than a code that silently
+ * matches the wrong sentence.
+ */
+const NOT_CANCELLABLE_CODE: Record<TerminalStatus, ApiErrorCode> = {
+  succeeded: "run_not_cancellable_succeeded",
+  failed: "run_not_cancellable_failed",
+  cancelled: "run_not_cancellable_cancelled",
+};
+
+/**
  * The 409 body for dismissing. Dismissing is how a human clears a FINISHED run
  * off the queue strip; a live run is not on the strip because of `dismissed_at`
  * (the open filter ignores it for `queued`/`running`), so accepting the dismiss
@@ -91,6 +109,12 @@ const NOT_CANCELLABLE_MESSAGE: Record<TerminalStatus, string> = {
 const NOT_DISMISSABLE_MESSAGE: Record<CancellableStatus, string> = {
   queued: "A queued run cannot be dismissed; cancel it first",
   running: "A running run cannot be dismissed; cancel it first",
+};
+
+/** The same two refusals as codes — see `NOT_CANCELLABLE_CODE`. */
+const NOT_DISMISSABLE_CODE: Record<CancellableStatus, ApiErrorCode> = {
+  queued: "run_not_dismissable_queued",
+  running: "run_not_dismissable_running",
 };
 
 function isCancellable(status: RunStatusValue): status is CancellableStatus {
@@ -160,7 +184,7 @@ export class RunsRepository {
       .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, id)))
       .limit(1);
     const run = rows[0];
-    if (!run) throw new NotFoundException("Run not found");
+    if (!run) throw notFound("run_not_found", "Run not found");
     return run;
   }
 
@@ -183,21 +207,24 @@ export class RunsRepository {
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
       .limit(1);
-    if (brand.length === 0) throw new NotFoundException("Brand not found");
+    if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
 
     const brandChannels = await db
       .select({ id: schema.channels.id })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.brandId, data.brandId)));
     if (brandChannels.length === 0) {
-      throw new BadRequestException("This brand has no channels; add one before generating");
+      throw badRequest(
+        "brand_has_no_channels",
+        "This brand has no channels; add one before generating",
+      );
     }
 
     const owned = new Set(brandChannels.map((channel) => channel.id));
     if (data.channelIds.some((id) => !owned.has(id))) {
       // Same wording and same status as ContentRepository.create: from the
       // caller's side it is the identical mistake.
-      throw new NotFoundException("One or more channels do not belong to this brand");
+      throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
     }
   }
 
@@ -228,7 +255,8 @@ export class RunsRepository {
       );
     const inFlight = rows[0]?.count ?? 0;
     if (inFlight >= MAX_CONCURRENT_RUNS) {
-      throw new ConflictException(
+      throw conflict(
+        "run_limit_reached",
         `This organization already has ${MAX_CONCURRENT_RUNS} generation runs queued or running; wait for one to finish or cancel it`,
       );
     }
@@ -287,7 +315,7 @@ export class RunsRepository {
       .limit(1)
       .for("update");
     const run = rows[0];
-    if (!run) throw new NotFoundException("Run not found");
+    if (!run) throw notFound("run_not_found", "Run not found");
     return run.status;
   }
 
@@ -307,7 +335,9 @@ export class RunsRepository {
   async cancel(orgId: string, id: string) {
     await db.transaction(async (tx) => {
       const status = await this.lockRun(tx, orgId, id);
-      if (!isCancellable(status)) throw new ConflictException(NOT_CANCELLABLE_MESSAGE[status]);
+      if (!isCancellable(status)) {
+        throw conflict(NOT_CANCELLABLE_CODE[status], NOT_CANCELLABLE_MESSAGE[status]);
+      }
       await this.queue.cancelGenerate(tx, id, orgId);
       // Query builder, not `db.execute(sql\`…\`)`: `updated_at`'s `$onUpdate`
       // fires for a built UPDATE and never for raw SQL, so a raw statement here
@@ -329,7 +359,9 @@ export class RunsRepository {
   async dismiss(orgId: string, id: string) {
     await db.transaction(async (tx) => {
       const status = await this.lockRun(tx, orgId, id);
-      if (isCancellable(status)) throw new ConflictException(NOT_DISMISSABLE_MESSAGE[status]);
+      if (isCancellable(status)) {
+        throw conflict(NOT_DISMISSABLE_CODE[status], NOT_DISMISSABLE_MESSAGE[status]);
+      }
       await tx
         .update(schema.pipelineRuns)
         .set({ dismissedAt: new Date() })

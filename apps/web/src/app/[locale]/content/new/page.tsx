@@ -24,6 +24,9 @@ const FORM_ID = "new-content-form";
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
+  // See the queue screen: the api's refusal codes are read from here, which is
+  // what puts "this brand has no channels" and the run cap in four languages.
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
 
@@ -48,9 +51,9 @@ export default function NewContentPage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setError(errorMessage(err, t("genericError")));
+      setError(errorMessage(err, t("genericError"), te));
     },
-    [router, locale, t],
+    [router, locale, t, te],
   );
 
   useEffect(() => {

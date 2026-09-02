@@ -14,6 +14,7 @@ import {
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
+import { notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
@@ -91,7 +92,9 @@ export class AiCredentialsRepository {
           and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, provider)),
         )
         .returning({ provider: schema.aiCredentials.provider });
-      if (rows.length === 0) throw new NotFoundException("No API key stored for this provider");
+      if (rows.length === 0) {
+        throw notFound("ai_credential_not_found", "No API key stored for this provider");
+      }
 
       const failed = await tx
         .update(schema.pipelineRuns)
@@ -219,7 +222,7 @@ export class AiCredentialsRepository {
       )
       .limit(1);
     const row = rows[0];
-    if (!row) throw new NotFoundException("No API key stored for this provider");
+    if (!row) throw notFound("ai_credential_not_found", "No API key stored for this provider");
     return this.decrypt(provider, row);
   }
 

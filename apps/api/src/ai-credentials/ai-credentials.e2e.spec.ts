@@ -400,10 +400,16 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       });
     });
 
-    it("404s when the org has no key for that provider", async () => {
+    it("404s when the org has no key for that provider, and names the refusal", async () => {
       const { agent } = await orgAgent();
 
-      await agent.post("/api/ai-credentials/google/test").expect(404);
+      const refused = await agent.post("/api/ai-credentials/google/test").expect(404);
+      // Reachable from the settings screen the moment a second tab removes the
+      // key, so it is a refusal a person provokes rather than a developer's
+      // 404: it carries a code the web renders in four languages, beside the
+      // English sentence a network tab and an API consumer still get.
+      expect(refused.body.code).toBe("ai_credential_not_found");
+      expect(refused.body.message).toBe("No API key stored for this provider");
       expect(probeCalls).toHaveLength(0);
     });
 

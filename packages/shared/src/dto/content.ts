@@ -88,17 +88,29 @@ export type AdaptationUpdate = z.infer<typeof adaptationUpdateSchema>;
 
 export const contentApproveSchema = z.object({
   /**
-   * ISO timestamp; when omitted the post is queued immediately. Must be in the
-   * future: pg-boss treats a past `startAfter` as "run now", so a typo'd or
-   * stale date would silently publish immediately instead of being scheduled.
+   * ISO timestamp; when omitted the post is queued immediately.
+   *
+   * IT MUST ALSO BE IN THE FUTURE — pg-boss treats a past `startAfter` as "run
+   * now", so a typo'd or stale date would silently publish immediately instead
+   * of being scheduled — but that rule is NOT here any more. It is
+   * `ContentRepository.approve`'s, and it moved for two reasons that point the
+   * same way.
+   *
+   * It is not a shape rule. This schema says what a well-formed request looks
+   * like, and a shape does not stop being well-formed while you look at it; a
+   * clock-reading `.refine` returns a different verdict for the same bytes a
+   * moment later, which is a domain rule wearing a schema's clothes.
+   *
+   * And where it stood it could not be named. The pipe refuses a whole body
+   * with one code (`invalid_request`), so the user was shown the developer's
+   * string — "scheduledAt: scheduledAt must be in the future", the pipe's
+   * `path: message` join wrapped around a message naming the field again. As a
+   * domain refusal it has its own code, `schedule_in_past`, and says "pick a
+   * time in the future" in four languages.
+   *
+   * `.datetime()` stays: THAT is a shape.
    */
-  scheduledAt: z
-    .string()
-    .datetime()
-    .refine((value) => new Date(value).getTime() > Date.now(), {
-      message: "scheduledAt must be in the future",
-    })
-    .optional(),
+  scheduledAt: z.string().datetime().optional(),
 });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
 

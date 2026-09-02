@@ -1,5 +1,24 @@
+import {
+  API_ERROR_CODES,
+  type ApiErrorBody,
+  type ApiErrorCode,
+  MAX_CONCURRENT_RUNS,
+  refusalBody,
+} from "@pubrick/shared";
+import { createTranslator } from "next-intl";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, apiVoid, errorMessage } from "./api";
+import en from "../../messages/en.json";
+import es from "../../messages/es.json";
+import pt from "../../messages/pt.json";
+import ru from "../../messages/ru.json";
+import {
+  ApiError,
+  api,
+  apiVoid,
+  type ErrorTranslator,
+  errorMessage,
+  TRANSPORT_ERROR_CODES,
+} from "./api";
 import { onUnauthorized } from "./unauthorized";
 
 function jsonResponse(status: number, body: unknown, statusText = ""): Response {
@@ -225,5 +244,203 @@ describe("errorMessage", () => {
 
   it("falls back for a non-ApiError", () => {
     expect(errorMessage(new Error("boom"), "fallback")).toBe("fallback");
+  });
+});
+
+/**
+ * THE REFUSALS, IN FOUR LANGUAGES.
+ *
+ * Everything below drives the REAL message files through the REAL next-intl
+ * translator. A stub `t` that returns its key would pass every one of these
+ * assertions while `es.json` said nothing at all, which is the exact failure
+ * this whole change exists to remove — so the translator is built from the
+ * shipped JSON and the assertions are on the Spanish and Russian sentences
+ * themselves.
+ *
+ * The response bodies are built by `refusalBody`, the same function the api
+ * throws with. A body shape that drifts on the server therefore breaks these
+ * tests too, instead of leaving them green over a contract nobody honours.
+ */
+describe("a coded refusal, end to end from the HTTP body", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  const LOCALES = { en, es, ru, pt } as const;
+  type LocaleId = keyof typeof LOCALES;
+
+  const translator = (locale: LocaleId): ErrorTranslator =>
+    createTranslator({
+      locale,
+      messages: LOCALES[locale] as Record<string, unknown>,
+      namespace: "Errors",
+    }) as unknown as ErrorTranslator;
+
+  /** One real 4xx response, exactly as the api builds it. */
+  async function refuse(body: ApiErrorBody): Promise<ApiError> {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(body.statusCode, body));
+    return (await api("/api/content/1/approve", { method: "POST" }).catch((e) => e)) as ApiError;
+  }
+
+  it("carries the code off the wire, beside the English sentence", async () => {
+    const error = await refuse(
+      refusalBody(
+        409,
+        "content_pinned_approved",
+        "Approved content cannot be edited; reject it first",
+      ),
+    );
+
+    expect(error.status).toBe(409);
+    expect(error.code).toBe("content_pinned_approved");
+    // The sentence is NOT removed: it is what a developer reads in a network
+    // tab and what an API consumer gets.
+    expect(error.message).toBe("Approved content cannot be edited; reject it first");
+  });
+
+  it("renders the publish gate's refusal in Spanish", async () => {
+    const error = await refuse(
+      refusalBody(409, "unread_ai_draft", "No one has read this AI-written draft yet"),
+    );
+
+    const shown = errorMessage(error, "fallback", translator("es"));
+
+    expect(shown).toBe(es.Errors.unread_ai_draft);
+    expect(shown).not.toBe(error.message);
+    expect(shown).not.toMatch(/Errors\./);
+  });
+
+  it("renders the publish gate's refusal in Russian", async () => {
+    const error = await refuse(
+      refusalBody(409, "unread_ai_draft", "No one has read this AI-written draft yet"),
+    );
+
+    const shown = errorMessage(error, "fallback", translator("ru"));
+
+    expect(shown).toBe(ru.Errors.unread_ai_draft);
+    expect(shown).not.toBe(error.message);
+    expect(shown).toMatch(/[а-яё]/i);
+  });
+
+  it("renders the run admission cap in Spanish and Russian, with the limit filled in", async () => {
+    // The number does not travel on the wire. Both sides import
+    // MAX_CONCURRENT_RUNS, so the sentence cannot promise a different rule than
+    // the api enforces.
+    const error = await refuse(
+      refusalBody(409, "run_limit_reached", "This organization already has 3 generation runs"),
+    );
+
+    for (const locale of ["es", "ru"] as const) {
+      const shown = errorMessage(error, "fallback", translator(locale));
+      expect(shown).toContain(String(MAX_CONCURRENT_RUNS));
+      expect(shown).not.toMatch(/\{limit\}/);
+    }
+  });
+
+  it("never shows a wire field name for a body zod refused", async () => {
+    // "scheduledAt: scheduledAt must be in the future" is what a developer sees
+    // in `message`, and it stays there. What the READER gets names the field the
+    // way the screen does.
+    const error = await refuse(
+      refusalBody(400, "invalid_request", ["scheduledAt: scheduledAt must be in the future"]),
+    );
+
+    expect(error.message).toBe("scheduledAt: scheduledAt must be in the future");
+    for (const locale of ["en", "es", "ru", "pt"] as const) {
+      expect(errorMessage(error, "fallback", translator(locale))).not.toMatch(/scheduledAt/);
+    }
+  });
+
+  it("translates the session and organization refusals the web writes itself", async () => {
+    // These two sentences were never the api's — `request()` writes them — and
+    // they were English in all four languages for exactly the same reason.
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(401, { statusCode: 401 }));
+    const signedOut = (await api("/api/content").catch((e) => e)) as ApiError;
+    expect(signedOut.code).toBe("signed_out");
+    expect(errorMessage(signedOut, "fallback", translator("ru"))).toBe(ru.Errors.signed_out);
+
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(403, { statusCode: 403, message: "No active organization", error: "Forbidden" }),
+    );
+    const noOrg = (await api("/api/content").catch((e) => e)) as ApiError;
+    expect(noOrg.noActiveOrg).toBe(true);
+    expect(errorMessage(noOrg, "fallback", translator("es"))).toBe(
+      es.Errors.no_active_organization,
+    );
+  });
+
+  it("says something true about a code it has never heard of", async () => {
+    // A released server can be newer than a cached client. The code is unknown,
+    // so no key exists to translate — but the api's own English sentence is in
+    // the body, it is specific, and (unlike a provider's error text, which is
+    // why `runFailureMessage` may NOT do this) it cannot contain a secret.
+    // Untranslated-but-true beats a generic apology, and beats a rendered key
+    // path or a blank line outright.
+    const error = await refuse({
+      statusCode: 409,
+      error: "Conflict",
+      message: "This post is being rewritten by someone else right now",
+      code: "content_being_rewritten" as ApiErrorCode,
+    });
+
+    const shown = errorMessage(error, "Something went wrong.", translator("es"));
+
+    expect(shown).toBe("This post is being rewritten by someone else right now");
+    expect(shown).not.toMatch(/Errors\./);
+    expect(shown.trim()).not.toBe("");
+  });
+
+  it("falls back to the caller's sentence when an unknown code brings no sentence either", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(409, { statusCode: 409, code: "who_knows" }));
+    const error = (await api("/api/content").catch((e) => e)) as ApiError;
+
+    expect(errorMessage(error, "Algo salió mal.", translator("es"))).toBe("Algo salió mal.");
+  });
+
+  it("keeps the untranslated contract for a caller that passes no translator", async () => {
+    // Three screens are not converted yet (brands, one brand's channels, the run
+    // receipt). They must keep showing the api's sentence rather than nothing.
+    const error = await refuse(
+      refusalBody(409, "content_already_published", "This content has already been published"),
+    );
+
+    expect(errorMessage(error, "fallback")).toBe("This content has already been published");
+  });
+
+  it("has a real sentence for every code, in every language", () => {
+    // The web's map is total over the union by TYPE; this is the other half —
+    // that each key it names actually resolves in all four files. A code whose
+    // message is missing renders as `Errors.<code>`; one whose message is empty
+    // renders as nothing at all. Both are caught here as well as by the parity
+    // suite, because this is the file that decides what a reader sees.
+    for (const locale of ["en", "es", "ru", "pt"] as const) {
+      const t = translator(locale);
+      for (const code of [...API_ERROR_CODES, ...TRANSPORT_ERROR_CODES]) {
+        const shown = errorMessage(
+          new ApiError(409, "server sentence", false, code),
+          "fallback",
+          t,
+        );
+        expect(shown, `${locale}/${code}`).not.toBe("server sentence");
+        expect(shown, `${locale}/${code}`).not.toBe("fallback");
+        expect(shown, `${locale}/${code}`).not.toMatch(/^Errors\./);
+        expect(shown.trim(), `${locale}/${code}`).not.toBe("");
+      }
+    }
+  });
+
+  it("translates the same codes into four DIFFERENT sentences, not four copies of English", () => {
+    // Parity plus non-blank is satisfied by pasting `en` into `es`. This is the
+    // check that says the translations exist.
+    for (const locale of ["es", "ru", "pt"] as const) {
+      const t = translator(locale);
+      const english = translator("en");
+      for (const code of [...API_ERROR_CODES, ...TRANSPORT_ERROR_CODES]) {
+        const error = new ApiError(409, "server sentence", false, code);
+        expect(errorMessage(error, "fallback", t), `${locale}/${code} is still English`).not.toBe(
+          errorMessage(error, "fallback", english),
+        );
+      }
+    }
   });
 });

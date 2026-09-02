@@ -121,6 +121,10 @@ const contentSettled = (items: ContentItem[]) =>
 export default function ContentQueuePage() {
   const t = useTranslations("Content");
   const tr = useTranslations("Runs");
+  // The refusals' own namespace: `errorMessage` turns the api's `code` into one
+  // of these, so what this screen shows for a 4xx is a sentence in the reader's
+  // language rather than the English one the server wrote for a network tab.
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
 
@@ -135,9 +139,9 @@ export default function ContentQueuePage() {
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setActionError(errorMessage(err, t("genericError")));
+      setActionError(errorMessage(err, t("genericError"), te));
     },
-    [router, locale, t],
+    [router, locale, t, te],
   );
 
   // `no-store` for the same reason the runs poll sets it.
@@ -415,7 +419,7 @@ export default function ContentQueuePage() {
   const readError = contentError ?? runsError;
   const readErrorMessage =
     readError && !(readError instanceof ApiError && readError.noActiveOrg)
-      ? errorMessage(readError, t("genericError"))
+      ? errorMessage(readError, t("genericError"), te)
       : null;
   const error = actionError ?? readErrorMessage;
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { EDITOR, editSchema, FACTCHECK, factcheckSchema, type RunStepContext } from "@pubrick/ai";
@@ -777,4 +778,89 @@ describe.skipIf(!url)("runs e2e", () => {
    * what happened, and a change that replaced it with the code would pass a
    * code-only assertion.
    */
+  describe("coded refusals", () => {
+    it("codes the admission cap WITHOUT putting the limit on the wire", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      for (let i = 0; i < MAX_CONCURRENT_RUNS; i++) await startRun(agent, brandId, [channelId]);
+
+      const denied = await agent
+        .post("/api/runs")
+        .send({ brandId, brief: "One too many", channelIds: [channelId] })
+        .expect(409);
+
+      expect(denied.body.code).toBe("run_limit_reached");
+      // The code is NULLARY. The number stays in the English sentence for the
+      // developer, and the web fills its own from the shared MAX_CONCURRENT_RUNS
+      // rather than parsing it back out of prose it cannot read in Russian.
+      expect(denied.body.message).toContain(String(MAX_CONCURRENT_RUNS));
+      expect(denied.body.code).not.toContain(String(MAX_CONCURRENT_RUNS));
+    });
+
+    it("codes a brand with nothing to publish to apart from a brand that is gone", async () => {
+      const agent = await orgAgent();
+      const emptyBrand = await agent.post("/api/brands").send({ name: "No channels" }).expect(201);
+      const { channelId } = await brandWithChannel(agent);
+
+      const noChannels = await agent
+        .post("/api/runs")
+        .send({ brandId: emptyBrand.body.id, brief: "Anything", channelIds: [channelId] })
+        .expect(400);
+      expect(noChannels.body.code).toBe("brand_has_no_channels");
+      expect(noChannels.body.message).toBe("This brand has no channels; add one before generating");
+
+      const missing = await agent
+        .post("/api/runs")
+        .send({ brandId: randomUUID(), brief: "Anything", channelIds: [channelId] })
+        .expect(404);
+      expect(missing.body.code).toBe("brand_not_found");
+    });
+
+    it("codes a channel that is not this brand's", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const other = await brandWithChannel(agent);
+
+      const denied = await agent
+        .post("/api/runs")
+        .send({ brandId, brief: "Anything", channelIds: [channelId, other.channelId] })
+        .expect(404);
+      expect(denied.body.code).toBe("channels_not_in_brand");
+    });
+
+    it("codes cancel and dismiss by the status on screen, one code per status", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+
+      // Live: dismissable is what it is NOT.
+      const queued = await agent.post(`/api/runs/${run.id}/dismiss`).expect(409);
+      expect(queued.body.code).toBe("run_not_dismissable_queued");
+      expect(queued.body.message).toBe("A queued run cannot be dismissed; cancel it first");
+
+      await setRunStatus(run.id, "running");
+      const running = await agent.post(`/api/runs/${run.id}/dismiss`).expect(409);
+      expect(running.body.code).toBe("run_not_dismissable_running");
+
+      // Terminal: cancellable is what it is NOT, and each terminal status says
+      // a different true thing — which is why there are three codes and not one
+      // code carrying a status argument.
+      for (const [status, code] of [
+        ["succeeded", "run_not_cancellable_succeeded"],
+        ["failed", "run_not_cancellable_failed"],
+        ["cancelled", "run_not_cancellable_cancelled"],
+      ] as const) {
+        await setRunStatus(run.id, status);
+        const refused = await agent.post(`/api/runs/${run.id}/cancel`).expect(409);
+        expect(refused.body.code, status).toBe(code);
+      }
+    });
+
+    it("codes a run that is gone", async () => {
+      const agent = await orgAgent();
+      const missing = await agent.get(`/api/runs/${randomUUID()}`).expect(404);
+      expect(missing.body.code).toBe("run_not_found");
+      expect(missing.body.message).toBe("Run not found");
+    });
+  });
 });

@@ -1,47 +1,185 @@
+import { type ApiErrorCode, isApiErrorCode, MAX_CONCURRENT_RUNS } from "@pubrick/shared";
 import { reportUnauthorized } from "./unauthorized";
 
+/**
+ * Refusals the WEB writes, not the api.
+ *
+ * A 401 and a bare 403 never carried a sentence worth showing — `request()`
+ * below replaces them with one of its own — so they were English in all four
+ * languages for exactly the reason the api's refusals were, and they are the two
+ * a person hits most often. They get codes from a separate list because they are
+ * not part of the wire contract: no server sends them, and putting them in
+ * `API_ERROR_CODES` would advertise a code the api can never emit.
+ *
+ * `no_active_organization` is the api's refusal read through a sniff rather than
+ * a code (`ActiveOrgGuard` is the one refusal path outside this change's reach),
+ * which is why it lives here beside the two the web really does author.
+ */
+export const TRANSPORT_ERROR_CODES = ["signed_out", "no_active_organization", "forbidden"] as const;
+export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
+
+/** Everything `errorMessage` can translate: the wire's codes plus the web's own. */
+export type ErrorCode = ApiErrorCode | TransportErrorCode;
+
+function isErrorCode(value: string | null): value is ErrorCode {
+  return (
+    value !== null &&
+    (isApiErrorCode(value) || (TRANSPORT_ERROR_CODES as readonly string[]).includes(value))
+  );
+}
+
 export class ApiError extends Error {
+  /**
+   * The refusal's machine-readable code, or null when the failure carried none —
+   * a 5xx, a network failure, an endpoint not yet converted, or an api older
+   * than this build.
+   *
+   * Typed `string | null` rather than `ErrorCode | null` for the same reason
+   * `Run.errorCode` is: it arrives OFF THE WIRE, and a released server can be
+   * newer than a cached client. Asserting the narrow type here would only hide
+   * the unknown value from `errorMessage`, which is the thing that actually
+   * decides what a reader sees.
+   */
+  readonly code: string | null;
+
   constructor(
     readonly status: number,
     message: string,
-    /** 403 raised by ActiveOrgGuard because the session has no active organization. */
+    /**
+     * 403 raised by ActiveOrgGuard because the session has no active
+     * organization. Screens branch on it to send the reader to onboarding
+     * instead of showing a sentence.
+     *
+     * Still the THIRD parameter and still a boolean because it predates codes
+     * and several page tests construct it positionally. It is not a second,
+     * disagreeable copy of `code`: with no explicit code it IS one, expanded
+     * below, so the flag the screens route on and the sentence the reader gets
+     * cannot come apart.
+     */
     readonly noActiveOrg = false,
+    code: string | null = null,
   ) {
     super(message);
+    this.code = code ?? (noActiveOrg ? "no_active_organization" : null);
   }
 }
 
 /**
+ * The message key for every code, in the reader's `Errors` namespace.
+ *
+ * TOTAL over the union, exactly as `RUN_FAILURE_KEYS` is total over
+ * `RunFailure`: a code added to `API_ERROR_CODES` without a sentence here is a
+ * COMPILE error, not a key path rendered at a user in four languages.
+ */
+const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  content_not_found: "content_not_found",
+  adaptation_not_found: "adaptation_not_found",
+  content_pinned_approved: "content_pinned_approved",
+  content_pinned_published: "content_pinned_published",
+  adaptation_pinned_scheduled: "adaptation_pinned_scheduled",
+  adaptation_pinned_queued: "adaptation_pinned_queued",
+  adaptation_pinned_publishing: "adaptation_pinned_publishing",
+  adaptation_pinned_published: "adaptation_pinned_published",
+  content_already_published: "content_already_published",
+  content_no_channels_left: "content_no_channels_left",
+  unread_ai_draft: "unread_ai_draft",
+  unread_ai_draft_open_only: "unread_ai_draft_open_only",
+  schedule_in_past: "schedule_in_past",
+  channels_not_in_brand: "channels_not_in_brand",
+  run_not_found: "run_not_found",
+  brand_not_found: "brand_not_found",
+  brand_has_no_channels: "brand_has_no_channels",
+  run_limit_reached: "run_limit_reached",
+  run_not_cancellable_succeeded: "run_not_cancellable_succeeded",
+  run_not_cancellable_failed: "run_not_cancellable_failed",
+  run_not_cancellable_cancelled: "run_not_cancellable_cancelled",
+  run_not_dismissable_queued: "run_not_dismissable_queued",
+  run_not_dismissable_running: "run_not_dismissable_running",
+  ai_credential_not_found: "ai_credential_not_found",
+  invalid_request: "invalid_request",
+  signed_out: "signed_out",
+  no_active_organization: "no_active_organization",
+  forbidden: "forbidden",
+};
+
+/**
+ * The one argument any refusal needs, and it does not travel on the wire.
+ *
+ * `MAX_CONCURRENT_RUNS` is exported from `@pubrick/shared` precisely so the UI
+ * and the api cannot promise different rules — the compose screen already names
+ * the same number. Reading it here rather than parsing it out of the api's
+ * English sentence is what keeps that true in Russian.
+ */
+const ERROR_MESSAGE_VALUES: Partial<Record<ErrorCode, Record<string, string | number>>> = {
+  run_limit_reached: { limit: MAX_CONCURRENT_RUNS },
+};
+
+/**
+ * What `errorMessage` needs of a translator: a key, and optionally the values to
+ * interpolate. Structurally satisfied by `useTranslations("Errors")`.
+ */
+export type ErrorTranslator = (key: string, values?: Record<string, string | number>) => string;
+
+/**
  * What to actually show the user for a failed request.
  *
- * A 4xx is the server saying something specific and actionable about THIS
- * request — "Approved content cannot be edited; reject it first", "This
- * content has already been published", "No active organization" — and the
- * whole value of it is the detail. Collapsing that into a generic apology
- * throws away the only thing that tells the operator what to do next, so a
- * 4xx message is rendered as it came.
+ * THREE answers, in falling order of how much each one knows.
  *
- * A 5xx, or a failure with no HTTP status at all (network down, DNS, a proxy's
- * own error page), says nothing the user can act on and was never written for
- * them. Those collapse into the caller's translated fallback, which is the
- * point of the per-screen `genericError` keys. A network failure that never
- * reached the server is wrapped as `ApiError(0, ...)` (see `api()` below) and
- * must land here too — hence the lower bound, not just `< 500`.
+ * 1. THE CODE. A refusal that named itself (`ApiErrorBody.code`, or one of the
+ *    web's own `TRANSPORT_ERROR_CODES`) is turned into a sentence in the
+ *    reader's language. This is the whole point: the api's prose is English,
+ *    this product ships in four languages, and it also speaks a different
+ *    vocabulary than the screens do — the server says "content item" where
+ *    every screen says "post".
+ * 2. THE SERVER'S SENTENCE, for a 4xx with no code this build knows. That is a
+ *    refusal not yet converted, and a code from an api NEWER than this build —
+ *    a released server against a cached client, which is ordinary. The sentence
+ *    is specific, actionable, and (unlike a provider's error text, which is why
+ *    `runFailureMessage` must NOT do this) cannot contain a secret: it is
+ *    written in this repository. Untranslated and true beats translated and
+ *    vague, and beats a rendered key path or a blank line outright.
+ * 3. THE CALLER'S FALLBACK, for a 5xx, a failure with no HTTP status at all
+ *    (network down, DNS, a proxy's own error page), or an unknown code that
+ *    brought no sentence either. None of those says anything the user can act
+ *    on, which is the point of the per-screen `genericError` keys. A network
+ *    failure that never reached the server is wrapped as `ApiError(0, ...)`
+ *    (see `api()` below) and must land here too — hence the lower bound on the
+ *    status test, not just `< 500`.
+ *
+ * `t` IS OPTIONAL, and that is a migration state rather than a design: a call
+ * site that passes none keeps step 2 exactly as it behaved before codes
+ * existed, so the screens this change does not reach (the brand list, one
+ * brand's channels, the run receipt) still show the api's sentence rather than
+ * nothing. Converting one is adding one argument.
  */
-export function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof ApiError && err.status >= 400 && err.status < 500 ? err.message : fallback;
+export function errorMessage(err: unknown, fallback: string, t?: ErrorTranslator): string {
+  if (!(err instanceof ApiError)) return fallback;
+  if (t !== undefined && isErrorCode(err.code)) {
+    return t(ERROR_MESSAGE_KEYS[err.code], ERROR_MESSAGE_VALUES[err.code]);
+  }
+  return err.status >= 400 && err.status < 500 && err.message.length > 0 ? err.message : fallback;
 }
 
-/** Nest error bodies are `{ statusCode, message, error }`; message may be a string[]. */
-function serverMessage(raw: string): string | undefined {
+/**
+ * Nest error bodies are `{ statusCode, message, error }`; message may be a
+ * string[]. A coded refusal adds `code` (see `refusalBody` in `@pubrick/shared`)
+ * and changes nothing else, so this reads both shapes.
+ */
+function serverFailure(raw: string): { message?: string; code?: string } {
   try {
-    const body = JSON.parse(raw) as { message?: unknown };
-    if (typeof body.message === "string" && body.message.length > 0) return body.message;
-    if (Array.isArray(body.message) && body.message.length > 0) return body.message.join(", ");
+    const body = JSON.parse(raw) as { message?: unknown; code?: unknown };
+    const code = typeof body.code === "string" && body.code.length > 0 ? body.code : undefined;
+    if (typeof body.message === "string" && body.message.length > 0) {
+      return { message: body.message, code };
+    }
+    if (Array.isArray(body.message) && body.message.length > 0) {
+      return { message: body.message.join(", "), code };
+    }
+    return { code };
   } catch {
     // Not JSON (proxy error page, gateway timeout) — never surface the raw body.
+    return {};
   }
-  return undefined;
 }
 
 /**
@@ -69,7 +207,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   }
   if (!res.ok) {
     const raw = await res.text();
-    const detail = serverMessage(raw);
+    const { message: detail, code } = serverFailure(raw);
     if (res.status === 401) {
       // Deliberately NOT "your session has expired". A 401 says only that the
       // request carried no valid session — which is equally true of a session
@@ -87,9 +225,14 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       // Reporting it is what turns the refusal into a trip to the login screen;
       // see `unauthorized.ts` and AppShell's guard.
       reportUnauthorized();
-      throw new ApiError(401, "You're signed out. Log in again to continue.");
+      throw new ApiError(401, "You're signed out. Log in again to continue.", false, "signed_out");
     }
     if (res.status === 403) {
+      // Still a sniff on the sentence rather than a code: `ActiveOrgGuard` is
+      // the one refusal path this change did not reach. The sniff decides the
+      // CODE now instead of a boolean flag, so the screens' `err.noActiveOrg`
+      // branch and the translated sentence can no longer disagree about which
+      // 403 this is.
       const noActiveOrg = /no active organization/i.test(detail ?? "");
       throw new ApiError(
         403,
@@ -97,9 +240,15 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
           ? "No active organization — create or select one first."
           : "You don't have access to this.",
         noActiveOrg,
+        noActiveOrg ? "no_active_organization" : "forbidden",
       );
     }
-    throw new ApiError(res.status, detail ?? res.statusText ?? `Request failed (${res.status})`);
+    throw new ApiError(
+      res.status,
+      detail ?? res.statusText ?? `Request failed (${res.status})`,
+      false,
+      code ?? null,
+    );
   }
   return res;
 }

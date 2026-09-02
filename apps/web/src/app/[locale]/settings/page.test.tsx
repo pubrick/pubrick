@@ -642,3 +642,59 @@ describe("Settings — AI provider: a failed spend read is not a spend of zero",
     expect(screen.queryByText(spendLine("$1.25"))).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The credential refusals a person provokes, in the product's words.
+ *
+ * `ai_credential_not_found` is the one this screen reaches by ordinary use: the
+ * key is listed here because it existed when the page loaded, and a second tab
+ * (or a colleague) removed it before the button was pressed. Both buttons then
+ * 404, and until the code existed both said "No API key stored for this
+ * provider" — the api's English — to a reader who had chosen Spanish.
+ *
+ * The asserted pair is what makes this a test of the WIRING rather than of the
+ * map: the sentence that appears is `Errors.*`, and the sentence that does not
+ * is the api's own.
+ */
+describe("Settings — a refused credential action speaks the product's language", () => {
+  const gone = new ApiError(
+    404,
+    "No API key stored for this provider",
+    false,
+    "ai_credential_not_found",
+  );
+
+  it("renders our sentence when Test finds the key already removed", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [googleKey] });
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const method = (args[1] as RequestInit | undefined)?.method ?? "GET";
+      if (method === "POST" && path.endsWith("/test")) throw gone;
+      if (method === "GET" && path === "/api/ai-credentials") return [googleKey];
+      if (method === "GET" && path === "/api/ai-credentials/spend")
+        return { kind: "exact", usd: 0 } satisfies CostSummary;
+      throw new Error(`unhandled request in test: ${method} ${path}`);
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
+
+    expect(await screen.findByText(en.Errors.ai_credential_not_found)).toBeInTheDocument();
+    expect(screen.queryByText(gone.message)).not.toBeInTheDocument();
+  });
+
+  it("renders our sentence when the credential list itself is refused", async () => {
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      if (path === "/api/ai-credentials") throw gone;
+      return { kind: "exact", usd: 0 } satisfies CostSummary;
+    });
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByText(en.Errors.ai_credential_not_found)).toBeInTheDocument();
+    expect(screen.queryByText(gone.message)).not.toBeInTheDocument();
+  });
+});

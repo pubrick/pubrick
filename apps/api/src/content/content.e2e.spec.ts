@@ -3402,4 +3402,251 @@ describe.skipIf(!url)("content e2e", () => {
       .send({ body: "Right drawer." })
       .expect(200);
   });
+  /**
+   * EVERY REFUSAL A PERSON CAN PROVOKE NAMES ITSELF.
+   *
+   * Asserted through the HTTP response, not through a repository call, because
+   * the code has to survive the whole path a browser's failure takes: a Nest
+   * exception filter, JSON serialisation, and the web's own body parser. A test
+   * that called `content.approve()` and inspected the thrown exception would
+   * pass over a filter that dropped every field but `message`.
+   *
+   * The English sentence is asserted alongside the code EVERY time, and that is
+   * not belt-and-braces: it is the contract. It is what a developer reads in a
+   * network tab, what a public-API consumer and the MCP server get, and what a
+   * web build older than the code still shows the reader. A change that swapped
+   * the sentence for the code would pass a code-only assertion.
+   */
+  describe("coded refusals", () => {
+    /** A post whose text is pinned, plus the ids to aim at it. */
+    async function approvedPost(agent: request.Agent) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Reviewed", channelIds: [channelId] })
+        .expect(201);
+      await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+      return {
+        brandId,
+        channelId,
+        itemId: created.body.id as string,
+        adaptationId: created.body.adaptations[0].id as string,
+      };
+    }
+
+    async function execute(statement: string) {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(statement);
+      await pool.end();
+    }
+
+    it("names the pinned STATUS in the code, so no argument has to travel", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await approvedPost(agent);
+
+      const approved = await agent.patch(`/api/content/${itemId}`).send({ body: "no" }).expect(409);
+      expect(approved.body.code).toBe("content_pinned_approved");
+      expect(approved.body.message).toBe("Approved content cannot be edited; reject it first");
+
+      await execute(`UPDATE adaptations SET status = 'published' WHERE id = '${adaptationId}'`);
+      await execute(`UPDATE content_items SET status = 'published' WHERE id = '${itemId}'`);
+
+      // The same request, one status later, is a DIFFERENT code — which is the
+      // whole reason the status is in the code rather than in an argument: one
+      // sentence cannot be true of both, in any language.
+      const published = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "no" })
+        .expect(409);
+      expect(published.body.code).toBe("content_pinned_published");
+      expect(published.body.message).toBe(
+        "This content has already been published and can no longer be edited",
+      );
+
+      const decided = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(decided.body.code).toBe("content_already_published");
+    });
+
+    it("codes a pinned channel override by its OWN status, not the item's", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await approvedPost(agent);
+      // Rejecting hands the item back (editable) and returns its outstanding
+      // adaptations to `pending` — the partial-fan-out shape, where the item's
+      // status and the row's disagree. That disagreement is the whole point of
+      // the second record: `content_pinned_*` cannot answer for this row.
+      await agent.post(`/api/content/${itemId}/reject`).expect(200);
+
+      for (const [status, code] of [
+        ["scheduled", "adaptation_pinned_scheduled"],
+        ["queued", "adaptation_pinned_queued"],
+        ["publishing", "adaptation_pinned_publishing"],
+        ["published", "adaptation_pinned_published"],
+      ] as const) {
+        await execute(`UPDATE adaptations SET status = '${status}' WHERE id = '${adaptationId}'`);
+        const refused = await agent
+          .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+          .send({ body: "no" })
+          .expect(409);
+        expect(refused.body.code, status).toBe(code);
+      }
+
+      // The sentence is still the api's own, unchanged, beside the last code.
+      const published = await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "no" })
+        .expect(409);
+      expect(published.body.message).toBe(
+        "This channel's post has already been published and can no longer be edited",
+      );
+    });
+
+    it("codes the two publish-gate refusals apart", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      // A body with a complete `ai` version behind it: an edit WOULD clear this.
+      const editable = await aiDraft(agent, brandId, [channelId]);
+      const canEdit = await agent
+        .post(`/api/content/${editable.itemId}/approve`)
+        .send({})
+        .expect(409);
+      expect(canEdit.body.code).toBe("unread_ai_draft");
+
+      // A hand-typed body carrying AI-written channel text: there is no complete
+      // `ai` version of the BODY to judge an edit against, so telling the reader
+      // to edit it would be telling them to do something that cannot work.
+      const deadEnd = await handTypedWithAiAdaptation(agent, brandId, [channelId]);
+      const openOnly = await agent
+        .post(`/api/content/${deadEnd.itemId}/approve`)
+        .send({})
+        .expect(409);
+      expect(openOnly.body.code).toBe("unread_ai_draft_open_only");
+    });
+
+    it("codes a post whose every channel has been deleted", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({
+          brandId,
+          body: "Written for a channel that is about to go",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      await agent.delete(`/api/channels/${channelId}`).expect(200);
+
+      const refused = await agent
+        .post(`/api/content/${created.body.id}/approve`)
+        .send({})
+        .expect(409);
+      expect(refused.body.code).toBe("content_no_channels_left");
+    });
+
+    it("codes the rows that are simply gone", async () => {
+      const agent = await orgAgent();
+      const { itemId } = await approvedPost(agent);
+
+      const missingItem = await agent.get(`/api/content/${randomUUID()}`).expect(404);
+      expect(missingItem.body.code).toBe("content_not_found");
+
+      const missingAdaptation = await agent
+        .patch(`/api/content/${itemId}/adaptations/${randomUUID()}`)
+        .send({ body: "no" })
+        .expect(404);
+      expect(missingAdaptation.body.code).toBe("adaptation_not_found");
+    });
+
+    it("codes a channel that is not this brand's", async () => {
+      const agent = await orgAgent();
+      const { brandId } = await brandWithChannel(agent);
+      const other = await agent.post("/api/brands").send({ name: "Other" }).expect(201);
+      const stranger = await agent
+        .post("/api/channels")
+        .send({
+          brandId: other.body.id,
+          platform: "telegram",
+          name: "Theirs",
+          credentials: { botToken: "789:ghi", chatId: "-1005555555555" },
+        })
+        .expect(201);
+
+      const refused = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Wrong brand's channel", channelIds: [stranger.body.id] })
+        .expect(404);
+      expect(refused.body.code).toBe("channels_not_in_brand");
+    });
+
+    /**
+     * THE WIRE FIELD NAME, which is the other half of this change.
+     *
+     * A schedule in the past was `contentApproveSchema`'s zod refine, so the
+     * reader was told "scheduledAt: scheduledAt must be in the future" — the
+     * pipe's `path: message` join, wrapped around a message that names the field
+     * again. It is now a domain refusal with a code, because it is a CLOCK-
+     * dependent predicate rather than a shape one: a schema that passes at parse
+     * time and is false a moment later at use time was never validation.
+     *
+     * The developer's sentence is unchanged and unprefixed; the reader gets
+     * `schedule_in_past`, which says "pick a time in the future" in four
+     * languages and names no field at all.
+     */
+    it("codes a past schedule instead of leaking the field name zod knows it by", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Scheduled for yesterday", channelIds: [channelId] })
+        .expect(201);
+
+      const refused = await agent
+        .post(`/api/content/${created.body.id}/approve`)
+        .send({ scheduledAt: new Date(Date.now() - 60_000).toISOString() })
+        .expect(400);
+
+      expect(refused.body.code).toBe("schedule_in_past");
+      expect(refused.body.message).toBe("scheduledAt must be in the future");
+      // The pipe's `field: ` prefix is gone from this path entirely — it is the
+      // part a reader could never make sense of.
+      expect(refused.body.message).not.toMatch(/^scheduledAt: /);
+
+      // ...and the rule still holds: nothing was approved.
+      const untouched = await agent.get(`/api/content/${created.body.id}`).expect(200);
+      expect(untouched.body.status).toBe("draft");
+    });
+
+    it("codes what is left at the validation boundary, keeping the field-qualified detail for developers", async () => {
+      const agent = await orgAgent();
+      const { brandId } = await brandWithChannel(agent);
+
+      const refused = await agent
+        .post("/api/content")
+        .send({ brandId, body: "", channelIds: [] })
+        .expect(400);
+
+      expect(refused.body.code).toBe("invalid_request");
+      // Unchanged: the array, each entry still qualified by the path zod knows.
+      // The reader never sees it — `Errors.invalid_request` is what renders —
+      // but the network tab and the API consumer do.
+      expect(Array.isArray(refused.body.message)).toBe(true);
+      expect((refused.body.message as string[]).join(" ")).toMatch(/body/);
+    });
+
+    it("keeps a scheduled approval working, so the refusal is about the time and not about scheduling", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Scheduled for later", channelIds: [channelId] })
+        .expect(201);
+
+      const approved = await agent
+        .post(`/api/content/${created.body.id}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+        .expect(200);
+      expect(approved.body.adaptations[0].status).toBe("scheduled");
+    });
+  });
 });

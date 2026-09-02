@@ -1,12 +1,8 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type AdaptationUpdate,
+  type ApiErrorCode,
   allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
@@ -14,6 +10,7 @@ import {
   isSameText,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 
@@ -95,6 +92,24 @@ const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
 };
 
 /**
+ * The same refusal, as the code the web turns into a translated sentence.
+ *
+ * A SECOND record over the same key rather than one record of pairs, because
+ * the sentence above is a different artefact with a different audience: it is
+ * the developer's, it is quoted verbatim by tests that predate codes, and it
+ * says "content" where the screens say "post". The code is what the reader
+ * gets, in four languages, and it carries the status in its NAME — which is
+ * exactly why "Approved content cannot be edited" being a lie about a
+ * published item forced this record to be keyed by status in the first place.
+ * Both are total over `PinnedItemStatus`, so a new status is still a compile
+ * error in both places.
+ */
+const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
+  approved: "content_pinned_approved",
+  published: "content_pinned_published",
+};
+
+/**
  * Adaptation statuses with no delivery in flight, so an override is still safe
  * to change. Same shape, same reasoning as the item set above.
  */
@@ -112,6 +127,14 @@ const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
   queued: "A post already queued for publishing cannot be edited; reject the content first",
   publishing: "A post that is being published right now cannot be edited; reject the content first",
   published: "This channel's post has already been published and can no longer be edited",
+};
+
+/** The same four refusals as codes — see `PINNED_ITEM_CODE`. */
+const PINNED_ADAPTATION_CODE: Record<PinnedAdaptationStatus, ApiErrorCode> = {
+  scheduled: "adaptation_pinned_scheduled",
+  queued: "adaptation_pinned_queued",
+  publishing: "adaptation_pinned_publishing",
+  published: "adaptation_pinned_published",
 };
 
 /**
@@ -579,7 +602,7 @@ export class ContentRepository {
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1);
     const item = rows[0];
-    if (!item) throw new NotFoundException("Content item not found");
+    if (!item) throw notFound("content_not_found", "Content item not found");
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
@@ -651,7 +674,7 @@ export class ContentRepository {
         ),
       );
     if (channels.length !== data.channelIds.length) {
-      throw new NotFoundException("One or more channels do not belong to this brand");
+      throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
     }
 
     const id = await db.transaction(async (tx) => {
@@ -696,9 +719,9 @@ export class ContentRepository {
       .limit(1)
       .for("update");
     const item = rows[0];
-    if (!item) throw new NotFoundException("Content item not found");
+    if (!item) throw notFound("content_not_found", "Content item not found");
     if (isEditableItemStatus(item.status)) return { body: item.body };
-    throw new ConflictException(PINNED_ITEM_MESSAGE[item.status]);
+    throw conflict(PINNED_ITEM_CODE[item.status], PINNED_ITEM_MESSAGE[item.status]);
   }
 
   /**
@@ -831,11 +854,14 @@ export class ContentRepository {
         .limit(1)
         .for("update");
       const current = locked[0];
-      if (!current) throw new NotFoundException("Adaptation not found");
+      if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
 
       await this.requireEditableItem(tx, orgId, contentItemId);
       if (!isEditableAdaptationStatus(current.status)) {
-        throw new ConflictException(PINNED_ADAPTATION_MESSAGE[current.status]);
+        throw conflict(
+          PINNED_ADAPTATION_CODE[current.status],
+          PINNED_ADAPTATION_MESSAGE[current.status],
+        );
       }
 
       const rows = await tx
@@ -850,7 +876,7 @@ export class ContentRepository {
         )
         .returning(ADAPTATION_COLUMNS);
       const updated = rows[0];
-      if (!updated) throw new NotFoundException("Adaptation not found");
+      if (!updated) throw notFound("adaptation_not_found", "Adaptation not found");
 
       const versionBody = humanVersionBody(current.body, data.body);
       if (versionBody !== null) {
@@ -886,7 +912,7 @@ export class ContentRepository {
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1);
-    if (rows.length === 0) throw new NotFoundException("Content item not found");
+    if (rows.length === 0) throw notFound("content_not_found", "Content item not found");
   }
 
   /**
@@ -920,7 +946,8 @@ export class ContentRepository {
       .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)))
       .limit(1);
     if (rows.length === 0) {
-      throw new ConflictException(
+      throw conflict(
+        "content_no_channels_left",
         "This content has no channels left to publish to; every channel it was written for has " +
           "been deleted",
       );
@@ -979,7 +1006,8 @@ export class ContentRepository {
       .limit(1)
       .for("update");
     if (rows[0]?.status === "published") {
-      throw new ConflictException(
+      throw conflict(
+        "content_already_published",
         "This content has already been published; it can no longer be approved or rejected",
       );
     }
@@ -1184,11 +1212,9 @@ export class ContentRepository {
       // altogether, or whose only `ai` row is a refine `fragment`, are the same
       // dead end and get the same sentence.
       const bodyEvidence = aiEvidence.get(null) ?? NO_AI_EVIDENCE;
-      throw new ConflictException(
-        bodyEvidence.firstFullBody === undefined
-          ? UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE
-          : UNREAD_AI_DRAFT_MESSAGE,
-      );
+      throw bodyEvidence.firstFullBody === undefined
+        ? conflict("unread_ai_draft_open_only", UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE)
+        : conflict("unread_ai_draft", UNREAD_AI_DRAFT_MESSAGE);
     }
   }
 
@@ -1234,7 +1260,7 @@ export class ContentRepository {
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1);
-    if (existing.length === 0) throw new NotFoundException("Content item not found");
+    if (existing.length === 0) throw notFound("content_not_found", "Content item not found");
   }
 
   private async setItemStatus(
@@ -1348,6 +1374,27 @@ export class ContentRepository {
    * UI, because this is the only door to `enqueuePublish`.
    */
   async approve(orgId: string, id: string, scheduledAt: Date | null) {
+    // A SCHEDULE IN THE PAST, refused here rather than by `contentApproveSchema`.
+    //
+    // It used to be a zod `.refine` on the DTO, and being there is what made the
+    // reader's error read "scheduledAt: scheduledAt must be in the future" — the
+    // pipe's `path: message` join wrapped around a message that names the field
+    // a second time. It could not be given a code where it stood, because the
+    // pipe refuses a whole body and cannot say which of its issues mattered.
+    //
+    // It is not validation, either. Validation asks about the SHAPE of a
+    // request, and a shape does not stop being valid while you look at it: this
+    // predicate reads the clock, so a body that parsed a moment ago is false
+    // now. A DTO whose verdict changes between parse and use is a domain rule
+    // wearing a schema's clothes, and this is where domain rules live.
+    //
+    // Before the transaction on purpose — it needs no row and no lock, and a
+    // refusal should cost neither. pg-boss treats a past `startAfter` as "run
+    // now", so without this a typo'd or stale date publishes IMMEDIATELY
+    // instead of being scheduled, which is the damage the rule exists to stop.
+    if (scheduledAt !== null && scheduledAt.getTime() <= Date.now()) {
+      throw badRequest("schedule_in_past", "scheduledAt must be in the future");
+    }
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
