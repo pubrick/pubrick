@@ -50,6 +50,7 @@
     "platformLabel": "Plataforma",
     "namePlaceholder": "Nombre del canal",
     "remove": "Eliminar",
+    "edit": "Editar",
     "add": "Añadir canal",
     "test": "Probar conexión",
     "testOk": "OK — conectado como {account}, puede publicar en {target}",
@@ -59,8 +60,13 @@
     "listError": "No se pudieron cargar los canales de esta marca, así que esta lista no es la respuesta.",
     "retry": "Inténtalo de nuevo",
     "removeTitle": "¿Eliminar este canal?",
-    "removeBody": "Pubrick borra las credenciales guardadas de {channel} y no puede volver a mostrarlas: necesitarías unas nuevas de la plataforma. Después no se publicará nada en este canal.",
-    "removeCancel": "Cancelar"
+    "removeBody": "Pubrick borra las credenciales guardadas de {channel} y no puede volver a mostrarlas: necesitarías unas nuevas de la plataforma. Todo lo programado para él se cancela y después no se publicará nada en este canal, aunque lo ya publicado permanece en el registro. Para reemplazar un token revocado, usa Editar.",
+    "removeCancel": "Cancelar",
+    "editTitle": "Editar canal",
+    "editCredsHint": "Déjalos vacíos para conservar las credenciales ya guardadas: Pubrick no puede volver a mostrarlas. Rellénalos para reemplazarlas, que es como se instala un token nuevo cuando la plataforma revoca el anterior. Las publicaciones programadas siguen programadas y saldrán con las credenciales nuevas.",
+    "editCredsPartial": "Rellena todos los campos de credenciales o déjalos todos vacíos. Las credenciales nuevas reemplazan a las guardadas en bloque, así que un formulario a medias dejaría este canal sin poder publicar.",
+    "editSave": "Guardar",
+    "editCancel": "Cancelar"
   },
   "Content": {
     "title": "Cola",

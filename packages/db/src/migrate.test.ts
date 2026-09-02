@@ -133,6 +133,49 @@ async function snapshotRows(pool: pg.Pool): Promise<Record<string, pg.QueryResul
 }
 
 /**
+ * Every value a row held before the migrations is still exactly that value
+ * after them, and any column the migrations ADDED is null on every pre-existing
+ * row.
+ *
+ * A plain `toEqual` of the two snapshots said the same thing while 0009 was the
+ * only migration under test — it adds no columns, which is what let one seed
+ * prove both halves. It stops being usable the moment a LATER migration adds
+ * one (0011 adds `publications.channel_name` / `channel_platform`): every row
+ * of that table grows a key the seed could not have had, and the whole
+ * assertion fails for a reason that has nothing to do with rewriting data.
+ *
+ * Weakening it to a column subset would have given that away. So the property
+ * is split instead, and it is now the stronger of the two: no seeded value may
+ * change, AND a new column must arrive empty on rows that predate it. A
+ * migration that BACKFILLS over live rows fails the second half — which is
+ * precisely the class this test exists to catch, and which the old shape could
+ * only catch for migrations that added no columns at all.
+ */
+function expectNoRowRewritten(
+  after: Record<string, pg.QueryResultRow[]>,
+  before: Record<string, pg.QueryResultRow[]>,
+): void {
+  expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+  for (const [table, beforeRows] of Object.entries(before)) {
+    const afterRows = after[table] as pg.QueryResultRow[];
+    expect(afterRows, `${table}: row count changed`).toHaveLength(beforeRows.length);
+    beforeRows.forEach((beforeRow, i) => {
+      const afterRow = afterRows[i] as pg.QueryResultRow;
+      const seededKeys = Object.keys(beforeRow);
+      expect(
+        Object.fromEntries(seededKeys.map((key) => [key, afterRow[key]])),
+        `${table}: an existing value was rewritten`,
+      ).toEqual(beforeRow);
+      const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
+      expect(
+        added.filter((key) => afterRow[key] !== null),
+        `${table}: a column added after the seed was backfilled over an existing row`,
+      ).toEqual([]);
+    });
+  }
+}
+
+/**
  * Every message in an error's `cause` chain, plus any Postgres `hint`.
  *
  * drizzle wraps a failed statement in a `DrizzleQueryError` whose own message
@@ -768,6 +811,10 @@ describe.skipIf(!url)("runMigrations", () => {
    * is compared field for field afterwards — `ALTER TABLE ... ADD CONSTRAINT`
    * and `CREATE UNIQUE INDEX` rewrite nothing, and this is the assertion that
    * says so rather than assuming it.
+   *
+   * `runMigrations` applies everything from 0009 to head, so the claim is
+   * really about all of them: see `expectNoRowRewritten` for why the comparison
+   * is not a flat `toEqual` of the two snapshots any more.
    */
   it("adds the invariants to a database that already holds rows of every table", async () => {
     const fresh = await withFreshDatabase(url as string);
@@ -801,7 +848,7 @@ describe.skipIf(!url)("runMigrations", () => {
       );
       await after.end();
 
-      expect(rows).toEqual(seeded);
+      expectNoRowRewritten(rows, seeded);
       expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length);
       expect(index.rows[0]?.indexdef).toContain("WHERE (status <> 'published'::text)");
     } finally {

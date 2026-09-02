@@ -1,4 +1,9 @@
-import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
+import {
+  channelUpdateSchema,
+  NON_SECRET_FIELDS,
+  PLATFORM_FIELDS,
+  PLATFORM_IDS,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { credentialFieldLabel } from "@/lib/platform";
@@ -522,5 +527,157 @@ describe("a failed channels read is not an empty brand", () => {
     expect(await screen.findByText(en.Channels.empty)).toBeInTheDocument();
     expect(screen.queryByText(en.Channels.listError)).not.toBeInTheDocument();
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+});
+
+/**
+ * Rotating a credential — the reason `PATCH /api/channels/:id` exists.
+ *
+ * Until it did, replacing a revoked bot token meant deleting the channel and
+ * adding it again, which cascaded every adaptation the channel had (scheduled
+ * posts included) and, before migration 0011, every record of what it had
+ * already published.
+ *
+ * Bodies are pinned twice, as the rest of this file's write paths are: a
+ * literal `toEqual` for what the screen sends, and a parse against the schema
+ * the API validates with. Every field of `channelUpdateSchema` is optional, so
+ * the schema half asserts the ROUND TRIP — `z.object()` strips unknown keys, so
+ * a renamed field would parse happily and silently yield `{}`.
+ */
+describe("BrandPage edit() — rotating credentials", () => {
+  const channel = { id: "c1", platform: "telegram", name: "My channel" };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  /** Opens the edit modal for the single listed channel. */
+  async function openEditor(user: ReturnType<typeof userEvent.setup>) {
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: en.Channels.edit }));
+    return within(screen.getByRole("dialog", { name: en.Channels.editTitle }));
+  }
+
+  function recordingHandlers(calls: { url: string; method: string; body?: string }[]) {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET", body: init?.body as string | undefined });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, [channel]);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+  }
+
+  it("opens with the credential fields EMPTY — there is nothing to prefill and nothing to pretend", async () => {
+    installHandlers([channel]);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const dialog = await openEditor(userEvent.setup());
+
+    // The name is known and is prefilled; the secrets are not returned by any
+    // endpoint, so a prefilled-looking value here would be a lie that Save
+    // would then act on.
+    expect(dialog.getByLabelText(en.Channels.namePlaceholder)).toHaveValue("My channel");
+    for (const field of PLATFORM_FIELDS.telegram) {
+      const input = dialog.getByLabelText(credentialFieldLabel(field));
+      expect(input).toHaveValue("");
+      expect(input).toHaveAttribute("type", NON_SECRET_FIELDS.has(field) ? "text" : "password");
+    }
+  });
+
+  it("sends the name alone when the credential fields are left blank", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    recordingHandlers(calls);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    await user.clear(dialog.getByLabelText(en.Channels.namePlaceholder));
+    await user.type(dialog.getByLabelText(en.Channels.namePlaceholder), "Renamed");
+    await user.click(dialog.getByRole("button", { name: en.Channels.editSave }));
+
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH");
+    if (!patch || patch.body === undefined) throw new Error("no PATCH body captured");
+    expect(patch.url).toContain("/api/channels/c1");
+    const body = JSON.parse(patch.body);
+    // No `credentials` key at all — an empty bag would be REJECTED by the API
+    // (and would be the wrong request anyway: the point of a blank form is that
+    // the stored ones are kept).
+    expect(body).toEqual({ name: "Renamed" });
+    expect(channelUpdateSchema.parse(body)).toEqual(body);
+  });
+
+  it("sends the whole new bag when the credential fields are filled", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    recordingHandlers(calls);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    await user.type(dialog.getByLabelText(credentialFieldLabel("botToken")), "999:fresh-token");
+    await user.type(dialog.getByLabelText(credentialFieldLabel("chatId")), "-1009876543210");
+    await user.click(dialog.getByRole("button", { name: en.Channels.editSave }));
+
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH");
+    if (!patch || patch.body === undefined) throw new Error("no PATCH body captured");
+    const body = JSON.parse(patch.body);
+    expect(body).toEqual({
+      name: "My channel",
+      credentials: { botToken: "999:fresh-token", chatId: "-1009876543210" },
+    });
+    expect(channelUpdateSchema.parse(body)).toEqual(body);
+  });
+
+  /**
+   * The half-filled form. `PATCH` REPLACES the stored bag — it cannot merge,
+   * because nothing can read back what is already there — so sending one field
+   * would install a channel whose credentials are incomplete, and the failure
+   * would surface at the next send rather than here.
+   */
+  it("refuses a half-filled credential form, and sends nothing", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    recordingHandlers(calls);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    const dialog = await openEditor(user);
+
+    await user.type(dialog.getByLabelText(credentialFieldLabel("botToken")), "999:only-half");
+    await user.click(dialog.getByRole("button", { name: en.Channels.editSave }));
+
+    expect(await dialog.findByRole("alert")).toHaveTextContent(en.Channels.editCredsPartial);
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+  });
+
+  it("drops the stale connection verdict a rotation invalidates", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.includes("/test")) {
+        return jsonResponse(200, { ok: true, account: "bot", target: "@pubrick" });
+      }
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, [channel]);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: en.Channels.test }));
+    const verdict = en.Channels.testOk.replace("{account}", "bot").replace("{target}", "@pubrick");
+    expect(await screen.findByText(verdict)).toBeInTheDocument();
+
+    const dialog = await openEditor(user);
+    await user.type(dialog.getByLabelText(credentialFieldLabel("botToken")), "999:fresh");
+    await user.type(dialog.getByLabelText(credentialFieldLabel("chatId")), "-100");
+    await user.click(dialog.getByRole("button", { name: en.Channels.editSave }));
+
+    // The "OK — connected as bot" line described a token that no longer
+    // exists. Leaving it up is the screen saying something it has not checked.
+    await waitFor(() => expect(screen.queryByText(verdict)).not.toBeInTheDocument());
   });
 });

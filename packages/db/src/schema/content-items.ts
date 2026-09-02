@@ -237,7 +237,28 @@ export const adaptations = pgTable(
   ],
 );
 
-/** Terminal outcome log: one row per delivery attempt that ended for good. */
+/**
+ * Terminal outcome log: one row per delivery attempt that ended for good.
+ *
+ * **THIS TABLE OUTLIVES WHAT IT POINTS AT.** It is the durable record that a
+ * platform accepted a message — the external id and the link the product's
+ * "published, here it is" claim rests on — and that fact does not stop being
+ * true when the channel is removed afterwards. `usage_ledger` already reasons
+ * this way about money (`run_id`, `content_item_id`, `adaptation_id` and
+ * `channel_id` are all `SET NULL` there: the money was spent whatever happened
+ * next); a post that went out is the same kind of fact.
+ *
+ * Both of its own foreign keys are therefore nullable and `SET NULL`. Both are
+ * load-bearing and neither is enough alone: `adaptations.channel_id` is
+ * `CASCADE`, so a channel delete used to take the adaptations with it and the
+ * publications with THEM — nulling `channel_id` alone would have left the row
+ * to die one hop further along. Deleting a channel now leaves the receipt
+ * standing with both pointers null.
+ *
+ * `org_id` stays `NOT NULL`/`CASCADE`, deliberately: deleting an organization
+ * is tenant erasure, not bookkeeping, and a receipt no tenant owns is a row no
+ * query in this codebase is allowed to reach.
+ */
 export const publications = pgTable(
   "publications",
   {
@@ -245,12 +266,56 @@ export const publications = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    adaptationId: uuid("adaptation_id")
-      .notNull()
-      .references(() => adaptations.id, { onDelete: "cascade" }),
-    channelId: uuid("channel_id")
-      .notNull()
-      .references(() => channels.id, { onDelete: "cascade" }),
+    /**
+     * Null once the adaptation is gone — which a channel delete causes
+     * (`adaptations.channel_id` cascades) and a brand delete causes twice over.
+     * Every live reader matches on a concrete id (`eq(adaptationId, x)`), so an
+     * orphan is invisible to all of them, and both partial unique indexes below
+     * are btree indexes where NULLs are distinct: any number of orphans may sit
+     * beside the one live `published` row of a still-existing adaptation.
+     */
+    adaptationId: uuid("adaptation_id").references(() => adaptations.id, {
+      onDelete: "set null",
+    }),
+    channelId: uuid("channel_id").references(() => channels.id, { onDelete: "set null" }),
+    /**
+     * WHICH CHANNEL THIS WENT TO, ONCE `channel_id` CAN NO LONGER SAY.
+     *
+     * A surviving row whose every pointer is null is a receipt with no
+     * addressee: it still carries the link and the timestamp, but it can no
+     * longer answer the question the reader actually asks, which is "where did
+     * this post go?". So the channel's identity is copied onto the row at the
+     * moment the channel is deleted, by the `publications_stamp_deleted_channel`
+     * BEFORE DELETE trigger on `channels` (migration 0011).
+     *
+     * A TRIGGER RATHER THAN REPOSITORY CODE, for one reason: the API's own
+     * `DELETE /channels/:id` is not the only way a channel row disappears. A
+     * brand delete cascades into `channels` without any of this app's code
+     * seeing it, and so does a hand-run `DELETE`. Stamping from the repository
+     * would cover the one path and silently miss the rest — and the ones it
+     * misses are exactly the bulk deletions where the most receipts are
+     * orphaned at once.
+     *
+     * Null on every live row, and that is the rule rather than an omission:
+     * while the channel exists it is the authority on its own name, and a copy
+     * kept beside it would be a second answer free to drift. These two columns
+     * are a TOMBSTONE — write-once, at the death of the thing they describe —
+     * so a reader resolves the channel through `channel_id` when it is set and
+     * falls back to these when it is not.
+     *
+     * `channel_platform` is plain `text`, with no `{ enum: ... }` and no check
+     * constraint, unlike every other platform column in this schema. That is
+     * deliberate: it records what a channel WAS, and pinning history to the
+     * platform list of the day the row is read would make retiring a platform
+     * fail on the tombstones of channels that used it.
+     *
+     * What is still lost, and is not pretended otherwise: an orphaned row's
+     * link back to the CONTENT ITEM. The only path to it was the adaptation,
+     * which a channel delete cascades away. The receipt says what went out and
+     * where; it no longer says which draft it came from.
+     */
+    channelName: text("channel_name"),
+    channelPlatform: text("channel_platform"),
     status: text("status", { enum: PUBLICATION_STATUSES }).notNull(),
     /** Platform message id; null when the platform returned no usable id. */
     externalId: text("external_id"),
@@ -262,6 +327,15 @@ export const publications = pgTable(
   (t) => [
     index("publications_org_id_idx").on(t.orgId),
     index("publications_adaptation_id_idx").on(t.adaptationId),
+    /**
+     * Postgres does not index a referencing column for you, and TWO things now
+     * scan by it on every channel delete: the foreign key's own `SET NULL`
+     * action, and the tombstone trigger's `UPDATE ... WHERE channel_id = OLD.id`.
+     * Both used to be one seq scan of the whole table per deleted channel — a
+     * brand delete multiplies that by its channel count. It is also the index a
+     * reader listing one channel's publications will want.
+     */
+    index("publications_channel_id_idx").on(t.channelId),
     /**
      * At most one PUBLISHED RECORD per adaptation, as a database invariant
      * rather than a convention.

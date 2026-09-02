@@ -50,6 +50,7 @@
     "platformLabel": "Platform",
     "namePlaceholder": "Channel name",
     "remove": "Remove",
+    "edit": "Edit",
     "add": "Add channel",
     "test": "Test connection",
     "testOk": "OK — connected as {account}, can post to {target}",
@@ -59,8 +60,13 @@
     "listError": "This brand's channels could not be loaded, so this list is not the answer.",
     "retry": "Try again",
     "removeTitle": "Remove this channel?",
-    "removeBody": "Pubrick deletes the stored credentials for {channel} and cannot show them again — you would need new ones from the platform. Nothing is published to this channel afterwards.",
-    "removeCancel": "Cancel"
+    "removeBody": "Pubrick deletes the stored credentials for {channel} and cannot show them again — you would need new ones from the platform. Anything scheduled for it is cancelled and nothing is published to it afterwards, though posts it already published stay on the record. To replace a revoked token, use Edit instead.",
+    "removeCancel": "Cancel",
+    "editTitle": "Edit channel",
+    "editCredsHint": "Leave these empty to keep the credentials already stored — Pubrick cannot show them again. Fill them in to replace them, which is how you install a new token after the platform revokes one. Scheduled posts stay scheduled and go out with the new credentials.",
+    "editCredsPartial": "Fill in every credential field, or leave them all empty. New credentials replace the stored ones as a set, so a half-filled form would leave this channel unable to post.",
+    "editSave": "Save",
+    "editCancel": "Cancel"
   },
   "Content": {
     "title": "Queue",

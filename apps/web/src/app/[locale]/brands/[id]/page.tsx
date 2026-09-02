@@ -32,6 +32,11 @@ const FORM_ID = "channel-add-form";
 // focus the first field of the add form without lifting a ref just for that.
 const NAME_INPUT_ID = "channel-name";
 
+// The edit modal's form id: its Save button lives in the modal FOOTER, outside
+// the <form>, and is wired back to it the same way the add form's header
+// button is.
+const EDIT_FORM_ID = "channel-edit-form";
+
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
@@ -59,6 +64,16 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // database, can put them back. Hence a confirmation — and a `Modal` rather
   // than `confirm()`, which the constitution bans.
   const [pendingRemoval, setPendingRemoval] = useState<Channel | null>(null);
+  // Editing a channel is what makes rotating a revoked token something other
+  // than deleting the channel and losing every scheduled post with it. The
+  // credential fields open EMPTY, always: no endpoint returns the stored bag,
+  // so there is nothing to prefill and a placeholder pretending otherwise would
+  // be a lie the Save button would then act on.
+  const [editing, setEditing] = useState<Channel | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editCreds, setEditCreds] = useState<Record<string, string>>({});
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
 
   // A 403 from ActiveOrgGuard means the account has no organization yet — that is
   // an onboarding step, not an error to show the user. Every other failure
@@ -126,6 +141,65 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       load();
     } catch (err) {
       setError(describeError(err));
+    }
+  }
+
+  /**
+   * STABLE, and that is load-bearing rather than tidiness. `Modal`'s focus-trap
+   * effect depends on `[open, onClose]`, and its body focuses the dialog: a new
+   * closure here on every render re-runs that effect on every keystroke and
+   * pulls focus out of whatever field is being typed into. The symptom is a
+   * credential field that accepts exactly one character — which is how this was
+   * found, by the rotation test above. The removal modal never noticed because
+   * it has nothing to type into.
+   */
+  const closeEditor = useCallback(() => setEditing(null), []);
+
+  function startEditing(channel: Channel) {
+    setEditing(channel);
+    setEditName(channel.name);
+    setEditCreds({});
+    setEditError(null);
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (editing === null) return;
+    const fields = PLATFORM_FIELDS[editing.platform as PlatformId] ?? [];
+    const filled = fields.filter((f) => (editCreds[f] ?? "").trim() !== "");
+    // ALL OR NOTHING, and refused here rather than sent. `PATCH /channels/:id`
+    // REPLACES the stored bag — it cannot merge, because no endpoint returns
+    // what is already there to merge into. A half-filled form would therefore
+    // install a chatId with no botToken beside it, and the channel would fail
+    // at the one moment that matters, the next send.
+    if (filled.length > 0 && filled.length < fields.length) {
+      setEditError(t("editCredsPartial"));
+      return;
+    }
+    setEditError(null);
+    setEditBusy(true);
+    try {
+      await api(`/api/channels/${editing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: editName,
+          ...(filled.length === 0 ? {} : { credentials: editCreds }),
+        }),
+      });
+      setEditing(null);
+      // A rotation invalidates whatever the last connection test said about
+      // this channel, so the verdict beside it is dropped rather than left to
+      // describe a token that is gone.
+      setTestResults((prev) => {
+        const next = { ...prev };
+        delete next[editing.id];
+        return next;
+      });
+      load();
+    } catch (err) {
+      setEditError(describeError(err));
+    } finally {
+      setEditBusy(false);
     }
   }
 
@@ -232,6 +306,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                     <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
                       {t("test")}
                     </Button>
+                    <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
+                      {t("edit")}
+                    </Button>
                     {/* Deliberately a plain visible Button, not tucked behind
                         the Menu component: a page test looks this up directly
                         via getByRole("button", { name: /remove/i }) with no
@@ -297,6 +374,49 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </div>
         </form>
       </Card>
+
+      <Modal
+        open={editing !== null}
+        onClose={closeEditor}
+        title={t("editTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeEditor}>
+              {t("editCancel")}
+            </Button>
+            <Button type="submit" form={EDIT_FORM_ID} disabled={editBusy}>
+              {t("editSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={EDIT_FORM_ID} onSubmit={saveEdit} className="flex flex-col gap-3">
+          {editError && (
+            <p role="alert" className="text-sm text-danger">
+              {editError}
+            </p>
+          )}
+          <Input
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            label={t("namePlaceholder")}
+            required
+          />
+          <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
+            (f) => (
+              <Input
+                key={f}
+                type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
+                autoComplete="off"
+                value={editCreds[f] ?? ""}
+                onChange={(e) => setEditCreds({ ...editCreds, [f]: e.target.value })}
+                label={credentialFieldLabel(f)}
+              />
+            ),
+          )}
+        </form>
+      </Modal>
 
       <Modal
         open={pendingRemoval !== null}

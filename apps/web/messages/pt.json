@@ -50,6 +50,7 @@
     "platformLabel": "Plataforma",
     "namePlaceholder": "Nome do canal",
     "remove": "Remover",
+    "edit": "Editar",
     "add": "Adicionar canal",
     "test": "Testar conexão",
     "testOk": "OK — conectado como {account}, pode publicar em {target}",
@@ -59,8 +60,13 @@
     "listError": "Não foi possível carregar os canais desta marca, então esta lista não é a resposta.",
     "retry": "Tente novamente",
     "removeTitle": "Remover este canal?",
-    "removeBody": "O Pubrick apaga as credenciais guardadas de {channel} e não pode mostrá-las de novo — você precisaria de novas credenciais da plataforma. Depois disso, nada será publicado neste canal.",
-    "removeCancel": "Cancelar"
+    "removeBody": "O Pubrick apaga as credenciais guardadas de {channel} e não pode mostrá-las de novo — você precisaria de novas credenciais da plataforma. Tudo o que estiver agendado para ele é cancelado e nada mais será publicado neste canal, mas o que já foi publicado continua no registro. Para substituir um token revogado, use Editar.",
+    "removeCancel": "Cancelar",
+    "editTitle": "Editar canal",
+    "editCredsHint": "Deixe em branco para manter as credenciais já guardadas — o Pubrick não pode mostrá-las de novo. Preencha para substituí-las, que é como se instala um token novo depois de a plataforma revogar o anterior. As publicações agendadas continuam agendadas e sairão com as credenciais novas.",
+    "editCredsPartial": "Preencha todos os campos de credenciais ou deixe todos em branco. As credenciais novas substituem as guardadas por inteiro, então um formulário pela metade deixaria este canal sem conseguir publicar.",
+    "editSave": "Salvar",
+    "editCancel": "Cancelar"
   },
   "Content": {
     "title": "Fila",

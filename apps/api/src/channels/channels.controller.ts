@@ -6,11 +6,17 @@ import {
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { type ChannelCreate, channelCreateSchema } from "@pubrick/shared";
+import {
+  type ChannelCreate,
+  type ChannelUpdate,
+  channelCreateSchema,
+  channelUpdateSchema,
+} from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
@@ -35,6 +41,24 @@ export class ChannelsController {
     @Body(new ZodValidationPipe(channelCreateSchema)) body: ChannelCreate,
   ) {
     return this.channels.create(orgId, body);
+  }
+
+  /**
+   * Rename a channel, or install new credentials for it.
+   *
+   * The reason this route exists: platform tokens get revoked, and without it
+   * the only way to install a new one was DELETE + POST — which cascaded every
+   * adaptation the channel had, scheduled posts included. Returns the same
+   * public columns as every other route here; the ciphertext it writes is never
+   * part of a response.
+   */
+  @Patch(":id")
+  update(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(channelUpdateSchema)) body: ChannelUpdate,
+  ) {
+    return this.channels.update(orgId, id, body);
   }
 
   @Delete(":id")

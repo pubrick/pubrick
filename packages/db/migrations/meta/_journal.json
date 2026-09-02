@@ -71,6 +71,13 @@
       "when": 1788346474669,
       "tag": "0009_declared_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788348189052,
+      "tag": "0011_publication_outlives_channel",
+      "breakpoints": true
     }
   ]
 }
