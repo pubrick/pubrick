@@ -401,6 +401,98 @@ describe.skipIf(!url)("runs e2e", () => {
     }
   });
 
+  /**
+   * A channel row owned by ANOTHER org while pointing at THIS brand.
+   *
+   * Nothing in the database forbids it (`channels.brand_id` and
+   * `channels.org_id` are independent references), and no endpoint will create
+   * it — which is exactly why it has to be planted from underneath the API. It
+   * is the only shape that reaches the org predicate on `resolveChannels`'s
+   * second read: every channel a caller can create through the API already
+   * agrees with its brand's org, so `brand_id` alone answers correctly and the
+   * org filter next to it is never asked anything.
+   */
+  async function foreignChannelOnBrand(brandId: string): Promise<string> {
+    const stranger = await orgAgent();
+    const strangerBrand = await brandWithChannel(stranger);
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (
+      await db.execute(
+        `SELECT org_id, credentials_encrypted FROM channels WHERE id = '${strangerBrand.channelId}'`,
+      )
+    ).rows as { org_id: string; credentials_encrypted: string }[];
+    const inserted = await db
+      .insert(schema.channels)
+      .values({
+        orgId: row?.org_id as string,
+        brandId,
+        platform: "telegram",
+        name: "Theirs, filed under your brand",
+        credentialsEncrypted: row?.credentials_encrypted as string,
+      })
+      .returning({ id: schema.channels.id });
+    await pool.end();
+    return inserted[0]?.id as string;
+  }
+
+  it("404s a run against another org's brand — and says the brand is missing, not that it has no channels", async () => {
+    const owner = await orgAgent();
+    const theirs = await brandWithChannel(owner);
+
+    const stranger = await orgAgent();
+    const mine = await brandWithChannel(stranger);
+
+    const denied = await stranger
+      .post("/api/runs")
+      .send({
+        brandId: theirs.brandId,
+        brief: "Write about their release",
+        channelIds: [theirs.channelId],
+      })
+      .expect(404);
+    // The MESSAGE is the assertion, not just the refusal. Drop the org
+    // predicate from the brand read and this request is still refused — by the
+    // channel read, which finds no channel of this org on that brand and calls
+    // it "this brand has no channels", a 400. Two different checks, two
+    // different codes, and only one of them is the one that must hold.
+    expect(denied.body.message).toBe("Brand not found");
+
+    // The stranger's own brand still starts a run, so the refusal above is
+    // scoping and not an endpoint that turns everything down.
+    const own = await startRun(stranger, mine.brandId, [mine.channelId]);
+    expect(own.status).toBe("queued");
+  });
+
+  it("404s a channel that belongs to another org even when it names this brand", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const foreign = await foreignChannelOnBrand(brandId);
+
+    // Refused by the org predicate on the channel read alone: `brand_id`
+    // matches, and the run would otherwise fan a generated post out through
+    // another org's bot token.
+    const denied = await agent
+      .post("/api/runs")
+      .send({ brandId, brief: "x", channelIds: [foreign] })
+      .expect(404);
+    expect(denied.body.message).toBe("One or more channels do not belong to this brand");
+
+    // The MIXED request, which is what the ownership check is really for: one
+    // channel the caller owns and one it does not. `some(id => !owned.has(id))`
+    // refuses it; `every(...)` — one character of difference — sees the first
+    // id is owned, decides the request is fine, and starts a run that publishes
+    // to a stranger's channel.
+    await agent
+      .post("/api/runs")
+      .send({ brandId, brief: "x", channelIds: [channelId, foreign] })
+      .expect(404);
+
+    // ...and the caller's own channel alone still starts a run.
+    const own = await startRun(agent, brandId, [channelId]);
+    expect(own.input.channelIds).toEqual([channelId]);
+  });
+
   it("refuses a channel from another brand (404) and a duplicated channel (400)", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

@@ -19,6 +19,9 @@ type Schema = typeof import("@pubrick/db").schema;
  * markExhausted twice is a true no-op the second time) can only be proven
  * against real SQL, not a vi.fn() stub.
  */
+/** The other tenant's bot token. A different value, so "whose row came back" is readable. */
+const STRANGER_CREDENTIALS = { botToken: "9:z", chatId: "-9" };
+
 describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB)", () => {
   let repo: PublishRepositoryInstance;
   let service: PublishServiceInstance;
@@ -30,6 +33,9 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   let brandId: string;
   let channelId: string;
   let secondChannelId: string;
+  let strangerOrgId: string;
+  let strangerChannelId: string;
+  let strangerAdaptationId: string;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -94,6 +100,51 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       })
       .returning({ id: schema.channels.id });
     secondChannelId = second?.id as string;
+
+    // A whole second tenant, with a row of its own at every level the publish
+    // path reads. Two reads below take an `org_id` and mask each other in the
+    // service — `load` refuses first, so `credentials` is never asked — and a
+    // stranger that owned nothing could not tell a correct filter from a query
+    // that returns nothing to anybody.
+    strangerOrgId = `publish-repo-test-stranger-${Date.now()}`;
+    await db.insert(schema.organization).values({
+      id: strangerOrgId,
+      name: "Publish Repo Test Stranger",
+      slug: `publish-repo-test-stranger-${Date.now()}`,
+      createdAt: new Date(),
+    });
+    const [strangerBrand] = await db
+      .insert(schema.brands)
+      .values({ orgId: strangerOrgId, name: "Their brand" })
+      .returning({ id: schema.brands.id });
+    const [strangerChannel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId: strangerOrgId,
+        brandId: strangerBrand?.id as string,
+        platform: "telegram",
+        name: "Their channel",
+        credentialsEncrypted: encryptJson(
+          STRANGER_CREDENTIALS,
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    strangerChannelId = strangerChannel?.id as string;
+    const [strangerItem] = await db
+      .insert(schema.contentItems)
+      .values({ orgId: strangerOrgId, brandId: strangerBrand?.id as string, body: "Their post" })
+      .returning({ id: schema.contentItems.id });
+    const [strangerAdaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: strangerOrgId,
+        contentItemId: strangerItem?.id as string,
+        channelId: strangerChannelId,
+        status: "queued",
+      })
+      .returning({ id: schema.adaptations.id });
+    strangerAdaptationId = strangerAdaptation?.id as string;
   });
 
   afterAll(async () => {
@@ -183,6 +234,118 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
+
+  /** The adaptation row's mutable state — everything a writer of this table moves. */
+  async function adaptationRow(adaptationId: string) {
+    const [row] = await db
+      .select({
+        status: schema.adaptations.status,
+        lastError: schema.adaptations.lastError,
+        attemptCount: schema.adaptations.attemptCount,
+        body: schema.adaptations.body,
+      })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    return row;
+  }
+
+  /** Its delivery log, in a stable order. */
+  async function publicationRows(adaptationId: string) {
+    return db
+      .select({
+        status: schema.publications.status,
+        attempt: schema.publications.attempt,
+        externalId: schema.publications.externalId,
+        error: schema.publications.error,
+      })
+      .from(schema.publications)
+      .where(eq(schema.publications.adaptationId, adaptationId))
+      .orderBy(schema.publications.attempt);
+  }
+
+  /**
+   * Every writer on this repository, called with an org that does not own the
+   * row, must do NOTHING.
+   *
+   * One test rather than nine, because the finding is one shape rather than
+   * nine bugs: each of these methods carries an `org_id` predicate that its
+   * neighbouring `id` predicate hides — the id is a primary key, so in the
+   * service the wrong org never gets this far (`load` refuses first) and every
+   * one of these filters could be deleted with the whole suite still green. The
+   * repository is where they are observable, so the repository is where they
+   * are pinned.
+   */
+  it("a call carrying another org's id moves nothing: every writer is a no-op", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+
+    const before = {
+      adaptation: await adaptationRow(adaptationId),
+      publications: await publicationRows(adaptationId),
+    };
+
+    await repo.markPublished(strangerOrgId, adaptationId, {
+      externalId: "999",
+      externalUrl: "https://t.me/theirs/999",
+    });
+    await repo.markAlreadyPublished(strangerOrgId, adaptationId);
+    await repo.markFailed(strangerOrgId, adaptationId, "not your delivery");
+    await repo.recordTransient(strangerOrgId, adaptationId, "not your retry");
+    await repo.releaseSend(strangerOrgId, adaptationId);
+    // The two that answer rather than write: a claim another org cannot take.
+    expect(await repo.markPublishing(strangerOrgId, adaptationId)).toBe(false);
+    expect(await repo.claimSend(strangerOrgId, adaptationId)).toBe(false);
+
+    expect({
+      adaptation: await adaptationRow(adaptationId),
+      publications: await publicationRows(adaptationId),
+    }).toEqual(before);
+
+    // The control, without which "nothing changed" proves nothing: the SAME
+    // calls under the owning org do move the row.
+    await repo.markPublished(orgId, adaptationId, {
+      externalId: "1",
+      externalUrl: "https://t.me/mine/1",
+    });
+    expect(await adaptationStatus(adaptationId)).toBe("published");
+    expect(await repo.hasPublished(orgId, adaptationId)).toBe(true);
+    // ...and the delivery that just landed is still invisible to anyone else.
+    expect(await repo.hasPublished(strangerOrgId, adaptationId)).toBe(false);
+  });
+
+  it("load answers for the org that owns the adaptation, and for no other", async () => {
+    const mine = await seedAdaptation("queued");
+
+    expect(await repo.load(orgId, mine)).toMatchObject({ id: mine, orgId, platform: "telegram" });
+    // The stranger has an adaptation of its own and `load` finds it, so an
+    // `undefined` below is this org's filter working rather than a join that
+    // returns nothing to anybody.
+    expect(await repo.load(strangerOrgId, strangerAdaptationId)).toMatchObject({
+      id: strangerAdaptationId,
+      orgId: strangerOrgId,
+    });
+
+    // A publish job whose payload names the wrong org — the shape a mis-routed
+    // or replayed job has — sees nothing. Asserted HERE rather than through the
+    // service, because in the service this filter is masked: `load` refusing is
+    // exactly what stops `credentials` from ever being asked.
+    expect(await repo.load(strangerOrgId, mine)).toBeUndefined();
+  });
+
+  it("credentials decrypt only for the org that owns the channel", async () => {
+    expect(await repo.credentials(orgId, channelId)).toEqual({ botToken: "1:a", chatId: "-1" });
+    // Again positively: the stranger's own token comes back, so the throw below
+    // is the org predicate and not a channel nobody can read.
+    expect(await repo.credentials(strangerOrgId, strangerChannelId)).toEqual(STRANGER_CREDENTIALS);
+
+    // The other half of the pair, killed on its own. This is the last read
+    // before a real send: a decrypt that ignored `org_id` would hand one org's
+    // bot token to another org's post.
+    await expect(repo.credentials(strangerOrgId, channelId)).rejects.toThrow(
+      `Channel ${channelId} not found for org ${strangerOrgId}`,
+    );
+  });
 
   it("markFailed on a fresh (queued) adaptation: attempt_count advances by exactly one and a failed publications row is written", async () => {
     const adaptationId = await seedAdaptation("queued");

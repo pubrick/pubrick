@@ -132,6 +132,31 @@ describe("AiCredentialProbe — what the verdict says", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "refused" });
   });
 
+  it("calls a 4xx nobody named a refusal, even when the provider billed for it", async () => {
+    // A status the closed set has no name for — 400, 429-as-permanent, 451 —
+    // is a REFUSAL, and the arm that says so is load-bearing precisely because
+    // the fallback underneath it looks reasonable. Delete `if (status !==
+    // undefined) return "refused"` and this same error falls through to the
+    // token-counting branch, which sees a metered round trip and reports
+    // `no_structured_output`: "your model cannot follow a schema" told to a
+    // user whose actual problem is a rejected request. Every other test in this
+    // file either has no status at all or has one of the three named ones, so
+    // nothing else observes this arm.
+    const outcome = await probeThatThrows(new PermanentError("Unsupported parameter", 400), [
+      record({ status: "errored" }),
+    ]).run(credential);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+
+    // Same arm from the other side: a 5xx that DID count tokens is not a schema
+    // failure either.
+    const server = await probeThatThrows(new PermanentError("upstream exploded", 503), [
+      record({ status: "errored" }),
+    ]).run(credential);
+
+    expect(server).toMatchObject({ ok: false, reason: "refused" });
+  });
+
   it("reports the model that actually answered, not the one we asked for", async () => {
     const outcome = await new StubbedProbe(async (onUsage) => {
       await onUsage(record({ modelId: "gemini-3.7-flash-8b" }));

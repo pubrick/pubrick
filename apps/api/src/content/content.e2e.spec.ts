@@ -328,6 +328,26 @@ describe.skipIf(!url)("content e2e", () => {
   }
 
   /**
+   * Every adaptation pointing at one channel, whoever owns it.
+   *
+   * Deliberately unfiltered by org, like `versionRows`: the question is whether
+   * a row exists AT ALL against another org's channel, and a read that filtered
+   * by the asking org could not tell "no such row" from "the row is invisible
+   * from here" — which is the whole difference between a refused create and a
+   * cross-tenant one hidden behind a 404.
+   */
+  async function adaptationsForChannel(channelId: string) {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.channelId, channelId));
+    await pool.end();
+    return rows;
+  }
+
+  /**
    * Writes an item's body straight to the row.
    *
    * A fixture, never a save: the API's own PATCH is the thing under test in
@@ -2707,5 +2727,122 @@ describe.skipIf(!url)("content e2e", () => {
     expect(mine.body.adaptations[0].status).toBe("pending");
     expect(mine.body.body).toBe("Mine");
     expect(mine.body.adaptations[0].body).toBeNull();
+  });
+
+  it("shows an item's OWN adaptations, never another org's row hanging off the same item", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Mine.", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const own = created.body.adaptations[0].id as string;
+
+    // `adaptations.org_id` references only the organization, so a row can point
+    // at this item while belonging to someone else. Every 404-based tenancy
+    // test stops at the ITEM lookup and never reaches the adaptations read, so
+    // this row — planted from underneath the API, because no endpoint writes
+    // it — is the only thing that observes its org filter at all.
+    const planted = await otherOrgAdaptation(itemId, "Their channel's text.");
+
+    for (const path of [`/api/content/${itemId}`, "/api/content"]) {
+      const body = (await agent.get(path).expect(200)).body;
+      const item = Array.isArray(body)
+        ? (body as { id: string }[]).find((row) => row.id === itemId)
+        : body;
+      const adaptations = (item as { adaptations: { id: string }[] }).adaptations;
+      expect(adaptations.map((adaptation) => adaptation.id)).toEqual([own]);
+      expect(JSON.stringify(item)).not.toContain(planted);
+      // The body matters more than the id: this array is what the editor
+      // renders as "your channels", and a stranger's draft rendered there is
+      // a text this org can approve and publish.
+      expect(JSON.stringify(item)).not.toContain("Their channel's text.");
+    }
+  });
+
+  it("refuses a create that names another org's channel, and queues nothing against it", async () => {
+    const owner = await orgAgent();
+    const theirs = await brandWithChannel(owner);
+
+    const stranger = await orgAgent();
+    const mine = await brandWithChannel(stranger);
+
+    // The stranger names the OWNER's brand and the OWNER's channel. Nothing but
+    // the org predicate in `create`'s channel lookup refuses this: the brand id
+    // is never checked against the caller's org directly — the channels ARE the
+    // check — and both of the other two predicates (`brand_id`, `id in (…)`)
+    // match perfectly, because the ids really do belong together.
+    await stranger
+      .post("/api/content")
+      .send({ brandId: theirs.brandId, body: "Not yours.", channelIds: [theirs.channelId] })
+      .expect(404);
+
+    // The same call against the stranger's own brand DOES work, so the 404
+    // above is scoping rather than an endpoint that refuses everything.
+    const own = await stranger
+      .post("/api/content")
+      .send({ brandId: mine.brandId, body: "Mine.", channelIds: [mine.channelId] })
+      .expect(201);
+    expect(own.body.adaptations).toHaveLength(1);
+
+    // And the rows are the real assertion, not the status code. What the org
+    // predicate stops is an adaptation pointing at ANOTHER org's channel —
+    // a row `approve` would happily enqueue, sending a stranger's text out of
+    // this org's Telegram bot.
+    expect(await adaptationsForChannel(theirs.channelId)).toEqual([]);
+  });
+
+  it("refuses an override edit that files one item's id against another item's adaptation", async () => {
+    const agent = await orgAgent();
+    const first = await brandWithChannel(agent);
+    const second = await brandWithChannel(agent);
+
+    const pinned = await agent
+      .post("/api/content")
+      .send({
+        brandId: first.brandId,
+        body: "Reviewed and approved.",
+        channelIds: [first.channelId],
+      })
+      .expect(201);
+    await agent.post(`/api/content/${pinned.body.id}/approve`).send({}).expect(200);
+
+    const editable = await agent
+      .post("/api/content")
+      .send({ brandId: second.brandId, body: "Still a draft.", channelIds: [second.channelId] })
+      .expect(201);
+    const otherAdaptation = editable.body.adaptations[0].id as string;
+
+    // Same org, both rows the caller's own: the ONLY thing wrong with this
+    // request is that the adaptation hangs off a different item. It is refused
+    // by the composite in `updateAdaptation`'s locked read, and the status code
+    // says which check spoke — 404 (no such adaptation UNDER THIS ITEM), not the
+    // 409 the approved item in the path would produce if the adaptation were
+    // located first and the item's editability asked afterwards.
+    //
+    // The same composite is spelled a second time on the UPDATE below it, and
+    // that copy is unobservable: `adaptations.id` is the primary key, so no row
+    // can satisfy the locked read's `content_item_id` and fail the UPDATE's.
+    // Deleting the READ's copy is therefore the mutation that matters, and this
+    // is the test that catches it — the UPDATE's copy cannot stand in for it.
+    const denied = await agent
+      .patch(`/api/content/${pinned.body.id}/adaptations/${otherAdaptation}`)
+      .send({ body: "Wrong drawer." })
+      .expect(404);
+    expect(denied.body.message).toBe("Adaptation not found");
+
+    // Nothing moved: the other item's override is untouched, and no version row
+    // was filed against the item named in the path.
+    const untouched = await agent.get(`/api/content/${editable.body.id}`).expect(200);
+    expect(untouched.body.adaptations[0].body).toBeNull();
+    expect(await versionRows(pinned.body.id)).toEqual([]);
+
+    // ...and that adaptation IS editable through its own item, so the 404 above
+    // is the composite rather than a row that was pinned anyway.
+    await agent
+      .patch(`/api/content/${editable.body.id}/adaptations/${otherAdaptation}`)
+      .send({ body: "Right drawer." })
+      .expect(200);
   });
 });
