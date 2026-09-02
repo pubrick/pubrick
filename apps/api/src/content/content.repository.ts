@@ -1207,8 +1207,11 @@ export class ContentRepository {
    * `publishing` one is mid-attempt: re-enqueueing either would cancel a live
    * job — for `publishing`, an entire transient-retry chain that may still
    * succeed on its own — for no user-visible gain. An in-flight attempt
-   * records its own truth when it lands (`markPublished`/`markFailed` both
-   * write unconditionally), and a `failed` outcome is re-approvable.
+   * records its own truth when it lands (`markPublished` writes
+   * unconditionally; `markFailed` is now fenced on the status and attempt
+   * count it was dispatched for, so a dead attempt can no longer overwrite a
+   * row this path has since re-approved), and a `failed` outcome is
+   * re-approvable.
    * (Rejecting DOES act on both — there the point is to stop the delivery, not
    * to move it.)
    *
