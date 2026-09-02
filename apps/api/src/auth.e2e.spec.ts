@@ -1,7 +1,10 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+// From auth-policy, not from the gate: the gate imports ./db, whose env parsing runs
+// at import time and would fire before beforeAll sets DATABASE_URL.
+import { SIGNUP_DISABLED_CODE, SIGNUP_DISABLED_MESSAGE } from "./auth-policy";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -108,5 +111,140 @@ describe.skipIf(!url)("auth e2e", () => {
 
     const session = await second.get("/api/auth/get-session").expect(200);
     expect(session.body.session.activeOrganizationId ?? null).toBeNull();
+  });
+
+  /**
+   * Registration posture. Pubrick's own docs tell operators to put this on a public URL,
+   * and until now that URL accepted anyone's sign-up, unverified, with permission to
+   * create organizations — so a stranger could make N of them and the per-org concurrency
+   * cap capped nothing.
+   *
+   * The gate reads SIGNUP_MODE per request (see auth-signup-gate.ts), which is what lets
+   * these drive all three postures against the one app booted for this file. The suite's
+   * own default is pinned to `open` in vitest.config.ts, restored after each test here.
+   */
+  describe("registration posture", () => {
+    const OPEN = process.env.SIGNUP_MODE;
+    afterEach(() => {
+      if (OPEN === undefined) {
+        // Deleted, not assigned undefined: assignment stores the STRING "undefined".
+        delete process.env.SIGNUP_MODE;
+      } else {
+        process.env.SIGNUP_MODE = OPEN;
+      }
+    });
+
+    const fresh = () => `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+
+    const signUp = (email: string) =>
+      request(app.getHttpServer())
+        .post("/api/auth/sign-up/email")
+        .send({ email, password: "password1234", name: "Posture" });
+
+    it("open lets anyone register", async () => {
+      process.env.SIGNUP_MODE = "open";
+      await signUp(fresh()).expect(200);
+    });
+
+    it("closed refuses with one generic answer", async () => {
+      process.env.SIGNUP_MODE = "closed";
+      const response = await signUp(fresh()).expect(403);
+      expect(response.body).toMatchObject({
+        code: SIGNUP_DISABLED_CODE,
+        message: SIGNUP_DISABLED_MESSAGE,
+      });
+    });
+
+    // The enumeration property, stated as an equality rather than as two separate
+    // assertions: better-auth's sign-up answers USER_ALREADY_EXISTS for a registered
+    // address and 200 for a fresh one, so with the gate off this test fails by design.
+    it("closed answers a registered address exactly as it answers an unknown one", async () => {
+      const registered = fresh();
+      process.env.SIGNUP_MODE = "open";
+      await signUp(registered).expect(200);
+
+      process.env.SIGNUP_MODE = "closed";
+      const known = await signUp(registered);
+      const unknown = await signUp(fresh());
+
+      expect(known.status).toBe(unknown.status);
+      expect(known.body).toEqual(unknown.body);
+      expect(known.status).toBe(403);
+    });
+
+    it("invite refuses an address nobody invited, with the same generic answer", async () => {
+      process.env.SIGNUP_MODE = "invite";
+      const response = await signUp(fresh()).expect(403);
+      expect(response.body).toMatchObject({ code: SIGNUP_DISABLED_CODE });
+    });
+
+    // The organization plugin's invitation is the way in: a pending invitation for that
+    // exact address is what lets the sign-up through.
+    it("invite lets an invited address register", async () => {
+      process.env.SIGNUP_MODE = "open";
+      const owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({ name: "Invite Co", slug: `invite-${Date.now()}` })
+        .expect(200);
+
+      const invited = fresh();
+      // organizationId explicitly: `organization/create` does not make the new org the
+      // session's active one — the web onboarding flow calls set-active itself.
+      await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: invited, role: "member", organizationId: org.body.id })
+        .expect(200);
+
+      process.env.SIGNUP_MODE = "invite";
+      await signUp(invited).expect(200);
+      // and still nobody else
+      await signUp(fresh()).expect(403);
+    });
+
+    // Address comparison is lowered on both sides: the plugin stores the invitation
+    // lowercased, so an invitee who types their address in caps must not be turned away.
+    it("invite matches the invited address case-insensitively", async () => {
+      process.env.SIGNUP_MODE = "open";
+      const owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({ name: "Case Co", slug: `case-${Date.now()}` })
+        .expect(200);
+
+      const invited = fresh();
+      await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: invited, role: "member", organizationId: org.body.id })
+        .expect(200);
+
+      process.env.SIGNUP_MODE = "invite";
+      await signUp(invited.toUpperCase()).expect(200);
+    });
+
+    // The unset default. By the time this runs the instance certainly has accounts —
+    // this file created several — so `auto` must have closed itself.
+    it("unset means invite-only once the instance has an account", async () => {
+      // Deleted, not assigned undefined: the gate must see the variable genuinely
+      // UNSET, and assignment would leave the string "undefined" in process.env.
+      delete process.env.SIGNUP_MODE;
+      await signUp(fresh()).expect(403);
+    });
+
+    // A typo must not silently leave registration more open than the operator asked for.
+    it("refuses to serve sign-up at all on an unrecognised SIGNUP_MODE", async () => {
+      process.env.SIGNUP_MODE = "invite-only";
+      const response = await signUp(fresh());
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.status).not.toBe(200);
+    });
   });
 });

@@ -13,6 +13,18 @@ export default defineConfig({
     // runs — measured, not assumed; see the fix commit. Capping workers bounds how many of
     // those bootstraps run at once instead of hiding the contention behind a bigger timeout.
     maxWorkers: 2,
+    // The two auth-posture defaults, turned off HERE rather than branched on inside
+    // the auth config, so the divergence between the suite and the shipped image is
+    // one visible list instead of a hidden `if (isTest)`:
+    //  - the limiter caps sign-in/sign-up at 3 per 10s and, in test mode, better-auth
+    //    keys every request on 127.0.0.1 — six e2e files signing up at once share one
+    //    bucket and would 429 each other;
+    //  - SIGNUP_MODE's default flips to invite-only the moment the first account
+    //    exists, which is the second sign-up of the run.
+    // Neither default goes untested: auth.compiled.e2e.spec.ts boots the compiled api
+    // with these unset and asserts the 429s, and auth.e2e.spec.ts drives all three
+    // postures by setting SIGNUP_MODE per test.
+    env: { AUTH_RATE_LIMIT_ENABLED: "false", SIGNUP_MODE: "open" },
   },
   plugins: [swc.vite({ module: { type: "es6" } })],
 });

@@ -24,8 +24,20 @@ services:
       # publicly known key. Generate both with `openssl rand -base64 32` (see .env.example).
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set it in .env - generate one with `openssl rand -base64 32`, see .env.example}"
       APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:?set it in .env - generate one with `openssl rand -base64 32`, see .env.example}"
-      BETTER_AUTH_URL: ${PUBLIC_ORIGIN:-http://localhost:3000}
-      WEB_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      # Required, like the two secrets above and for the same reason: a silent
+      # localhost fallback made a TLS install fail as a puzzling 403 (origin not
+      # trusted) and serve session cookies without `Secure`, instead of refusing to
+      # start. Use the origin a browser types, scheme included.
+      BETTER_AUTH_URL: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use, e.g. https://pubrick.example (http://localhost:3000 for a local trial)}"
+      WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use, e.g. https://pubrick.example (http://localhost:3000 for a local trial)}"
+      # Who may register: open | invite | closed. Unset means open until the first
+      # account exists, invite-only from then on — see .env.example.
+      SIGNUP_MODE: ${SIGNUP_MODE:-}
+      # IPs/CIDRs of the proxies in front of Pubrick. Empty means no X-Forwarded-For
+      # is believed, and auth rate limiting falls back to one shared bucket per path.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      # Leave on unless something in front of Pubrick already rate-limits /api/auth.
+      AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
     # Localhost-only: the web service proxies /api, so the api needs no public port.
     ports: ["127.0.0.1:3001:3001"]
     depends_on:

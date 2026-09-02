@@ -17,24 +17,92 @@ cp .env.example .env
 openssl rand -base64 32
 openssl rand -base64 32
 
-# Set POSTGRES_PASSWORD in .env as well, then start:
+# Set POSTGRES_PASSWORD and PUBLIC_ORIGIN in .env as well, then start:
 docker compose up -d
 ```
 
-If either secret is missing, `docker compose up` stops immediately with
-`required variable BETTER_AUTH_SECRET is missing a value: set it in .env …`.
-`APP_ENCRYPTION_KEY` must base64-decode to exactly 32 bytes — the api refuses
-to boot otherwise. It encrypts channel credentials at rest, so back it up:
-losing or changing it makes every stored credential unreadable.
+Three variables are required and have no defaults; `docker compose up` stops
+immediately with `required variable X is missing a value: …` if any is unset.
+
+- `BETTER_AUTH_SECRET` signs session cookies.
+- `APP_ENCRYPTION_KEY` must base64-decode to exactly 32 bytes — the api refuses
+  to boot otherwise. It encrypts channel credentials at rest, so back it up:
+  losing or changing it makes every stored credential unreadable.
+- `PUBLIC_ORIGIN` is the origin a browser types, scheme included
+  (`https://your-domain.example`). Auth cookies, redirects and the trusted-origin
+  list all come from it: an install that leaves it wrong signs people out with a
+  403 `Invalid origin`, and one left on `http://` behind TLS serves session
+  cookies without the `Secure` attribute.
+
+Neither secret may be a value published in this repository — the api refuses to
+start in production on the old `init.sh` fallbacks or the `.env.example`
+placeholders, rather than running on a key anyone can read off GitHub.
 
 Only the web app publishes a port (`3000`); the api is bound to `127.0.0.1:3001`
 and reached through the web proxy. Put your TLS terminator in front of port 3000.
 
-If the app is reachable at a public URL, also set `PUBLIC_ORIGIN` (e.g.
-`https://your-domain.example`) so auth cookies and redirects use the right
-origin.
-
 Database migrations run automatically when the api container starts.
+
+## Who can register
+
+Pubrick is meant to sit on a public URL, so registration is not open by default.
+`SIGNUP_MODE` in `.env` decides:
+
+| `SIGNUP_MODE` | Who may create an account |
+| --- | --- |
+| unset (default) | anyone, until the first account exists — then invite-only |
+| `open` | anyone with the URL |
+| `invite` | only an address an existing member has invited |
+| `closed` | nobody |
+
+The default is deliberately self-closing: a fresh install has to let *someone*
+create the first account with no configuration, and the moment that account
+exists the door shuts on its own. Nobody has to remember to flip a setting back,
+which is how instances that were opened "just for a minute" stay open. The window
+is one account wide, so create yours right after `docker compose up` — before you
+point DNS or a TLS terminator at the box.
+
+Under `invite` and `closed`, every refused sign-up gets the same reply whether or
+not the address is already registered, so the endpoint cannot be used to test
+which of your colleagues has an account.
+
+**Adding people.** An owner or admin invites an address from their organization
+(organization → invite member). The invitee then registers with exactly that
+address — the pending invitation is what lets their sign-up through — and accepts
+the invitation. Invitations expire after 48 hours; a stale one no longer opens
+the door.
+
+Email verification is not required, and there is no built-in mailer: Pubrick does
+not send the invitation for you, so pass the invite link to the person yourself.
+
+## Auth rate limiting and client IPs
+
+Sign-in, sign-up, change-password and change-email are capped at 3 requests per
+10 seconds per client; everything else under `/api/auth` at 100 per 10 seconds.
+This is on by default and does not depend on `NODE_ENV`. `AUTH_RATE_LIMIT_ENABLED=false`
+turns it off — only sensible if something in front of Pubrick already limits
+`/api/auth`.
+
+"Per client" needs a client address, and the api can only get one from a
+forwarded header. The web app's `/api` proxy passes a caller's own
+`X-Forwarded-For` through untouched, so Pubrick believes that header **only**
+when you declare who is allowed to set it:
+
+```dotenv
+TRUSTED_PROXIES=127.0.0.1        # nginx/Caddy on the same host
+TRUSTED_PROXIES=10.0.0.0/24      # a load balancer subnet
+```
+
+List the proxies between the internet and Pubrick, most specific first — the
+address or subnet they connect from, never a broad private range that also covers
+your users. With `TRUSTED_PROXIES` set, the forwarded chain is walked from the
+right past your proxies and the first address beyond them is the client.
+
+While it is empty, rate limiting still applies but shares one bucket per endpoint
+across every caller, and sessions record no IP address. That is the safe way
+round: an unset value costs you per-client granularity, whereas trusting the
+header unconditionally would let a single attacker change it on every request and
+never be limited at all.
 
 ## Connect a Telegram channel
 
