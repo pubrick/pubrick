@@ -10,6 +10,7 @@ import {
   allSentencesAi,
   type ContentCreate,
   type ContentUpdate,
+  type DeliveryOutcome,
   isSameText,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -185,12 +186,69 @@ const ADAPTATION_COLUMNS = {
    * bare Table for a subquery FROM isn't exercised anywhere else in this
    * codebase — the literal column/table names here are the actual db names
    * from packages/db/src/schema/content-items.ts, not TS property names.
+   *
+   * Scoped to `published` and deliberately NOT widened to the `unknown`
+   * receipts `deliveryOutcome` below reads: an unknown delivery has no link and
+   * cannot have one — the worker writes `external_url = null` on every one of
+   * them, because the answer that would have carried the id never arrived. That
+   * absence IS the outcome, and the screens say where the post may have gone by
+   * naming the CHANNEL, which they know without asking this subquery.
    */
   externalUrl: sql<string | null>`(
     select external_url from publications
     where adaptation_id = adaptations.id and status = 'published'
     order by created_at desc
     limit 1
+  )`,
+  /**
+   * WHAT HAPPENED TO THIS CHANNEL'S POST — `DeliveryOutcome`, the field the web
+   * labels a delivery from. Its seven values are documented on the union in
+   * `@pubrick/shared`; this is where the seventh is computed.
+   *
+   * The adaptation column has six: `failed` is its only
+   * terminal-and-not-published state, so a send whose answer never came back —
+   * the post may be live in the channel, nothing here can tell — is stored as
+   * `failed` too. The distinction lives on the `publications` receipt the
+   * worker writes per attempt, whose status is `unknown` for exactly that
+   * ending (`PublishService.recordUnknownOutcome`, and `sweepAbandoned` for an
+   * attempt that died holding its in-flight claim). Rounding it back to
+   * `failed` invites the re-approval that posts a SECOND copy, which is the
+   * whole reason the distinction exists.
+   *
+   * Computed HERE, in SQL, rather than in either browser screen:
+   *
+   * - It is one expression in `ADAPTATION_COLUMNS`, so every reader gets it —
+   *   the list, the item, and `updateAdaptation`'s RETURNING — and a future
+   *   one cannot forget to apply it. (The correlated subquery works in both
+   *   SELECT and RETURNING; `externalUrl` above relies on the same.)
+   * - The queue and the item screen ask the same question, and a verdict the
+   *   server computes is a verdict they cannot answer differently — the reason
+   *   `bodyIsAiVerbatim` is a server-computed boolean a few fields up.
+   * - Before it, the only trace of an unknown outcome that reached a browser
+   *   was the ENGLISH SENTENCE the worker happens to prefix `last_error` with,
+   *   which the web recognised by `startsWith`. A reworded log line turned
+   *   every unknown delivery back into a plain red failure, silently.
+   *
+   * BOTH HALVES OF THE CONDITION ARE LOAD-BEARING. `status = 'failed'` is what
+   * scopes the receipt to the delivery being described: an unknown attempt
+   * leaves its receipt behind for ever, and a human who checked the channel and
+   * approved again has an adaptation that is `queued` — reading the old receipt
+   * then would label a send that is in flight right now with the verdict of the
+   * one before it. And `status <> 'in_flight'` picks the last FINISHED attempt:
+   * a claim is written before the platform is called, so it is a record that
+   * someone is sending, not a record of how it ended.
+   */
+  deliveryOutcome: sql<DeliveryOutcome>`(
+    case
+      when adaptations.status = 'failed' and (
+        select p.status from publications p
+        where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+        order by p.created_at desc
+        limit 1
+      ) = 'unknown'
+      then 'unknown'
+      else adaptations.status
+    end
   )`,
 };
 

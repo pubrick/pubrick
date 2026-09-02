@@ -202,9 +202,13 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
                     cascade. Reset to min-h-0 at sm+ so desktop/rail sizing (the
                     Button's own height) is unchanged — `min-h-11` mirrors the same
                     44px token the mobile nav links already use above. Text labels
-                    stay: the item screen's header carries Approve + Reject, where
-                    round icon-only buttons would be cryptic — deliberate deviation
-                    from the spec's "round" 44px mobile primary-action wording. */}
+                    stay: this slot holds one verb-labelled button (the item
+                    screen's "Publish now"; Reject moved down to the decision card
+                    when the constitution's one-primary-action rule was applied),
+                    and a round icon-only button would be cryptic — a deliberate
+                    deviation from the spec's "round" 44px mobile primary-action
+                    wording. The gap and the flex row remain because the slot takes
+                    an arbitrary node and a screen may still pass more than one. */}
                 {primaryAction && (
                   <div className="flex items-center gap-2 [&_button]:min-h-11 sm:[&_button]:min-h-0">
                     {primaryAction}

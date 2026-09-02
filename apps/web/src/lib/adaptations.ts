@@ -1,3 +1,4 @@
+import type { DeliveryOutcome } from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
 /**
@@ -25,49 +26,28 @@ export const ADAPTATION_STATUSES = [
 export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
 
 /**
- * The sentinel the worker writes into `adaptations.last_error` when a send's
- * outcome was never learned (`PublishService.recordUnknownOutcome`).
+ * What actually happened to one channel's post: the api's own
+ * `deliveryOutcome` field, re-exported so the badge map below is keyed on the
+ * same union the response carries.
  *
- * It is a string match because it has to be: the distinction lives in the
- * `publications` row's `unknown` status, and no content endpoint ships that
- * column — `ADAPTATION_COLUMNS.externalUrl` in the api's content repository is
- * a subquery filtered to `status = 'published'`, so the only trace of an
- * unknown outcome that reaches a browser is this prefix. The right fix is an
- * `outcome` field on the adaptation DTO; until that exists, this constant is
- * the coupling, and `adaptations.test.ts` pins it against the worker source so
- * a reworded sentence there fails a test here instead of silently turning
- * every unknown outcome back into a plain failure.
+ * It is `@pubrick/shared`'s, not a local copy, precisely because it is a WIRE
+ * field — the reason `ADAPTATION_STATUSES` above is a copy does not reach it.
+ * The seven values and what each of them means are documented there; the one
+ * this screen exists to get right is `unknown`, a send whose answer never came
+ * back, which is neither a success nor a failure.
+ *
+ * This module used to derive that seventh value itself, by matching a fixed
+ * English sentence at the front of `lastError` — the only trace of an unknown
+ * outcome that reached a browser before the api shipped the field. Rewording
+ * the worker's log line turned every unknown delivery back into a plain red
+ * "Failed", which invites the re-approval that puts a second copy in someone's
+ * channel. There is nothing left here to reword.
  */
-export const UNKNOWN_OUTCOME_PREFIX = "DELIVERY OUTCOME UNKNOWN:";
+export type { DeliveryOutcome } from "@pubrick/shared";
 
 /**
- * What actually happened to one channel's post — the adaptation's own status,
- * except that a `failed` one carrying the sentinel is not a failure.
- *
- * The adaptation column has no `unknown` state and cannot get one: `failed` is
- * its only terminal-and-not-published value, and the worker's own docstring
- * says the publications row is where the distinction lives. So the SCREEN
- * carries the sixth value the column does not, because rounding "we do not
- * know" to "it failed" is the thing this whole distinction exists to stop.
- */
-export type DeliveryOutcome = AdaptationStatus | "unknown";
-
-export function isUnknownOutcome(lastError: string | null): boolean {
-  return lastError?.startsWith(UNKNOWN_OUTCOME_PREFIX) ?? false;
-}
-
-export function deliveryOutcome(adaptation: {
-  status: AdaptationStatus;
-  lastError: string | null;
-}): DeliveryOutcome {
-  return adaptation.status === "failed" && isUnknownOutcome(adaptation.lastError)
-    ? "unknown"
-    : adaptation.status;
-}
-
-/**
- * Spec §2.4's five status colors, mapped from every outcome that exists. Six
- * values, five colors, no sixth palette (constitution).
+ * Spec §2.4's five status colors, mapped from every outcome that exists.
+ * Seven values, five colors, no sixth palette (constitution).
  *
  * `queued`/`publishing` share `scheduled`'s blue — their own translated labels
  * are unaffected, only the color. `unknown` is the one use of `review`'s brick

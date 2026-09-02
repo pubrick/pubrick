@@ -101,3 +101,54 @@ export const contentApproveSchema = z.object({
     .optional(),
 });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
+
+/**
+ * WHAT HAPPENED TO ONE CHANNEL'S POST — the `deliveryOutcome` the api reports
+ * on every adaptation it returns, and the only field a screen needs in order to
+ * label a delivery.
+ *
+ * Six of the seven values are the adaptation row's own `status`, forwarded:
+ *
+ * - `pending` — created, not approved yet. Nothing has been sent.
+ * - `scheduled` — approved for a future time; the queue holds the job until it.
+ * - `queued` — approved and handed to the queue; a worker will pick it up.
+ * - `publishing` — a worker is talking to the platform right now.
+ * - `published` — the platform accepted the post. This is the one outcome that
+ *   carries an `externalUrl`.
+ * - `failed` — the attempt ended and NOTHING reached the platform. Safe to
+ *   approve again: re-approving sends the post for the first time.
+ *
+ * The seventh has no column of its own and is the reason this field exists:
+ *
+ * - `unknown` — the request may have left this process and never came back.
+ *   The post may be live in the channel and nothing here can tell. It carries
+ *   no `externalUrl` — there is no answer to have learned one from — and it is
+ *   emphatically NOT `failed`: re-approving an unknown delivery can put a
+ *   SECOND copy in someone's channel, so a human has to open the channel and
+ *   look first.
+ *
+ * The adaptation column cannot hold that seventh value: `failed` is its only
+ * terminal-and-not-published state, and the distinction lives one table over,
+ * on the `publications` receipt the worker writes per attempt (`unknown`
+ * there). The api joins the two — a `failed` adaptation whose most recent
+ * finished receipt says `unknown` is reported here as `unknown` — so that a
+ * browser never has to, and so the queue and the item screen cannot disagree.
+ * The status is part of the pair on purpose: a re-approved adaptation is
+ * `queued` again, and an older attempt's `unknown` receipt must not keep
+ * describing the delivery that is currently in flight.
+ */
+export const DELIVERY_OUTCOMES = [
+  "pending",
+  "scheduled",
+  "queued",
+  "publishing",
+  "published",
+  "failed",
+  "unknown",
+] as const;
+export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
+
+/** Is this string one of the outcomes? Guards a value read back off the wire. */
+export function isDeliveryOutcome(value: unknown): value is DeliveryOutcome {
+  return typeof value === "string" && (DELIVERY_OUTCOMES as readonly string[]).includes(value);
+}

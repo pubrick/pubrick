@@ -2,7 +2,7 @@ import { runCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTENT_LIST_POLL_INTERVAL_MS, UNKNOWN_OUTCOME_PREFIX } from "@/lib/adaptations";
+import { CONTENT_LIST_POLL_INTERVAL_MS } from "@/lib/adaptations";
 import type { ContentOrigin } from "@/lib/origin";
 import { OPEN_RUNS_POLL_INTERVAL_MS, type Run } from "@/lib/runs";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -22,11 +22,14 @@ const mockApi = vi.mocked(api);
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
+/** The api's verdict, the seventh value included — see `@pubrick/shared`. */
+type DeliveryOutcome = AdaptationStatus | "unknown";
 
 type Adaptation = {
   id: string;
   channelId: string;
   status: AdaptationStatus;
+  deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
   externalUrl: string | null;
   lastError: string | null;
@@ -48,6 +51,10 @@ function adaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     id: "a1",
     channelId: "ch1",
     status: "pending",
+    // The api's own rule, in the fixture: the outcome IS the status, except for
+    // the one value the column cannot hold. A test that wants `unknown` says so
+    // explicitly, and every other fixture stays honest for free.
+    deliveryOutcome: overrides.status ?? "pending",
     origin: "human",
     externalUrl: null,
     lastError: null,
@@ -813,15 +820,20 @@ describe("failures come first, and look like failures (Finding 3)", () => {
 });
 
 describe("an outcome nobody knows, on the list (Finding 2)", () => {
-  const workerSentence = `${UNKNOWN_OUTCOME_PREFIX} the post was sent but nothing came back.`;
+  /**
+   * The worker's log line, still stored on `lastError` and still English. The
+   * screen no longer reads it — `deliveryOutcome` is what it reads — so these
+   * fixtures carry BOTH, and the assertions below say the sentence never
+   * reaches the page while the outcome always does.
+   */
+  const workerSentence = "DELIVERY OUTCOME UNKNOWN: the post was sent but nothing came back.";
+
+  const unknownDelivery = () =>
+    adaptation({ status: "failed", deliveryOutcome: "unknown", lastError: workerSentence });
 
   it("reads 'Outcome unknown' and carries the advice, not the worker's log line", async () => {
     const calls: Call[] = [];
-    installHandlers(calls, () => [
-      item("c1", "Launch post", "failed", [
-        adaptation({ status: "failed", lastError: workerSentence }),
-      ]),
-    ]);
+    installHandlers(calls, () => [item("c1", "Launch post", "failed", [unknownDelivery()])]);
 
     render(<ContentQueuePage />);
 
@@ -829,9 +841,36 @@ describe("an outcome nobody knows, on the list (Finding 2)", () => {
     const row = screen.getByRole("link", { name: "Launch post" }).closest("li");
     if (!row) throw new Error("content item <li> not found");
     expect(within(row).getByText(en.Content.adaptationStatus.unknown)).toBeInTheDocument();
-    expect(within(row).getByText(en.Content.unknownOutcome)).toBeInTheDocument();
     expect(within(row).queryByText(en.Content.adaptationStatus.failed)).not.toBeInTheDocument();
     expect(screen.queryByText(workerSentence)).not.toBeInTheDocument();
+  });
+
+  /**
+   * An unknown delivery has no link — that is what "unknown" means — so the
+   * only thing this row can say about where the post may have gone is the
+   * channel, and the advice names it.
+   */
+  it("names the channel the post may be sitting in", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [item("c1", "Launch post", "failed", [unknownDelivery()])], [
+      { id: "ch1", platform: "telegram", name: "Main channel" },
+    ]);
+
+    render(<ContentQueuePage />);
+
+    await screen.findByRole("link", { name: "Launch post" });
+    const row = screen
+      .getByRole("link", { name: "Launch post" })
+      .closest("li") as HTMLElement | null;
+    if (!row) throw new Error("content item <li> not found");
+    const advice = within(row).getByText(
+      en.Content.unknownOutcome.replace("{channel}", "Telegram · Main channel"),
+    );
+    // Asserted on its own as well as through the message: a translation that
+    // dropped the `{channel}` argument would still match a message built by
+    // replacing nothing, and would still leave the reader without an address.
+    expect(advice).toHaveTextContent("Telegram · Main channel");
+    expect(within(row).queryByRole("link", { name: /t\.me/ })).toBeNull();
   });
 
   it("leaves a real failure red", async () => {
@@ -849,6 +888,25 @@ describe("an outcome nobody knows, on the list (Finding 2)", () => {
     const badge = within(row).getByText(en.Content.adaptationStatus.failed);
     expect(badge.className).toContain("var(--status-failed-bg)");
     expect(within(row).queryByText(en.Content.adaptationStatus.unknown)).toBeNull();
+  });
+
+  /**
+   * The rounding this whole field exists to stop, asserted from the other
+   * side: the screen must take the api's word for the outcome and must not
+   * re-derive one from the status. A `failed` row whose delivery is `unknown`
+   * is the case that used to depend on an English sentence.
+   */
+  it("takes the api's outcome over the row's own status", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [item("c1", "Launch post", "failed", [unknownDelivery()])]);
+
+    render(<ContentQueuePage />);
+
+    const row = (await screen.findByRole("link", { name: "Launch post" })).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    const badge = within(row).getByText(en.Content.adaptationStatus.unknown);
+    expect(badge.className).toContain("var(--status-review-bg)");
+    expect(badge.className).not.toContain("var(--status-failed-bg)");
   });
 });
 

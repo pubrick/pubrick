@@ -7,7 +7,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
-import { UNKNOWN_OUTCOME_PREFIX } from "@/lib/adaptations";
 import type { ContentOrigin } from "@/lib/origin";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
@@ -28,6 +27,8 @@ const mockApiVoid = vi.mocked(apiVoid);
 
 type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
+/** The api's verdict, the seventh value included — see `@pubrick/shared`. */
+type DeliveryOutcome = AdaptationStatus | "unknown";
 
 type Adaptation = {
   id: string;
@@ -35,6 +36,7 @@ type Adaptation = {
   channelId: string;
   body: string | null;
   status: AdaptationStatus;
+  deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -65,6 +67,10 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     channelId: "ch1",
     body: null,
     status: "pending",
+    // The api's own rule, in the fixture: the outcome IS the status, except for
+    // the one value the column cannot hold. A test that wants `unknown` says so
+    // explicitly, and every other fixture stays honest for free.
+    deliveryOutcome: overrides.status ?? "pending",
     origin: "human",
     scheduledAt: null,
     attemptCount: 0,
@@ -1131,8 +1137,14 @@ describe("re-reading while a post is on its way out (Finding 1)", () => {
  * clue was the worker's English log line printed as an error.
  */
 describe("an outcome nobody knows (Finding 2)", () => {
+  /**
+   * The worker's log line, still stored on `lastError` and still English. The
+   * screen no longer reads it — `deliveryOutcome` is what it reads — so this
+   * fixture carries BOTH, and the assertions say the sentence never reaches the
+   * page while the outcome always does.
+   */
   const workerSentence =
-    `${UNKNOWN_OUTCOME_PREFIX} the post was sent to the platform but the outcome could not be ` +
+    "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
     "confirmed (an earlier attempt was interrupted after the post was sent to the platform and " +
     "never reported back). A copy may already be live — check the channel before re-approving, " +
     "because re-approving will send again.";
@@ -1140,7 +1152,9 @@ describe("an outcome nobody knows (Finding 2)", () => {
   function unknownItem() {
     return makeItem({
       status: "failed",
-      adaptations: [makeAdaptation({ status: "failed", lastError: workerSentence })],
+      adaptations: [
+        makeAdaptation({ status: "failed", deliveryOutcome: "unknown", lastError: workerSentence }),
+      ],
     });
   }
 
@@ -1161,8 +1175,29 @@ describe("an outcome nobody knows (Finding 2)", () => {
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     await screen.findByRole("heading", { name: en.Publish.resultsTitle });
 
-    expect(within(resultsList()).getByRole("alert")).toHaveTextContent(en.Content.unknownOutcome);
+    expect(within(resultsList()).getByRole("alert")).toHaveTextContent(
+      en.Content.unknownOutcome.replace("{channel}", "Telegram · Main channel"),
+    );
     expect(screen.queryByText(workerSentence)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The alert is announced on its own, away from the row that shows the
+   * channel beside the badge — so an alert that does not name the channel is
+   * an instruction a screen-reader user cannot follow. It is also all this
+   * screen can say about where the post went: an unknown delivery has no link
+   * and never will.
+   */
+  it("names the channel the post may be sitting in, and offers no link", async () => {
+    installBaseHandlers({ current: unknownItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const alert = within(resultsList()).getByRole("alert");
+    expect(alert).toHaveTextContent("Telegram · Main channel");
+    expect(within(resultsList()).queryByRole("link")).toBeNull();
+    expect(within(resultsList()).queryByText(en.Publish.linkUnavailable)).toBeNull();
   });
 
   it("wears neither the failed red nor the published green", async () => {

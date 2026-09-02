@@ -18,7 +18,7 @@ import {
   CONTENT_BADGE_STATUS,
   type ContentStatus,
   DELIVERY_BADGE_STATUS,
-  deliveryOutcome,
+  type DeliveryOutcome,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
@@ -34,6 +34,13 @@ type Adaptation = {
   channelId: string;
   body: string | null;
   status: AdaptationStatus;
+  /**
+   * What happened to this channel's post — the api's verdict, not one this
+   * screen derives. `status` is the row's own column and still answers "is
+   * anything still moving"; this is the same value except that a failure whose
+   * send may actually have landed reads `unknown`.
+   */
+  deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -447,8 +454,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <Card key={a.id}>
             <div className="mb-3 flex items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
-              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
-                {tc(`adaptationStatus.${deliveryOutcome(a)}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[a.deliveryOutcome]}>
+                {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
             <DimmedTextarea
@@ -540,8 +547,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           >
             <div className="flex flex-wrap items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
-              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
-                {tc(`adaptationStatus.${deliveryOutcome(a)}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[a.deliveryOutcome]}>
+                {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
             {a.status === "published" &&
@@ -567,13 +574,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               that happens to be readable. It says the one thing a person can
               act on: look at the channel first, because approving again sends
               a second copy.
+
+              It NAMES the channel, and that is the whole of what this screen
+              can say about where the post went: an unknown delivery carries no
+              link, by construction — the answer that would have carried one
+              never arrived. The name is also next to it on the row, but this
+              paragraph is a `role="alert"`, announced on its own, and an alert
+              telling someone to go and check a channel it does not name is an
+              instruction they cannot follow.
             */}
-            {deliveryOutcome(a) === "unknown" && (
+            {a.deliveryOutcome === "unknown" && (
               <p role="alert" className="text-sm text-[var(--status-review-fg)]">
-                {tc("unknownOutcome")}
+                {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
               </p>
             )}
-            {deliveryOutcome(a) === "failed" && a.lastError && (
+            {a.deliveryOutcome === "failed" && a.lastError && (
               <p role="alert" className="text-sm text-danger">
                 {a.lastError}
               </p>

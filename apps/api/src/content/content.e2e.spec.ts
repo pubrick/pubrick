@@ -1071,6 +1071,261 @@ describe.skipIf(!url)("content e2e", () => {
     expect(fetched.body.adaptations[0]).toMatchObject({ status: "pending", externalUrl: null });
   });
 
+  /**
+   * A DELIVERY WHOSE ANSWER NEVER CAME BACK, end to end.
+   *
+   * The distinction is worth a `publications` status of its own because the two
+   * endings need opposite actions from a human: a `failed` adaptation delivered
+   * nothing and is safe to approve again, while an `unknown` one may already be
+   * live in the channel and approving it again posts a SECOND copy. The
+   * adaptation column cannot hold the difference — `failed` is its only
+   * terminal-and-not-published value — so the api joins the receipt in and ships
+   * `deliveryOutcome`.
+   *
+   * Everything here goes through the HTTP response on purpose. The screens read
+   * a JSON body, not a repository return value, and the hop this replaces was a
+   * browser matching an English sentence out of `last_error`: a test that called
+   * the repository could not have told whether the field survived the wire at
+   * all. The worker's write is seeded directly, as every worker-shaped fixture
+   * in this file is — and the sentence it stores is NEVER asserted on, because
+   * the whole point of the field is that rewording it changes nothing.
+   */
+  describe("an outcome nobody knows", () => {
+    /**
+     * What `PublishService.recordUnknownOutcome` leaves behind: the adaptation
+     * `failed` with the operator's sentence, and the attempt's receipt resolved
+     * to `unknown` with NO link — there was no answer to learn one from.
+     */
+    async function seedUnknownDelivery(adaptationId: string, channelId: string) {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      const orgId = row?.org_id;
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', last_error =
+       'DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be confirmed. A copy may already be live.'
+       WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+       VALUES ('${orgId}', '${adaptationId}', '${channelId}', 'unknown', NULL, NULL, 1)`,
+      );
+      await pool.end();
+    }
+
+    /** The other ending: the attempt never reached the platform. */
+    async function seedFailedDelivery(adaptationId: string, channelId: string) {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      const orgId = row?.org_id;
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', last_error = 'Telegram: chat not found' WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+       VALUES ('${orgId}', '${adaptationId}', '${channelId}', 'failed', NULL, NULL, 1)`,
+      );
+      await pool.end();
+    }
+
+    async function itemWithOneChannel(agent: request.Agent, body: string) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body, channelIds: [channelId] })
+        .expect(201);
+      return {
+        itemId: created.body.id as string,
+        adaptationId: created.body.adaptations[0].id as string,
+        channelId,
+      };
+    }
+
+    it("reaches the browser as deliveryOutcome, on the item and on the queue alike", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Maybe out");
+      await seedUnknownDelivery(adaptationId, channelId);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
+        status: "failed",
+        deliveryOutcome: "unknown",
+        // No link, and that absence IS the outcome: the answer that would have
+        // carried one never arrived. The screen says where the post may have
+        // gone by naming the channel instead.
+        externalUrl: null,
+      });
+
+      const listed = await agent.get("/api/content").expect(200);
+      const item = (
+        listed.body as { id: string; adaptations: { deliveryOutcome: string }[] }[]
+      ).find((i) => i.id === itemId);
+      expect(item?.adaptations[0]?.deliveryOutcome).toBe("unknown");
+    });
+
+    /**
+     * THE POINT OF THE FIELD, asserted directly: the sentence on `last_error`
+     * is a log line, and nothing outside the worker may depend on how it is
+     * worded. This seeds an unknown delivery whose message is deliberately NOT
+     * the one the worker writes today, and the answer is the same.
+     *
+     * It is what the deleted ratchet in `apps/web/src/lib/adaptations.test.ts`
+     * was standing in for. That test read the worker's source off disk and
+     * pinned the prefix, because the web recognised an unknown outcome by
+     * `startsWith` on this very string — so rewording a log line turned every
+     * unknown delivery into a plain red "Failed", which invites the
+     * re-approval that posts a second copy. The receipt is what carries the
+     * distinction now, and it has a column, not a paragraph.
+     */
+    it("does not care how the worker worded its log line", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Reworded");
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', last_error =
+         'Nobody has ever written this sentence in the worker, and nothing here reads it.'
+         WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+         VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'unknown', NULL, NULL, 1)`,
+      );
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0].deliveryOutcome).toBe("unknown");
+    });
+
+    /**
+     * A CLAIM IS NOT AN OUTCOME. The worker writes an `in_flight` receipt
+     * BEFORE it calls the platform and resolves it on every ending it survives
+     * — but one can be left behind (a release that could not reach the
+     * database, an attempt whose verdict lost a fence race), and nothing sweeps
+     * a leaked claim off an adaptation that is already terminal. Reading the
+     * newest receipt without excluding it would let that leftover hide the last
+     * FINISHED attempt's verdict, and the verdict it would hide here is the one
+     * that says "go and look at the channel before you approve again".
+     */
+    it("looks past a leftover in-flight claim to the last finished attempt", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(
+        agent,
+        "Claim left over",
+      );
+      await seedUnknownDelivery(adaptationId, channelId);
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      // Newer than the unknown receipt, so "most recent row" and "most recent
+      // FINISHED row" are different rows and the query has to pick the right one.
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at)
+         VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'in_flight', NULL, NULL, 2, now() + interval '1 minute')`,
+      );
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0].deliveryOutcome).toBe("unknown");
+    });
+
+    it("keeps a failure that delivered nothing a plain failure", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Never out");
+      await seedFailedDelivery(adaptationId, channelId);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
+        status: "failed",
+        deliveryOutcome: "failed",
+      });
+    });
+
+    it("calls a delivery that landed published, receipt and all", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Went out");
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${adaptationId}'`);
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+       VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'published', '4711', 'https://t.me/mychannel/4711', 1)`,
+      );
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
+        deliveryOutcome: "published",
+        externalUrl: "https://t.me/mychannel/4711",
+      });
+    });
+
+    /**
+     * THE OTHER HALF OF THE CONDITION. An unknown attempt leaves its receipt
+     * behind for ever. A human who did what the message asks — opened the
+     * channel, saw nothing, approved again — has an adaptation that is `queued`,
+     * and the stale receipt must not label the send that is in flight right now
+     * with the verdict of the one before it.
+     */
+    it("stops describing a re-approved adaptation with the previous attempt's verdict", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Try once more");
+      await seedUnknownDelivery(adaptationId, channelId);
+
+      const reApproved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(reApproved.body.adaptations[0]).toMatchObject({
+        status: "queued",
+        deliveryOutcome: "queued",
+      });
+    });
+
+    /**
+     * The field travels on a PATCH's response too — it is one expression in
+     * `ADAPTATION_COLUMNS`, so the RETURNING gets it exactly as the SELECTs do.
+     * Worth a test rather than a comment: a `failed` adaptation IS editable
+     * (`EDITABLE_ADAPTATION_STATUSES`), so this response is a real way for an
+     * unknown delivery to reach a screen, and a mapping applied per call site
+     * instead of in the column list would have missed this one.
+     */
+    it("comes back from an adaptation PATCH, not only from the reads", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Editable");
+      await seedUnknownDelivery(adaptationId, channelId);
+
+      const patched = await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "A channel-specific take" })
+        .expect(200);
+      expect(patched.body).toMatchObject({ status: "failed", deliveryOutcome: "unknown" });
+    });
+
+    /**
+     * The ratchet that replaces the deleted one. The web keyed a badge color off
+     * every value this union can carry; a status added to the adaptation column
+     * without being added to `DELIVERY_OUTCOMES` would arrive at a screen with no
+     * color and no label for it.
+     */
+    it("can carry every adaptation status, plus the one the column cannot hold", async () => {
+      const { schema } = await import("@pubrick/db");
+      const { DELIVERY_OUTCOMES } = await import("@pubrick/shared");
+      expect([...DELIVERY_OUTCOMES]).toEqual([...schema.ADAPTATION_STATUSES, "unknown"]);
+    });
+  });
+
   it('400s an empty PATCH instead of 500ing on drizzle\'s "No values to set"', async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

@@ -1,69 +1,33 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { DELIVERY_OUTCOMES } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import {
   ADAPTATION_STATUSES,
   CONTENT_STATUSES,
   DELIVERY_BADGE_STATUS,
-  deliveryOutcome,
   hasAdaptationInFlight,
   isAdaptationInFlight,
-  isUnknownOutcome,
-  UNKNOWN_OUTCOME_PREFIX,
 } from "./adaptations";
 
+/**
+ * What used to be here: a ratchet that read `apps/worker/src/publish/
+ * publish.service.ts` off disk and asserted the English sentence this module
+ * matched on was still spelled that way. It existed because nothing in the
+ * response said whether a failed adaptation's send had actually left, so the
+ * screen recognised an unknown delivery by `startsWith` on a log line, and a
+ * reworded sentence would have turned every one of them back into a plain red
+ * "Failed" with no test anywhere noticing.
+ *
+ * The api ships `deliveryOutcome` now, so there is no sentence to pin and
+ * nothing to read the worker's source for. What is left to check is that the
+ * values the wire can carry all have a color.
+ */
 describe("the unknown delivery outcome", () => {
-  /**
-   * The one coupling in this module, pinned against its source.
-   *
-   * `UNKNOWN_OUTCOME_PREFIX` is a copy of a sentence that lives in the worker,
-   * and no type checks it: nothing in the content DTO says whether a failed
-   * adaptation's send actually left. If someone rewords
-   * `PublishService.recordUnknownOutcome`, every unknown outcome silently
-   * becomes a plain red "Failed" again — the exact rounding this whole
-   * distinction exists to prevent — and no test that mocks the api could
-   * notice. So this one reads the worker's own source.
-   *
-   * It is a ratchet, not a design: the honest fix is an `outcome` field on the
-   * adaptation DTO, which is an api change. Delete this test when that lands.
-   */
-  it("is spelled exactly as the worker writes it", () => {
-    // Walked up from the working directory rather than resolved against
-    // `import.meta.url`: vite rewrites that to a non-file URL, and a fixed
-    // number of `..` segments assumes which package vitest was started from.
-    const relative = join("apps", "worker", "src", "publish", "publish.service.ts");
-    let directory = resolve(process.cwd());
-    while (!existsSync(join(directory, relative))) {
-      const parent = dirname(directory);
-      if (parent === directory)
-        throw new Error(`could not find ${relative} above ${process.cwd()}`);
-      directory = parent;
-    }
-    const source = readFileSync(join(directory, relative), "utf8");
-    expect(source).toContain(UNKNOWN_OUTCOME_PREFIX);
+  it("is the one outcome the adaptation column cannot hold", () => {
+    expect(DELIVERY_OUTCOMES).toEqual([...ADAPTATION_STATUSES, "unknown"]);
   });
 
-  it("recognises the worker's sentence and nothing else", () => {
-    expect(isUnknownOutcome(`${UNKNOWN_OUTCOME_PREFIX} the post was sent`)).toBe(true);
-    expect(isUnknownOutcome("Unauthorized")).toBe(false);
-    expect(isUnknownOutcome("")).toBe(false);
-    expect(isUnknownOutcome(null)).toBe(false);
-    // Not a substring match: a platform error that happens to quote the phrase
-    // mid-sentence is still a plain failure, and the worker always leads with it.
-    expect(isUnknownOutcome(`Telegram said: ${UNKNOWN_OUTCOME_PREFIX} nope`)).toBe(false);
-  });
-
-  it("is the only thing that turns a failed adaptation into an unknown one", () => {
-    expect(deliveryOutcome({ status: "failed", lastError: "Unauthorized" })).toBe("failed");
-    expect(
-      deliveryOutcome({ status: "failed", lastError: `${UNKNOWN_OUTCOME_PREFIX} no answer` }),
-    ).toBe("unknown");
-    // A live row carrying the sentence from an earlier attempt is not unknown:
-    // the current status is what happened, and it is still in flight.
-    expect(
-      deliveryOutcome({ status: "publishing", lastError: `${UNKNOWN_OUTCOME_PREFIX} no answer` }),
-    ).toBe("publishing");
-    expect(deliveryOutcome({ status: "published", lastError: null })).toBe("published");
+  it("gives every value the api can send a color, and no value it cannot", () => {
+    expect(Object.keys(DELIVERY_BADGE_STATUS).sort()).toEqual([...DELIVERY_OUTCOMES].sort());
   });
 
   it("wears review's brick, not failed's red and not published's green", () => {

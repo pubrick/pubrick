@@ -19,7 +19,7 @@ import {
   CONTENT_STATUSES,
   type ContentStatus,
   DELIVERY_BADGE_STATUS,
-  deliveryOutcome,
+  type DeliveryOutcome,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -55,6 +55,13 @@ type Adaptation = {
   id: string;
   channelId: string;
   status: AdaptationStatus;
+  /**
+   * What happened to this channel's post — the api's verdict, not one this
+   * screen derives. `status` is the row's own column and still answers "is
+   * anything still moving"; this is the same value except that a failure whose
+   * send may actually have landed reads `unknown`.
+   */
+  deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
   externalUrl: string | null;
   lastError: string | null;
@@ -345,17 +352,21 @@ export default function ContentQueuePage() {
               className="flex flex-wrap items-center gap-1.5 text-[13px] text-fg-tertiary"
             >
               {channelLabel(a.channelId)} —{" "}
-              <StatusBadge status={DELIVERY_BADGE_STATUS[deliveryOutcome(a)]}>
-                {t(`adaptationStatus.${deliveryOutcome(a)}`)}
+              <StatusBadge status={DELIVERY_BADGE_STATUS[a.deliveryOutcome]}>
+                {t(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
               {/*
                 Said here and not only on the item screen: "check the channel
                 before approving again" is advice about an action that starts
                 on THIS list, and a badge alone does not carry it. Our sentence,
-                not the worker's log line.
+                not the worker's log line — and it names the channel, because an
+                unknown delivery has no link and the channel is the only place a
+                human can go to find out whether the post is there.
               */}
-              {deliveryOutcome(a) === "unknown" && (
-                <span className="w-full text-[var(--status-review-fg)]">{t("unknownOutcome")}</span>
+              {a.deliveryOutcome === "unknown" && (
+                <span className="w-full text-[var(--status-review-fg)]">
+                  {t("unknownOutcome", { channel: channelLabel(a.channelId) })}
+                </span>
               )}
               {a.status === "published" &&
                 a.externalUrl &&
