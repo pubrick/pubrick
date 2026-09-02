@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { telegramPublisher } from "./telegram.js";
+import { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
 import {
   PermanentPublishError,
   type PublishInput,
@@ -259,7 +259,15 @@ describe("telegramPublisher.publish", () => {
     ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
-  it("never leaks the bot token into a thrown error message", async () => {
+  // NOT a pin for either half of `redactToken`, despite reading like one, and a
+  // security review that cited it as one was wrong. It puts the token inside a
+  // `/bot<token>/` URL, which is the ONE shape both passes redact, so it holds
+  // as long as EITHER survives: deleting the literal pass alone leaves it
+  // green, and so does deleting the URL pass alone. It pins the disjunction —
+  // "at least one redaction still runs" — and nothing finer. The per-half pins
+  // are in the "bot-token redaction" block at the bottom of this file; keep
+  // this one for the end-to-end shape it does cover.
+  it("never leaks the bot token when the token rides inside the request URL", async () => {
     const fetchImpl = vi
       .fn()
       .mockRejectedValue(
@@ -560,5 +568,173 @@ describe("telegramPublisher.verify", () => {
       ok: false,
       reason: "Telegram returned an unexpected getChatMember response",
     });
+  });
+});
+
+/**
+ * `redactToken` is two independent passes, and every existing assertion fed it
+ * the one input both passes handle — a token inside a `/bot<token>/` URL — so
+ * either half could be deleted with the suite still green. These pin them one
+ * at a time: each test carries a token in a shape only ONE pass can catch, so
+ * deleting that pass is the only edit that can turn it red.
+ *
+ * What is at stake is not tidiness. The redacted string is the `message` of the
+ * thrown error, and that message is what the worker persists verbatim as
+ * `adaptations.last_error` (apps/worker/src/publish/publish.service.ts, `const
+ * message = (error as Error).message`), which the api selects as `lastError`
+ * (apps/api/src/content/content.repository.ts) and a screen prints. An
+ * unredacted token in a platform error is a bot token rendered in a browser.
+ */
+describe("bot-token redaction", () => {
+  /** The value the worker writes to `adaptations.last_error` for a failed publish. */
+  async function lastErrorFor(fetchImpl: typeof fetch): Promise<string> {
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(Error);
+    return (caught as Error).message;
+  }
+
+  // PIN for the LITERAL-token pass. The token appears in prose, with no `/bot`
+  // and no surrounding slashes, so the URL-shape regex cannot reach it: only
+  // `message.split(botToken).join("***")` removes it. This is not a contrived
+  // shape — an intermediary that rejects the credential says so in its own
+  // words, and its body becomes the snippet in an unrecognized-response error.
+  it("redacts the exact token when it appears outside any URL", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(`gateway refused credential ${CREDS.botToken} for upstream`, { status: 502 }),
+      );
+
+    const message = await lastErrorFor(fetchImpl);
+    expect(message).not.toContain(CREDS.botToken);
+    expect(message).toContain("***");
+    // The rest of the snippet must survive: redaction removes the secret, not
+    // the diagnosis the operator needs.
+    expect(message).toContain("gateway refused credential");
+  });
+
+  // The same pass, reached down the other road into `redactToken`: Telegram's
+  // OWN `ok:false` description. A platform that echoes the credential it just
+  // refused hands it straight to the error path, and this description never
+  // contains a URL either.
+  it("redacts the exact token out of Telegram's own error description", async () => {
+    const fetchImpl = fetchReturning(
+      { ok: false, error_code: 400, description: `Bad Request: token ${CREDS.botToken} rejected` },
+      400,
+    );
+
+    const message = await lastErrorFor(fetchImpl);
+    expect(message).not.toContain(CREDS.botToken);
+    expect(message).toContain("***");
+  });
+
+  // PIN for the URL-SHAPE pass. The token here is NOT this channel's token, so
+  // the literal pass has nothing to match on and only the `/bot<...>/` regex
+  // can remove it. That is exactly the defense-in-depth the docstring claims:
+  // `baseUrl` is configurable, and a shared egress proxy quoting the request
+  // line it failed to forward can quote a token this call never held.
+  it("redacts a bot-token URL shape even when the token is not ours", async () => {
+    const foreignToken = "987654321:AAHnotOurBotTokenAtAll";
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          `Bad gateway proxying POST https://api.telegram.org/bot${foreignToken}/sendMessage`,
+          { status: 502 },
+        ),
+      );
+
+    const message = await lastErrorFor(fetchImpl);
+    expect(message).not.toContain(foreignToken);
+    expect(message).toContain("/bot***/");
+  });
+
+  // The other rendered field. `verify()` does not throw — it returns
+  // `{ ok: false, reason }`, and apps/api/src/channels/channels.repository.ts
+  // returns that object straight out of the controller, so `reason` is served
+  // to the browser as-is. Same redaction, second screen.
+  it("keeps the token out of the connection-test reason the api serves verbatim", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(`upstream rejected credential ${CREDS.botToken}`, { status: 502 }),
+      );
+
+    const result = await telegramPublisher.verify(CREDS, { fetchImpl });
+    expect(result.ok).toBe(false);
+    const reason = (result as { ok: false; reason: string }).reason;
+    expect(reason).not.toContain(CREDS.botToken);
+    expect(reason).toContain("***");
+  });
+});
+
+/**
+ * The request timeout. `AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS)` could
+ * be deleted from the fetch options with the whole suite still green: the
+ * "treats the request timeout as unknown" test above feeds a TimeoutError to
+ * `fetchImpl` by hand, which proves how such a rejection is CLASSIFIED and says
+ * nothing about whether anything would ever produce one. Without the signal a
+ * hung connection never aborts, the pg-boss job outlives the worker's shutdown
+ * window (apps/worker/src/publish/publish.service.ts derives that window from
+ * this very constant) and the redelivery is the duplicate post.
+ */
+describe("request timeout wiring", () => {
+  it("hands fetch an abort signal built from TELEGRAM_REQUEST_TIMEOUT_MS", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const fetchImpl = fetchReturning(okMessage());
+      await telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl });
+
+      // The constant is what gets applied — not a hardcoded literal that has
+      // drifted from it, and not some other duration.
+      expect(timeoutSpy).toHaveBeenCalledWith(TELEGRAM_REQUEST_TIMEOUT_MS);
+      // ...and the signal it produced is the one the request actually carries.
+      // `toBe` on the spy's own return value is what makes deleting the
+      // `signal:` option fail here instead of quietly passing.
+      const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+      expect(init.signal).toBe(timeoutSpy.mock.results[0]?.value);
+      expect(init.signal?.aborted).toBe(false);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("puts a timeout signal on every call verify makes, not just on publish", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ok: true, result: { id: 42, username: "my_bot" } }), {
+            status: 200,
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ok: true, result: { id: -1001234567890, title: "My Channel" } }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ok: true, result: { status: "creator" } }), {
+            status: 200,
+          }),
+        );
+
+      await telegramPublisher.verify(CREDS, { fetchImpl });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      for (const call of fetchImpl.mock.calls) {
+        expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+      }
+      expect(timeoutSpy).toHaveBeenCalledTimes(3);
+      for (const call of timeoutSpy.mock.calls) {
+        expect(call[0]).toBe(TELEGRAM_REQUEST_TIMEOUT_MS);
+      }
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

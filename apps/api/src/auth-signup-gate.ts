@@ -19,8 +19,22 @@ async function instanceHasUsers(): Promise<boolean> {
  * Whether an organization has a live invitation waiting for this address.
  *
  * The organization plugin lowercases the address it stores, so the comparison is
- * lowered on both sides rather than trusting one of them. Expired and already
- * accepted/cancelled invitations do not open the door.
+ * lowered on both sides rather than trusting one of them.
+ *
+ * "Live" is TWO independent facts, and the pair is load-bearing — do not collapse
+ * it into one. The plugin tracks a `status` (`pending` -> `accepted` / `rejected`
+ * / `canceled`) and an `expiresAt`, and neither implies the other: a revoked
+ * invite keeps its future expiry, and an invite nobody ever answered stays
+ * `pending` forever past its date. Dropping either check re-opens invite-only
+ * registration to a stranger — an address invited a year ago and since abandoned,
+ * or one whose invite the operator deliberately took back. Both halves were
+ * unpinned until 2026-09-02; each is now pinned by its own test in
+ * auth.e2e.spec.ts ("invite refuses an expired invitation" / "a revoked
+ * invitation" / "an already-accepted invitation"), and each of those was verified
+ * by deleting the matching line here and watching only that test die.
+ *
+ * A refusal is the caller's generic 403, never "your invitation expired": the
+ * specific answer would confirm that this address was once invited.
  */
 async function hasPendingInvitation(email: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase();

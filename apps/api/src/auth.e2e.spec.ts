@@ -1,5 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { schema } from "@pubrick/db";
+import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // From auth-policy, not from the gate: the gate imports ./db, whose env parsing runs
@@ -228,6 +230,139 @@ describe.skipIf(!url)("auth e2e", () => {
 
       process.env.SIGNUP_MODE = "invite";
       await signUp(invited.toUpperCase()).expect(200);
+    });
+
+    /**
+     * A real, live invitation for a fresh address, created through the plugin's own
+     * endpoints so the row under test is byte-for-byte the row production writes —
+     * `status` and `expiresAt` included, neither of them invented here.
+     */
+    async function inviteFreshAddress(label: string) {
+      process.env.SIGNUP_MODE = "open";
+      const owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({
+          name: `${label} Co`,
+          slug: `${label}-${Date.now()}${Math.floor(Math.random() * 1e6)}`,
+        })
+        .expect(200);
+      const email = fresh();
+      const invited = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: org.body.id })
+        .expect(200);
+      const invitationId = invited.body.id as string;
+      expect(typeof invitationId).toBe("string");
+      return { owner, email, invitationId };
+    }
+
+    /**
+     * The invitation row as stored. Imported dynamically for the reason at the top of
+     * this file: `./db` parses env at import time, which must not happen before
+     * `beforeAll` has set DATABASE_URL.
+     */
+    async function invitationRow(invitationId: string) {
+      const { db } = await import("./db");
+      const [row] = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.id, invitationId))
+        .limit(1);
+      if (!row) throw new Error(`invitation ${invitationId} not found`);
+      return row;
+    }
+
+    /**
+     * MUTATION PIN for `hasPendingInvitation`'s expiry half. An invitation is two
+     * separate facts — a status and an expiry — and only the pair makes it live.
+     * Every earlier invite test used an invitation that was fresh in both, so
+     * deleting `gt(expiresAt, now)` left the suite green while an invitation sent
+     * to an address a year ago went on admitting whoever now controls it.
+     *
+     * The expiry is moved by writing the row: the plugin sets `expiresAt` itself and
+     * exposes no way to age it. That single write is the only fabricated step — the
+     * invitation, its status and the sign-up are all the real endpoints.
+     */
+    it("invite refuses an expired invitation, with the answer a stranger gets", async () => {
+      const { email, invitationId } = await inviteFreshAddress("expired");
+      const { db } = await import("./db");
+      await db
+        .update(schema.invitation)
+        .set({ expiresAt: new Date(Date.now() - 60_000) })
+        .where(eq(schema.invitation.id, invitationId));
+      // Still `pending`: this is the expiry check acting alone, with the status
+      // check unable to cover for it.
+      expect((await invitationRow(invitationId)).status).toBe("pending");
+
+      process.env.SIGNUP_MODE = "invite";
+      const refused = await signUp(email);
+      const stranger = await signUp(fresh());
+
+      expect(refused.status).toBe(403);
+      // Byte-identical to the never-invited refusal. Anything more specific — "your
+      // invitation expired" — confirms to whoever is asking that this address was
+      // once invited, which is the enumeration oracle the generic answer exists to
+      // deny.
+      expect(refused.status).toBe(stranger.status);
+      expect(refused.body).toEqual(stranger.body);
+    });
+
+    /**
+     * MUTATION PIN for the status half, driven entirely through the plugin: revoking
+     * an invitation is the one way an operator takes an invite back, and the address
+     * must stop being able to register the moment they do. The expiry is untouched
+     * and still in the future, so only `eq(status, "pending")` can refuse this.
+     */
+    it("invite refuses a revoked invitation, with the answer a stranger gets", async () => {
+      const { owner, email, invitationId } = await inviteFreshAddress("revoked");
+      await owner
+        .post("/api/auth/organization/cancel-invitation")
+        .send({ invitationId })
+        .expect(200);
+
+      const row = await invitationRow(invitationId);
+      // Read back rather than assumed. The gate keys on the ONE live value,
+      // `pending`, precisely so that it does not have to know how the library
+      // spells the others; this asserts the revoke moved the row off `pending`
+      // without hardcoding which word it moved to.
+      expect(row.status).not.toBe("pending");
+      expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+      process.env.SIGNUP_MODE = "invite";
+      const refused = await signUp(email);
+      const stranger = await signUp(fresh());
+
+      expect(refused.status).toBe(403);
+      expect(refused.body).toEqual(stranger.body);
+    });
+
+    /**
+     * The third dead state, and the one an attacker can reach without any operator
+     * action: an invitation that has already been used. A single-use invite that
+     * stays usable is a shared password with an expiry date.
+     */
+    it("invite refuses an already-accepted invitation", async () => {
+      const { email, invitationId } = await inviteFreshAddress("accepted");
+      const { db } = await import("./db");
+      // Written directly because accepting requires being signed in as the invitee,
+      // and the invitee having no account yet is the whole premise of this gate.
+      await db
+        .update(schema.invitation)
+        .set({ status: "accepted" })
+        .where(eq(schema.invitation.id, invitationId));
+      expect((await invitationRow(invitationId)).expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+      process.env.SIGNUP_MODE = "invite";
+      const refused = await signUp(email);
+      const stranger = await signUp(fresh());
+
+      expect(refused.status).toBe(403);
+      expect(refused.body).toEqual(stranger.body);
     });
 
     // The unset default. By the time this runs the instance certainly has accounts —

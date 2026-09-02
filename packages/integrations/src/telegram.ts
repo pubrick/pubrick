@@ -125,6 +125,22 @@ function truncateSnippet(text: string, maxLength = SNIPPET_MAX_LENGTH): string {
  * fetch error, a proxy's response body, or similar could echo it back. Strip
  * the exact token plus the generic `/bot<...>/` URL shape as defense in depth
  * before a message ever reaches a thrown error.
+ *
+ * TWO passes, and neither is redundant — do not collapse them. The literal pass
+ * is the only one that reaches a token quoted in prose ("credential 123:abc
+ * refused"), which has no slashes for the regex to anchor on; the URL pass is
+ * the only one that reaches a `/bot<...>/` carrying a token that is not this
+ * call's, which the literal pass has nothing to match. Both were unpinned until
+ * 2026-09-02 — the only test that looked like a pin fed them a token inside a
+ * `/bot<token>/` URL, the one shape both passes catch, so either could be
+ * deleted alone and stay green. See the "bot-token redaction" block in
+ * telegram.test.ts, where each half now has a test only it can satisfy.
+ *
+ * What the pass protects: this string becomes the thrown error's `message`, and
+ * that message is persisted verbatim as `adaptations.last_error`
+ * (apps/worker/src/publish/publish.service.ts) and served to a screen by the
+ * api, while `verify()` hands the same string back as its `reason` for the
+ * channel connection test. An unredacted token here is a token in a browser.
  */
 function redactToken(message: string, credentials: TelegramCredentials): string {
   const withoutLiteralToken = credentials.botToken
