@@ -588,6 +588,14 @@ describe.skipIf(!url)("runs e2e", () => {
       .send({ brandId, brief: "x", channelIds: [channelId, channelId] })
       .expect(400);
   });
+  /**
+   * The step whose whole purpose is honesty about what it could not verify.
+   *
+   * Its output is generated, billed and stored on the run — and until the run
+   * receipt learned to render it, nobody could read it. The endpoint is the
+   * first half of that road: `RUN_DETAIL_COLUMNS` is what decides whether the
+   * list ever leaves the database.
+   */
   describe("a run's step output reaches the client", () => {
     it("hands back the fact-checker's own list, unchanged, from a real run row", async () => {
       const agent = await orgAgent();
