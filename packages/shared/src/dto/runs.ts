@@ -138,6 +138,16 @@ export type RunListState = (typeof RUN_LIST_STATES)[number];
  *   status while the job keeps retrying, so the strip can say why a run is
  *   taking so long.
  * - `retries_exhausted` — the queue gave up; no permanent error ever fired.
+ * - `timed_out` — OUR OWN call budget ran out before the provider answered
+ *   (`MODEL_CALL_TIMEOUT_MS`). Deliberately not folded into any of its
+ *   neighbours, and each fold would have been a different lie: `cancelled`
+ *   names an action the user did not take, `rate_limited` blames a provider
+ *   that never said it was busy, and `internal` — what it was reported as
+ *   between the budget landing on 2026-09-02 and this member existing — hides
+ *   the one fact the reader can act on, which is that the call was abandoned
+ *   rather than answered. It is also the only failure whose row may have been
+ *   billed in full without ever being delivered, which is why the ledger writes
+ *   `outcome = 'unknown'` for it and the org's total says "≥".
  * - `too_long_for_channel` — the model could not fit a channel's length limit,
  *   twice. The channel is deliberately not named: a code carries no arguments,
  *   and the receipt's adapter row already shows which channels finished.
@@ -154,6 +164,7 @@ export const RUN_FAILURES = [
   "provider_refused",
   "rate_limited",
   "retries_exhausted",
+  "timed_out",
   "too_long_for_channel",
   "unreadable_key",
 ] as const;

@@ -911,8 +911,10 @@ describe("generateStructured", () => {
       expect(error).toBeInstanceOf(TransientError);
       expect((error as TransientError).message).toBe(TIMED_OUT);
       // Not `cancelled`: nobody withdrew this request, and telling a user their
-      // call was cancelled would name an action they did not take.
-      expect(runFailureOf(error)).toBe("internal");
+      // call was cancelled would name an action they did not take. Not
+      // `internal` either — that is the code for "we do not know", and this
+      // path knows exactly what happened.
+      expect(runFailureOf(error)).toBe("timed_out");
       expect(rows).toHaveLength(1);
     });
 

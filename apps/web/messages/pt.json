@@ -99,7 +99,7 @@
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por uma pessoa"
     },
-    "unknownOutcome": "Foi enviado, mas a plataforma nunca confirmou. Verifique o canal antes de aprovar de novo: aprovar envia outra cópia.",
+    "unknownOutcome": "Foi enviado para {channel}, mas a plataforma nunca confirmou. Verifique esse canal antes de aprovar de novo: aprovar envia outra cópia.",
     "channelsUnavailable": "Não foi possível carregar os nomes dos canais, por isso eles aparecem pelo ID.",
     "tryAgain": "Tentar de novo"
   },
@@ -183,6 +183,7 @@
     "aiTestFailNoStructuredOutput": "O modelo respondeu, mas não conseguiu devolver a saída estruturada que o Pubrick precisa. Tente outro modelo.",
     "aiTestFailRateLimited": "O provedor está limitando as requisições ou está indisponível. Tente novamente em instantes.",
     "aiTestFailRefused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo.",
+    "aiTestFailTimedOut": "A chamada ao modelo esgotou o tempo antes de o provedor responder. Tente novamente ou verifique o identificador de modelo.",
     "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente.",
     "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero."
   },
@@ -224,6 +225,7 @@
       "provider_refused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo em Configurações.",
       "rate_limited": "O provedor está limitando as requisições ou está indisponível. Esta geração será repetida.",
       "retries_exhausted": "Esta geração foi repetida até esgotar as tentativas. Tente novamente.",
+      "timed_out": "A chamada ao modelo esgotou o tempo antes de o provedor responder. Esta geração será repetida.",
       "too_long_for_channel": "O modelo não conseguiu respeitar o limite de tamanho de um dos canais. Tente um brief mais curto.",
       "unreadable_key": "Não foi possível ler a chave de API salva. Salve-a novamente em Configurações."
     },

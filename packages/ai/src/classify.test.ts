@@ -184,7 +184,31 @@ describe("classifyAiError", () => {
       );
 
       expect(classified).toBeInstanceOf(TransientError);
-      expect(runFailureOf(classified)).toBe("internal");
+    });
+
+    it("is tagged `timed_out`, and not borrowed from a neighbour", () => {
+      // The member exists so this arm does not have to pick a least-wrong
+      // synonym. Each of the three it could have borrowed says something false:
+      // `internal` (what it was until this member landed) hides that the call
+      // was abandoned rather than answered, `cancelled` names an action the
+      // user did not take, and `rate_limited` — which is what the Test button's
+      // second copy of this mapping actually reported — blames a provider that
+      // never said it was busy.
+      const classified = classifyAiError(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      );
+
+      expect(runFailureOf(classified)).toBe("timed_out");
+      expect(runFailureOf(classified)).not.toBe("internal");
+      expect(runFailureOf(classified)).not.toBe("cancelled");
+      expect(runFailureOf(classified)).not.toBe("rate_limited");
+    });
+
+    it("does not let a genuinely unattributable error borrow `timed_out` either", () => {
+      // The other direction of the same rule: widening the timeout arm until it
+      // catches everything would restore the lie with the roles swapped.
+      expect(runFailureOf(classifyAiError(new TypeError("boom")))).toBe("internal");
+      expect(runFailureOf(classifyAiError(apiError(429)))).toBe("rate_limited");
     });
 
     it("does not mistake an ordinary error that merely mentions a timeout", () => {

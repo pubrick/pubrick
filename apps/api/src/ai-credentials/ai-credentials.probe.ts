@@ -4,10 +4,11 @@ import {
   classifyAiError,
   generateStructured,
   resolveModel,
+  runFailureOf,
   type UsageRecord,
   type UsageSink,
 } from "@pubrick/ai";
-import type { AiTestFailure } from "@pubrick/shared";
+import type { AiTestFailure, RunFailure } from "@pubrick/shared";
 import { z } from "zod";
 
 /**
@@ -102,6 +103,44 @@ export class AiCredentialProbe {
 }
 
 /**
+ * The Test verdict for every run-failure code, or `null` where this button
+ * cannot say the true thing and something else must decide.
+ *
+ * TOTAL over `RunFailure` on purpose, and that totality is the whole point: a
+ * code added to `RUN_FAILURES` is a compile error here rather than a silent
+ * fall-through to a neighbour. The previous shape — this function re-deriving
+ * the SAME status→code mapping `classifyAiError` had already made — is exactly
+ * how `timed_out` came to be reported as `rate_limited`: one copy of a mapping
+ * grew an arm and the other did not, and nothing failed.
+ *
+ * The `null`s are decisions, not omissions:
+ * - `cancelled` — nothing cancels a probe; no signal is passed to it.
+ * - `every_channel_deleted`, `retries_exhausted`, `too_long_for_channel` — a
+ *   run's failures, reachable only from the worker's pipeline.
+ * - `no_api_key` — a stored key that decrypts to nothing. `AI_TEST_FAILURES`
+ *   has no member for it and inventing one would be a member no screen can
+ *   reach: the upsert schema requires eight characters and the controller 404s
+ *   when there is no row at all.
+ * - `internal` — the honest "we do not know", which is precisely when the
+ *   meter, below, knows more than the code does.
+ */
+const TEST_FAILURE_FOR_RUN_FAILURE: Record<RunFailure, AiTestFailure | null> = {
+  cancelled: null,
+  every_channel_deleted: null,
+  internal: null,
+  invalid_key: "invalid_key",
+  model_not_found: "model_not_found",
+  no_api_key: null,
+  no_structured_output: "no_structured_output",
+  provider_refused: "refused",
+  rate_limited: "rate_limited",
+  retries_exhausted: null,
+  timed_out: "timed_out",
+  too_long_for_channel: null,
+  unreadable_key: "unreadable_key",
+};
+
+/**
  * Turn a failure into one of a closed set of codes.
  *
  * The provider's own words are deliberately dropped on the floor. They are the
@@ -113,6 +152,21 @@ export class AiCredentialProbe {
  * turns the code into a sentence, in four languages — which the provider's
  * English could never do either.
  *
+ * Three sources, in falling order of how much each one knows:
+ *
+ * 1. THE TAG. `classifyAiError` already decided what this error is, and every
+ *    error the probe's own call path can throw carries that decision. Reading
+ *    it is what keeps the two closed sets in step; re-deciding it here is what
+ *    let them drift apart.
+ * 2. THE STATUS. Its domain is an error that arrived already classified but
+ *    NOT tagged — a `PermanentError` built by something other than
+ *    `classifyAiError`, which that function returns untouched. Narrow, and kept
+ *    because the alternative is calling a 401 a refusal.
+ * 3. THE METER. `internal` means we could not attribute the failure; the token
+ *    counts still can. If any round trip reported tokens the provider DID
+ *    answer, so what failed was the answer's SHAPE — precisely the thing this
+ *    button exists to detect. Never error prose: a model can write prose.
+ *
  * `.name` rather than `instanceof`: the marker survives duplicate copies of
  * `@pubrick/shared` in the tree, which is the same reason the SDK's own
  * `APICallError.isInstance` exists.
@@ -122,19 +176,22 @@ export function classifyProbeFailure(
   records: readonly UsageRecord[],
 ): AiTestFailure {
   const classified = classifyAiError(error);
-  if (classified.name === "TransientError") return "rate_limited";
 
-  const status = (classified as { code?: number }).code;
-  if (status === 401 || status === 403) return "invalid_key";
-  if (status === 404) return "model_not_found";
-  if (status !== undefined) return "refused";
+  const tagged = runFailureOf(classified);
+  if (tagged !== undefined) {
+    const mapped = TEST_FAILURE_FOR_RUN_FAILURE[tagged];
+    if (mapped !== null) return mapped;
+  } else {
+    // Untagged. `TransientError` has no status to read, and the only transient
+    // this function can be handed without a tag is a retryable provider error.
+    if (classified.name === "TransientError") return "rate_limited";
 
-  // No HTTP status at all: the throw came from our own structured-output layer
-  // (a schema violation twice over, or a tool call where text was required)
-  // rather than from the transport. Distinguished by the meter, never by error
-  // prose: if any round trip reported tokens the provider DID answer, so what
-  // failed was the answer's shape — which is precisely the thing this button
-  // exists to detect. No tokens means nothing ever got that far.
+    const status = (classified as { code?: number }).code;
+    if (status === 401 || status === 403) return "invalid_key";
+    if (status === 404) return "model_not_found";
+    if (status !== undefined) return "refused";
+  }
+
   const providerAnswered = records.some((record) => record.inputTokens + record.outputTokens > 0);
   return providerAnswered ? "no_structured_output" : "refused";
 }

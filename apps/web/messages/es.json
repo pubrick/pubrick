@@ -99,7 +99,7 @@
       "aiAdapted": "Adaptado por IA",
       "human": "Escrito por una persona"
     },
-    "unknownOutcome": "Se envió, pero la plataforma nunca lo confirmó. Revisa el canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
+    "unknownOutcome": "Se envió a {channel}, pero la plataforma nunca lo confirmó. Revisa ese canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
     "channelsUnavailable": "No se pudieron cargar los nombres de los canales, así que se muestran por ID.",
     "tryAgain": "Reintentar"
   },
@@ -183,6 +183,7 @@
     "aiTestFailNoStructuredOutput": "El modelo respondió, pero no pudo devolver la salida estructurada que Pubrick necesita. Prueba con otro modelo.",
     "aiTestFailRateLimited": "El proveedor está limitando las peticiones o no está disponible. Inténtalo de nuevo en un momento.",
     "aiTestFailRefused": "El proveedor rechazó la petición. Revisa la clave y el identificador de modelo.",
+    "aiTestFailTimedOut": "La llamada al modelo se quedó sin tiempo antes de que el proveedor respondiera. Inténtalo de nuevo o revisa el identificador de modelo.",
     "aiTestFailUnreadableKey": "No se pudo leer la clave guardada. Vuelve a guardarla.",
     "aiSpendError": "No se pudo cargar el gasto hasta ahora: esto no es un total de cero."
   },
@@ -224,6 +225,7 @@
       "provider_refused": "El proveedor rechazó la petición. Revisa la clave y el identificador de modelo en Ajustes.",
       "rate_limited": "El proveedor está limitando las peticiones o no está disponible. Se reintentará esta generación.",
       "retries_exhausted": "Se reintentó esta generación hasta agotar los intentos. Inténtalo de nuevo.",
+      "timed_out": "La llamada al modelo se quedó sin tiempo antes de que el proveedor respondiera. Se reintentará esta generación.",
       "too_long_for_channel": "El modelo no logró ajustarse al límite de longitud de uno de los canales. Prueba con un brief más corto.",
       "unreadable_key": "No se pudo leer la clave de API guardada. Vuelve a guardarla en Ajustes."
     },

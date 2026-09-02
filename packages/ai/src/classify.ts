@@ -91,10 +91,15 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
   // row with `outcome = 'unknown'`, so each attempt's possible charge is
   // counted and the org's total says "≥".
   //
-  // `internal` rather than a code of its own: the closed set has no member for
-  // "we do not know", and `internal` is the documented generic for exactly that
-  // — the bound that fired is ours, not the provider's.
-  if (isTimeoutError(cause)) return withRunFailure(new TransientError(TIMED_OUT), "internal");
+  // `timed_out`, which is a member of both closed sets precisely so that this
+  // arm does not have to borrow one. It was `internal` for the few hours
+  // between the budget landing and the code existing, and `internal` is the
+  // generic for "we do not know" — but this branch knows exactly what happened,
+  // and the Test button's copy of the mapping turned the same borrowing into an
+  // outright lie ("the provider is rate-limiting"). A closed set that cannot say
+  // the true thing is a set with a member missing, not a licence to pick the
+  // least-wrong neighbour.
+  if (isTimeoutError(cause)) return withRunFailure(new TransientError(TIMED_OUT), "timed_out");
 
   if (APICallError.isInstance(cause) && cause.isRetryable === true) {
     return withRunFailure(

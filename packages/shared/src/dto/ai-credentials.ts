@@ -67,6 +67,15 @@ export type AiCredentialPublic = {
  * `unreadable_key` is the stored blob failing to decrypt — the key predates a
  * rotated `APP_ENCRYPTION_KEY`, or the row was tampered with. It is a verdict
  * about the key, so it belongs here rather than in a 500 with a crypto stack.
+ *
+ * `timed_out` is our own two-minute call budget expiring before the provider
+ * answered (`MODEL_CALL_TIMEOUT_MS`). It exists as a member because the nearest
+ * alternative was a lie: with only the six codes above, a timed-out Test was
+ * reported as `rate_limited` — telling the user the provider was busy when the
+ * provider had said nothing at all, and pointing them at a wait instead of at a
+ * model or a network that is not answering. It mirrors `RUN_FAILURES`'
+ * `timed_out` one-for-one, which is what `TEST_FAILURE_FOR_RUN_FAILURE` in
+ * `ai-credentials.probe.ts` now makes structural rather than remembered.
  */
 export const AI_TEST_FAILURES = [
   "invalid_key",
@@ -74,6 +83,7 @@ export const AI_TEST_FAILURES = [
   "no_structured_output",
   "rate_limited",
   "refused",
+  "timed_out",
   "unreadable_key",
 ] as const;
 export type AiTestFailure = (typeof AI_TEST_FAILURES)[number];

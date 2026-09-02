@@ -42,6 +42,7 @@ const TEST_FAILURE_KEYS: Record<AiTestFailure, string> = {
   no_structured_output: "aiTestFailNoStructuredOutput",
   rate_limited: "aiTestFailRateLimited",
   refused: "aiTestFailRefused",
+  timed_out: "aiTestFailTimedOut",
   unreadable_key: "aiTestFailUnreadableKey",
 };
 

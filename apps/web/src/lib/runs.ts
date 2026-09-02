@@ -191,6 +191,7 @@ const RUN_FAILURE_KEYS: Record<RunFailure, string> = {
   provider_refused: "failure.provider_refused",
   rate_limited: "failure.rate_limited",
   retries_exhausted: "failure.retries_exhausted",
+  timed_out: "failure.timed_out",
   too_long_for_channel: "failure.too_long_for_channel",
   unreadable_key: "failure.unreadable_key",
 };

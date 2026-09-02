@@ -200,6 +200,30 @@ describe("toUsageRecord", () => {
     expect(record.costSource).toBe("provider_reported");
   });
 
+  it("falls back to the Google table when OpenRouter reported no cost for a google/ id", () => {
+    // OpenRouter's cost field is optional and its absence used to mean the row
+    // was unpriced for ever — even though the id names a Google model this
+    // table knows the published rate for. The report still wins whenever there
+    // is one (the test above); this is only for when there is not.
+    const record = toUsageRecord(
+      { ...call, modelId: "google/gemini-3.7-flash" },
+      { provider: "openrouter", attempt: 1, status: "ok", at },
+    );
+    expect(record.costUsd).toBe(0.0015);
+    expect(record.costSource).toBe("price_table");
+  });
+
+  it("still records unknown for an OpenRouter id this table cannot price", () => {
+    for (const modelId of ["anthropic/claude-opus-5", "google/gemini-3.7-flash:free"]) {
+      const record = toUsageRecord(
+        { ...call, modelId },
+        { provider: "openrouter", attempt: 1, status: "ok", at },
+      );
+      expect(record.costUsd).toBeNull();
+      expect(record.costSource).toBe("unknown");
+    }
+  });
+
   it("prices a two-token call rather than rounding it away", () => {
     const record = toUsageRecord(
       {

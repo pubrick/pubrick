@@ -31,10 +31,16 @@ export type AiCredential = {
 /**
  * The model used when neither the call nor the credential names one.
  *
- * Gemini 3.7 Flash is the house default: it is the tier the price table knows,
- * and it does structured output. The OpenRouter default routes to the same
- * model through their catalogue so a user switching providers gets the same
- * behaviour rather than a surprise.
+ * Gemini 3.7 Flash is the house default: it is fast, cheap, and it does
+ * structured output. The OpenRouter default routes to the same model through
+ * their catalogue so a user switching providers gets the same behaviour rather
+ * than a surprise.
+ *
+ * It is no longer the only id the price table can price — that changed on
+ * 2026-09-02, when the table started matching by model FAMILY — but a model the
+ * table does not know still costs an org a permanent "cost not reported" on
+ * every one of its calls, so `pricing.ts` is where a new default belongs
+ * first.
  */
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
   google: "gemini-3.7-flash",

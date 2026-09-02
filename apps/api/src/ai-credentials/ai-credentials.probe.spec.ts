@@ -1,6 +1,15 @@
-import type { AiCredential, UsageRecord, UsageSink } from "@pubrick/ai";
+import {
+  type AiCredential,
+  generateStructured,
+  type UsageRecord,
+  type UsageSink,
+  withRunFailure,
+} from "@pubrick/ai";
 import { PermanentError, TransientError } from "@pubrick/shared";
+import { APICallError } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { AiCredentialProbe } from "./ai-credentials.probe";
 
 /**
@@ -189,5 +198,131 @@ describe("AiCredentialProbe — every physical call is handed back to be billed"
     ]).run(credential);
 
     expect(outcome.records).toHaveLength(1);
+  });
+});
+
+/**
+ * A provider that has stopped talking: it never answers, and the only thing
+ * that can end the call is the signal it was handed. Rejecting with the
+ * signal's own `reason` is what a real `fetch` does, and it is what lets
+ * `classifyAiError` tell "our budget ran out" from "someone pressed stop".
+ */
+function hangingModel() {
+  return new MockLanguageModelV4({
+    modelId: "gemini-3.7-flash",
+    doGenerate: async (options) =>
+      await new Promise((_resolve, reject) => {
+        options.abortSignal?.addEventListener("abort", () => {
+          reject(options.abortSignal?.reason);
+        });
+      }),
+  });
+}
+
+/**
+ * The real `generateStructured`, on a model that never answers.
+ *
+ * The ONE production line replaced is `resolveModel` — everything after it is
+ * the shipping code: the composite abort signal, the budget's `TimeoutError`,
+ * `classifyAiError`'s tag, `run`'s catch, and `classifyProbeFailure`'s lookup.
+ * Stubbing the thrown error instead would test this file's idea of what a
+ * timeout looks like, which is precisely the kind of second copy that let a
+ * timeout be reported as a rate limit in the first place.
+ */
+class TimingOutProbe extends AiCredentialProbe {
+  protected override async call(_credential: AiCredential, onUsage: UsageSink): Promise<string> {
+    await generateStructured({
+      model: hangingModel(),
+      provider: "google",
+      schema: z.object({ ok: z.literal(true) }),
+      instructions: "irrelevant",
+      prompt: "Say ok",
+      onUsage,
+      maxRetries: 0,
+      timeoutMs: 30,
+    });
+    return "gemini-3.7-flash";
+  }
+}
+
+describe("AiCredentialProbe — a call that ran out of time", () => {
+  it("says the call timed out, end to end, and never that the provider was busy", async () => {
+    const outcome = await new TimingOutProbe().run(credential);
+
+    // The bug this closes: the budget landed with no member meaning "ran out of
+    // time" in either closed set, so the Test button reported `rate_limited` —
+    // "The provider is rate-limiting or temporarily unavailable. Try again
+    // shortly." The provider said nothing at all, and waiting is not the fix.
+    expect(outcome).toMatchObject({ ok: false, reason: "timed_out" });
+    expect(outcome).not.toMatchObject({ reason: "rate_limited" });
+  });
+
+  it("still hands back the round trip it gave up on, because it may have been billed", async () => {
+    // The provider can have finished generating and been billing while we hung
+    // up. The row carries no tokens and no price, so the org's total has to say
+    // "≥" rather than quietly stay an estimate.
+    const outcome = await new TimingOutProbe().run(credential);
+
+    expect(outcome.records).toHaveLength(1);
+    expect(outcome.records[0]).toMatchObject({
+      status: "errored",
+      costUsd: null,
+      costSource: "unknown",
+      outcome: "unknown",
+    });
+  });
+});
+
+describe("AiCredentialProbe — the verdict is read from the classifier's tag", () => {
+  /**
+   * The mapping used to be re-derived here from the HTTP status, in parallel
+   * with `classifyAiError`'s own. Two copies of one mapping is how `timed_out`
+   * arrived in `RUN_FAILURES` and never reached this file. These four throw
+   * what the SDK really throws and let the real classifier tag it, so the tag
+   * is what the assertions observe.
+   */
+  function apiError(statusCode: number) {
+    return new APICallError({
+      message: `status ${statusCode}`,
+      url: "https://example.invalid/v1/models",
+      requestBodyValues: {},
+      statusCode,
+    });
+  }
+
+  it("trusts the tag over the meter when the two could disagree", () => {
+    // `generateStructured` tags its own schema failures, and that tag is read
+    // before the token-counting fallback. The arm is load-bearing rather than
+    // belt-and-braces: a repair attempt that threw before the provider reported
+    // usage leaves ZERO metered tokens, and the meter alone would then call a
+    // schema failure a refusal — "the provider refused the request, check your
+    // key" told to someone whose key is fine and whose model cannot follow a
+    // schema.
+    const tagged = withRunFailure(
+      new PermanentError(
+        "the model returned output that does not match the required schema, twice",
+      ),
+      "no_structured_output",
+    );
+
+    return probeThatThrows(tagged, [
+      record({ inputTokens: 0, outputTokens: 0, costUsd: null, costSource: "unknown" }),
+    ])
+      .run(credential)
+      .then((outcome) => {
+        expect(outcome).toMatchObject({ ok: false, reason: "no_structured_output" });
+      });
+  });
+
+  it.each([
+    [401, "invalid_key"],
+    [403, "invalid_key"],
+    [404, "model_not_found"],
+    [400, "refused"],
+    [429, "rate_limited"],
+  ] as const)("maps a real %i the way the run pipeline does: %s", async (status, reason) => {
+    const outcome = await probeThatThrows(apiError(status)).run(credential);
+
+    expect(outcome).toMatchObject({ ok: false, reason });
   });
 });

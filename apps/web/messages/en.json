@@ -99,7 +99,7 @@
       "aiAdapted": "AI-adapted",
       "human": "Human-written"
     },
-    "unknownOutcome": "Sent, but the platform never confirmed it. Check the channel before approving again — approving sends another copy.",
+    "unknownOutcome": "Sent to {channel}, but the platform never confirmed it. Check that channel before approving again — approving sends another copy.",
     "channelsUnavailable": "Channel names could not be loaded, so channels are shown by ID.",
     "tryAgain": "Try again"
   },
@@ -183,6 +183,7 @@
     "aiTestFailNoStructuredOutput": "The model answered, but could not return the structured output Pubrick needs. Try another model.",
     "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",
     "aiTestFailRefused": "The provider refused the request. Check the key and the model id.",
+    "aiTestFailTimedOut": "The model call ran out of time before the provider answered. Try again, or check the model id.",
     "aiTestFailUnreadableKey": "The stored key could not be read. Save it again.",
     "aiSpendError": "Spend so far could not be loaded — this is not a total of zero."
   },
@@ -224,6 +225,7 @@
       "provider_refused": "The provider refused the request. Check the key and the model id in Settings.",
       "rate_limited": "The provider is rate-limiting or temporarily unavailable. This run will be retried.",
       "retries_exhausted": "This run was retried until its attempts ran out. Try again.",
+      "timed_out": "The model call ran out of time before the provider answered. This run will be retried.",
       "too_long_for_channel": "The model could not fit one of the channels' length limits. Try a shorter brief.",
       "unreadable_key": "The stored API key could not be read. Save it again in Settings."
     },
