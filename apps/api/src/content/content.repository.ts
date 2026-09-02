@@ -751,8 +751,9 @@ export class ContentRepository {
     userId: string,
   ) {
     return db.transaction(async (tx) => {
-      // `adaptations` before `content_items` — the lock order every other
-      // writer of this pair uses (see `lockAdaptations`). `body` comes back for
+      // `adaptations` before `content_items` — the product's one lock order,
+      // written down in `docs/lock-order.md`, which this file is the fourth
+      // site of. `body` comes back for
       // the same reason `requireEditableItem` returns the item's: it is the
       // text this save is compared against, read under the lock that makes the
       // comparison hold until the write lands.
