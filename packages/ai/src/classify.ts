@@ -1,4 +1,4 @@
-import { PermanentError, TransientError } from "@pubrick/shared";
+import { isRunFailure, PermanentError, type RunFailure, TransientError } from "@pubrick/shared";
 import { APICallError, RetryError } from "ai";
 
 /**
@@ -8,8 +8,38 @@ import { APICallError, RetryError } from "ai";
 const MAX_UNWRAP_DEPTH = 5;
 
 /**
+ * The property a classified error carries its closed failure code on.
+ *
+ * A field rather than the message, because the two have different audiences.
+ * The CODE is what the worker stores and a browser is shown, in four languages;
+ * the MESSAGE stays the provider's own sentence, which is the most informative
+ * thing available and is also where a key can hide — it belongs in a log, and
+ * `redactSecrets` is what makes it fit to appear even there.
+ *
+ * Read through `runFailureOf`, which re-validates against `RUN_FAILURES` rather
+ * than trusting the property: an error can cross a package boundary from a
+ * duplicate copy of `@pubrick/ai` in the tree, and the same marker-symbol
+ * reasoning that makes us prefer `APICallError.isInstance` over `instanceof`
+ * applies to a value we merely hung on an object.
+ */
+type FailureCarrier = { runFailure?: unknown };
+
+/** Tag a classified error with the code the run row will store. */
+export function withRunFailure<E extends Error>(error: E, failure: RunFailure): E {
+  (error as E & FailureCarrier).runFailure = failure;
+  return error;
+}
+
+/** The code an error was tagged with, if it is one of ours and one of the codes. */
+export function runFailureOf(error: unknown): RunFailure | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const tagged = (error as FailureCarrier).runFailure;
+  return isRunFailure(tagged) ? tagged : undefined;
+}
+
+/**
  * Reduce an unknown thrown value to the two error classes the job queue
- * understands.
+ * understands, TAGGED with the closed code that reaches the user.
  *
  * The decision is the SDK's own, not a status-code list of ours:
  * `APICallError.isInstance(e) && e.isRetryable === true`. `isRetryable`
@@ -22,40 +52,99 @@ const MAX_UNWRAP_DEPTH = 5;
  *
  * Everything else is permanent — schema violations, bad prompts,
  * `LoadAPIKeyError`, a provider 401. Retrying those spends money to fail again.
+ *
+ * The status → code mapping is deliberately the SAME one `classifyProbeFailure`
+ * makes for the Test button (401/403 invalid, 404 unknown model, anything else
+ * with a status refused), so a key that fails a run and a key that fails the
+ * Test are described to the user in the same words.
  */
 export function classifyAiError(error: unknown): PermanentError | TransientError {
   // Already classified upstream (the repair wrapper throws PermanentError).
+  // It carries its own tag; re-tagging here would overwrite what the throw site
+  // knew with what this function can only guess.
   if (error instanceof PermanentError || error instanceof TransientError) return error;
 
   const cause = unwrapRetry(error);
 
-  // Permanent, and a sentence of its own. A cancelled call is not a failure the
+  // Permanent, and a code of its own. A cancelled call is not a failure the
   // provider had anything to do with, so it is not an `APICallError` and used
   // to fall through to the bare branch below — which would show a user the
   // DOM's own words, "This operation was aborted": true, and about nothing they
   // recognise as having done. Permanent rather than transient because nobody is
   // waiting for the answer any more; a retry would spend money on a result the
   // caller has already withdrawn its request for.
-  if (isAbortError(cause)) return new PermanentError(CANCELLED);
+  if (isAbortError(cause)) return withRunFailure(new PermanentError(CANCELLED), "cancelled");
 
   if (APICallError.isInstance(cause) && cause.isRetryable === true) {
-    return new TransientError(cause.message, retryAfterSeconds(cause.responseHeaders));
+    return withRunFailure(
+      new TransientError(redactSecrets(cause.message), retryAfterSeconds(cause.responseHeaders)),
+      "rate_limited",
+    );
   }
 
   if (APICallError.isInstance(cause)) {
-    return new PermanentError(cause.message, cause.statusCode);
+    return withRunFailure(
+      new PermanentError(redactSecrets(cause.message), cause.statusCode),
+      // No status at all still reads as `provider_refused` rather than
+      // `internal`: the call failed at the provider boundary, and "check the key
+      // and the model id" remains the useful thing to say about it.
+      codeForStatus(cause.statusCode),
+    );
   }
 
-  return new PermanentError(messageOf(cause));
+  // Not the provider's doing as far as anything here can tell — a `TypeError`
+  // in our own code, a dropped socket, a thrown string. `internal` is the
+  // honest answer, and the message goes to the log for whoever has to fix it.
+  return withRunFailure(new PermanentError(redactSecrets(messageOf(cause))), "internal");
+}
+
+function codeForStatus(statusCode: number | undefined): RunFailure {
+  if (statusCode === 401 || statusCode === 403) return "invalid_key";
+  if (statusCode === 404) return "model_not_found";
+  return "provider_refused";
 }
 
 /**
- * What a cancelled call is reported as.
- *
- * The worker writes this into a run's `error` column and the API returns it, so
- * it is the sentence a person reads.
+ * What a cancelled call is reported as, in the log. The user is shown the
+ * `cancelled` code's own translated sentence instead.
  */
 const CANCELLED = "the model call was cancelled before it finished";
+
+/**
+ * Take the secrets out of a provider's own sentence before it reaches a log.
+ *
+ * The prose is kept — it is what an operator needs — but a provider decides its
+ * wording, and providers put credentials in it: OpenAI-style bodies quote the
+ * submitted key back, and Google's errors quote the request URL, which carries
+ * `?key=`. `secret`, when the caller has it in scope, removes that exact string;
+ * the patterns are the defence for every case where it is not in scope (a key
+ * belonging to another org, a token in a proxy's body, a key a model wrote into
+ * its own output).
+ *
+ * The literal-string half is `redactToken`'s (`@pubrick/integrations`, for
+ * Telegram's bot token) three lines exactly. The pattern half is not shareable
+ * as written — a bot token rides in a URL PATH (`/bot<token>/`) and an AI key in
+ * a query parameter or an `Authorization` header — so the two live apart until
+ * one of them grows a second caller; neither may grow a copy of the other.
+ */
+export function redactSecrets(message: string, secret?: string): string {
+  const withoutLiteral =
+    secret !== undefined && secret.trim() !== "" ? message.split(secret).join("***") : message;
+
+  return (
+    withoutLiteral
+      // `?key=…` / `&key=…` — Google puts the API key here, and its own error
+      // bodies quote the request URL back at us.
+      .replace(/([?&]key=)[^&\s"'`]+/gi, "$1***")
+      // `Authorization: Bearer …` — OpenRouter and most OpenAI-compatible
+      // providers.
+      .replace(/(\bBearer\s+)[\w.\-~+/=]+/gi, "$1***")
+      // The two key shapes our two supported providers actually issue, for the
+      // case where the key is in the prose rather than in a URL or a header.
+      .replace(/\bsk-[\w-]{8,}/gi, "sk-***")
+      .replace(/\bAIza[\w-]{10,}/g, "AIza***")
+  );
+}
 
 /**
  * Did this end because someone cancelled it?

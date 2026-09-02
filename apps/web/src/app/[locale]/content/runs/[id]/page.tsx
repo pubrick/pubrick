@@ -15,6 +15,7 @@ import {
   RUN_BADGE_STATUS,
   RUN_STEP_BADGE_STATUS,
   type RunDetail,
+  runFailureMessage,
   runStepStates,
 } from "@/lib/runs";
 
@@ -73,6 +74,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   }
 
   const error = actionError ?? (pollError ? errorMessage(pollError, t("genericError")) : null);
+  // Our sentence for the run's failure code, in the reader's language. Never
+  // the provider's own words: those are English, and they are where a
+  // submitted API key gets quoted back at whoever is looking at this page.
+  const failure = runFailureMessage(t, run?.errorCode ?? null);
   const draftHref = run?.contentItemId ? `/${locale}/content/${run.contentItemId}` : null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
@@ -121,12 +126,12 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             <p className="whitespace-pre-wrap text-sm text-fg">{run.input.text}</p>
           </Card>
 
-          {/* The run's own error, verbatim. A failed run produces no content
-              item, so this sentence is the only place the failure is explained
-              at all — collapsing it into a generic apology would delete it. */}
-          {run.error && (
+          {/* A failed run produces no content item, so this sentence is the
+              only place the failure is explained at all — collapsing it into a
+              generic apology would delete it. */}
+          {failure && (
             <p role="alert" className="mb-6 text-sm text-danger">
-              {run.error}
+              {failure}
             </p>
           )}
 

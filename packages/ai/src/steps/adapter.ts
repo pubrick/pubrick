@@ -4,6 +4,7 @@ import {
   adaptationLimit as platformAdaptationLimit,
 } from "@pubrick/shared";
 import { z } from "zod";
+import { withRunFailure } from "../classify.js";
 import { defineStep } from "./prompt.js";
 import type { Step } from "./types.js";
 
@@ -26,7 +27,13 @@ export function adaptationLimit(platform: Platform): number {
   // The editor's counter makes the opposite call on the same input — there the
   // worst case is a generous denominator, not money spent on unusable text.
   if (limit === undefined) {
-    throw new PermanentError(`no text limit is known for platform "${String(platform)}"`);
+    // `internal`, not a provider code: a channel row carrying a platform this
+    // build has no limit for is our bug or our migration's, and the code the
+    // user is shown must not blame the model for it.
+    throw withRunFailure(
+      new PermanentError(`no text limit is known for platform "${String(platform)}"`),
+      "internal",
+    );
   }
   return limit;
 }
@@ -97,8 +104,11 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
     const detail = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "channel"}: ${issue.message}`)
       .join("; ");
-    throw new PermanentError(
-      `cannot build an adapter for platform "${String(channel?.platform)}": ${detail}`,
+    throw withRunFailure(
+      new PermanentError(
+        `cannot build an adapter for platform "${String(channel?.platform)}": ${detail}`,
+      ),
+      "internal",
     );
   }
   const { id, name, platform } = parsed.data;
@@ -135,8 +145,14 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
         return await step.run(ctx, input);
       } catch (error) {
         if (isBodyTooLong(error)) {
-          throw new PermanentError(
-            `the model could not fit ${name}'s limit of ${limit} characters, twice`,
+          throw withRunFailure(
+            new PermanentError(
+              `the model could not fit ${name}'s limit of ${limit} characters, twice`,
+            ),
+            // Its own code rather than `no_structured_output`: the length rule
+            // is the one schema rule a HUMAN can do something about — shorten
+            // the brief, or drop the channel with the tightest limit.
+            "too_long_for_channel",
           );
         }
         throw error;

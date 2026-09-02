@@ -259,7 +259,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     expect(job.state).toBe("completed");
     const run = await runRow(seeded.runId);
     expect(run?.status).toBe("failed");
-    expect(run?.error).toContain("does not match the required schema");
+    expect(run?.error).toBe("no_structured_output");
     expect(run?.contentItemId).toBeNull();
   }, 40_000);
 
@@ -288,7 +288,10 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     // Still running: only a PERMANENT error may write a terminal status, and the
     // retry will resume from the researcher's checkpoint rather than re-buy it.
     expect(run?.status).toBe("running");
-    expect(run?.error).toContain("service unavailable");
+    // The code, not the provider's sentence: `pipeline_runs.error` is handed to
+    // a browser, and "service unavailable" is the polite end of what a provider
+    // can put in that string.
+    expect(run?.error).toBe("rate_limited");
     expect(Object.keys(run?.steps ?? {})).toEqual(["researcher"]);
 
     // Leave nothing armed: retryDelay is 60s, well past this file's lifetime,

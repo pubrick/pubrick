@@ -99,3 +99,64 @@ export type RunCreate = z.infer<typeof runCreateSchema>;
  */
 export const RUN_LIST_STATES = ["open", "all"] as const;
 export type RunListState = (typeof RUN_LIST_STATES)[number];
+
+/**
+ * Why a run failed — a closed set of codes, never a sentence.
+ *
+ * This is `AI_TEST_FAILURES`' rule applied to the other place a provider can
+ * talk to a browser, and it is the same rule for the same two reasons. A
+ * provider's own error text is NEVER passed through: OpenAI-style bodies quote
+ * the submitted credential back ("Incorrect API key provided: sk-live-…") and
+ * Google's quota errors quote the request URL, which carries `?key=`. The
+ * worker writes this value into `pipeline_runs.error`, `RUN_COLUMNS` returns it
+ * on the run list and the run detail, and the queue strip and the run receipt
+ * print it — so the only safe contract is one that cannot express a secret
+ * however the provider words its 401. A code is also the only way those two
+ * screens can speak the four languages this product ships; the provider's
+ * English never could.
+ *
+ * The prose is not lost, it is moved: the worker logs the provider's own
+ * sentence, redacted, where an operator can read it and a browser cannot.
+ *
+ * Members, and what each one is for:
+ * - `cancelled` — the model call was abandoned before it answered.
+ * - `every_channel_deleted` — every channel the run was started for is gone.
+ * - `internal` — a failure of ours, not the provider's: a dropped database
+ *   connection, a run input this worker cannot execute, a bug. The generic
+ *   member on purpose, so an unrecognised failure degrades to "we do not know"
+ *   rather than to a sentence that guesses.
+ * - `invalid_key` — the provider rejected the key (401/403).
+ * - `model_not_found` — the provider does not know the configured model (404).
+ * - `no_api_key` — the org has no AI key stored at all.
+ * - `no_structured_output` — the model answered, twice, with something that is
+ *   not the structure the step requires.
+ * - `provider_refused` — any other refusal that carries an HTTP status.
+ * - `rate_limited` — a retryable provider error. Written WITHOUT a terminal
+ *   status while the job keeps retrying, so the strip can say why a run is
+ *   taking so long.
+ * - `retries_exhausted` — the queue gave up; no permanent error ever fired.
+ * - `too_long_for_channel` — the model could not fit a channel's length limit,
+ *   twice. The channel is deliberately not named: a code carries no arguments,
+ *   and the receipt's adapter row already shows which channels finished.
+ * - `unreadable_key` — the stored key would not decrypt.
+ */
+export const RUN_FAILURES = [
+  "cancelled",
+  "every_channel_deleted",
+  "internal",
+  "invalid_key",
+  "model_not_found",
+  "no_api_key",
+  "no_structured_output",
+  "provider_refused",
+  "rate_limited",
+  "retries_exhausted",
+  "too_long_for_channel",
+  "unreadable_key",
+] as const;
+export type RunFailure = (typeof RUN_FAILURES)[number];
+
+/** Is this string one of the codes? Guards a value read back out of the database. */
+export function isRunFailure(value: unknown): value is RunFailure {
+  return typeof value === "string" && (RUN_FAILURES as readonly string[]).includes(value);
+}

@@ -30,7 +30,7 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     status: "running" as RunStatus,
     currentStep: "researcher",
     contentItemId: null,
-    error: null,
+    errorCode: null,
     dismissedAt: null,
     steps: {},
     createdAt: "2026-08-28T10:00:00.000Z",
@@ -103,14 +103,16 @@ describe("the step checklist", () => {
         status: "failed",
         currentStep: "writer",
         steps: { researcher: { status: "succeeded" } },
-        error: "The model could not fit Telegram's limit",
+        errorCode: "too_long_for_channel",
       }),
     });
 
     await renderRun();
 
+    // Our sentence for the code, in the reader's language — the provider's own
+    // words never get this far, because they are where an API key gets quoted.
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("The model could not fit Telegram's limit");
+    expect(alert).toHaveTextContent(en.Runs.failure.too_long_for_channel);
 
     const rows = screen.getAllByRole("listitem");
     const writerRow = rows.find((row) => row.textContent?.startsWith(en.Runs.step.writer));
@@ -127,7 +129,7 @@ describe("a run that is over does not claim anything is still coming", () => {
         status: "failed",
         currentStep: "writer",
         steps: { researcher: { status: "succeeded" } },
-        error: "provider refused",
+        errorCode: "provider_refused",
       }),
     });
 
@@ -159,7 +161,7 @@ describe("a run that is over does not claim anything is still coming", () => {
           editor: { status: "succeeded" },
           factcheck: { status: "succeeded" },
         },
-        error: "the model could not fit Telegram's limit",
+        errorCode: "too_long_for_channel",
       }),
     });
 

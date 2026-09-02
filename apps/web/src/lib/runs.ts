@@ -1,3 +1,4 @@
+import { isRunFailure, type RunFailure } from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
 /**
@@ -77,7 +78,15 @@ export type Run = {
   status: RunStatus;
   currentStep: string | null;
   contentItemId: string | null;
-  error: string | null;
+  /**
+   * Why it failed, as a code — never a sentence, and never the provider's own
+   * words (those quote the submitted API key back). Typed `string | null`
+   * rather than `RunFailure | null` because it arrives over the wire: rows
+   * written before the codes existed still hold prose, and a type assertion
+   * would only hide that from `runFailureMessage`, which is the thing that
+   * actually decides what a reader sees.
+   */
+  errorCode: string | null;
   dismissedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -163,4 +172,42 @@ function stepState(
   // Nothing more will happen to this run, so a step with no checkpoint never
   // ran and never will — it is not waiting for anything.
   return isTerminalRunStatus(run.status) ? "skipped" : "pending";
+}
+
+/**
+ * A message key for every failure the API can report — the same total `Record`
+ * the settings screen keeps for `AI_TEST_FAILURES`, and for the same reason: a
+ * code added upstream without a sentence here is a COMPILE error, not a key
+ * path rendered at a user in four languages.
+ */
+const RUN_FAILURE_KEYS: Record<RunFailure, string> = {
+  cancelled: "failure.cancelled",
+  every_channel_deleted: "failure.every_channel_deleted",
+  internal: "failure.internal",
+  invalid_key: "failure.invalid_key",
+  model_not_found: "failure.model_not_found",
+  no_api_key: "failure.no_api_key",
+  no_structured_output: "failure.no_structured_output",
+  provider_refused: "failure.provider_refused",
+  rate_limited: "failure.rate_limited",
+  retries_exhausted: "failure.retries_exhausted",
+  too_long_for_channel: "failure.too_long_for_channel",
+  unreadable_key: "failure.unreadable_key",
+};
+
+/**
+ * The sentence for a run's failure, in the reader's language.
+ *
+ * Anything that is not one of the codes falls back to the generic sentence
+ * rather than being printed. Two things arrive that way and neither may be
+ * shown: a run row written before this column held codes, whose value is the
+ * PROVIDER's own English — the sentence that can quote an API key — and a code
+ * from a newer API than this build knows.
+ */
+export function runFailureMessage(
+  t: (key: string) => string,
+  errorCode: string | null,
+): string | null {
+  if (errorCode === null || errorCode === "") return null;
+  return isRunFailure(errorCode) ? t(RUN_FAILURE_KEYS[errorCode]) : t("genericError");
 }

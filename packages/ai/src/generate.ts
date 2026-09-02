@@ -7,7 +7,7 @@ import {
   NoOutputGeneratedError,
   Output,
 } from "ai";
-import { classifyAiError } from "./classify.js";
+import { classifyAiError, withRunFailure } from "./classify.js";
 import type { AiProvider } from "./provider.js";
 import {
   createCallRecorder,
@@ -123,8 +123,11 @@ export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Pr
       repaired = await attempt(args, repairPrompt(args.prompt, firstError), 2, clock);
     } catch (repairError) {
       if (!NoObjectGeneratedError.isInstance(repairError)) throw classifyAiError(repairError);
-      const failure = new PermanentError(
-        `the model returned output that does not match the required schema, twice: ${validationMessage(repairError)}`,
+      const failure = withRunFailure(
+        new PermanentError(
+          `the model returned output that does not match the required schema, twice: ${validationMessage(repairError)}`,
+        ),
+        "no_structured_output",
       );
       // The originating error travels along as `cause`, and callers that need to
       // know WHICH rule was broken must read the validation issues through it.
@@ -190,8 +193,11 @@ async function attempt<T>(
   } catch (error) {
     await report(args, recorder.calls, attemptNumber, "errored", clock);
     if (NoOutputGeneratedError.isInstance(error)) {
-      throw new PermanentError(
-        "the model produced a tool call instead of text, so no structured output could be read",
+      throw withRunFailure(
+        new PermanentError(
+          "the model produced a tool call instead of text, so no structured output could be read",
+        ),
+        "no_structured_output",
       );
     }
     throw error;

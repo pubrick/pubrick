@@ -8,6 +8,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { PermanentError } from "@pubrick/shared";
+import { withRunFailure } from "./classify.js";
 
 /** Providers a BYOK key can be stored for. Mirrors `AI_PROVIDERS` in `@pubrick/db`. */
 export const AI_PROVIDERS = ["google", "openrouter"] as const;
@@ -57,7 +58,10 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
     // Caught here rather than at the first call: an empty key produces a
     // provider 401 that reads like the user's key was rejected, which sends
     // them to re-copy a key that was never saved.
-    throw new PermanentError(`no API key stored for provider "${credential.provider}"`);
+    throw withRunFailure(
+      new PermanentError(`no API key stored for provider "${credential.provider}"`),
+      "no_api_key",
+    );
   }
 
   switch (credential.provider) {

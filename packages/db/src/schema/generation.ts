@@ -125,6 +125,17 @@ export const pipelineRuns = pgTable(
     contentItemId: uuid("content_item_id").references(() => contentItems.id, {
       onDelete: "set null",
     }),
+    /**
+     * Why the run failed, as a `RunFailure` CODE — `invalid_key`,
+     * `too_long_for_channel`, … — never a sentence.
+     *
+     * The column predates that rule and its name still says "error". What goes
+     * in it is a closed set (`@pubrick/shared`'s `RUN_FAILURES`) because the API
+     * hands this value straight to a browser, and a provider's own error prose
+     * quotes the submitted API key back at us. The prose stays in the worker's
+     * log, redacted; a code is also the only form the four locales can
+     * translate.
+     */
     error: text("error"),
     /** A failed or cancelled run stays on the queue strip until a human dismisses it. */
     dismissedAt: timestamp("dismissed_at"),

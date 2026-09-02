@@ -4,6 +4,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { runFailureOf } from "./classify.js";
 import { generateStructured } from "./generate.js";
 import type { UsageRecord } from "./usage.js";
 
@@ -440,15 +441,18 @@ describe("generateStructured", () => {
       }),
     });
 
-    await expect(
-      generateStructured({
-        ...base,
-        model,
-        onUsage: (record) => {
-          rows.push(record);
-        },
-      }),
-    ).rejects.toThrow(/tool call instead of text/);
+    const error = await generateStructured({
+      ...base,
+      model,
+      onUsage: (record) => {
+        rows.push(record);
+      },
+    }).catch((e: unknown) => e);
+
+    expect((error as Error).message).toMatch(/tool call instead of text/);
+    // The code the run row stores. Same one as a schema violation: from the
+    // reader's side both are "the model would not answer in the shape we need".
+    expect(runFailureOf(error)).toBe("no_structured_output");
     expect(rows).toHaveLength(1);
     expect(rows[0]?.status).toBe("errored");
   });
@@ -489,6 +493,7 @@ describe("generateStructured", () => {
       // database was unreachable while we tried to write it down.
       expect(error).toBeInstanceOf(PermanentError);
       expect(error.message).toContain("does not match the required schema");
+      expect(runFailureOf(error)).toBe("no_structured_output");
       expect(onUsageError).toHaveBeenCalledTimes(2);
     });
   });

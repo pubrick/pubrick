@@ -192,6 +192,20 @@
       "failed": "Falhou",
       "cancelled": "Cancelado"
     },
+    "failure": {
+      "cancelled": "A chamada ao modelo foi cancelada antes de terminar.",
+      "every_channel_deleted": "Todos os canais para os quais esta geração foi iniciada já foram excluídos. Adicione um canal e tente novamente.",
+      "internal": "Algo deu errado do nosso lado. Tente novamente.",
+      "invalid_key": "O provedor rejeitou a chave de API. Verifique-a em Configurações.",
+      "model_not_found": "O provedor não reconhece o identificador de modelo definido em Configurações.",
+      "no_api_key": "Nenhuma chave de provedor de IA está configurada. Adicione uma em Configurações e tente novamente.",
+      "no_structured_output": "O modelo não conseguiu devolver a saída estruturada que o Pubrick precisa. Tente outro modelo.",
+      "provider_refused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo em Configurações.",
+      "rate_limited": "O provedor está limitando as requisições ou está indisponível. Esta geração será repetida.",
+      "retries_exhausted": "Esta geração foi repetida até esgotar as tentativas. Tente novamente.",
+      "too_long_for_channel": "O modelo não conseguiu respeitar o limite de tamanho de um dos canais. Tente um brief mais curto.",
+      "unreadable_key": "Não foi possível ler a chave de API salva. Salve-a novamente em Configurações."
+    },
     "draftReady": "Rascunho pronto",
     "cancel": "Cancelar",
     "stripsTitle": "Gerando",

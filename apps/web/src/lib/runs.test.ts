@@ -1,10 +1,13 @@
+import { RUN_FAILURES } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
+import en from "../../messages/en.json";
 import {
   isTerminalRunStatus,
   RUN_BADGE_STATUS,
   RUN_STATUSES,
   type RunDetail,
   type RunStepKey,
+  runFailureMessage,
   runStepStates,
 } from "./runs";
 
@@ -19,7 +22,7 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     status: "queued",
     currentStep: null,
     contentItemId: null,
-    error: null,
+    errorCode: null,
     dismissedAt: null,
     steps: {},
     createdAt: "2026-08-28T10:00:00.000Z",
@@ -86,7 +89,7 @@ describe("runStepStates", () => {
     // A failing step writes no checkpoint — the error lands on the run — so
     // reading only the checkpoint map would show the step that broke as
     // "waiting" forever.
-    const run = makeRun({ status: "failed", currentStep: "writer", error: "provider refused" });
+    const run = makeRun({ status: "failed", currentStep: "writer", errorCode: "provider_refused" });
 
     expect(stateOf(run, "writer")).toBe("failed");
   });
@@ -125,7 +128,7 @@ describe("runStepStates", () => {
       status: "failed",
       currentStep: "writer",
       steps: { researcher: { status: "succeeded" } },
-      error: "provider refused",
+      errorCode: "provider_refused",
     });
 
     expect(stateOf(failed, "researcher")).toBe("done");
@@ -151,5 +154,42 @@ describe("runStepStates", () => {
 
     const running = makeRun({ status: "running", currentStep: "researcher" });
     expect(stateOf(running, "factcheck")).toBe("pending");
+  });
+});
+
+/**
+ * The screens print THIS, and never `run.errorCode` itself.
+ *
+ * The column behind it used to hold the provider's own error sentence, which is
+ * where a submitted API key gets quoted back and which only ever exists in
+ * English. Rows written then are still in the database, so "anything I do not
+ * recognise" has to mean "say the generic thing", not "print it".
+ */
+describe("runFailureMessage", () => {
+  const t = (key: string) => `translated:${key}`;
+
+  it("translates every code the API can send", () => {
+    for (const code of RUN_FAILURES) {
+      expect(runFailureMessage(t, code)).toBe(`translated:failure.${code}`);
+      // ...and the key it asks for exists in the reference locale, so the
+      // screen shows a sentence rather than a dotted path.
+      expect(en.Runs.failure).toHaveProperty(code);
+    }
+  });
+
+  it("says nothing at all for a run that has not failed", () => {
+    expect(runFailureMessage(t, null)).toBeNull();
+    expect(runFailureMessage(t, "")).toBeNull();
+  });
+
+  it("never prints a value it does not recognise", () => {
+    // A row from before the codes existed. Printing it would put the provider's
+    // own sentence — the one that can carry a key — on the screen, which is the
+    // whole defect.
+    expect(runFailureMessage(t, "Incorrect API key provided: sk-live-51ABCdef")).toBe(
+      "translated:genericError",
+    );
+    // ...and a code from a newer API than this build knows.
+    expect(runFailureMessage(t, "some_future_code")).toBe("translated:genericError");
   });
 });

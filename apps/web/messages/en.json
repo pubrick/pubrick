@@ -192,6 +192,20 @@
       "failed": "Failed",
       "cancelled": "Cancelled"
     },
+    "failure": {
+      "cancelled": "The model call was cancelled before it finished.",
+      "every_channel_deleted": "Every channel this run was started for has since been deleted. Add a channel and try again.",
+      "internal": "Something went wrong on our side. Try again.",
+      "invalid_key": "The provider rejected the API key. Check it in Settings.",
+      "model_not_found": "The provider does not recognise the model id set in Settings.",
+      "no_api_key": "No AI provider key is configured. Add one in Settings, then try again.",
+      "no_structured_output": "The model could not return the structured output Pubrick needs. Try another model.",
+      "provider_refused": "The provider refused the request. Check the key and the model id in Settings.",
+      "rate_limited": "The provider is rate-limiting or temporarily unavailable. This run will be retried.",
+      "retries_exhausted": "This run was retried until its attempts ran out. Try again.",
+      "too_long_for_channel": "The model could not fit one of the channels' length limits. Try a shorter brief.",
+      "unreadable_key": "The stored API key could not be read. Save it again in Settings."
+    },
     "draftReady": "Draft ready",
     "cancel": "Cancel",
     "stripsTitle": "Generating",

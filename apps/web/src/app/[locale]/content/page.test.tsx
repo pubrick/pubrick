@@ -79,7 +79,7 @@ function run(overrides: Partial<Run> = {}): Run {
     status: "running",
     currentStep: "writer",
     contentItemId: null,
-    error: null,
+    errorCode: null,
     dismissedAt: null,
     createdAt: "2026-08-28T10:00:00.000Z",
     updatedAt: "2026-08-28T10:00:00.000Z",
@@ -113,7 +113,7 @@ function installHandlers(
     if (method === "GET" && path === "/api/channels") return channelList;
     if (method === "GET" && path === "/api/runs?state=open") return runs.current;
     if (method === "POST" && path === "/api/runs") {
-      const created = run({ id: NEW_RUN_ID, status: "queued", currentStep: null, error: null });
+      const created = run({ id: NEW_RUN_ID, status: "queued", currentStep: null, errorCode: null });
       // Creating a run does NOT clear the one it was started from: that run stays
       // open until somebody dismisses it, and sorts ABOVE the new one because
       // failures come first. A fixture that dropped it here is what let "Try
@@ -336,23 +336,15 @@ describe("run strips (Task 10)", () => {
 
   it("keeps a failed run visible, with its error and both actions", async () => {
     const calls: Call[] = [];
-    const runs = {
-      current: [
-        run({
-          status: "failed",
-          error: "No AI provider key is configured for this organization.",
-        }),
-      ],
-    };
+    const runs = { current: [run({ status: "failed", errorCode: "no_api_key" })] };
     installHandlers(calls, () => [], noChannels, runs);
 
     render(<ContentQueuePage />);
 
     // A failed run creates NO content item, so this strip is the only place the
-    // failure exists at all.
-    expect(
-      await screen.findByText("No AI provider key is configured for this organization."),
-    ).toBeInTheDocument();
+    // failure exists at all — and what it prints is OUR translated sentence for
+    // the API's code, not the provider's own English.
+    expect(await screen.findByText(en.Runs.failure.no_api_key)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Runs.tryAgain })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Runs.dismiss })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "A post about our new pricing" })).toHaveAttribute(
@@ -377,7 +369,7 @@ describe("run strips (Task 10)", () => {
   it("Try again starts a new run from the same brief and channels", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => [], noChannels, {
-      current: [run({ status: "failed", error: "boom" })],
+      current: [run({ status: "failed", errorCode: "internal" })],
     });
 
     render(<ContentQueuePage />);
@@ -403,7 +395,7 @@ describe("run strips (Task 10)", () => {
 
   it("Try again dismisses the run it replaces, so failures cannot stack over the live one", async () => {
     const calls: Call[] = [];
-    const runs = { current: [run({ status: "failed", error: "boom" })] };
+    const runs = { current: [run({ status: "failed", errorCode: "internal" })] };
     installHandlers(calls, () => [], noChannels, runs);
 
     render(<ContentQueuePage />);
@@ -437,7 +429,7 @@ describe("run strips (Task 10)", () => {
     vi.useFakeTimers();
     try {
       const calls: Call[] = [];
-      const runs = { current: [run({ status: "failed", error: "boom" })] };
+      const runs = { current: [run({ status: "failed", errorCode: "internal" })] };
       installHandlers(calls, () => [], noChannels, runs);
 
       render(<ContentQueuePage />);
@@ -505,7 +497,7 @@ describe("run strips (Task 10)", () => {
   it("clears the strip under StrictMode's double-invoked effects too", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => [], noChannels, {
-      current: [run({ status: "failed", error: "boom" })],
+      current: [run({ status: "failed", errorCode: "internal" })],
     });
 
     render(
@@ -530,7 +522,7 @@ describe("run strips (Task 10)", () => {
     vi.useFakeTimers();
     try {
       const calls: Call[] = [];
-      const runs = { current: [run({ status: "failed", error: "boom" })] };
+      const runs = { current: [run({ status: "failed", errorCode: "internal" })] };
       installHandlers(calls, () => [], noChannels, runs);
 
       render(<ContentQueuePage />);

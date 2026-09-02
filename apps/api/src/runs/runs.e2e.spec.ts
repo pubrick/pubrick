@@ -326,7 +326,7 @@ describe.skipIf(!url)("runs e2e", () => {
     const { brandId, channelId } = await brandWithChannel(agent);
     const failed = await startRun(agent, brandId, [channelId]);
     const queued = await startRun(agent, brandId, [channelId]);
-    await setRunStatus(failed.id, "failed", "the model could not fit the channel limit");
+    await setRunStatus(failed.id, "failed", "too_long_for_channel");
 
     const open = await agent.get("/api/runs?state=open").expect(200);
     const ids = open.body.map((run: { id: string }) => run.id);
@@ -335,7 +335,12 @@ describe.skipIf(!url)("runs e2e", () => {
     // Failures sort first: a failed run creates no content item, so a strip
     // buried under successful chatter is a failure that is invisible everywhere.
     expect(open.body[0].id).toBe(failed.id);
-    expect(open.body[0].error).toBe("the model could not fit the channel limit");
+    // A CODE on the wire, under a name that says so. The column it comes from
+    // used to hold the provider's own error sentence — the sentence that quotes
+    // the submitted API key back — and this is the response that carried it to
+    // a browser.
+    expect(open.body[0].errorCode).toBe("too_long_for_channel");
+    expect(open.body[0].error).toBeUndefined();
 
     const dismissed = await agent.post(`/api/runs/${failed.id}/dismiss`).expect(200);
     expect(dismissed.body.dismissedAt).not.toBeNull();

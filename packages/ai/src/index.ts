@@ -1,4 +1,4 @@
-export { classifyAiError } from "./classify.js";
+export { classifyAiError, redactSecrets, runFailureOf, withRunFailure } from "./classify.js";
 export {
   type GenerateStructuredArgs,
   generateStructured,

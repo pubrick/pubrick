@@ -7,13 +7,16 @@ import {
   FACTCHECK,
   RESEARCHER,
   type RunStepContext,
+  redactSecrets,
   resolveModel,
+  runFailureOf,
   type Step,
   type StepAttribution,
   type UsageRecord,
   WRITER,
+  withRunFailure,
 } from "@pubrick/ai";
-import { type GenerateJob, PermanentError } from "@pubrick/shared";
+import { type GenerateJob, PermanentError, type RunFailure } from "@pubrick/shared";
 import { z } from "zod";
 import {
   type ClaimedRun,
@@ -53,12 +56,46 @@ type Stopped = typeof STOPPED;
 const TERMINAL_WRITE_MAX_ATTEMPTS = 3;
 
 /**
- * One sentence for one situation, reachable from two places: the channels were
- * already gone when the run started, and they went away while it worked. The
- * user cannot tell those apart and should not have to.
+ * One situation, reachable from two places: the channels were already gone when
+ * the run started, and they went away while it worked. The user cannot tell
+ * those apart and should not have to.
+ *
+ * The CODE is what the run row stores and the screens translate; the sentence
+ * is the log's, in the one language logs are written in.
  */
-const EVERY_CHANNEL_DELETED =
-  "Every channel this run was started for has since been deleted. Add a channel and try again.";
+const EVERY_CHANNEL_DELETED: RunFailure = "every_channel_deleted";
+const EVERY_CHANNEL_DELETED_DETAIL =
+  "every channel this run was started for has since been deleted";
+
+/**
+ * The org's decrypted key, carried from where it is loaded to where a failure is
+ * logged.
+ *
+ * `execute` decrypts it; the catch that writes the log line lives in `handle`,
+ * one frame out, and needs it to scrub the provider's own sentence before an
+ * operator (or pg-boss's `job.output` column) sees it. A box rather than a
+ * return value because the value is wanted on the path where `execute` THROWS.
+ */
+type SecretBox = { apiKey?: string };
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Scrub the provider's own sentence in place, on the error that is about to be
+ * rethrown to pg-boss.
+ *
+ * pg-boss serialises a failed handler's error into `pgboss.job.output`, which
+ * is a second place a decrypted key would come to rest — not a browser, but
+ * plaintext in a table that outlives the run. Mutated rather than replaced so
+ * the class, the cause and the stack all survive: the queue reads none of them,
+ * but whoever is debugging does.
+ */
+function redactInPlace(error: unknown, secret: string | undefined): unknown {
+  if (error instanceof Error) error.message = redactSecrets(error.message, secret);
+  return error;
+}
 
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
@@ -143,25 +180,35 @@ export class GenerateService {
     }
 
     let payload: TerminalPayload | Stopped;
+    // Filled in by `execute` the moment the org's key is decrypted, so the
+    // catch below can take that key back out of whatever the provider said.
+    const secret: SecretBox = {};
     try {
-      payload = await this.execute(claimed, fence, job.signal);
+      payload = await this.execute(claimed, fence, job.signal, secret);
     } catch (error) {
+      // The two halves of a failure, and they go to two different places. The
+      // CODE is stored and shown, in the reader's own language; the provider's
+      // own sentence is only ever logged, and only after `redactSecrets` — it
+      // is the sentence that quotes the submitted key back at us.
+      const failure = runFailureOf(error) ?? "internal";
+      const detail = redactSecrets(messageOf(error), secret.apiKey);
+
       if (error instanceof PermanentError) {
-        await this.recordFailure(orgId, runId, fence, error.message);
+        await this.recordFailure(orgId, runId, fence, failure, detail);
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
       // Best effort: the point of this write is visibility, and losing it must
       // not swallow the error that actually needs to reach pg-boss.
       try {
-        await this.repo.recordTransient(orgId, runId, fence, message);
+        await this.repo.recordTransient(orgId, runId, fence, failure);
       } catch (writeError) {
         this.logger.warn(
           `Could not record a transient error on run ${runId}: ` +
-            `${writeError instanceof Error ? writeError.message : String(writeError)}`,
+            `${redactSecrets(messageOf(writeError), secret.apiKey)}`,
         );
       }
-      throw error;
+      this.logger.warn(`Run ${runId} hit a transient failure (${failure}): ${detail}`);
+      throw redactInPlace(error, secret.apiKey);
     }
 
     if (payload === STOPPED) return;
@@ -177,11 +224,7 @@ export class GenerateService {
    */
   async markExhausted(job: GenerateJob): Promise<void> {
     try {
-      const marked = await this.repo.markExhausted(
-        job.orgId,
-        job.runId,
-        "This run was retried until its attempts ran out. Try again.",
-      );
+      const marked = await this.repo.markExhausted(job.orgId, job.runId, "retries_exhausted");
       if (marked) this.logger.warn(`Run ${job.runId} failed: retries exhausted`);
     } catch (error) {
       this.logger.error(
@@ -196,6 +239,7 @@ export class GenerateService {
     run: ClaimedRun,
     fence: string,
     signal: AbortSignal | undefined,
+    secret: SecretBox,
   ): Promise<TerminalPayload | Stopped> {
     const input = this.parseInput(run.input);
     const context = await this.loadContext(run, input.channelIds);
@@ -208,10 +252,14 @@ export class GenerateService {
 
     const credential = await this.repo.credential(run.orgId);
     if (!credential) {
-      throw new PermanentError(
-        "No AI provider key is configured for this organization. Add one in Settings, then try again.",
+      throw withRunFailure(
+        new PermanentError("no AI provider key is configured for this organization"),
+        "no_api_key",
       );
     }
+    // From here on the key is in scope, so anything thrown from here on may
+    // quote it. `handle` reads this to scrub what it logs.
+    secret.apiKey = credential.apiKey;
 
     const usage = new Map<string, UsageRecord[]>();
     const state: RunState = {
@@ -393,7 +441,13 @@ export class GenerateService {
     const detail = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
       .join("; ");
-    throw new PermanentError(`This run's input cannot be executed by this worker: ${detail}`);
+    // `internal`, not a code of its own: a row this build cannot parse was
+    // written by another build of OURS, and there is nothing the reader of the
+    // strip can do about it. The zod detail goes to the log with the rest.
+    throw withRunFailure(
+      new PermanentError(`this run's input cannot be executed by this worker: ${detail}`),
+      "internal",
+    );
   }
 
   /**
@@ -413,7 +467,7 @@ export class GenerateService {
     const context = await this.repo.context(run.orgId, run.brandId, channelIds);
     if (!context) return undefined;
     if (context.channels.length === 0) {
-      throw new PermanentError(EVERY_CHANNEL_DELETED);
+      throw withRunFailure(new PermanentError(EVERY_CHANNEL_DELETED_DETAIL), EVERY_CHANNEL_DELETED);
     }
     if (context.channels.length !== channelIds.length) {
       this.logger.warn(
@@ -459,7 +513,13 @@ export class GenerateService {
           // permanent failure `loadContext` raises when the channels were already
           // gone at the start. It is terminal by definition: no retry can bring a
           // deleted channel back.
-          await this.recordFailure(orgId, runId, fence, EVERY_CHANNEL_DELETED);
+          await this.recordFailure(
+            orgId,
+            runId,
+            fence,
+            EVERY_CHANNEL_DELETED,
+            EVERY_CHANNEL_DELETED_DETAIL,
+          );
         } else {
           this.logger.log(`Run ${runId} produced no draft (${outcome})`);
         }
@@ -489,20 +549,21 @@ export class GenerateService {
     orgId: string,
     runId: string,
     fence: string,
-    message: string,
+    failure: RunFailure,
+    /** The provider's own words, already redacted. Logged, never stored. */
+    detail: string,
   ): Promise<void> {
     for (let attempt = 1; attempt <= TERMINAL_WRITE_MAX_ATTEMPTS; attempt++) {
       try {
-        const outcome = await this.repo.recordFailure(orgId, runId, fence, message);
-        if (outcome === "held") this.logger.warn(`Run ${runId} failed: ${message}`);
-        else this.logger.log(`Run ${runId} failed (${message}) but the fence was already lost`);
+        const outcome = await this.repo.recordFailure(orgId, runId, fence, failure);
+        if (outcome === "held") this.logger.warn(`Run ${runId} failed (${failure}): ${detail}`);
+        else this.logger.log(`Run ${runId} failed (${failure}) but the fence was already lost`);
         return;
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
         if (attempt === TERMINAL_WRITE_MAX_ATTEMPTS) {
           this.logger.error(
             `MARK FAILED WRITE FAILED: run ${runId} may be stuck in "running" with no job left to ` +
-              `move it. orgId=${orgId} reason=${message} error=${detail}`,
+              `move it. orgId=${orgId} reason=${failure} error=${messageOf(error)}`,
           );
           return;
         }

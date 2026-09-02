@@ -26,7 +26,20 @@ const RUN_COLUMNS = {
   status: schema.pipelineRuns.status,
   currentStep: schema.pipelineRuns.currentStep,
   contentItemId: schema.pipelineRuns.contentItemId,
-  error: schema.pipelineRuns.error,
+  /**
+   * A `RunFailure` CODE, aliased away from the column's older name.
+   *
+   * The column is `text` and used to hold the provider's own error sentence,
+   * which is where the submitted API key can be quoted back ("Incorrect API key
+   * provided: sk-live-…") — on the very path that ends in a browser. The worker
+   * now writes only a member of the closed set, and the web app turns it into a
+   * sentence in four languages. The name says which of the two this is, so a
+   * client cannot mistake the value for something printable.
+   *
+   * Rows written before that change still hold prose; the web app renders any
+   * value it does not recognise as its generic failure sentence.
+   */
+  errorCode: schema.pipelineRuns.error,
   dismissedAt: schema.pipelineRuns.dismissedAt,
   createdAt: schema.pipelineRuns.createdAt,
   updatedAt: schema.pipelineRuns.updatedAt,
@@ -39,7 +52,7 @@ const RUN_COLUMNS = {
  * The list does NOT carry it: each checkpoint holds that step's whole model
  * output, so a queue strip showing a dozen runs would ship several hundred
  * kilobytes of draft text on every poll to render a row that only reads
- * `status`, `currentStep` and `error`.
+ * `status`, `currentStep` and `errorCode`.
  */
 const RUN_DETAIL_COLUMNS = { ...RUN_COLUMNS, steps: schema.pipelineRuns.steps };
 

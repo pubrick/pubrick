@@ -1,11 +1,17 @@
 import { Injectable, Logger } from "@nestjs/common";
-import type { AiCredential, StepAttribution, UsageRecord } from "@pubrick/ai";
+import {
+  type AiCredential,
+  type StepAttribution,
+  type UsageRecord,
+  withRunFailure,
+} from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
   PermanentError,
   preferredCredential,
+  type RunFailure,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -482,8 +488,9 @@ export class GenerateRepository {
         `Stored ${row.provider} key for org ${orgId} could not be decrypted: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
-      throw new PermanentError(
-        `The stored ${row.provider} API key could not be read. Remove it in Settings and add it again.`,
+      throw withRunFailure(
+        new PermanentError(`the stored ${row.provider} API key could not be decrypted`),
+        "unreadable_key",
       );
     }
     return { provider: row.provider, apiKey, defaultModel: row.defaultModel };
@@ -662,7 +669,14 @@ export class GenerateRepository {
     orgId: string,
     runId: string,
     fence: string,
-    error: string,
+    /**
+     * A CODE, never a sentence — and the type is what keeps it one. The column
+     * is `text`, this value is handed to a browser by `RUN_COLUMNS`, and a
+     * provider's own 401 body quotes the submitted key back at us; a `string`
+     * parameter here is all it took for that sentence to reach a run row
+     * verbatim. The prose lives in the worker's log instead, redacted.
+     */
+    error: RunFailure,
   ): Promise<FenceOutcome> {
     const rows = await db
       .update(schema.pipelineRuns)
@@ -684,7 +698,13 @@ export class GenerateRepository {
    * left alone, because pg-boss is about to retry and the retry resumes from the
    * checkpoints this attempt already wrote.
    */
-  async recordTransient(orgId: string, runId: string, fence: string, error: string): Promise<void> {
+  async recordTransient(
+    orgId: string,
+    runId: string,
+    fence: string,
+    /** A code, for the same reason `recordFailure`'s is one. */
+    error: RunFailure,
+  ): Promise<void> {
     await db
       .update(schema.pipelineRuns)
       .set({ error, updatedAt: nowSql() })
@@ -709,7 +729,7 @@ export class GenerateRepository {
    * would sit "queued" forever. Both states are terminal-by-now; the fence is
    * deliberately not consulted, because the handler that held it is gone.
    */
-  async markExhausted(orgId: string, runId: string, error: string): Promise<boolean> {
+  async markExhausted(orgId: string, runId: string, error: RunFailure): Promise<boolean> {
     const rows = await db
       .update(schema.pipelineRuns)
       .set({ status: "failed", error, updatedAt: nowSql() })

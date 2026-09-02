@@ -22,6 +22,7 @@ import {
   OPEN_RUNS_POLL_INTERVAL_MS,
   RUN_BADGE_STATUS,
   type Run,
+  runFailureMessage,
 } from "@/lib/runs";
 
 type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
@@ -224,12 +225,17 @@ export default function ContentQueuePage() {
    * One compact strip per open run, above the cards.
    *
    * A failed run creates no content item, so its strip is the ONLY place the
-   * failure exists in the UI: it stays until a human dismisses it, carries the
-   * error verbatim, and offers the two things a human can do about it. The API
+   * failure exists in the UI: it stays until a human dismisses it, says what
+   * went wrong, and offers the two things a human can do about it. The API
    * sorts failures first for the same reason.
+   *
+   * What it says is OUR sentence for the API's code, never the provider's own
+   * text: that text is where a submitted API key gets quoted back, and it only
+   * exists in English.
    */
   function renderRun(run: Run) {
     const terminal = isTerminalRunStatus(run.status);
+    const failure = runFailureMessage(tr, run.errorCode);
     return (
       <li
         key={run.id}
@@ -244,7 +250,7 @@ export default function ContentQueuePage() {
         >
           {run.input.text}
         </Link>
-        {run.error && <span className="w-full text-[13px] text-danger">{run.error}</span>}
+        {failure && <span className="w-full text-[13px] text-danger">{failure}</span>}
         {terminal && (
           <span className="flex shrink-0 items-center gap-2">
             <Button variant="secondary" size="sm" onClick={() => tryAgain(run)}>

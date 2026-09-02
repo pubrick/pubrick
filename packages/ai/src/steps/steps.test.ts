@@ -9,6 +9,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { runFailureOf } from "../classify.js";
 import type { UsageRecord } from "../usage.js";
 import {
   adaptationLimit,
@@ -363,6 +364,9 @@ describe("the adapter", () => {
     expect((error as Error).message).toContain("could not fit");
     expect((error as Error).message).toContain(channel.name);
     expect((error as Error).message).toContain("300");
+    // Its own code, and not `no_structured_output`: the length rule is the one
+    // schema rule a HUMAN can act on, and the run row carries only the code.
+    expect(runFailureOf(error)).toBe("too_long_for_channel");
   });
 
   it("keeps a non-length schema failure honest instead of blaming the limit", async () => {
@@ -374,6 +378,8 @@ describe("the adapter", () => {
 
     expect(error).toBeInstanceOf(PermanentError);
     expect((error as Error).message).not.toContain("could not fit");
+    // ...and the code the user is shown says the same thing the message does.
+    expect(runFailureOf(error)).toBe("no_structured_output");
   });
 
   it("cannot be told it broke the limit by a model writing about limits", async () => {

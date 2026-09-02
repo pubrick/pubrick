@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { channelOf, scriptedModel } from "../test/scripted-model";
 
@@ -596,11 +597,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         await repo.writeCheckpoint(intruder.orgId, victim.runId, fence, "editor", checkpoint),
       ).toBe("gone");
       expect(await repo.explain(intruder.orgId, victim.runId, fence)).toBe("gone");
-      expect(await repo.recordFailure(intruder.orgId, victim.runId, fence, "not yours")).toBe(
+      expect(await repo.recordFailure(intruder.orgId, victim.runId, fence, "internal")).toBe(
         "lost",
       );
-      await repo.recordTransient(intruder.orgId, victim.runId, fence, "not yours");
-      expect(await repo.markExhausted(intruder.orgId, victim.runId, "not yours")).toBe(false);
+      await repo.recordTransient(intruder.orgId, victim.runId, fence, "internal");
+      expect(await repo.markExhausted(intruder.orgId, victim.runId, "internal")).toBe(false);
 
       // Nothing the intruder did left a mark of any kind.
       const run = await runRow(victim.runId);
@@ -893,8 +894,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
       const run = await runRow(seeded.runId);
       expect(run?.status).toBe("failed");
-      // A sentence the user can act on, not a provider 401 they cannot read.
-      expect(run?.error).toContain("No AI provider key is configured");
+      // A code the four locales can translate, not a provider 401 in English.
+      expect(run?.error).toBe("no_api_key");
       expect(script.calls).toHaveLength(0);
     }, 20_000);
 
@@ -911,7 +912,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
       const run = await runRow(seeded.runId);
       expect(run?.status).toBe("failed");
-      expect(run?.error).toContain("does not match the required schema");
+      expect(run?.error).toBe("no_structured_output");
       // One repair retry, then permanent — never a third paid call.
       expect(script.callsFor("writer")).toBe(2);
     }, 25_000);
@@ -935,8 +936,34 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // Status untouched: a retry is coming, and only a PERMANENT error may write
       // a terminal status.
       expect(run?.status).toBe("running");
-      expect(run?.error).toContain("Connection terminated unexpectedly");
+      // The database's own words are not the provider's, but they are still
+      // prose on a path that ends in a browser: the row gets the generic code
+      // and the sentence goes to the log.
+      expect(run?.error).toBe("internal");
       vi.restoreAllMocks();
+    }, 20_000);
+
+    it("reports a stored key that will not decrypt as its own code, not as a crypto stack", async () => {
+      // The key predates a rotated APP_ENCRYPTION_KEY, or the row was tampered
+      // with. Deterministic, so permanent — and a verdict about the KEY, which
+      // is why it gets a code of its own rather than the generic one.
+      const seeded = await seed({ channels: 1 });
+      const otherKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+      await db
+        .update(schema.aiCredentials)
+        .set({ credentialsEncrypted: encryptJson({ apiKey: "unreadable" }, otherKey) })
+        .where(eq(schema.aiCredentials.orgId, seeded.orgId));
+      const script = scriptedModel();
+
+      await serviceFor(script).handle({
+        id: "job-badkey",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.error).toBe("unreadable_key");
+      expect(script.calls).toHaveLength(0);
     }, 20_000);
 
     it("fails a run whose channels have all been deleted rather than writing a draft nobody can publish", async () => {
@@ -950,9 +977,134 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
       const run = await runRow(seeded.runId);
       expect(run?.status).toBe("failed");
-      expect(run?.error).toContain("has since been deleted");
+      expect(run?.error).toBe("every_channel_deleted");
       expect(await itemsOf(seeded.orgId)).toHaveLength(0);
     }, 20_000);
+  });
+
+  /**
+   * The reviewer's probe, kept as a test.
+   *
+   * A provider's own error prose used to be written into `pipeline_runs.error`
+   * verbatim — on the permanent arm and, once per retry, on the transient one —
+   * and `RUN_COLUMNS` hands that column to the browser. OpenAI-style bodies
+   * quote the submitted credential back ("Incorrect API key provided: sk-…")
+   * and Google's quota errors quote the request URL, which carries `?key=`. So
+   * the mock model throws exactly that, with the org's REAL seeded key inside
+   * it, and the run row is read back raw.
+   */
+  describe("a provider's own error prose", () => {
+    const LIVE_KEY = "sk-live-51PROBEkeyMUSTNOTLEAK0987654321";
+
+    async function keyBearingModel(statusCode: number, isRetryable: boolean) {
+      const { APICallError } = await import("ai");
+      return scriptedModel({
+        researcher: () => {
+          throw new APICallError({
+            // The two shapes a real 4xx body takes, in one string.
+            message:
+              `Incorrect API key provided: ${LIVE_KEY}. ` +
+              `You can find your API key at https://generativelanguage.googleapis.com/v1beta/models:generateContent?key=${LIVE_KEY}`,
+            url: `https://generativelanguage.googleapis.com/v1beta/models:generateContent?key=${LIVE_KEY}`,
+            requestBodyValues: {},
+            statusCode,
+            isRetryable,
+          });
+        },
+      });
+    }
+
+    it("never reaches pipeline_runs.error on the permanent (401) arm", async () => {
+      const seeded = await seed({ channels: 1, apiKey: LIVE_KEY });
+      const script = await keyBearingModel(401, false);
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-leak-401",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).resolves.toBeUndefined();
+
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.error ?? "").not.toContain(LIVE_KEY);
+      expect(run?.error ?? "").not.toContain("Incorrect API key provided");
+      expect(run?.error ?? "").not.toContain("?key=");
+    }, 25_000);
+
+    it("never reaches pipeline_runs.error on the transient (429) arm, on any retry", async () => {
+      const seeded = await seed({ channels: 1, apiKey: LIVE_KEY });
+      const script = await keyBearingModel(429, true);
+
+      await expect(
+        serviceFor(script).handle({
+          id: "job-leak-429",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).rejects.toThrow();
+
+      const run = await runRow(seeded.runId);
+      // Still running — a transient error records a reason without a verdict.
+      expect(run?.status).toBe("running");
+      expect(run?.error ?? "").not.toContain(LIVE_KEY);
+      expect(run?.error ?? "").not.toContain("Incorrect API key provided");
+      expect(run?.error ?? "").not.toContain("?key=");
+      expect(run?.error).toBe("rate_limited");
+    }, 40_000);
+
+    it("stores the code and puts the provider's sentence in the log instead", async () => {
+      const seeded = await seed({ channels: 1, apiKey: LIVE_KEY });
+      const script = await keyBearingModel(401, false);
+      const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+
+      await serviceFor(script).handle({
+        id: "job-leak-log",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      // The prose is not thrown away — an operator needs to know WHICH 401 —
+      // it is moved to the one place a customer's browser cannot reach.
+      const logged = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("invalid_key");
+      expect(logged).toContain("Incorrect API key provided");
+      expect(logged).not.toContain(LIVE_KEY);
+      expect((await runRow(seeded.runId))?.error).toBe("invalid_key");
+      vi.restoreAllMocks();
+    }, 25_000);
+
+    it("takes the org's own key out of the log even when it looks like nothing", async () => {
+      // The patterns in `redactSecrets` catch `sk-…`, `AIza…`, `?key=` and
+      // `Bearer …`. A key of some other shape is caught only by the literal
+      // pass, which needs the decrypted credential — which lives one stack frame
+      // below the catch that writes the log line. This test is what says that
+      // frame still hands it over.
+      const QUIET_KEY = "9f3c-quiet-looking-credential-42";
+      const { APICallError } = await import("ai");
+      const seeded = await seed({ channels: 1, apiKey: QUIET_KEY });
+      const script = scriptedModel({
+        researcher: () => {
+          throw new APICallError({
+            message: `the key ${QUIET_KEY} is not authorized for this model`,
+            url: "https://example.invalid/v1",
+            requestBodyValues: {},
+            statusCode: 403,
+          });
+        },
+      });
+      const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+
+      await serviceFor(script).handle({
+        id: "job-leak-quiet",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      const logged = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("is not authorized for this model");
+      expect(logged).not.toContain(QUIET_KEY);
+      expect(logged).toContain("***");
+      expect((await runRow(seeded.runId))?.error).toBe("invalid_key");
+      vi.restoreAllMocks();
+    }, 25_000);
   });
 
   describe("the DLQ consumer", () => {
@@ -973,6 +1125,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // handler and no other way out of the strip.
       expect((await runRow(queued.runId))?.status).toBe("failed");
       expect((await runRow(running.runId))?.status).toBe("failed");
+      expect((await runRow(queued.runId))?.error).toBe("retries_exhausted");
+      expect((await runRow(running.runId))?.error).toBe("retries_exhausted");
     }, 20_000);
 
     it("leaves a run that already finished alone", async () => {
@@ -1223,7 +1377,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // An item with zero adaptations is one `approve` would mark approved while
       // enqueueing nothing — a post that looks sent and never was.
       expect(run?.status).toBe("failed");
-      expect(run?.error).toContain("has since been deleted");
+      expect(run?.error).toBe("every_channel_deleted");
       expect(await itemsOf(seeded.orgId)).toHaveLength(0);
     }, 30_000);
 
