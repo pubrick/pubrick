@@ -23,6 +23,22 @@
  *     in the others — which would show as the light gallery going dark, or as
  *     `prefers-color-scheme` and the theme toggle disagreeing.
  *
+ * Where the pairs come from is the fourth property, and the one this file got
+ * wrong first. They were a hand-written list, and coverage counted a token
+ * decided the moment it appeared in ANY pair, foreground or background — so a
+ * token that later gained a second ground kept the verdict its first ground
+ * had earned, and nothing said a word. `--status-review-fg` was enumerated
+ * only against its own chip while two screens were printing it as a sentence
+ * on the page and on a card; `--color-fg` on `--color-border-soft` — the
+ * selected segment of every pill switcher, 14px semibold — had no pair at all,
+ * under an exemption whose reason ("nothing is identified by it") had stopped
+ * being true. Both cleared AA anyway, which is the worse way to find out.
+ *
+ * Every pair a component can express is therefore READ OFF the components now,
+ * by `painted-pairs.ts` — a repaint brings its own pair with it, in its own
+ * commit. `DECLARED` below is only what no class list can say: the rules
+ * globals.css writes itself.
+ *
  * These numbers are not decoration. The palette they replaced put a primary
  * button's label at 3.10:1, meta text at 2.43:1, and every error alert in the
  * dark theme at 2.99:1, and nothing in the suite noticed for as long as it
@@ -32,6 +48,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { GROUNDS, readPaintedPairs } from "./painted-pairs";
 
 /**
  * Found by walking up from the working directory rather than from
@@ -53,7 +70,10 @@ function globalsCssPath(): string {
   }
 }
 
-const CSS = readFileSync(globalsCssPath(), "utf8");
+const CSS_PATH = globalsCssPath();
+const CSS = readFileSync(CSS_PATH, "utf8");
+/** `…/src/app/globals.css` → `…/src`: the tree whose class lists are read. */
+const SOURCE_ROOT = dirname(dirname(CSS_PATH));
 
 // — parsing ————————————————————————————————————————————————————————————
 
@@ -141,57 +161,35 @@ type Pair = {
   min: number;
 };
 
-/** The three grounds any text can land on. */
-const GROUNDS = ["--color-panel", "--color-bg-sunken", "--color-bg"] as const;
-
 function onEveryGround(what: string, fg: string, min = AA_TEXT): Pair[] {
   return GROUNDS.map((bg) => ({ what: `${what} on ${bg.replace("--color-", "")}`, fg, bg, min }));
 }
 
-const PAIRS: Pair[] = [
-  ...onEveryGround("body copy", "--color-fg"),
-  ...onEveryGround("labels, empty-state title, inactive segment", "--color-fg-secondary"),
-  ...onEveryGround("13px row meta, 12px counters, placeholders", "--color-fg-tertiary"),
-  ...onEveryGround("text still verbatim AI under the provenance lens", "--color-fg-dim"),
-  ...onEveryGround("links (`text-accent`)", "--color-accent"),
+/**
+ * The pairs no component can declare, because globals.css paints them itself.
+ *
+ * Everything else — every `text-*` beside a `bg-*`, every foreground with no
+ * fill of its own — is derived from the source below, and must NOT be
+ * duplicated here: a hand-written copy is how the list stopped matching the
+ * app the first time.
+ */
+const DECLARED: Pair[] = [
+  // `@layer base { a:hover { color: var(--color-accent-hover) } }` — a rule on
+  // the element, not a utility class, so nothing in the markup names it.
   ...onEveryGround("a link being hovered", "--color-accent-hover"),
-  ...onEveryGround("the Reject button, error alerts, destructive menu items", "--color-danger"),
 
-  // Text on a fill rather than on a ground.
-  {
-    what: "the primary button's label",
-    fg: "--color-accent-fg",
-    bg: "--color-accent",
-    min: AA_TEXT,
-  },
-  {
-    what: "the primary button's label, hovered",
-    fg: "--color-accent-fg",
-    bg: "--color-accent-hover",
-    min: AA_TEXT,
-  },
-  {
-    what: "the brand tile and the active nav pill",
-    fg: "--color-accent-soft-fg",
-    bg: "--color-accent-soft",
-    min: AA_TEXT,
-  },
-
-  // The five statuses, 12px semibold — the only status colours that exist.
-  ...(["draft", "review", "scheduled", "published", "failed"] as const).map((status) => ({
-    what: `the ${status} status chip`,
-    fg: `--status-${status}-fg`,
-    bg: `--status-${status}-bg`,
-    min: AA_TEXT,
-  })),
-
-  // Non-text (§1.4.11).
+  // Non-text (§1.4.11). `:focus-visible { outline: 2px solid var(--color-accent) }`,
+  // again a base-layer rule rather than a class.
   ...GROUNDS.map((bg) => ({
     what: `the focus ring on ${bg.replace("--color-", "")}`,
     fg: "--color-accent",
     bg,
     min: AA_NON_TEXT,
   })),
+  // A control's border is `border-border-strong` in the markup, but what it
+  // owes 3:1 against is BOTH sides of itself — its own fill and the ground the
+  // control is standing on — and only the first of those is ever written in
+  // the same class list.
   {
     what: "a text field's border against its own fill",
     fg: "--color-border-strong",
@@ -207,6 +205,53 @@ const PAIRS: Pair[] = [
 ];
 
 /**
+ * ...and everything the components themselves say. See `painted-pairs.ts` for
+ * how a class list becomes a pair, and for what that reading does and does not
+ * model.
+ *
+ * `light.keys()` is what teaches the reader which utilities are colours:
+ * `text-fg` is one because `--color-fg` is declared, `text-sm` is not because
+ * `--color-sm` isn't. There is no second list of colour names to drift.
+ */
+const PAINTED = readPaintedPairs(SOURCE_ROOT, new Set(light.keys()));
+
+const PAIRS: Pair[] = [
+  ...DECLARED,
+  ...PAINTED.pairs.map((pair) => ({
+    what: `painted at ${pair.where}`,
+    fg: pair.fg,
+    bg: pair.bg,
+    // Text, always: the app's only large text is the 30px page title, which
+    // would be allowed 3:1, and holding it to 4.5 costs nothing and removes a
+    // font-size model from this file.
+    min: AA_TEXT,
+  })),
+];
+
+/**
+ * Fills that appear with no foreground beside them — so no pair names them,
+ * and the reason has to be that nothing is READ on them. Each entry is that
+ * judgement; a new one is a prompt to check whether the thing really is
+ * wordless.
+ */
+const FILLS_WITHOUT_TEXT: Record<string, string> = {
+  "--color-accent":
+    "The toast's status dot and the Advanced section's unsaved dot: 6px " +
+    "circles marked aria-hidden. Also the label-less fill of the primary " +
+    "button, which does carry text — and is checked that way, from the " +
+    "button's own class list.",
+  "--color-danger": "The error toast's dot. Same 6px circle, same aria-hidden.",
+  "--color-overlay":
+    "The modal scrim. It carries no text and outlines nothing, and a ratio " +
+    "against it is undefined anyway since it composites over what it covers.",
+  "--color-border-soft":
+    "The skeleton's shimmer bars — placeholders for text that has not " +
+    "arrived, with none of their own. Where this fill DOES carry a word (the " +
+    "selected segment of a pill switcher) the pair is derived from that class " +
+    "list.",
+};
+
+/**
  * Tokens with no contrast requirement, each with the reason it has none.
  * Judged, not waived: the entry is the argument, and it is here so a later
  * reader can disagree with it in one place.
@@ -220,13 +265,14 @@ const EXEMPT: Record<string, string> = {
     "that IS load-bearing — a control's — is `--color-border-strong`, checked " +
     "above.",
   "--color-border-soft":
-    "Quieter still than --color-border: the rule between list rows and the " +
-    "skeleton's shimmer bars. Nothing is identified by it.",
-  "--color-overlay":
-    "A translucent scrim over the whole page. It carries no text and outlines " +
-    "nothing; its job is to dim, and a ratio against it is undefined anyway " +
-    "since it composites over whatever it covers.",
-  "--color-bg": "A ground, checked as the `bg` side of every text pair above.",
+    "Quieter still than --color-border as a rule between list rows. NOT " +
+    "quieter as a fill: since the pill switcher it is also the selected " +
+    "segment's background, and `--color-fg` on it is checked as a derived " +
+    "pair. This entry covers only the rule.",
+  // `--color-bg` used to sit here, excused as "a ground". It is also the
+  // letter in the user block's avatar — `bg-fg text-bg` — so it is read, and
+  // the derived pair checks it both ways. Reading the components is what
+  // noticed; the hand-written list had not.
   "--color-bg-sunken": "A ground, checked as the `bg` side of every text pair above.",
   "--color-panel": "A ground, checked as the `bg` side of every text pair above.",
   "--color-accent-soft": "A fill, checked as the `bg` side of the accent-soft pair above.",
@@ -245,11 +291,17 @@ describe.each(THEMES)("%s theme contrast", (_name, theme) => {
 });
 
 describe("the contract itself", () => {
-  it("gives every colour token in :root a verdict — a pair or a written exemption", () => {
+  it("gives every colour token in :root a verdict", () => {
+    // Three kinds of verdict, and no fourth: it is in a pair, it is exempt
+    // with a reason, or it is a fill nothing is read on. Appearing in a pair
+    // is no longer something a human grants — it is what the components say —
+    // so "decided" now means decided against every ground it is painted on.
     const checked = new Set(PAIRS.flatMap((pair) => [pair.fg, pair.bg]));
     const undecided = [...light.keys()]
       .filter((token) => token.startsWith("--color-") || token.startsWith("--status-"))
-      .filter((token) => !checked.has(token) && !(token in EXEMPT));
+      .filter(
+        (token) => !checked.has(token) && !(token in EXEMPT) && !(token in FILLS_WITHOUT_TEXT),
+      );
 
     expect(undecided).toEqual([]);
   });
@@ -271,6 +323,69 @@ describe("the contract itself", () => {
         contrast(resolveToken("--color-border", theme), resolveToken("--color-panel", theme)),
       ).toBeGreaterThan(1.1);
     }
+  });
+});
+
+/**
+ * The reading itself, which is now the part that can go quietly wrong.
+ *
+ * A scanner that stops matching — a class list built some new way, a parser
+ * that throws and is caught somewhere — produces an empty pair list, and an
+ * empty pair list passes every ratio there is. So the reading is asserted
+ * before the ratios mean anything.
+ */
+describe("reading the app rather than a list of it", () => {
+  it("reads the class lists it claims to read", () => {
+    expect(PAINTED.classListCount).toBeGreaterThan(120);
+    expect(PAINTED.pairs.length).toBeGreaterThan(25);
+  });
+
+  it("sees the two paints the hand-written list did not", () => {
+    // The finding, pinned. The first was introduced by the delivery-outcome
+    // work — "we don't know whether this went out, check the channel", printed
+    // in the review colour on the queue (page ground) and on the item screen
+    // (card ground) — thirty-six minutes before this file was first written.
+    // The second is the selected segment of every pill switcher.
+    const derived = PAINTED.pairs.map((pair) => `${pair.fg} on ${pair.bg}`);
+
+    expect(derived).toContain("--status-review-fg on --color-panel");
+    expect(derived).toContain("--status-review-fg on --color-bg");
+    expect(derived).toContain("--status-review-fg on --color-bg-sunken");
+    expect(derived).toContain("--color-fg on --color-border-soft");
+  });
+
+  it("still pairs a chip's word with its own pill", () => {
+    // The same token's first ground, which it does not lose by gaining others.
+    const derived = PAINTED.pairs.map((pair) => `${pair.fg} on ${pair.bg}`);
+
+    expect(derived).toContain("--status-review-fg on --status-review-bg");
+    expect(derived).toContain("--color-accent-fg on --color-accent");
+  });
+
+  it("uses no colour that is not one of ours", () => {
+    // A `text-red-500` anywhere in the app is outside the palette, so outside
+    // everything above — including the dark theme, which it would not follow.
+    expect(PAINTED.offPalette).toEqual([]);
+  });
+
+  it("accounts for every fill that carries no foreground of its own", () => {
+    // The one case deriving from class lists cannot see: a fill whose words
+    // are coloured by an ancestor. Today every such fill is wordless, and each
+    // says so in FILLS_WITHOUT_TEXT. A new one is a question to answer, not a
+    // line to add.
+    const unexplained = PAINTED.bareFills
+      .filter((fill) => !(fill.token in FILLS_WITHOUT_TEXT))
+      .map((fill) => `${fill.token} (${fill.where})`);
+
+    expect(unexplained).toEqual([]);
+  });
+
+  it("keeps no reason for a fill that is no longer bare", () => {
+    const stale = Object.keys(FILLS_WITHOUT_TEXT).filter(
+      (token) => !PAINTED.bareFills.some((fill) => fill.token === token),
+    );
+
+    expect(stale).toEqual([]);
   });
 });
 
