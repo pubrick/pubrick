@@ -1,3 +1,5 @@
+import { reportUnauthorized } from "./unauthorized";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -76,7 +78,15 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       // to tell those apart (`useSession` reports every one of them as
       // `data: null`), and the old sentence told a user who had just signed
       // out that something had gone wrong. "Signed out" is the one claim true
-      // in every case; AppShell's guard is what supplies the way back.
+      // in every case.
+      //
+      // The sentence is not the way back, and must never be left to be: the
+      // session store has no idea this request was refused, so on a screen that
+      // is polling — the one place a session dies with nobody navigating —
+      // saying it and stopping would be the whole of what the reader got.
+      // Reporting it is what turns the refusal into a trip to the login screen;
+      // see `unauthorized.ts` and AppShell's guard.
+      reportUnauthorized();
       throw new ApiError(401, "You're signed out. Log in again to continue.");
     }
     if (res.status === 403) {

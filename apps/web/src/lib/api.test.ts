@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api, apiVoid, errorMessage } from "./api";
+import { onUnauthorized } from "./unauthorized";
 
 function jsonResponse(status: number, body: unknown, statusText = ""): Response {
   return {
@@ -46,6 +47,39 @@ describe("api", () => {
         headers: expect.objectContaining({ "content-type": "application/json" }),
       }),
     );
+  });
+
+  it("reports a 401 to the app, not only to the caller that made the request", async () => {
+    // The caller gets a sentence; the APP has to get the fact. A screen that is
+    // polling has nobody navigating, so without this the session's death never
+    // reaches AppShell's guard and the reader is left on a dead screen. Both
+    // wrappers go through `request()`, so the read-receipt POST reports too.
+    const seen = vi.fn();
+    const stop = onUnauthorized(seen);
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(401, { statusCode: 401 }));
+
+    await expect(api("/content")).rejects.toBeInstanceOf(ApiError);
+    await expect(apiVoid("/content/1/opened", { method: "POST" })).rejects.toBeInstanceOf(ApiError);
+
+    expect(seen).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("reports nothing to the app for any other failure", async () => {
+    // A 403 is a permission and a 5xx is a blip. Reporting either would sign
+    // people out over a restarting API.
+    const seen = vi.fn();
+    const stop = onUnauthorized(seen);
+
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(403, { message: "Forbidden" }));
+    await expect(api("/content")).rejects.toBeInstanceOf(ApiError);
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(500, { message: "boom" }));
+    await expect(api("/content")).rejects.toBeInstanceOf(ApiError);
+    vi.mocked(fetch).mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(api("/content")).rejects.toBeInstanceOf(ApiError);
+
+    expect(seen).not.toHaveBeenCalled();
+    stop();
   });
 
   it("surfaces the server's message verbatim on a 4xx", async () => {

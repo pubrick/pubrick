@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { vi } from "vitest";
 
 /**
@@ -46,8 +47,38 @@ const NO_ORG: OrgState = { data: null, isPending: false };
 let sessionState: SessionState = SIGNED_OUT;
 let orgState: OrgState = NO_ORG;
 
+/**
+ * The real `useSession()` is a subscription to a store: writing to that store
+ * — which `refetch()` does, with the server's answer — re-renders everything
+ * reading it. A stub that merely returns a module variable is a *snapshot*,
+ * and under it a session that dies mid-render is invisible to the component
+ * until something else happens to re-render it. That is not a smaller version
+ * of the real thing, it is the one behaviour the guard is built on, so the
+ * stub subscribes properly and the setters below notify.
+ */
+const subscribers = new Set<() => void>();
+
+function subscribe(onStoreChange: () => void): () => void {
+  subscribers.add(onStoreChange);
+  return () => {
+    subscribers.delete(onStoreChange);
+  };
+}
+
+function setSessionState(next: SessionState): SessionState {
+  sessionState = next;
+  for (const notify of [...subscribers]) notify();
+  return next;
+}
+
 export const authClient = {
-  useSession: vi.fn(() => sessionState),
+  useSession: vi.fn(() =>
+    useSyncExternalStore(
+      subscribe,
+      () => sessionState,
+      () => sessionState,
+    ),
+  ),
   useActiveOrganization: vi.fn(() => orgState),
   signOut: vi.fn(),
   signIn: { email: vi.fn() },
@@ -57,12 +88,20 @@ export const authClient = {
 
 /** Opt-in: `authClient.useSession()` reports a signed-in user until reset. */
 export function signedInSession(email = "test@example.com"): SessionState {
-  sessionState = {
+  return setSessionState({
     data: { user: { id: "test-user", email } },
     isPending: false,
     refetch: sessionRefetch,
-  };
-  return sessionState;
+  });
+}
+
+/**
+ * Opt-in: the session ends. Not the same as the default — this is the store
+ * *changing* to null under a mounted component, which is what a `refetch()`
+ * that finds the session gone actually does.
+ */
+export function signedOutSession(): SessionState {
+  return setSessionState(SIGNED_OUT);
 }
 
 /**
@@ -70,8 +109,7 @@ export function signedInSession(email = "test@example.com"): SessionState {
  * AppShell's guard must NOT read this as signed out, so it needs saying.
  */
 export function pendingSession(): SessionState {
-  sessionState = { data: null, isPending: true, refetch: sessionRefetch };
-  return sessionState;
+  return setSessionState({ data: null, isPending: true, refetch: sessionRefetch });
 }
 
 /** Opt-in: `authClient.useActiveOrganization()` reports an org until reset. */
@@ -82,7 +120,7 @@ export function signedInOrganization(name = "Test Org"): OrgState {
 
 /** Back to the safe signed-out default. Called from `setup.ts`'s afterEach. */
 export function resetStubSession(): void {
-  sessionState = SIGNED_OUT;
+  setSessionState(SIGNED_OUT);
   orgState = NO_ORG;
   sessionRefetch.mockReset();
 }

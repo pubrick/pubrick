@@ -12,6 +12,7 @@ import { TRANSITION_COLORS } from "@/components/ui/transition";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { authClient } from "@/lib/auth-client";
 import { loginHref } from "@/lib/auth-routes";
+import { onUnauthorized } from "@/lib/unauthorized";
 
 export type AppShellProps = {
   // ReactNode (not just string) so a page can show e.g. a `Skeleton` in the
@@ -52,9 +53,20 @@ const NAV_ICONS: Record<NavKey, (props: IconProps) => ReactNode> = {
  * nav, filters, whatever the page had already painted — with an inline error
  * where the data should be. Once the session resolves to null the shell
  * renders NOTHING and sends the visitor to the login screen with the path they
- * wanted, so that logging in returns them to it. Rendering the children and
- * redirecting "in the background" is not equivalent: they would mount, fetch,
- * and paint a 401 in the frame before the navigation lands.
+ * wanted, so that logging in returns them to it.
+ *
+ * What returning nothing does and does not buy, stated exactly, because the
+ * comment here used to overclaim it: it keeps the chrome, the title and every
+ * CHILD component off the screen and unmounted, so nothing under it fetches,
+ * and no 401 is ever painted. It does NOT stop the page's own requests. Every
+ * screen in this app renders the shell from the same component that does its
+ * fetching — the queue's content and runs polls, the item screen's read
+ * receipt — so those are already in flight by the time this guard has an
+ * opinion, and no guard living inside the shell could be otherwise. That is
+ * not a hole to plug here: those requests answer 401 to a signed-out visitor,
+ * which is what a session-less request should do, and the 401 is now the thing
+ * that carries the reader to the login screen (see the expiry effect below).
+ * The guard's job is that nobody is left LOOKING at the result.
  */
 export function AppShell({ title, primaryAction, search, children }: AppShellProps) {
   const t = useTranslations("Nav");
@@ -85,7 +97,49 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
   const [confirmedSignedOut, setConfirmedSignedOut] = useState(false);
   const confirming = useRef(false);
 
+  /**
+   * ...and the other direction: a session that dies while nobody navigates.
+   *
+   * The store above is refreshed on mount, on `visibilitychange` and on
+   * `online`, and on nothing else — no refetch interval is configured, and
+   * better-auth is never told that an API request came back 401. So on the two
+   * screens that poll while a delivery is in flight, watched by the very
+   * person the polling was built for, not one of those events fires: the poll
+   * stops on the 4xx, an alert goes red, and the guard above never hears that
+   * there is nothing left to guard. That was a fully painted screen with no
+   * redirect and no link out of it until its owner switched tabs.
+   *
+   * A 401 is the SERVER's verdict on the session, not the store's stale copy
+   * of one, so it needs no confirming round trip the way a suspected sign-out
+   * does — it already is the round trip. `refetch()` still goes out, not to
+   * decide anything here, but so that the store the rest of the app reads
+   * (the login screen we are about to land on included) stops reporting a user
+   * the API has stopped accepting.
+   *
+   * One way, once. The queue runs TWO polls — its cards and its open runs —
+   * and a session that has ended ends both of them, usually in the same tick;
+   * `left` is what keeps that one event from being two departures.
+   */
+  const [expired, setExpired] = useState(false);
+  const left = useRef(false);
+
+  useEffect(
+    () =>
+      onUnauthorized(() => {
+        if (left.current) return;
+        left.current = true;
+        setExpired(true);
+        void refetch();
+        router.replace(loginHref(locale, pathname));
+      }),
+    [refetch, router, locale, pathname],
+  );
+
   useEffect(() => {
+    // The expiry above owns the departure once it has happened; re-confirming
+    // a sign-out the server has already stated would only spend a second
+    // `get-session` on the way out.
+    if (expired) return;
     if (session) {
       // Signed in again (or never really out): forget the old verdict, so a
       // later expiry is re-confirmed rather than inheriting this one.
@@ -105,7 +159,7 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
       confirming.current = false;
       setConfirmedSignedOut(true);
     });
-  }, [session, isPending, confirmedSignedOut, refetch, router, locale, pathname]);
+  }, [expired, session, isPending, confirmedSignedOut, refetch, router, locale, pathname]);
 
   const destinations: { key: NavKey; href: string }[] = [
     { key: "queue", href: `/${locale}/content` },
@@ -149,9 +203,14 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
   const initial = email.charAt(0).toUpperCase();
 
   // Nothing — not the chrome, not the title, not a "redirecting…" line — until
-  // there is a session to render it for. The effect above is already on its
+  // there is a session to render it for. The effects above are already on the
   // way to the login screen.
-  if (!session) return null;
+  //
+  // `expired` is checked as well as `session`, and that is the point of it:
+  // the store still holds a user at this moment (nothing has told it
+  // otherwise), so reading `session` alone would keep the dead screen — and
+  // its red alert — painted underneath a navigation that has not landed yet.
+  if (expired || !session) return null;
 
   return (
     <ToastProvider>
