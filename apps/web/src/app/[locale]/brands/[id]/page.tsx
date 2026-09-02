@@ -1,6 +1,12 @@
 "use client";
 
-import { NON_SECRET_FIELDS, PLATFORM_FIELDS, PLATFORM_IDS } from "@pubrick/shared";
+import {
+  isPublishablePlatform,
+  NON_SECRET_FIELDS,
+  PLATFORM_FIELDS,
+  PLATFORM_IDS,
+  PUBLISHABLE_PLATFORM_IDS,
+} from "@pubrick/shared";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
@@ -13,11 +19,26 @@ import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 
 type Channel = { id: string; platform: string; name: string };
-type Brand = { id: string; name: string };
+/**
+ * The brand as this screen edits it. `voice`, `audience` and `contentLanguage`
+ * are not decoration: every generation step interpolates all three into the
+ * model's `instructions` (`instructionsFor` in `@pubrick/ai`), and until this
+ * screen grew the editor below there was no way for anyone to fill them — the
+ * create form sends a name and nothing else, so "on-brand, on-voice" rested on
+ * columns that were always null.
+ */
+type Brand = {
+  id: string;
+  name: string;
+  voice: string | null;
+  audience: string | null;
+  contentLanguage: string;
+};
 type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
 
 type PlatformId = (typeof PLATFORM_IDS)[number];
@@ -37,9 +58,39 @@ const NAME_INPUT_ID = "channel-name";
 // button is.
 const EDIT_FORM_ID = "channel-edit-form";
 
+// The brand-voice modal's form id — same arrangement, its Save is in the footer.
+const VOICE_FORM_ID = "brand-voice-form";
+
+// The language field's hint is a sibling paragraph rather than a placeholder:
+// the field is always prefilled, so a placeholder would never be seen.
+const LANGUAGE_HINT_ID = "brand-language-hint";
+
+/**
+ * The picker's two groups.
+ *
+ * Every platform this product names is still shown, and the seven with no
+ * adapter are shown as what they are — `disabled`, under a heading that says
+ * so — rather than hidden. Hiding them would answer "does Pubrick support VK?"
+ * with silence; the honest answer is "not yet", and this is a product whose
+ * pitch is not overstating what it did. The browser will not let a disabled
+ * option be selected, so nobody can reach the credential fields for one, and
+ * `POST /api/channels` refuses the same set server-side (derived there from the
+ * publisher registry) in case anything ever does.
+ */
+const OFFERED_PLATFORMS = PLATFORM_IDS.filter((p) => isPublishablePlatform(p));
+const UNSUPPORTED_PLATFORMS = PLATFORM_IDS.filter((p) => !isPublishablePlatform(p));
+
+/**
+ * The picker's initial value, taken from the publishable set rather than
+ * written down again: a hard-coded `"telegram"` would put an unselectable
+ * platform in `platform` the day Telegram's adapter is the one that goes.
+ */
+const DEFAULT_PLATFORM: PlatformId = PUBLISHABLE_PLATFORM_IDS[0];
+
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
+  const tb = useTranslations("Brands");
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
@@ -48,7 +99,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // channels list was missing.
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [channelsError, setChannelsError] = useState<string | null>(null);
-  const [platform, setPlatform] = useState<PlatformId>("telegram");
+  const [platform, setPlatform] = useState<PlatformId>(DEFAULT_PLATFORM);
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +125,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [editCreds, setEditCreds] = useState<Record<string, string>>({});
   const [editError, setEditError] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
+  // The brand's own settings — the three fields every generation prompt
+  // interpolates. Unlike the channel credentials above these ARE readable, so
+  // the modal opens prefilled with what is stored and Save sends all three:
+  // clearing a field is a deliberate act with a meaning (the prompt omits the
+  // line rather than telling the model the voice is empty).
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState("");
+  const [audienceDraft, setAudienceDraft] = useState("");
+  const [languageDraft, setLanguageDraft] = useState("");
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
 
   // A 403 from ActiveOrgGuard means the account has no organization yet — that is
   // an onboarding step, not an error to show the user. Every other failure
@@ -203,6 +265,56 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
+  /**
+   * STABLE for the same reason `closeEditor` is: `Modal`'s focus-trap effect
+   * depends on `[open, onClose]`, and a new closure on every render re-runs it
+   * on every keystroke, pulling focus out of the field being typed into. The
+   * symptom is a textarea that accepts exactly one character.
+   */
+  const closeVoiceEditor = useCallback(() => setVoiceOpen(false), []);
+
+  function startVoiceEditing() {
+    if (brand === null) return;
+    setVoiceDraft(brand.voice ?? "");
+    setAudienceDraft(brand.audience ?? "");
+    setLanguageDraft(brand.contentLanguage);
+    setVoiceError(null);
+    setVoiceOpen(true);
+  }
+
+  /**
+   * Writes the three fields the model is instructed with.
+   *
+   * All three go in one PATCH, including the ones that did not change: this is
+   * a form, not a diff, and `brandUpdateSchema` accepts each independently. An
+   * empty voice or audience is sent as `""` on purpose — that is how a person
+   * un-sets one, and the prompt builder omits an empty line rather than telling
+   * the model the brand's voice is nothing.
+   */
+  async function saveVoice(e: React.FormEvent) {
+    e.preventDefault();
+    setVoiceError(null);
+    setVoiceBusy(true);
+    try {
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          voice: voiceDraft,
+          audience: audienceDraft,
+          contentLanguage: languageDraft,
+        }),
+      });
+      // The server's row, not the draft: `contentLanguage` has a default and
+      // every field is bounded there, so the card must show what was stored.
+      setBrand(updated);
+      setVoiceOpen(false);
+    } catch (err) {
+      setVoiceError(describeError(err));
+    } finally {
+      setVoiceBusy(false);
+    }
+  }
+
   async function testConnection(channelId: string) {
     setTestResults((prev) => ({ ...prev, [channelId]: "loading" }));
     try {
@@ -235,6 +347,55 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           {error}
         </p>
       )}
+
+      {/* The brand's own settings, above its channels: this is the one place
+          voice, audience and content language can be set, and all three are
+          interpolated into every generation prompt. They used to exist only in
+          the schema, the PATCH route and the prompt builder — never on a
+          screen — so "on-brand, on-voice" was a promise resting on null
+          columns. `description` is deliberately absent: no prompt reads it, and
+          a field that changes nothing is the same overstatement in miniature. */}
+      <Card className="mb-6">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-fg">{tb("voiceTitle")}</h2>
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={startVoiceEditing}
+            disabled={brand === null}
+          >
+            {tb("voiceEdit")}
+          </Button>
+        </div>
+        <p className="mb-4 text-sm text-fg-secondary">{tb("voiceHint")}</p>
+        {brand === null ? (
+          <div aria-busy="true">
+            <Skeleton lines={3} />
+          </div>
+        ) : (
+          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {[
+              { key: "voice", label: tb("voiceLabel"), value: brand.voice },
+              { key: "audience", label: tb("audienceLabel"), value: brand.audience },
+              { key: "language", label: tb("languageLabel"), value: brand.contentLanguage },
+            ].map((field) => (
+              <div key={field.key} className="flex min-w-0 flex-col gap-1">
+                <dt className="text-sm font-medium text-fg-secondary">{field.label}</dt>
+                <dd
+                  className={
+                    (field.value ?? "").trim() === ""
+                      ? "text-sm text-fg-tertiary"
+                      : "whitespace-pre-wrap text-sm text-fg"
+                  }
+                >
+                  {(field.value ?? "").trim() === "" ? tb("voiceUnset") : field.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </Card>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
 
@@ -343,11 +504,27 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               }}
               className="min-w-[160px]"
             >
-              {PLATFORM_IDS.map((p) => (
+              {OFFERED_PLATFORMS.map((p) => (
                 <option key={p} value={p}>
                   {platformName(p)}
                 </option>
               ))}
+              {/* Named, and plainly marked as not yet deliverable. Disabled
+                  rather than hidden: hiding them answers "does Pubrick support
+                  VK?" with silence, and this is the product that refuses to
+                  overstate what it can do. The browser will not select a
+                  disabled option, so the credential fields for one are
+                  unreachable — and `POST /api/channels` refuses the same set
+                  anyway, derived from the publisher registry. */}
+              {UNSUPPORTED_PLATFORMS.length > 0 && (
+                <optgroup label={t("platformUnsupported")}>
+                  {UNSUPPORTED_PLATFORMS.map((p) => (
+                    <option key={p} value={p} disabled>
+                      {platformName(p)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </Select>
             <Input
               id={NAME_INPUT_ID}
@@ -415,6 +592,64 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               />
             ),
           )}
+        </form>
+      </Modal>
+
+      <Modal
+        open={voiceOpen}
+        onClose={closeVoiceEditor}
+        title={tb("voiceTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeVoiceEditor}>
+              {tb("voiceCancel")}
+            </Button>
+            <Button type="submit" form={VOICE_FORM_ID} disabled={voiceBusy}>
+              {tb("voiceSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={VOICE_FORM_ID} onSubmit={saveVoice} className="flex flex-col gap-3">
+          {voiceError && (
+            <p role="alert" className="text-sm text-danger">
+              {voiceError}
+            </p>
+          )}
+          <Textarea
+            value={voiceDraft}
+            onChange={(e) => setVoiceDraft(e.target.value)}
+            label={tb("voiceLabel")}
+            placeholder={tb("voicePlaceholder")}
+            maxLength={2000}
+            showCount
+          />
+          <Textarea
+            value={audienceDraft}
+            onChange={(e) => setAudienceDraft(e.target.value)}
+            label={tb("audienceLabel")}
+            placeholder={tb("audiencePlaceholder")}
+            maxLength={2000}
+            showCount
+          />
+          {/* A free-text code, bounded exactly as `brandCreateSchema` bounds it
+              (2–10 characters). Not a fixed menu: the prompt says "write in the
+              language with code X" and a self-hoster writing in a language no
+              menu of ours would list must be able to say so. */}
+          <div className="flex flex-col gap-1.5">
+            <Input
+              value={languageDraft}
+              onChange={(e) => setLanguageDraft(e.target.value)}
+              label={tb("languageLabel")}
+              aria-describedby={LANGUAGE_HINT_ID}
+              minLength={2}
+              maxLength={10}
+              required
+            />
+            <p id={LANGUAGE_HINT_ID} className="text-xs text-fg-tertiary">
+              {tb("languageHint")}
+            </p>
+          </div>
         </form>
       </Modal>
 

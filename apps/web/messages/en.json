@@ -43,7 +43,19 @@
     "emptyCreateAction": "Create your first brand",
     "genericError": "Something went wrong. Please try again.",
     "listError": "Your brands could not be loaded, so this list is not the answer.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "voiceTitle": "Voice and audience",
+    "voiceHint": "All three go into the model’s instructions on every generation, and nothing else tells it how this brand sounds. Leave one empty and it is left out of the prompt rather than guessed at.",
+    "voiceEdit": "Edit voice",
+    "voiceLabel": "Voice",
+    "voicePlaceholder": "Dry and concrete. No exclamation marks, no hype.",
+    "audienceLabel": "Audience",
+    "audiencePlaceholder": "Independent cafe owners who roast their own beans.",
+    "languageLabel": "Content language",
+    "languageHint": "The language code drafts are written in — for example en, es, ru or pt-BR.",
+    "voiceUnset": "Not set",
+    "voiceSave": "Save",
+    "voiceCancel": "Cancel"
   },
   "Channels": {
     "title": "Channels",
@@ -66,7 +78,8 @@
     "editCredsHint": "Leave these empty to keep the credentials already stored — Pubrick cannot show them again. Fill them in to replace them, which is how you install a new token after the platform revokes one. Scheduled posts stay scheduled and go out with the new credentials.",
     "editCredsPartial": "Fill in every credential field, or leave them all empty. New credentials replace the stored ones as a set, so a half-filled form would leave this channel unable to post.",
     "editSave": "Save",
-    "editCancel": "Cancel"
+    "editCancel": "Cancel",
+    "platformUnsupported": "Not yet supported"
   },
   "Content": {
     "title": "Queue",

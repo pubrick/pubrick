@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { PLATFORM_FIELDS, PLATFORM_IDS, PUBLISHABLE_PLATFORM_IDS } from "@pubrick/shared";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -91,9 +92,9 @@ describe.skipIf(!url)("channels e2e", () => {
       .post("/api/channels")
       .send({
         brandId: brand.body.id,
-        platform: "vk",
-        name: "VK",
-        credentials: { accessToken: "vk-plain-secret" },
+        platform: "telegram",
+        name: "TG",
+        credentials: { botToken: "tg-plain-secret", chatId: "@pubrick" },
       })
       .expect(201);
     const { createDb } = await import("@pubrick/db");
@@ -103,7 +104,88 @@ describe.skipIf(!url)("channels e2e", () => {
     );
     await pool.end();
     const stored = String((rows.rows[0] as Record<string, unknown>).credentials_encrypted);
-    expect(stored).not.toContain("vk-plain-secret");
+    expect(stored).not.toContain("tg-plain-secret");
+  });
+
+  /**
+   * The picker and the API answer the same question, and this is what stops
+   * them answering it differently.
+   *
+   * The channel form offers `PLATFORM_IDS` — eight names — and disables every
+   * one Pubrick has no adapter for, reading `PUBLISHABLE_PLATFORM_IDS` from
+   * `@pubrick/shared`. The API refuses the same set by asking the registry
+   * (`getPublisher`) instead. Two different sources for one answer, on two
+   * sides of the wire, is exactly the arrangement that drifts — so the cases
+   * below are GENERATED from the shared declaration the picker renders, and
+   * every one of them is asserted against the running API.
+   *
+   * A survivor here is not a cosmetic mismatch. A channel for a platform with
+   * no adapter can be created and its credentials stored; the pipeline then
+   * spends the org's own API budget adapting each post for it; and approval
+   * fails permanently with "no adapter for platform X". The refusal has to
+   * happen here, before the first paid call, because nothing downstream can
+   * give the money back.
+   */
+  describe("platforms with no adapter", () => {
+    const unsupported = PLATFORM_IDS.filter(
+      (id) => !(PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(id),
+    );
+
+    it("has something to refuse (the picker disables these very ids)", () => {
+      expect(unsupported.length).toBeGreaterThan(0);
+    });
+
+    for (const platform of unsupported) {
+      it(`refuses to create a ${platform} channel, and stores nothing`, async () => {
+        const agent = await orgAgent();
+        const brand = await agent
+          .post("/api/brands")
+          .send({ name: `NA ${platform}` })
+          .expect(201);
+
+        await agent
+          .post("/api/channels")
+          .send({
+            brandId: brand.body.id,
+            platform,
+            name: `${platform} channel`,
+            credentials: Object.fromEntries(
+              PLATFORM_FIELDS[platform].map((f) => [f, "would-be-secret"]),
+            ),
+          })
+          .expect(400);
+
+        // The refusal is only worth anything if nothing was written on the way
+        // to it — a stored channel is what the pipeline would later find and
+        // spend money adapting for.
+        const list = await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200);
+        expect(list.body).toEqual([]);
+      });
+    }
+
+    for (const platform of PUBLISHABLE_PLATFORM_IDS) {
+      it(`still accepts a ${platform} channel, which the picker still offers`, async () => {
+        const agent = await orgAgent();
+        const brand = await agent
+          .post("/api/brands")
+          .send({ name: `OK ${platform}` })
+          .expect(201);
+
+        const created = await agent
+          .post("/api/channels")
+          .send({
+            brandId: brand.body.id,
+            platform,
+            name: `${platform} channel`,
+            credentials: Object.fromEntries(
+              PLATFORM_FIELDS[platform].map((f) => [f, "credential-value"]),
+            ),
+          })
+          .expect(201);
+
+        expect(created.body.platform).toBe(platform);
+      });
+    }
   });
 
   it("rejects a channel for another org's brand", async () => {
@@ -121,7 +203,7 @@ describe.skipIf(!url)("channels e2e", () => {
     const brand = await a.post("/api/brands").send({ name: "D" }).expect(201);
     const ch = await a
       .post("/api/channels")
-      .send({ brandId: brand.body.id, platform: "max", name: "M", credentials: { k: "v" } })
+      .send({ brandId: brand.body.id, platform: "telegram", name: "M", credentials: { k: "v" } })
       .expect(201);
     const b = await orgAgent();
     await b.delete(`/api/channels/${ch.body.id}`).expect(404);

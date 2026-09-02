@@ -43,7 +43,19 @@
     "emptyCreateAction": "Crie sua primeira marca",
     "genericError": "Algo deu errado. Tente novamente.",
     "listError": "Não foi possível carregar suas marcas, então esta lista não é a resposta.",
-    "retry": "Tente novamente"
+    "retry": "Tente novamente",
+    "voiceTitle": "Voz e público",
+    "voiceHint": "Os três campos entram nas instruções do modelo a cada geração, e nada mais lhe diz como esta marca soa. Um campo vazio fica de fora do prompt em vez de ser inventado.",
+    "voiceEdit": "Editar voz",
+    "voiceLabel": "Voz",
+    "voicePlaceholder": "Seca e concreta. Sem pontos de exclamação, sem exagero.",
+    "audienceLabel": "Público",
+    "audiencePlaceholder": "Donos de cafés independentes que torram o próprio grão.",
+    "languageLabel": "Idioma do conteúdo",
+    "languageHint": "O código do idioma em que os rascunhos são escritos — por exemplo en, es, ru ou pt-BR.",
+    "voiceUnset": "Não definido",
+    "voiceSave": "Salvar",
+    "voiceCancel": "Cancelar"
   },
   "Channels": {
     "title": "Canais",
@@ -66,7 +78,8 @@
     "editCredsHint": "Deixe em branco para manter as credenciais já guardadas — o Pubrick não pode mostrá-las de novo. Preencha para substituí-las, que é como se instala um token novo depois de a plataforma revogar o anterior. As publicações agendadas continuam agendadas e sairão com as credenciais novas.",
     "editCredsPartial": "Preencha todos os campos de credenciais ou deixe todos em branco. As credenciais novas substituem as guardadas por inteiro, então um formulário pela metade deixaria este canal sem conseguir publicar.",
     "editSave": "Salvar",
-    "editCancel": "Cancelar"
+    "editCancel": "Cancelar",
+    "platformUnsupported": "Ainda não suportado"
   },
   "Content": {
     "title": "Fila",

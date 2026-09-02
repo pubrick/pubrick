@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { getPublisher, type VerifyResult } from "@pubrick/integrations";
 import { type ChannelCreate, type ChannelUpdate, decryptJson, encryptJson } from "@pubrick/shared";
@@ -57,7 +57,36 @@ export class ChannelsRepository {
     return db.select(PUBLIC_COLUMNS).from(schema.channels).where(where);
   }
 
+  /**
+   * Creates a channel — and refuses one for a platform Pubrick cannot deliver to.
+   *
+   * The refusal is the point of this method, not a validation nicety. Without
+   * it a channel could be created for any of the eight names in `PLATFORM_IDS`,
+   * its credentials would be encrypted and stored, the generation pipeline
+   * would then spend the org's own API budget adapting every post for it, and
+   * approval would fail permanently with "no adapter for platform X". The money
+   * is spent before anything can notice; the connection test says so only if
+   * somebody presses it.
+   *
+   * `getPublisher` — the registry itself — is what decides, rather than a list
+   * of supported platforms maintained beside it. A self-hoster who adds an
+   * adapter gets the endpoint that accepts it in the same commit, and this
+   * cannot go stale against the publisher a post is eventually handed to,
+   * because it is the same lookup `PublishService` makes.
+   *
+   * 400, not 404: the platform is a real name this product knows and intends to
+   * support, and the caller's request is well-formed. What it is not is
+   * something that can be published to yet, which is what the message says.
+   *
+   * Checked BEFORE the brand lookup would matter and before anything is
+   * written, so a refused create leaves no row and no ciphertext behind.
+   */
   async create(orgId: string, data: ChannelCreate) {
+    if (!getPublisher(data.platform)) {
+      throw new BadRequestException(
+        `Pubrick cannot publish to ${data.platform} yet, so a channel for it would never deliver a post`,
+      );
+    }
     const brand = await db
       .select({ id: schema.brands.id })
       .from(schema.brands)

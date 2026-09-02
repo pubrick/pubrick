@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { type RunStepContext, type UsageRecord, WRITER } from "@pubrick/ai";
+import { MockLanguageModelV4 } from "ai/test";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -80,6 +82,153 @@ describe.skipIf(!url)("brands e2e", () => {
     await agent.delete(`/api/brands/${created.body.id}`).expect(200);
     const after = await agent.get("/api/brands").expect(200);
     expect(after.body).toHaveLength(0);
+  });
+
+  /**
+   * A model that answers with one canned JSON body. The V4 usage shape is
+   * nested and `finishReason` is an object — a bare string passes vitest and
+   * fails `tsc` (both traps are documented in `packages/ai`'s steps.test.ts).
+   * NO provider is reached: house rule, and this suite has no key.
+   */
+  function jsonModel(text: string) {
+    return new MockLanguageModelV4({
+      modelId: "gemini-3.7-flash",
+      doGenerate: async () => ({
+        content: [{ type: "text" as const, text }],
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 5, text: 5, reasoning: 0 },
+        },
+        warnings: [],
+      }),
+    });
+  }
+
+  /**
+   * The system and user halves of one call, split by ROLE.
+   *
+   * Splitting matters: the SDK carries the system message inside the same
+   * `prompt` array as the user message, so an assertion against the
+   * stringified whole is true whichever side a string is on — and the whole
+   * point of the brand fields is that they are `instructions`.
+   */
+  function halvesOf(model: MockLanguageModelV4): { system: string; user: string } {
+    const prompt = (model.doGenerateCalls[0]?.prompt ?? []) as ReadonlyArray<{ role: string }>;
+    return {
+      system: JSON.stringify(prompt.filter((m) => m.role === "system")),
+      user: JSON.stringify(prompt.filter((m) => m.role !== "system")),
+    };
+  }
+
+  /**
+   * The chain the product's central claim rests on, end to end: a value a
+   * person types on the brand screen is the value the model is instructed with.
+   *
+   * Each half of it was already true and neither was joined to the other.
+   * `voice`, `audience` and `contentLanguage` had a column, a place in
+   * `brandUpdateSchema`, a PATCH route and an interpolation in every step's
+   * `instructions` — and no screen anywhere could set them, so the README's
+   * "on-brand, on-voice" was a promise about columns that were always null.
+   * The screen half is now pinned in `apps/web/src/app/[locale]/brands/[id]/page.test.tsx`
+   * (that the modal PATCHes exactly this body); this is the rest of the road.
+   *
+   * It deliberately does NOT assert that a PATCH succeeded — that test existed
+   * already and proved nothing about the model. It reads the brand back through
+   * the public endpoint, hands those four fields to a REAL step (`WRITER`,
+   * through `defineStep`'s one prompt path, the same one every step in the
+   * pipeline goes through) and reads what the model was actually sent.
+   * `apps/worker/src/generate/generate.repository.ts` selects the same four
+   * columns into the same `StepBrand`.
+   *
+   * The markers are distinctive strings rather than plausible prose: "friendly"
+   * could appear in a step's own role lines, and an assertion that passes on
+   * the pipeline's boilerplate would say nothing about the brand's row.
+   */
+  it("carries a typed voice, audience and language into the model's instructions", async () => {
+    const VOICE = "VOICE_MARKER dry and concrete, never an exclamation mark";
+    const AUDIENCE = "AUDIENCE_MARKER independent cafe owners who roast their own beans";
+    const LANGUAGE = "pt-BR";
+
+    const agent = await orgAgent();
+    const created = await agent.post("/api/brands").send({ name: "Kettle and Co" }).expect(201);
+
+    // Exactly the body the brand-voice modal sends, field for field.
+    await agent
+      .patch(`/api/brands/${created.body.id}`)
+      .send({ voice: VOICE, audience: AUDIENCE, contentLanguage: LANGUAGE })
+      .expect(200);
+
+    const stored = await agent.get(`/api/brands/${created.body.id}`).expect(200);
+
+    const model = jsonModel(JSON.stringify({ body: "a draft" }));
+    const ledger: UsageRecord[] = [];
+    const ctx: RunStepContext = {
+      brand: {
+        name: stored.body.name,
+        voice: stored.body.voice,
+        audience: stored.body.audience,
+        contentLanguage: stored.body.contentLanguage,
+      },
+      brief: "BRIEF_MARKER announce the autumn menu",
+      model,
+      provider: "google",
+      onUsage: (record) => {
+        ledger.push(record);
+      },
+      maxRetries: 0,
+    };
+
+    await WRITER.run(ctx, {
+      research: { angle: "seasonal sourcing", keyPoints: ["four new drinks"], avoid: [] },
+    });
+
+    const { system, user } = halvesOf(model);
+    expect(system).toContain(VOICE);
+    expect(system).toContain(AUDIENCE);
+    expect(system).toContain(LANGUAGE);
+    // Not merely present — present as INSTRUCTIONS. Brand configuration on the
+    // material side would be a prompt-injection regression as well as a
+    // weaker guarantee, and the brief must stay on the material side.
+    expect(user).not.toContain(VOICE);
+    expect(user).not.toContain(AUDIENCE);
+    expect(user).toContain("BRIEF_MARKER");
+    expect(system).not.toContain("BRIEF_MARKER");
+    // A call that never happened cannot have carried anything.
+    expect(ledger).toHaveLength(1);
+  });
+
+  /**
+   * The other half of the same claim: a field nobody filled is left OUT of the
+   * instructions, rather than told to the model as the word "null".
+   */
+  it("says nothing about a voice nobody set", async () => {
+    const agent = await orgAgent();
+    const created = await agent.post("/api/brands").send({ name: "Kettle and Co" }).expect(201);
+    const stored = await agent.get(`/api/brands/${created.body.id}`).expect(200);
+    expect(stored.body.voice).toBeNull();
+
+    const model = jsonModel(JSON.stringify({ body: "a draft" }));
+    await WRITER.run(
+      {
+        brand: {
+          name: stored.body.name,
+          voice: stored.body.voice,
+          audience: stored.body.audience,
+          contentLanguage: stored.body.contentLanguage,
+        },
+        brief: "announce the autumn menu",
+        model,
+        provider: "google",
+        onUsage: () => undefined,
+        maxRetries: 0,
+      },
+      { research: { angle: "a", keyPoints: ["one"], avoid: [] } },
+    );
+
+    const { system } = halvesOf(model);
+    expect(system).not.toMatch(/Voice:/);
+    expect(system).not.toContain("null");
   });
 
   it("rejects invalid payloads with 400", async () => {

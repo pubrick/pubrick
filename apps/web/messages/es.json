@@ -43,7 +43,19 @@
     "emptyCreateAction": "Crea tu primera marca",
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "listError": "No se pudieron cargar tus marcas, así que esta lista no es la respuesta.",
-    "retry": "Inténtalo de nuevo"
+    "retry": "Inténtalo de nuevo",
+    "voiceTitle": "Voz y público",
+    "voiceHint": "Los tres campos entran en las instrucciones del modelo en cada generación, y nada más le dice cómo suena esta marca. Si dejas uno vacío, se omite del prompt en lugar de inventarlo.",
+    "voiceEdit": "Editar voz",
+    "voiceLabel": "Voz",
+    "voicePlaceholder": "Seca y concreta. Sin signos de exclamación, sin exageraciones.",
+    "audienceLabel": "Público",
+    "audiencePlaceholder": "Dueños de cafeterías independientes que tuestan su propio café.",
+    "languageLabel": "Idioma del contenido",
+    "languageHint": "El código del idioma en el que se escriben los borradores: por ejemplo en, es, ru o pt-BR.",
+    "voiceUnset": "Sin definir",
+    "voiceSave": "Guardar",
+    "voiceCancel": "Cancelar"
   },
   "Channels": {
     "title": "Canales",
@@ -66,7 +78,8 @@
     "editCredsHint": "Déjalos vacíos para conservar las credenciales ya guardadas: Pubrick no puede volver a mostrarlas. Rellénalos para reemplazarlas, que es como se instala un token nuevo cuando la plataforma revoca el anterior. Las publicaciones programadas siguen programadas y saldrán con las credenciales nuevas.",
     "editCredsPartial": "Rellena todos los campos de credenciales o déjalos todos vacíos. Las credenciales nuevas reemplazan a las guardadas en bloque, así que un formulario a medias dejaría este canal sin poder publicar.",
     "editSave": "Guardar",
-    "editCancel": "Cancelar"
+    "editCancel": "Cancelar",
+    "platformUnsupported": "Todavía no compatible"
   },
   "Content": {
     "title": "Cola",
