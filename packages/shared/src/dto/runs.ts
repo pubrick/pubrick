@@ -74,10 +74,13 @@ export const runCreateSchema = z.object({
     // what was produced, on the screen whose whole job is to say what happened.
     // Refusing it here keeps the recorded list and the fan-out the same list.
     //
-    // This schema is the ONLY thing catching it: `resolveChannels` checks that
-    // every id belongs to the brand (set membership), never how many there are.
-    // `contentCreateSchema`'s repository catches the same mistake by accident,
-    // because it compares the resolved channel count against the requested one.
+    // This schema is the only thing catching it on THIS path: `resolveChannels`
+    // checks that every id belongs to the brand (set membership), never how many
+    // there are. `contentCreateSchema` now carries the same refine — it used to
+    // rely on its repository comparing the resolved channel count against the
+    // requested one, which caught the duplicate by accident and then reported it
+    // as "one or more channels do not belong to this brand", naming the wrong
+    // fault.
     .refine((ids) => new Set(ids).size === ids.length, {
       message: "channelIds must not contain duplicates",
     }),
