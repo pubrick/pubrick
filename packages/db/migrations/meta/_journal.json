@@ -64,6 +64,13 @@
       "when": 1788329387056,
       "tag": "0008_in_flight_claim",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788346474669,
+      "tag": "0009_declared_invariants",
+      "breakpoints": true
     }
   ]
 }

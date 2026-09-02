@@ -1,4 +1,5 @@
 import {
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -12,6 +13,7 @@ import {
 import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { adaptations, CONTENT_ORIGINS, contentItems } from "./content-items.js";
+import { enumCheck } from "./enum-check.js";
 
 /** Model providers a BYOK key can be stored for. */
 export const AI_PROVIDERS = ["google", "openrouter"] as const;
@@ -100,6 +102,13 @@ export const aiCredentials = pgTable(
   (t) => [
     index("ai_credentials_org_id_idx").on(t.orgId),
     uniqueIndex("ai_credentials_org_id_provider_idx").on(t.orgId, t.provider),
+    /**
+     * Pinned in the database as well as in the types — see `enumCheck`. The
+     * provider selects which client decrypts and spends this key, and the
+     * unique index above is what makes "one key per provider" mean one key per
+     * REAL provider rather than one per spelling of it.
+     */
+    enumCheck("ai_credentials_provider_check", t.provider, AI_PROVIDERS),
   ],
 );
 
@@ -159,6 +168,16 @@ export const pipelineRuns = pgTable(
     index("pipeline_runs_brand_id_idx").on(t.brandId),
     /** The queue strip reads open runs by status on every poll. */
     index("pipeline_runs_status_idx").on(t.status),
+    /**
+     * Pinned in the database as well as in the types — see `enumCheck`. This
+     * enum's own docstring already says `awaiting_review` arrives "with its own
+     * migration"; this constraint is what makes that sentence enforceable
+     * rather than aspirational. Every write the generate handler makes is
+     * guarded `status in ('queued','running')`, so a run whose status is
+     * outside the set is a run no fence can claim, no sweep can reclaim and no
+     * DLQ consumer can fail — it just sits there.
+     */
+    enumCheck("pipeline_runs_status_check", t.status, RUN_STATUSES),
   ],
 );
 
@@ -239,6 +258,28 @@ export const usageLedger = pgTable(
      * target an adaptation writes the column, and adds its index then.
      */
     index("usage_ledger_content_item_id_idx").on(t.contentItemId),
+    /**
+     * NO composite `(content_item_id, adaptation_id)` foreign key here, unlike
+     * `content_versions`, and for a reason specific to what a delete has to do.
+     * Both columns are `ON DELETE SET NULL`, because the money was spent
+     * whatever became of the draft — and a composite `SET NULL` blanks EVERY
+     * column of the key, so deleting one adaptation would also erase the
+     * `content_item_id` of every ledger row that named it, taking with it the
+     * only answer to "what did refining this draft cost". Pinning the pair
+     * would cost the column its meaning; the pair is also unwritten today, as
+     * `adaptation_id`'s own note above says.
+     *
+     * All four value sets pinned in the database as well as in the types — see
+     * `enumCheck`. `cost_source` is the one that costs real money to get wrong:
+     * `cost_usd` is nullable precisely so an unpriced call cannot read as free,
+     * and the readers decide whether a null is honest by looking at THIS
+     * column. A value outside the set is a row that every cost summary has to
+     * guess about.
+     */
+    enumCheck("usage_ledger_provider_check", t.provider, AI_PROVIDERS),
+    enumCheck("usage_ledger_cost_source_check", t.costSource, COST_SOURCES),
+    enumCheck("usage_ledger_status_check", t.status, LEDGER_STATUSES),
+    enumCheck("usage_ledger_key_ownership_check", t.keyOwnership, KEY_OWNERSHIPS),
   ],
 );
 
@@ -280,5 +321,62 @@ export const contentVersions = pgTable(
     index("content_versions_content_item_id_idx").on(t.contentItemId),
     /** The publish rule compares each adaptation against its own first AI version. */
     index("content_versions_adaptation_id_idx").on(t.adaptationId),
+    /**
+     * Both value sets pinned in the database as well as in the types — see
+     * `enumCheck`. These two columns are the publish gate's own filters: it
+     * reads `origin = 'ai'` rows and anchors the deletion clause on the first
+     * `scope = 'full'` one. A row outside either set is evidence the gate
+     * cannot see, and missing evidence is what makes the gate refuse a draft a
+     * human really did write.
+     */
+    enumCheck("content_versions_origin_check", t.origin, CONTENT_ORIGINS),
+    enumCheck("content_versions_scope_check", t.scope, VERSION_SCOPES),
+    /**
+     * A VERSION'S ADAPTATION BELONGS TO THE VERSION'S ITEM. Two independent
+     * references — `content_item_id` and `adaptation_id` — that every reader
+     * treats as one fact, tied together in the database instead of in a hope.
+     *
+     * The pair is not decoration on either side. The publish gate and the lens
+     * both read this table BY `content_item_id` and then GROUP the rows by
+     * `adaptation_id`, so a row filing item A's id against item B's adaptation
+     * is counted as evidence about a channel it has nothing to do with. What
+     * that produces is not a crash: the group is keyed by an id that is not
+     * among the item's adaptations, so the row is silently dropped, the real
+     * adaptation is left with no `ai` evidence, and the gate takes its
+     * missing-evidence branch and refuses a draft a human really did write. The
+     * fail-safe direction, which is why nobody has seen it — a wrong answer
+     * that looks like caution. `groupAiVersionBodies` in
+     * apps/api/src/content/content.repository.ts carries an explicit fallback
+     * for exactly this row ("the fallback keeps the body rather than dropping
+     * it silently if that ever stops being true"), which is the code saying out
+     * loud that it could not prove what it needed.
+     *
+     * MATCH SIMPLE (the default) is load-bearing rather than incidental: a
+     * master-level version has `adaptation_id IS NULL`, and a composite FK with
+     * any NULL column is satisfied without a lookup. So this constrains exactly
+     * the adaptation-level rows and leaves the master ones alone — no partial
+     * index, no trigger, no second nullable column to keep in step.
+     *
+     * `ON DELETE CASCADE`, matching the single-column reference on
+     * `adaptation_id` that stays beside it: deleting an adaptation still takes
+     * its version rows, and deleting an item still reaches them by both paths.
+     * The single-column FK is now implied by this one and is kept anyway — it
+     * is what drizzle renders for a fresh database and what the query builder
+     * reads as the relation; the redundancy costs one more constraint check on
+     * a table written once per save.
+     *
+     * NOT keyed on `org_id`, deliberately. The tempting stronger version —
+     * `(org_id, adaptation_id)` — would refuse a row whose own `org_id` is this
+     * org's while the adaptation it names belongs to a stranger's, and
+     * apps/api's tenancy suite PLANTS exactly that row (`otherOrgAdaptation`)
+     * to prove the repository's `org_id` predicate is doing the work where the
+     * database does not. That predicate is a real defence with its own tests;
+     * turning it into a constraint would delete the test that watches it.
+     */
+    foreignKey({
+      columns: [t.adaptationId, t.contentItemId],
+      foreignColumns: [adaptations.id, adaptations.contentItemId],
+      name: "content_versions_adaptation_belongs_to_item_fk",
+    }).onDelete("cascade"),
   ],
 );

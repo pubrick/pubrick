@@ -17,6 +17,152 @@ const ADDITIVE_MIGRATION = "0006_authorship";
 /** The index-only migration proved additive AND non-vacuous below. */
 const INDEX_MIGRATION = "0007_ledger_draft_index";
 
+/** The constraint-only migration, proved against a populated database below. */
+const CONSTRAINT_MIGRATION = "0009_declared_invariants";
+
+/**
+ * Every column 0009 pins, with a value that is not in its set.
+ *
+ * Driven from a table rather than written out fourteen times, because the point
+ * being proved is about the CLASS: a check that exists on twelve of the
+ * fourteen looks exactly like one that exists on all of them until the day the
+ * thirteenth matters. `schema-invariants.test.ts` holds the other end — that
+ * every enum column in the schema has a constraint at all — and this one proves
+ * the constraints actually reached the database.
+ */
+const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: string }> = [
+  { table: "channels", column: "platform", bogus: "myspace" },
+  { table: "content_items", column: "status", bogus: "publishd" },
+  { table: "content_items", column: "origin", bogus: "robot" },
+  { table: "adaptations", column: "status", bogus: "awaiting_review" },
+  { table: "adaptations", column: "origin", bogus: "robot" },
+  { table: "publications", column: "status", bogus: "inflight" },
+  { table: "ai_credentials", column: "provider", bogus: "acme_ai" },
+  { table: "content_versions", column: "origin", bogus: "robot" },
+  { table: "content_versions", column: "scope", bogus: "partial" },
+  { table: "pipeline_runs", column: "status", bogus: "awaiting_review" },
+  { table: "usage_ledger", column: "provider", bogus: "acme_ai" },
+  { table: "usage_ledger", column: "cost_source", bogus: "guessed" },
+  { table: "usage_ledger", column: "status", bogus: "OK" },
+  { table: "usage_ledger", column: "key_ownership", bogus: "ours" },
+];
+
+/** Postgres SQLSTATEs the assertions below name rather than match by message. */
+const UNIQUE_VIOLATION = "23505";
+const FOREIGN_KEY_VIOLATION = "23503";
+const CHECK_VIOLATION = "23514";
+
+/**
+ * One row in every table 0009 touches, written with SQL that is valid at 0008
+ * AND at head — 0009 adds no columns, which is what lets the same seed prove
+ * both "the constraints can be added over real data" and "the constraints
+ * refuse the rows they exist to refuse".
+ */
+async function seedEveryTable(pool: pg.Pool, org: string) {
+  await pool.query("INSERT INTO organization (id, name, slug) VALUES ($1, $1, $1)", [org]);
+  const brand = await pool.query(
+    "INSERT INTO brands (org_id, name) VALUES ($1, 'Brand') RETURNING id",
+    [org],
+  );
+  const brandId = brand.rows[0].id as string;
+  const channel = await pool.query(
+    "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ($1, $2, 'telegram', 'Announcements', 'blob') RETURNING id",
+    [org, brandId],
+  );
+  const channelId = channel.rows[0].id as string;
+  const item = await pool.query(
+    "INSERT INTO content_items (org_id, brand_id, body, status, origin) VALUES ($1, $2, 'Ship it.', 'draft', 'ai') RETURNING id",
+    [org, brandId],
+  );
+  const itemId = item.rows[0].id as string;
+  const adaptation = await pool.query(
+    "INSERT INTO adaptations (org_id, content_item_id, channel_id, status, origin) VALUES ($1, $2, $3, 'pending', 'ai') RETURNING id",
+    [org, itemId, channelId],
+  );
+  const adaptationId = adaptation.rows[0].id as string;
+  await pool.query(
+    "INSERT INTO publications (org_id, adaptation_id, channel_id, status) VALUES ($1, $2, $3, 'failed')",
+    [org, adaptationId, channelId],
+  );
+  await pool.query(
+    "INSERT INTO ai_credentials (org_id, provider, credentials_encrypted) VALUES ($1, 'google', 'blob')",
+    [org],
+  );
+  const run = await pool.query(
+    `INSERT INTO pipeline_runs (org_id, brand_id, input, status) VALUES ($1, $2, $3, 'succeeded') RETURNING id`,
+    [org, brandId, JSON.stringify({ kind: "brief", text: "a brief", channelIds: [channelId] })],
+  );
+  await pool.query(
+    `INSERT INTO usage_ledger (org_id, run_id, step, provider, model_id, cost_usd, cost_source, status, key_ownership)
+       VALUES ($1, $2, 'writer', 'google', 'gemini-3-flash', 0.001234, 'price_table', 'ok', 'byok')`,
+    [org, run.rows[0].id],
+  );
+  await pool.query(
+    "INSERT INTO content_versions (org_id, content_item_id, adaptation_id, body, origin, scope) VALUES ($1, $2, $3, 'the first draft', 'ai', 'full')",
+    [org, itemId, adaptationId],
+  );
+  await pool.query(
+    "INSERT INTO content_versions (org_id, content_item_id, body, origin, scope) VALUES ($1, $2, 'the master draft', 'ai', 'full')",
+    [org, itemId],
+  );
+  return { brandId, channelId, itemId, adaptationId };
+}
+
+/**
+ * Every row of every table 0009 touches, ordered so two reads are comparable.
+ * `SELECT *` deliberately: the point is that NOTHING changed, and an explicit
+ * column list would quietly stop looking at whatever it forgot.
+ */
+async function snapshotRows(pool: pg.Pool): Promise<Record<string, pg.QueryResultRow[]>> {
+  const snapshot: Record<string, pg.QueryResultRow[]> = {};
+  for (const table of [
+    "brands",
+    "channels",
+    "content_items",
+    "adaptations",
+    "publications",
+    "ai_credentials",
+    "pipeline_runs",
+    "usage_ledger",
+    "content_versions",
+  ]) {
+    const { rows } = await pool.query(`SELECT * FROM ${table} ORDER BY id`);
+    snapshot[table] = rows;
+  }
+  return snapshot;
+}
+
+/**
+ * Every message in an error's `cause` chain, plus any Postgres `hint`.
+ *
+ * drizzle wraps a failed statement in a `DrizzleQueryError` whose own message
+ * is the SQL it tried to run; the database's own words — which is what the
+ * preflight exists to produce — are one or more `cause` levels down. Asserting
+ * on `error.message` alone would pass over an empty preflight, because the SQL
+ * text quoted in the wrapper contains the RAISE literals too.
+ */
+function messageChain(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    const pgError = current as Error & { hint?: string };
+    parts.push(pgError.message);
+    if (typeof pgError.hint === "string") parts.push(pgError.hint);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.join("\n");
+}
+
+/** The SQLSTATE of a rejected write, or null if Postgres accepted it. */
+async function refusal(pool: pg.Pool, text: string, values: unknown[] = []) {
+  try {
+    await pool.query(text, values);
+    return null;
+  } catch (error) {
+    return (error as { code?: string; message: string }).code ?? (error as Error).message;
+  }
+}
+
 /**
  * Copies the migrations folder minus `tag` and everything after it, so a
  * database can be brought to the schema as it stood *before* that migration.
@@ -408,6 +554,310 @@ describe.skipIf(!url)("runMigrations", () => {
       // all-NULL entry. Whoever lets a refine target an adaptation writes that
       // column, and adds the index in the same change.
       expect([...byName.keys()]).not.toContain("usage_ledger_adaptation_id_idx");
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The exploit, refused. Two adaptations for one channel are not a duplicate
+   * record — they are a second post: `approve` locks every adaptation of the
+   * item in `pending | failed | scheduled` and enqueues one publish job per
+   * row, and the `publications` in-flight and published indexes are both scoped
+   * to ONE adaptation, so neither can see the pair. Measured before the index
+   * existed: the duplicate row was accepted, approve enqueued two live publish
+   * jobs under one channel's group, and both would have sent.
+   */
+  it("admits one undelivered adaptation per item and channel, and refuses a second", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const seed = await seedEveryTable(pool, "org_one_live");
+        const duplicate = await refusal(
+          pool,
+          "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_one_live', $1, $2)",
+          [seed.itemId, seed.channelId],
+        );
+        expect(duplicate).toBe(UNIQUE_VIOLATION);
+
+        // A DIFFERENT channel of the same item is the ordinary fan-out and must
+        // stay ordinary — an index that also refused this would have broken
+        // every multi-channel post rather than the exploit.
+        const second = await pool.query(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('org_one_live', $1, 'vk', 'Wall', 'blob') RETURNING id",
+          [seed.brandId],
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_one_live', $1, $2)",
+            [seed.itemId, second.rows[0].id],
+          ),
+        ).toBeNull();
+
+        // And the same channel on a DIFFERENT item: two posts to one channel is
+        // what a content calendar IS.
+        const otherItem = await pool.query(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('org_one_live', $1, 'Another one.') RETURNING id",
+          [seed.brandId],
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_one_live', $1, $2)",
+            [otherItem.rows[0].id, seed.channelId],
+          ),
+        ).toBeNull();
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The predicate, from the side that matters for increment 2c. A published
+   * adaptation is history rather than a delivery — the one status `approve`
+   * never re-enqueues — so re-adapting that channel may write a fresh live row
+   * beside it. This is the assertion that says the planned feature does not
+   * have to drop the index; if someone narrows the predicate to a list of
+   * statuses, this is what fails.
+   */
+  it("lets a re-adaptation join a published row, and still refuses two live ones", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const seed = await seedEveryTable(pool, "org_readapt");
+        await pool.query("UPDATE adaptations SET status = 'published' WHERE id = $1", [
+          seed.adaptationId,
+        ]);
+        const readapted = await pool.query(
+          "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_readapt', $1, $2) RETURNING id",
+          [seed.itemId, seed.channelId],
+        );
+        expect(readapted.rows).toHaveLength(1);
+        // Two published rows are two deliveries that already happened, which is
+        // history and not a race; the live one is still unique.
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('org_readapt', $1, $2)",
+            [seed.itemId, seed.channelId],
+          ),
+        ).toBe(UNIQUE_VIOLATION);
+        // `failed` is deliverable — `approve` re-targets it — so the exemption
+        // must not extend to it. Written as a status change on the live row
+        // rather than a new insert: the constraint has to hold across UPDATEs.
+        expect(
+          await refusal(pool, "UPDATE adaptations SET status = 'failed' WHERE id = $1", [
+            seed.adaptationId,
+          ]),
+        ).toBe(UNIQUE_VIOLATION);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The composite foreign key. A version row filing one item's id against
+   * another item's adaptation is not rejected by anything else: both columns
+   * point at rows that exist, and the pair is what is wrong. What it produces
+   * downstream is a quiet wrong answer rather than a crash — the row is grouped
+   * under an adaptation the item does not have, the real adaptation is left
+   * with no `ai` evidence, and the publish gate refuses a draft a human wrote.
+   */
+  it("refuses a version row whose adaptation belongs to another item", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const mine = await seedEveryTable(pool, "org_versions");
+        const otherItem = await pool.query(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('org_versions', $1, 'Another one.') RETURNING id",
+          [mine.brandId],
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO content_versions (org_id, content_item_id, adaptation_id, body, origin) VALUES ('org_versions', $1, $2, 'text', 'ai')",
+            [otherItem.rows[0].id, mine.adaptationId],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        // MATCH SIMPLE: a master-level row names no adaptation and is left
+        // alone. Without that this one foreign key could not serve both levels.
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO content_versions (org_id, content_item_id, body, origin) VALUES ('org_versions', $1, 'text', 'ai')",
+            [otherItem.rows[0].id],
+          ),
+        ).toBeNull();
+        // The matching pair still writes, and deleting the adaptation still
+        // takes its version rows with it — `ON DELETE CASCADE` on both
+        // references, so the composite one did not change what a delete does.
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO content_versions (org_id, content_item_id, adaptation_id, body, origin) VALUES ('org_versions', $1, $2, 'text', 'human')",
+            [mine.itemId, mine.adaptationId],
+          ),
+        ).toBeNull();
+        await pool.query("DELETE FROM adaptations WHERE id = $1", [mine.adaptationId]);
+        const left = await pool.query(
+          "SELECT adaptation_id FROM content_versions WHERE content_item_id = $1",
+          [mine.itemId],
+        );
+        expect(left.rows).toEqual([{ adaptation_id: null }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * Every pinned column, refusing a value outside its set — the assertion that
+   * the fourteen constraints reached the database rather than only the schema
+   * module. Driven from `PINNED_COLUMNS` so a column added there without a
+   * migration fails here.
+   */
+  it("refuses a value outside the enum on every pinned column", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await seedEveryTable(pool, "org_enums");
+        const accepted: string[] = [];
+        for (const { table, column, bogus } of PINNED_COLUMNS) {
+          const code = await refusal(pool, `UPDATE ${table} SET ${column} = '${bogus}'`);
+          if (code !== CHECK_VIOLATION) accepted.push(`${table}.${column} -> ${code}`);
+        }
+        expect(
+          accepted,
+          "Column that accepted a value outside its enum (or failed for another reason):",
+        ).toEqual([]);
+        // The seed itself proves the constraints admit every LEGAL value: it
+        // wrote one row per table through these same columns, above.
+        const rows = await pool.query("SELECT count(*)::int AS n FROM adaptations");
+        expect(rows.rows[0].n).toBe(1);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The migration over REAL DATA, which is the only version of "it applies"
+   * worth having: a constraint that cannot be added to the rows a running
+   * deployment already holds is not a constraint, it is a boot failure. Every
+   * table 0009 touches is populated at the pre-0009 schema first, and every row
+   * is compared field for field afterwards — `ALTER TABLE ... ADD CONSTRAINT`
+   * and `CREATE UNIQUE INDEX` rewrite nothing, and this is the assertion that
+   * says so rather than assuming it.
+   */
+  it("adds the invariants to a database that already holds rows of every table", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(CONSTRAINT_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: Record<string, pg.QueryResultRow[]>;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the constraints were already here, "seeded before the migration"
+        // would be a lie and the assertions below would prove nothing.
+        const pre = await pool.query(
+          "SELECT conname FROM pg_constraint WHERE conname LIKE '%\\_check' AND connamespace = 'public'::regnamespace",
+        );
+        expect(pre.rows).toHaveLength(0);
+        await seedEveryTable(pool, "org_populated");
+        seeded = await snapshotRows(pool);
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const rows = await snapshotRows(after);
+      const constraints = await after.query(
+        "SELECT conname FROM pg_constraint WHERE conname LIKE '%\\_check' AND connamespace = 'public'::regnamespace",
+      );
+      const index = await after.query(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'adaptations_one_live_per_item_channel'",
+      );
+      await after.end();
+
+      expect(rows).toEqual(seeded);
+      expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length);
+      expect(index.rows[0]?.indexdef).toContain("WHERE (status <> 'published'::text)");
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The preflight, doing the one thing it exists for. Postgres reports a check
+   * violation on an existing row as `check constraint "x" of relation "y" is
+   * violated by some row` — it names neither the row nor the value, and a
+   * self-hoster reading that at boot has nothing to query for. The migration
+   * therefore scans first and raises a message naming the table, the column and
+   * the offending values.
+   *
+   * The row is planted at the pre-0009 schema, where nothing yet forbids it —
+   * which is also the honest reproduction of how such a row gets into a real
+   * database in the first place.
+   */
+  it("names the table, column and value when an existing row is outside the enum", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(CONSTRAINT_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await seedEveryTable(pool, "org_typo");
+        await pool.query("UPDATE adaptations SET status = 'publishd'");
+      } finally {
+        await pool.end();
+      }
+
+      const failure = await runMigrations(fresh.url).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure, "the migration applied over a row outside the enum").not.toBeNull();
+      // The database's own sentence, not drizzle's wrapper — see `messageChain`.
+      // Postgres' unaided report is `check constraint "x" of relation "y" is
+      // violated by some row`, which names neither the row nor the value.
+      const said = messageChain(failure);
+      expect(said).toContain("Cannot pin adaptations.status");
+      expect(said).toContain("'publishd'");
+      // The HINT carries the set the operator has to choose from, so the fix
+      // does not require reading the migration.
+      expect(said).toContain("pending, scheduled, queued, publishing, published, failed");
+
+      // And it rolled back whole: drizzle runs every pending migration in one
+      // transaction, so a raised preflight must leave NO constraint behind.
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const left = await after.query(
+        "SELECT conname FROM pg_constraint WHERE conname LIKE '%\\_check' AND connamespace = 'public'::regnamespace",
+      );
+      await after.end();
+      expect(left.rows).toEqual([]);
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();

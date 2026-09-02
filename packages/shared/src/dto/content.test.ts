@@ -85,3 +85,58 @@ describe("body newline normalisation", () => {
     expect(contentUpdateSchema.safeParse({}).success).toBe(false);
   });
 });
+
+/**
+ * A repeated channel id is a repeated POST.
+ *
+ * `create()` writes one `adaptations` row per resolved channel and an
+ * adaptation IS a delivery — `approve` enqueues one publish job per row — so an
+ * item admitted with the same channel twice sends the post there twice from a
+ * single approval. Measured before this refine and the matching unique index
+ * existed: writing the second adaptation directly and approving the item
+ * enqueued two live publish jobs under one channel's group.
+ *
+ * The refine is the boundary that gives a human the right sentence; the
+ * database's `adaptations_one_live_per_item_channel` is the guarantee.
+ */
+describe("duplicate channels on create", () => {
+  it("refuses the same channel twice", () => {
+    const parsed = contentCreateSchema.safeParse({
+      brandId: BRAND,
+      body: "Ship it.",
+      channelIds: [CHANNEL, CHANNEL],
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain("must not contain duplicates");
+  });
+
+  it("still admits a genuine fan-out to two different channels", () => {
+    const second = "33333333-3333-4333-8333-333333333333";
+    const parsed = contentCreateSchema.safeParse({
+      brandId: BRAND,
+      body: "Ship it.",
+      channelIds: [CHANNEL, second],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  /**
+   * Why the refusal cannot be left to the repository, which is where it used to
+   * land by accident: `create()` resolves the requested ids against the brand's
+   * channels and compares `channels.length` with `data.channelIds.length`, so a
+   * REPEATED id fails that arithmetic exactly as a STRANGER'S id does — and is
+   * answered with "One or more channels do not belong to this brand". A 404
+   * about tenancy, for a request whose channels are all present, all this
+   * brand's and all permitted. This test is the pin on the distinction: the
+   * duplicate is refused here, by name, before the count comparison is asked a
+   * question it cannot tell apart.
+   */
+  it("names duplication rather than tenancy", () => {
+    const parsed = contentCreateSchema.safeParse({
+      brandId: BRAND,
+      body: "Ship it.",
+      channelIds: [CHANNEL, CHANNEL],
+    });
+    expect(JSON.stringify(parsed.error?.issues)).not.toContain("belong to this brand");
+  });
+});

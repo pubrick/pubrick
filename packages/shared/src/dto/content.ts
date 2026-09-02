@@ -33,7 +33,35 @@ export const contentCreateSchema = z.object({
   brandId: z.string().uuid(),
   title: z.string().max(300).optional(),
   body: bodyText,
-  channelIds: z.array(z.string().uuid()).min(1).max(20),
+  channelIds: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(20)
+    // Duplicates are rejected, exactly as `runCreateSchema` rejects them, and
+    // for a sharper reason than the run's: here a repeated id is a repeated
+    // POST. `create()` writes one `adaptations` row per resolved channel, and
+    // an adaptation IS a delivery — `approve` enqueues one publish job per row
+    // — so an item admitted with the same channel twice would carry two rows
+    // for one channel and send the post there twice, from a single approval.
+    // The `publications` in-flight and published indexes cannot see it: both
+    // are scoped to ONE adaptation, and these are two.
+    //
+    // This was NOT caught before, whatever the sibling schema's comment says.
+    // What `create()` has is a COUNT comparison — it resolves the requested
+    // ids against the brand's channels and compares `channels.length` with
+    // `data.channelIds.length` — which a repeated id fails for the same
+    // arithmetic reason a stranger's id does, and which therefore answers
+    // "One or more channels do not belong to this brand": a 404 about tenancy
+    // for a request whose channels are all present, all this brand's, and all
+    // permitted. The caller is told to fix the one thing that is not wrong.
+    // The refusal belongs here, where the fault is nameable, and the count
+    // comparison goes back to meaning only what it can actually tell apart.
+    //
+    // It is not the guarantee either — `adaptations_one_live_per_item_channel`
+    // is. This is the boundary that gives a human the right sentence.
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "channelIds must not contain duplicates",
+    }),
 });
 export type ContentCreate = z.infer<typeof contentCreateSchema>;
 

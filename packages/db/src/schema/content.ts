@@ -1,5 +1,6 @@
 import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
+import { enumCheck } from "./enum-check.js";
 
 export const PLATFORMS = [
   "telegram",
@@ -54,5 +55,15 @@ export const channels = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (t) => [index("channels_org_id_idx").on(t.orgId), index("channels_brand_id_idx").on(t.brandId)],
+  (t) => [
+    index("channels_org_id_idx").on(t.orgId),
+    index("channels_brand_id_idx").on(t.brandId),
+    /**
+     * The platform decides which adapter sends the post and which length limit
+     * the body is checked against (`adaptationLimit`), and both are lookups
+     * keyed by this string. A value outside the set resolves to no adapter and
+     * no limit — see `enumCheck`.
+     */
+    enumCheck("channels_platform_check", t.platform, PLATFORMS),
+  ],
 );
