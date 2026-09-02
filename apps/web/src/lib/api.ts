@@ -69,7 +69,15 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
     const raw = await res.text();
     const detail = serverMessage(raw);
     if (res.status === 401) {
-      throw new ApiError(401, "Your session has expired. Please log in again.");
+      // Deliberately NOT "your session has expired". A 401 says only that the
+      // request carried no valid session — which is equally true of a session
+      // that timed out, one revoked elsewhere, and one the person ended by
+      // pressing Sign out a second ago. better-auth gives the browser no way
+      // to tell those apart (`useSession` reports every one of them as
+      // `data: null`), and the old sentence told a user who had just signed
+      // out that something had gone wrong. "Signed out" is the one claim true
+      // in every case; AppShell's guard is what supplies the way back.
+      throw new ApiError(401, "You're signed out. Log in again to continue.");
     }
     if (res.status === 403) {
       const noActiveOrg = /no active organization/i.test(detail ?? "");

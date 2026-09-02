@@ -16,14 +16,24 @@ export default function OnboardingPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Creating an organization is not idempotent: the same name submitted twice
+  // makes two rows, one of which wins `setActive` while the other becomes an
+  // org the person owns and has no screen to find. `disabled` on the submit is
+  // the guard — a click is a discrete React event, so this state has already
+  // flushed to the DOM before an impatient second click can be dispatched, and
+  // a disabled submit also takes Enter-in-the-field with it. Same mechanism as
+  // AuthForm's; onboarding was simply missing it.
+  const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setBusy(true);
     setError(null);
     const slug = orgSlug(name);
     const created = await authClient.organization.create({ name, slug });
     if (created.error) {
       setError(created.error.message ?? t("genericError"));
+      setBusy(false);
       return;
     }
     // Without an active organization every org-scoped route 403s, so a failed
@@ -33,8 +43,12 @@ export default function OnboardingPage() {
     });
     if (activated.error) {
       setError(activated.error.message ?? t("genericError"));
+      setBusy(false);
       return;
     }
+    // Deliberately still busy: the org exists, and the only thing left is a
+    // navigation. Re-enabling here would reopen the double-create window for
+    // the length of the route transition.
     router.push(`/${locale}/brands`);
   }
 
@@ -59,7 +73,7 @@ export default function OnboardingPage() {
               {error}
             </p>
           )}
-          <Button type="submit" className="w-full">
+          <Button type="submit" disabled={busy} className="w-full">
             {t("create")}
           </Button>
         </form>

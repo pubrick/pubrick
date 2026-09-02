@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useSignOut } from "@/hooks/use-sign-out";
 import { authClient } from "@/lib/auth-client";
 
 // Mirrors Button's primary/secondary visuals (colors AND focus ring) on an
@@ -21,6 +22,7 @@ export default function LandingPage() {
   const t = useTranslations("Landing");
   const locale = useLocale();
   const { data: session, isPending } = authClient.useSession();
+  const signOut = useSignOut();
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-bg-sunken px-4">
@@ -40,7 +42,7 @@ export default function LandingPage() {
             <Link href={`/${locale}/content`} className={secondaryLinkClasses}>
               {t("goToContent")}
             </Link>
-            <Button variant="ghost" className="w-full" onClick={() => authClient.signOut()}>
+            <Button variant="ghost" className="w-full" onClick={() => void signOut()}>
               {t("signOut")}
             </Button>
           </div>

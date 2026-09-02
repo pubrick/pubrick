@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 import { Logo } from "@/components/Logo";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
+import { safeNextPath } from "@/lib/auth-routes";
 
 // The auth card is a sanctioned exception to the top-right-action rule: its
 // primary submit IS the whole screen, so a full-width Button at the bottom
@@ -16,6 +17,11 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const t = useTranslations("Auth");
   const locale = useLocale();
   const router = useRouter();
+  // AppShell bounces a signed-out visitor here with the page they wanted in
+  // `?next=`. Honouring it is what makes that promise real — and `safeNextPath`
+  // is what keeps the promise from being redeemable by anyone with a link:
+  // the value is attacker-controllable, so only a same-origin path survives.
+  const next = safeNextPath(useSearchParams().get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -35,7 +41,9 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
       setError(result.error.message ?? t("genericError"));
       return;
     }
-    router.push(mode === "signup" ? `/${locale}/onboarding` : `/${locale}`);
+    // A brand-new account has no organization yet, so signup always goes to
+    // onboarding — a `next` from the guard would land it on a screen that 403s.
+    router.push(mode === "signup" ? `/${locale}/onboarding` : (next ?? `/${locale}`));
   }
 
   return (

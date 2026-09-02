@@ -2,7 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { orgSlug } from "@/lib/slug";
 import { routerMock } from "@/test/next-navigation.stub";
-import { render, screen, waitFor } from "@/test/render";
+import { act, render, screen, waitFor } from "@/test/render";
 import en from "../../../../messages/en.json";
 import OnboardingPage from "./page";
 
@@ -103,5 +103,62 @@ describe("Onboarding — organization.setActive fails", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Could not activate organization");
     expect(routerMock.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("Onboarding — a second click", () => {
+  it("creates exactly one organization when the button is clicked twice in a row", async () => {
+    // Two rows is not a cosmetic duplicate: `setActive` picks one, and the
+    // other becomes an organization the person owns with no screen anywhere to
+    // see it, switch to it, or delete it.
+    let finishCreate!: (value: { data: { id: string }; error: null }) => void;
+    mockAuthClient.organization.create.mockReturnValue(
+      new Promise((resolve) => {
+        finishCreate = resolve;
+      }),
+    );
+    mockAuthClient.organization.setActive.mockResolvedValue({ data: {}, error: null });
+    render(<OnboardingPage />);
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.Onboarding.orgName), "Acme Corp");
+    const button = screen.getByRole("button", { name: en.Onboarding.create });
+    await user.click(button);
+
+    expect(button).toBeDisabled();
+    await user.click(button);
+    await user.dblClick(button);
+
+    expect(mockAuthClient.organization.create).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishCreate({ data: { id: "org-1" }, error: null });
+    });
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/brands"));
+    expect(mockAuthClient.organization.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the person try again after a failure — the guard closes the window, it does not lock the screen", async () => {
+    mockAuthClient.organization.create.mockResolvedValue({
+      data: null,
+      error: { message: "Name already taken" },
+    });
+    render(<OnboardingPage />);
+
+    await fillAndSubmit("Acme Corp");
+
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: en.Onboarding.create })).not.toBeDisabled();
+  });
+
+  it("stays disabled after success, so the window cannot reopen during the route change", async () => {
+    mockAuthClient.organization.create.mockResolvedValue({ data: { id: "org-1" }, error: null });
+    mockAuthClient.organization.setActive.mockResolvedValue({ data: {}, error: null });
+    render(<OnboardingPage />);
+
+    await fillAndSubmit("Acme Corp");
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/brands"));
+    expect(screen.getByRole("button", { name: en.Onboarding.create })).toBeDisabled();
   });
 });

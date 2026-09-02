@@ -18,8 +18,11 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
+import { Modal } from "@/components/ui/modal";
 import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useSignOut } from "@/hooks/use-sign-out";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { applyTheme, readThemePref, type ThemePref } from "@/lib/theme";
@@ -57,7 +60,8 @@ export default function SettingsPage() {
   const t = useTranslations("SettingsPage");
   const tLanding = useTranslations("Landing");
   const { data: session } = authClient.useSession();
-  const { data: organization } = authClient.useActiveOrganization();
+  const { data: organization, isPending: organizationPending } = authClient.useActiveOrganization();
+  const signOut = useSignOut();
 
   const [pref, setPref] = useState<ThemePref>("system");
   // Stored pref is client-only state: reading it during the first render makes
@@ -67,7 +71,12 @@ export default function SettingsPage() {
     setPref(readThemePref());
   }, []);
 
-  const [credentials, setCredentials] = useState<AiCredentialPublic[]>([]);
+  // `null` is "not loaded yet", NOT "none" — the distinction the brand detail
+  // screen already draws with its title skeleton. Starting at `[]` made the
+  // screen answer a question it had not asked the server yet, and the answer it
+  // guessed was a definite negative: "No API key yet" flashed on every visit,
+  // including the visits where a key was about to appear.
+  const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
   const [spend, setSpend] = useState<CostSummary | null>(null);
   const [provider, setProvider] = useState<AiProviderId>("google");
   const [apiKey, setApiKey] = useState("");
@@ -144,8 +153,16 @@ export default function SettingsPage() {
     }
   }
 
+  // Removing a key is one click away from unrecoverable — the secret is
+  // encrypted at rest and never returned by any endpoint, so nothing on this
+  // screen or in the database can put it back; the person has to go to the
+  // provider for a new one. Hence a confirmation, and a `Modal` rather than
+  // `confirm()` (the constitution bans native dialogs).
+  const [pendingRemoval, setPendingRemoval] = useState<AiProviderId | null>(null);
+
   async function removeKey(id: AiProviderId) {
     setAiError(null);
+    setPendingRemoval(null);
     try {
       await api(`/api/ai-credentials/${id}`, { method: "DELETE" });
       setTestResults((prev) => ({ ...prev, [id]: undefined }));
@@ -220,7 +237,11 @@ export default function SettingsPage() {
             </p>
           )}
 
-          {credentials.length === 0 ? (
+          {credentials === null ? (
+            // Not an EmptyState: an empty state is a verdict, and we do not
+            // have one yet.
+            <Skeleton lines={2} className="mb-4 py-2" />
+          ) : credentials.length === 0 ? (
             <EmptyState title={t("aiEmpty")} className="py-6" />
           ) : (
             <div className="mb-4 overflow-hidden rounded-card border border-border">
@@ -248,7 +269,7 @@ export default function SettingsPage() {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() => removeKey(credential.provider)}
+                        onClick={() => setPendingRemoval(credential.provider)}
                       >
                         {t("remove")}
                       </Button>
@@ -300,16 +321,48 @@ export default function SettingsPage() {
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>
           <p className="mb-3 text-sm text-fg-secondary">{session?.user?.email}</p>
-          <Button variant="secondary" onClick={() => authClient.signOut()}>
+          <Button variant="secondary" onClick={() => void signOut()}>
             {tLanding("signOut")}
           </Button>
         </Card>
 
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("workspaceTitle")}</h2>
-          <p className="text-sm text-fg-secondary">{organization?.name ?? t("workspaceNoOrg")}</p>
+          {/* Same rule as the credential list: "No organization" is a verdict,
+              and while the query is in flight there isn't one. It used to show
+              for the couple of seconds the lookup took, telling a member of an
+              organization they had none. */}
+          {organizationPending ? (
+            <Skeleton lines={1} className="w-40 py-1" />
+          ) : (
+            <p className="text-sm text-fg-secondary">{organization?.name ?? t("workspaceNoOrg")}</p>
+          )}
         </Card>
       </div>
+
+      <Modal
+        open={pendingRemoval !== null}
+        onClose={() => setPendingRemoval(null)}
+        title={t("aiRemoveTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemoval(null)}>
+              {t("aiRemoveCancel")}
+            </Button>
+            {/* Same one word as the row's button: the act has one verb. */}
+            <Button variant="danger" onClick={() => pendingRemoval && removeKey(pendingRemoval)}>
+              {t("remove")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">
+          {t("aiRemoveBody", {
+            provider:
+              pendingRemoval === null ? "" : (PROVIDER_NAMES[pendingRemoval] ?? pendingRemoval),
+          })}
+        </p>
+      </Modal>
     </AppShell>
   );
 }

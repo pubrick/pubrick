@@ -24,10 +24,23 @@ import { vi } from "vitest";
  * `vi.mock("@/lib/auth-client", ...)`, which fully replaces this module —
  * the alias only fills in for tests that don't.
  */
-type SessionState = { data: { user: { id: string; email: string } } | null; isPending: boolean };
+type SessionState = {
+  data: { user: { id: string; email: string } } | null;
+  isPending: boolean;
+  refetch: () => Promise<void>;
+};
 type OrgState = { data: { id: string; name: string } | null; isPending: boolean };
 
-const SIGNED_OUT: SessionState = { data: null, isPending: false };
+/**
+ * The real `useSession()` hands back a `refetch` that re-asks the server and
+ * only resolves once the store holds the answer — AppShell's guard uses it to
+ * confirm a suspected sign-out. One shared identity across every state below,
+ * because it is an effect dependency there: a fresh function per render would
+ * re-run that effect forever.
+ */
+export const sessionRefetch = vi.fn(async (): Promise<void> => {});
+
+const SIGNED_OUT: SessionState = { data: null, isPending: false, refetch: sessionRefetch };
 const NO_ORG: OrgState = { data: null, isPending: false };
 
 let sessionState: SessionState = SIGNED_OUT;
@@ -44,7 +57,20 @@ export const authClient = {
 
 /** Opt-in: `authClient.useSession()` reports a signed-in user until reset. */
 export function signedInSession(email = "test@example.com"): SessionState {
-  sessionState = { data: { user: { id: "test-user", email } }, isPending: false };
+  sessionState = {
+    data: { user: { id: "test-user", email } },
+    isPending: false,
+    refetch: sessionRefetch,
+  };
+  return sessionState;
+}
+
+/**
+ * Opt-in: the session is still loading — the state every real page starts in.
+ * AppShell's guard must NOT read this as signed out, so it needs saying.
+ */
+export function pendingSession(): SessionState {
+  sessionState = { data: null, isPending: true, refetch: sessionRefetch };
   return sessionState;
 }
 
@@ -58,4 +84,5 @@ export function signedInOrganization(name = "Test Org"): OrgState {
 export function resetStubSession(): void {
   sessionState = SIGNED_OUT;
   orgState = NO_ORG;
+  sessionRefetch.mockReset();
 }

@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { routerMock } from "@/test/next-navigation.stub";
+import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor } from "@/test/render";
 import en from "../../messages/en.json";
 import { AuthForm } from "./AuthForm";
@@ -126,5 +126,50 @@ describe("AuthForm — signup mode", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Email already registered");
     expect(routerMock.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthForm — the return path AppShell's guard attaches", () => {
+  beforeEach(() => {
+    mockAuthClient.signIn.email.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+  });
+
+  async function login() {
+    render(<AuthForm mode="login" />);
+    const user = userEvent.setup();
+    await fillLogin(user);
+    await user.click(screen.getByRole("button", { name: en.Auth.loginAction }));
+  }
+
+  it("returns the person to the page they were bounced off", async () => {
+    // Without this the guard's `?next=` is decoration: you are sent to login
+    // from the queue and land on the locale root.
+    navigationState.searchParams = new URLSearchParams("next=/en/content/42");
+    await login();
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/42"));
+  });
+
+  it("ignores a next that points off-site", async () => {
+    // `?next=` is attacker-controllable — a crafted link would otherwise make
+    // our own login screen a redirector to somebody else's page.
+    navigationState.searchParams = new URLSearchParams("next=//evil.example/steal");
+    await login();
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en"));
+  });
+
+  it("sends a brand-new account to onboarding regardless of next", async () => {
+    // A fresh signup has no organization, so every org-scoped destination
+    // would 403 on arrival.
+    mockAuthClient.signUp.email.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
+    navigationState.searchParams = new URLSearchParams("next=/en/settings");
+    render(<AuthForm mode="signup" />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.Auth.name), "Ann Author");
+    await fillLogin(user);
+    await user.click(screen.getByRole("button", { name: en.Auth.signupAction }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/onboarding"));
   });
 });

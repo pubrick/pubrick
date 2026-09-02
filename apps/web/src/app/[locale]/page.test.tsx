@@ -1,6 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@/test/render";
+import { routerMock } from "@/test/next-navigation.stub";
+import { render, screen, waitFor } from "@/test/render";
 import en from "../../../messages/en.json";
 import LandingPage from "./page";
 
@@ -68,6 +69,20 @@ describe("Landing — signed in", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: en.Landing.signOut }));
     expect(mockAuthClient.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves for the login screen after signing out, rather than sitting on the signed-in card", async () => {
+    mockAuthClient.useSession.mockReturnValue({
+      data: { user: { id: "u1" } },
+      isPending: false,
+    });
+    mockAuthClient.signOut.mockResolvedValue(undefined);
+    render(<LandingPage />);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Landing.signOut }));
+
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/login"));
   });
 });
 

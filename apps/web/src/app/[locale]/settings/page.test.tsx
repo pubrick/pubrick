@@ -8,6 +8,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as theme from "@/lib/theme";
+import { routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
 import SettingsPage from "./page";
@@ -163,6 +164,17 @@ describe("Settings — Account", () => {
 
     expect(mockAuthClient.signOut).toHaveBeenCalledTimes(1);
   });
+
+  it("leaves for the login screen — signing out on the screen that lists the org's keys must not keep you on it", async () => {
+    mockAuthClient.signOut.mockResolvedValue(undefined);
+    await renderSettings();
+    const main = within(screen.getByRole("main"));
+
+    const user = userEvent.setup();
+    await user.click(main.getByRole("button", { name: en.Landing.signOut }));
+
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/login"));
+  });
 });
 
 describe("Settings — Workspace", () => {
@@ -178,6 +190,19 @@ describe("Settings — Workspace", () => {
 
     expect(screen.getByText(en.SettingsPage.workspaceNoOrg)).toBeInTheDocument();
   });
+
+  it("says nothing at all while the organization is still being fetched", async () => {
+    // "No organization" is a verdict about the account. Showing it during the
+    // couple of seconds the lookup takes told members of an organization that
+    // they had none — a definite negative standing in for "loading".
+    mockAuthClient.useActiveOrganization.mockReturnValue({ data: null, isPending: true });
+    await renderSettings();
+
+    expect(screen.queryByText(en.SettingsPage.workspaceNoOrg)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: en.SettingsPage.workspaceTitle }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("Settings — AI provider: saving a key", () => {
@@ -185,6 +210,20 @@ describe("Settings — AI provider: saving a key", () => {
     await renderSettings();
 
     expect(screen.getByText(en.SettingsPage.aiEmpty)).toBeInTheDocument();
+  });
+
+  it("does not claim there is no key before the list has come back", async () => {
+    // Rendered synchronously, before the mocked GET resolves — the exact frame
+    // in which the screen used to assert "No API key yet" about an org that
+    // has one. Nothing is known yet, so nothing is claimed.
+    installApi([], { credentials: [googleKey] });
+    render(<SettingsPage />);
+
+    expect(screen.queryByText(en.SettingsPage.aiEmpty)).not.toBeInTheDocument();
+
+    // …and the real answer still arrives.
+    expect(await screen.findByText("Google")).toBeInTheDocument();
+    expect(screen.queryByText(en.SettingsPage.aiEmpty)).not.toBeInTheDocument();
   });
 
   it("sends the key as a PUT, with the body pinned twice", async () => {
@@ -372,19 +411,54 @@ describe("Settings — AI provider: Test", () => {
 });
 
 describe("Settings — AI provider: Remove", () => {
-  it("deletes the key for that provider", async () => {
+  function deleted(calls: Call[]): boolean {
+    return calls.some((c) => c.method === "DELETE" && c.path === "/api/ai-credentials/google");
+  }
+
+  async function openRemoveConfirmation(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    const row = within(screen.getByRole("main"));
+    await user.click(await row.findByRole("button", { name: en.SettingsPage.remove }));
+    return user;
+  }
+
+  it("asks first — the row's button opens a confirmation and deletes nothing", async () => {
+    // The stored secret is encrypted at rest and never returned by any
+    // endpoint: one stray click and only the provider can issue a replacement.
     const calls: Call[] = [];
     installApi(calls, { credentials: [googleKey] });
     await renderSettings();
 
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: en.SettingsPage.remove }));
+    await openRemoveConfirmation();
 
-    await waitFor(() =>
-      expect(
-        calls.some((c) => c.method === "DELETE" && c.path === "/api/ai-credentials/google"),
-      ).toBe(true),
-    );
+    expect(screen.getByRole("dialog", { name: en.SettingsPage.aiRemoveTitle })).toBeInTheDocument();
+    expect(deleted(calls)).toBe(false);
+  });
+
+  it("deletes the key for that provider once the confirmation is accepted", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [googleKey] });
+    await renderSettings();
+
+    const user = await openRemoveConfirmation();
+    const dialog = within(screen.getByRole("dialog"));
+    // The confirming button repeats the row's one word: one act, one verb.
+    await user.click(dialog.getByRole("button", { name: en.SettingsPage.remove }));
+
+    await waitFor(() => expect(deleted(calls)).toBe(true));
+  });
+
+  it("deletes nothing when the confirmation is dismissed", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [googleKey] });
+    await renderSettings();
+
+    const user = await openRemoveConfirmation();
+    const dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("button", { name: en.SettingsPage.aiRemoveCancel }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deleted(calls)).toBe(false);
   });
 });
 

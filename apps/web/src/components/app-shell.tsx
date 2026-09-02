@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/Logo";
 import { IconBrands, type IconProps, IconQueue, IconSettings } from "@/components/ui/icons";
 import { Menu } from "@/components/ui/menu";
 import { ToastProvider } from "@/components/ui/toast";
+import { useSignOut } from "@/hooks/use-sign-out";
 import { authClient } from "@/lib/auth-client";
+import { loginHref } from "@/lib/auth-routes";
 
 export type AppShellProps = {
   // ReactNode (not just string) so a page can show e.g. a `Skeleton` in the
@@ -43,13 +45,66 @@ const NAV_ICONS: Record<NavKey, (props: IconProps) => ReactNode> = {
  * No Calendar, no Compose: those existed in the design canvas artboards but
  * are dead per the task brief — Compose is each page's own primary-action
  * button, not a nav destination.
+ *
+ * The shell is also the auth guard for everything it wraps. No route under it
+ * has one of its own, so a signed-out visitor used to get the whole screen —
+ * nav, filters, whatever the page had already painted — with an inline error
+ * where the data should be. Once the session resolves to null the shell
+ * renders NOTHING and sends the visitor to the login screen with the path they
+ * wanted, so that logging in returns them to it. Rendering the children and
+ * redirecting "in the background" is not equivalent: they would mount, fetch,
+ * and paint a 401 in the frame before the navigation lands.
  */
 export function AppShell({ title, primaryAction, search, children }: AppShellProps) {
   const t = useTranslations("Nav");
   const tLanding = useTranslations("Landing");
   const locale = useLocale();
   const pathname = usePathname();
-  const { data: session } = authClient.useSession();
+  const router = useRouter();
+  const signOut = useSignOut();
+  const { data: session, isPending, refetch } = authClient.useSession();
+
+  /**
+   * Before telling anyone they are signed out, ask the server.
+   *
+   * better-auth's session store is a module-level singleton shared with
+   * whatever screen we arrived from, and the login screen subscribes nothing to
+   * it — so the `null` it settled on BEFORE the visitor signed in is still
+   * sitting there when this shell mounts, and the library's own re-check is
+   * only scheduled for the next tick. Judging that value bounces a person who
+   * has *just logged in* straight back to the login screen; it was reproduced
+   * in a browser before this confirmation existed, and no jsdom test would have
+   * shown it, because the race is between two real timers.
+   *
+   * So a suspected sign-out costs one `get-session` round trip, and only a null
+   * that survives it is a verdict. `isPending` is checked first for the
+   * ordinary cold load, where the store has not answered even once yet;
+   * `confirming` keeps StrictMode's double-invoked effect from asking twice.
+   */
+  const [confirmedSignedOut, setConfirmedSignedOut] = useState(false);
+  const confirming = useRef(false);
+
+  useEffect(() => {
+    if (session) {
+      // Signed in again (or never really out): forget the old verdict, so a
+      // later expiry is re-confirmed rather than inheriting this one.
+      setConfirmedSignedOut(false);
+      return;
+    }
+    if (isPending) return;
+    if (confirmedSignedOut) {
+      router.replace(loginHref(locale, pathname));
+      return;
+    }
+    if (confirming.current) return;
+    confirming.current = true;
+    // `refetch` resolves only after the store has been written with the
+    // server's answer, so the state this effect re-runs on is that answer.
+    void refetch().finally(() => {
+      confirming.current = false;
+      setConfirmedSignedOut(true);
+    });
+  }, [session, isPending, confirmedSignedOut, refetch, router, locale, pathname]);
 
   const destinations: { key: NavKey; href: string }[] = [
     { key: "queue", href: `/${locale}/content` },
@@ -92,6 +147,11 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
   const email = session?.user?.email ?? "";
   const initial = email.charAt(0).toUpperCase();
 
+  // Nothing — not the chrome, not the title, not a "redirecting…" line — until
+  // there is a session to render it for. The effect above is already on its
+  // way to the login screen.
+  if (!session) return null;
+
   return (
     <ToastProvider>
       <div className="flex min-h-screen flex-col bg-bg text-fg sm:flex-row">
@@ -116,17 +176,15 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
 
           {renderLink("settings", settingsHref)}
 
-          {session && (
-            <div className="hidden items-center gap-2 border-t border-border px-2 pt-3 lg:flex">
-              <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-fg text-[11px] font-semibold text-bg">
-                {initial}
-              </span>
-              <Menu
-                trigger={<span className="truncate text-[13px] font-medium text-fg">{email}</span>}
-                items={[{ label: tLanding("signOut"), onSelect: () => authClient.signOut() }]}
-              />
-            </div>
-          )}
+          <div className="hidden items-center gap-2 border-t border-border px-2 pt-3 lg:flex">
+            <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-fg text-[11px] font-semibold text-bg">
+              {initial}
+            </span>
+            <Menu
+              trigger={<span className="truncate text-[13px] font-medium text-fg">{email}</span>}
+              items={[{ label: tLanding("signOut"), onSelect: () => void signOut() }]}
+            />
+          </div>
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col pb-16 sm:pb-0">
