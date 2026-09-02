@@ -41,7 +41,9 @@
     "create": "Create brand",
     "empty": "No brands yet.",
     "emptyCreateAction": "Create your first brand",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "listError": "Your brands could not be loaded, so this list is not the answer.",
+    "retry": "Try again"
   },
   "Channels": {
     "title": "Channels",
@@ -51,7 +53,14 @@
     "add": "Add channel",
     "test": "Test connection",
     "testOk": "OK — connected as {account}, can post to {target}",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "empty": "No channels yet.",
+    "emptyAddAction": "Add your first channel",
+    "listError": "This brand's channels could not be loaded, so this list is not the answer.",
+    "retry": "Try again",
+    "removeTitle": "Remove this channel?",
+    "removeBody": "Pubrick deletes the stored credentials for {channel} and cannot show them again — you would need new ones from the platform. Nothing is published to this channel afterwards.",
+    "removeCancel": "Cancel"
   },
   "Content": {
     "title": "Queue",
@@ -168,7 +177,8 @@
     "aiTestFailNoStructuredOutput": "The model answered, but could not return the structured output Pubrick needs. Try another model.",
     "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",
     "aiTestFailRefused": "The provider refused the request. Check the key and the model id.",
-    "aiTestFailUnreadableKey": "The stored key could not be read. Save it again."
+    "aiTestFailUnreadableKey": "The stored key could not be read. Save it again.",
+    "aiSpendError": "Spend so far could not be loaded — this is not a total of zero."
   },
   "Runs": {
     "title": "Generation",

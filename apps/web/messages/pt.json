@@ -41,7 +41,9 @@
     "create": "Criar marca",
     "empty": "Ainda não há marcas.",
     "emptyCreateAction": "Crie sua primeira marca",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "listError": "Não foi possível carregar suas marcas, então esta lista não é a resposta.",
+    "retry": "Tente novamente"
   },
   "Channels": {
     "title": "Canais",
@@ -51,7 +53,14 @@
     "add": "Adicionar canal",
     "test": "Testar conexão",
     "testOk": "OK — conectado como {account}, pode publicar em {target}",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "empty": "Ainda não há canais.",
+    "emptyAddAction": "Adicione seu primeiro canal",
+    "listError": "Não foi possível carregar os canais desta marca, então esta lista não é a resposta.",
+    "retry": "Tente novamente",
+    "removeTitle": "Remover este canal?",
+    "removeBody": "O Pubrick apaga as credenciais guardadas de {channel} e não pode mostrá-las de novo — você precisaria de novas credenciais da plataforma. Depois disso, nada será publicado neste canal.",
+    "removeCancel": "Cancelar"
   },
   "Content": {
     "title": "Fila",
@@ -168,7 +177,8 @@
     "aiTestFailNoStructuredOutput": "O modelo respondeu, mas não conseguiu devolver a saída estruturada que o Pubrick precisa. Tente outro modelo.",
     "aiTestFailRateLimited": "O provedor está limitando as requisições ou está indisponível. Tente novamente em instantes.",
     "aiTestFailRefused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo.",
-    "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente."
+    "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente.",
+    "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero."
   },
   "Runs": {
     "title": "Geração",

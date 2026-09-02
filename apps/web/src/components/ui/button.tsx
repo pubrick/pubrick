@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { TRANSITION_COLORS } from "./transition";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "md" | "sm";
@@ -44,7 +45,7 @@ export function buttonClasses(
   className?: string,
 ): string {
   return [
-    "inline-flex items-center justify-center gap-2 rounded-control font-semibold transition-colors",
+    `inline-flex items-center justify-center gap-2 rounded-control font-semibold ${TRANSITION_COLORS}`,
     "disabled:pointer-events-none disabled:opacity-50",
     VARIANT_CLASSES[variant],
     SIZE_CLASSES[size],

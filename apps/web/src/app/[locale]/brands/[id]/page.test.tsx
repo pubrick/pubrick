@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { credentialFieldLabel } from "@/lib/platform";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { renderAsync, screen, waitFor } from "@/test/render";
+import { act, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import BrandPage from "./page";
 
@@ -52,18 +52,111 @@ function installHandlers(
 }
 
 /**
- * Focused regression test for the "silent delete" bug: `remove()` had no
- * try/catch at all, so a failed DELETE was an unhandled rejection and the
- * button appeared to do nothing. A fuller pass over this page belongs to
- * Task 3 — this test only proves the failure is now visible.
+ * Removing a channel destroys credentials that are encrypted at rest and never
+ * returned by any endpoint — nothing on this screen and nothing in the
+ * database can put them back. So the row's button asks first, and only the
+ * confirmation deletes.
  */
+async function confirmRemoval(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const dialog = within(screen.getByRole("dialog"));
+  await user.click(dialog.getByRole("button", { name: en.Channels.remove }));
+}
+
 describe("BrandPage remove()", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
+  it("asks first — the row's button opens a confirmation and deletes nothing", async () => {
+    const channel = { id: "c1", platform: "telegram", name: "My channel" };
+    const calls: { url: string; method: string }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, [channel]);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Channels.remove }));
+
+    expect(screen.getByRole("dialog", { name: en.Channels.removeTitle })).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
+  it("names the channel it is about to destroy", async () => {
+    const channel = { id: "c1", platform: "telegram", name: "My channel" };
+    installHandlers([channel]);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Channels.remove }));
+
+    expect(within(screen.getByRole("dialog")).getByText(/My channel/)).toBeInTheDocument();
+  });
+
+  it("deletes nothing when the confirmation is dismissed", async () => {
+    const channel = { id: "c1", platform: "telegram", name: "My channel" };
+    const calls: { url: string; method: string }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, [channel]);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Channels.remove }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.Channels.removeCancel,
+      }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
+  it("DELETEs the channel once the confirmation is accepted", async () => {
+    const channel = { id: "c1", platform: "telegram", name: "My channel" };
+    const calls: { url: string; method: string }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method ?? "GET" });
+      if (init?.method === "DELETE") return jsonResponse(200, { deleted: true });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, [channel]);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Channels.remove }));
+    await confirmRemoval(user);
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/api/channels/c1"))).toBe(
+        true,
+      ),
+    );
+  });
+
+  /**
+   * Regression test for the "silent delete" bug: `remove()` had no try/catch
+   * at all, so a failed DELETE was an unhandled rejection and the button
+   * appeared to do nothing.
+   */
   it("surfaces a visible error instead of failing silently when deleting a channel fails on the network", async () => {
-    const brand = { id: "b1", name: "Acme" };
     const channel = { id: "c1", platform: "telegram", name: "My channel" };
 
     vi.mocked(fetch).mockImplementation(async (input, init) => {
@@ -79,7 +172,8 @@ describe("BrandPage remove()", () => {
     await waitFor(() => expect(screen.getByText(/My channel/)).toBeInTheDocument());
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /remove/i }));
+    await user.click(screen.getByRole("button", { name: en.Channels.remove }));
+    await confirmRemoval(user);
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/something went wrong/i);
@@ -285,5 +379,148 @@ describe("no active organization redirects to onboarding", () => {
       expect(routerMock.replace).toHaveBeenCalledWith("/en/onboarding");
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * `POST /api/channels` is not idempotent, and the body carries a bot token: a
+ * double-click makes two channels with the same credentials, and every future
+ * post to that brand goes out twice.
+ */
+describe("adding a channel cannot be fired twice", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("ignores the second click while the first POST is still in flight", async () => {
+    const calls: { url: string; method: string }[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (method === "POST" && url.includes("/api/channels")) {
+        await gate;
+        return jsonResponse(201, { id: "new-ch" });
+      }
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.Channels.namePlaceholder), "Main channel");
+    await user.type(screen.getByLabelText(credentialFieldLabel("botToken")), "123456:ABC");
+    await user.type(screen.getByLabelText(credentialFieldLabel("chatId")), "-100123");
+
+    const add = screen.getByRole("button", { name: en.Channels.add });
+    await user.click(add);
+
+    await waitFor(() => expect(add).toBeDisabled());
+    await user.click(add);
+
+    const posts = () =>
+      calls.filter((c) => c.method === "POST" && c.url.includes("/api/channels")).length;
+    expect(posts()).toBe(1);
+
+    release();
+    await waitFor(() => expect(add).toBeEnabled());
+    expect(posts()).toBe(1);
+  });
+});
+
+/**
+ * The channels read used to end in `.catch(() => {})`. A 500 or a dead network
+ * then produced the brand name, the "Channels" heading and the add form with
+ * no list — which is exactly what a brand with NO channels looks like. The
+ * reader concluded there were none and started adding a second copy of a
+ * channel that already exists.
+ */
+describe("a failed channels read is not an empty brand", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("says the channels could not be loaded, and never that there are none", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(500, { message: "boom" });
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+
+    expect(await screen.findByText(en.Channels.listError)).toBeInTheDocument();
+    expect(screen.queryByText(en.Channels.empty)).not.toBeInTheDocument();
+    // The brand itself loaded fine, so the screen is not blank — the failure is
+    // local to the list it belongs to.
+    expect(screen.getByRole("heading", { name: "Acme" })).toBeInTheDocument();
+  });
+
+  it("offers the read again, and the retry replaces the message with the list", async () => {
+    let fail = true;
+    const channel = { id: "c1", platform: "telegram", name: "My channel" };
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) {
+        return fail ? jsonResponse(500, { message: "boom" }) : jsonResponse(200, [channel]);
+      }
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await screen.findByText(en.Channels.listError);
+
+    fail = false;
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Channels.retry }));
+
+    expect(await screen.findByText(/My channel/)).toBeInTheDocument();
+    expect(screen.queryByText(en.Channels.listError)).not.toBeInTheDocument();
+  });
+
+  it("teaches the next step when the brand genuinely has no channels", async () => {
+    installHandlers([]);
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+
+    expect(await screen.findByText(en.Channels.empty)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Channels.emptyAddAction })).toBeInTheDocument();
+  });
+
+  it("shows a loading placeholder while the request is in flight, not the silence that means 'none'", async () => {
+    let resolveChannels!: (value: Response) => void;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) {
+        return new Promise<Response>((resolve) => {
+          resolveChannels = resolve;
+        });
+      }
+      if (url.includes("/api/brands/")) return jsonResponse(200, brand);
+      return jsonResponse(200, {});
+    });
+
+    const { container } = await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(screen.queryByText(en.Channels.empty)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Channels.listError)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveChannels(jsonResponse(200, []));
+    });
+
+    // …and the two verdicts, once one of them is true, are mutually exclusive.
+    expect(await screen.findByText(en.Channels.empty)).toBeInTheDocument();
+    expect(screen.queryByText(en.Channels.listError)).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 });

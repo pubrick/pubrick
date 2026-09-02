@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { TRANSITION_COLORS } from "./transition";
 
 export type ListRowProps = {
   title: ReactNode;
@@ -13,7 +14,7 @@ export type ListRowProps = {
 export function ListRow({ title, meta, trailing, href, className }: ListRowProps) {
   const classes = [
     "flex items-center justify-between gap-4 border-b border-border-soft px-4 py-3 last:border-b-0",
-    href ? "transition-colors hover:bg-bg-sunken" : "",
+    href ? `${TRANSITION_COLORS} hover:bg-bg-sunken` : "",
     className,
   ]
     .filter(Boolean)

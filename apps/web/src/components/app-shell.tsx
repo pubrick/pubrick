@@ -8,6 +8,7 @@ import { Logo } from "@/components/Logo";
 import { IconBrands, type IconProps, IconQueue, IconSettings } from "@/components/ui/icons";
 import { Menu } from "@/components/ui/menu";
 import { ToastProvider } from "@/components/ui/toast";
+import { TRANSITION_COLORS } from "@/components/ui/transition";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { authClient } from "@/lib/auth-client";
 import { loginHref } from "@/lib/auth-routes";
@@ -118,7 +119,7 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
 
   function navLinkClasses(active: boolean): string {
     return [
-      "flex min-h-11 flex-col items-center justify-center gap-1 rounded-control px-2 py-1.5 text-center text-[10.5px] font-semibold transition-colors",
+      `flex min-h-11 flex-col items-center justify-center gap-1 rounded-control px-2 py-1.5 text-center text-[10.5px] font-semibold ${TRANSITION_COLORS}`,
       "sm:min-h-0 sm:flex-row sm:justify-start sm:gap-2.5 sm:px-2.5 sm:py-2 sm:text-left sm:text-sm sm:font-medium",
       active
         ? "text-accent sm:bg-accent-soft sm:text-accent-soft-fg"

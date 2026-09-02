@@ -26,7 +26,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 
 const mockApi = vi.mocked(api);
@@ -494,5 +494,151 @@ describe("Settings — AI provider: the three cost display rules", () => {
     await renderSettings();
 
     expect(await screen.findByText(spendLine("cost not reported (1 call)"))).toBeInTheDocument();
+  });
+});
+
+/**
+ * The key is a secret in a password field, and Save is a round trip. A button
+ * that stays live through it sends the secret twice and races two `loadAi()`
+ * refreshes — the third instance of the double-submit shape a reviewer first
+ * proved on onboarding, where the second click made a whole second
+ * organization.
+ */
+describe("Settings — AI provider: saving cannot be fired twice", () => {
+  it("ignores the second click while the first PUT is still in flight", async () => {
+    const calls: Call[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const init = args[1] as RequestInit | undefined;
+      const method = init?.method ?? "GET";
+      calls.push({ path, method });
+      if (method === "PUT") {
+        await gate;
+        return googleKey;
+      }
+      if (path === "/api/ai-credentials") return [];
+      if (path === "/api/ai-credentials/spend")
+        return { kind: "exact", usd: 0 } satisfies CostSummary;
+      throw new Error(`unhandled request in test: ${method} ${path}`);
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk-live-abcdefgh12345678");
+    const save = screen.getByRole("button", { name: en.SettingsPage.aiSave });
+    await user.click(save);
+
+    await waitFor(() => expect(save).toBeDisabled());
+    await user.click(save);
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+
+    release();
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+  });
+
+  it("re-enables the button after a failed save", async () => {
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const init = args[1] as RequestInit | undefined;
+      const method = init?.method ?? "GET";
+      if (method === "PUT") throw new ApiError(400, "That key is too short.");
+      if (path === "/api/ai-credentials") return [];
+      if (path === "/api/ai-credentials/spend")
+        return { kind: "exact", usd: 0 } satisfies CostSummary;
+      throw new Error(`unhandled request in test: ${method} ${path}`);
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk");
+    const save = screen.getByRole("button", { name: en.SettingsPage.aiSave });
+    await user.click(save);
+
+    await screen.findByText("That key is too short.");
+    expect(save).toBeEnabled();
+  });
+});
+
+/**
+ * `.catch(() => {})` on the spend read left the em dash that also stands for
+ * "loading" — so "Spent so far: —" was what a person saw whether the figure
+ * was on its way or the request had died. Of all the wrong answers about
+ * money, "nothing yet" is the most reassuring one.
+ */
+describe("Settings — AI provider: a failed spend read is not a spend of zero", () => {
+  function spendFails(): void {
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      if (path === "/api/ai-credentials/spend") throw new ApiError(500, "Internal Server Error");
+      if (path === "/api/ai-credentials") return [googleKey];
+      throw new Error(`unhandled request in test: ${path}`);
+    });
+  }
+
+  it("says so instead of leaving a dash behind", async () => {
+    spendFails();
+    await renderSettings();
+
+    expect(await screen.findByText(en.SettingsPage.aiSpendError)).toBeInTheDocument();
+    expect(screen.queryByText(spendLine("—"))).not.toBeInTheDocument();
+    expect(screen.queryByText(spendLine("$0.00"))).not.toBeInTheDocument();
+  });
+
+  it("announces it, rather than only colouring it red", async () => {
+    spendFails();
+    await renderSettings();
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.some((a) => a.textContent === en.SettingsPage.aiSpendError)).toBe(true);
+  });
+
+  it("shows no figure at all while the read is still in flight", async () => {
+    // Rendered synchronously, before the mocked GET resolves. A dash here read
+    // as a total; nothing is claimed until there is something to claim.
+    installApi([], { spend: { kind: "exact", usd: 1.25 } });
+    render(<SettingsPage />);
+
+    expect(screen.queryByText(spendLine("—"))).not.toBeInTheDocument();
+    expect(screen.queryByText(en.SettingsPage.aiSpendError)).not.toBeInTheDocument();
+
+    expect(await screen.findByText(spendLine("$1.25"))).toBeInTheDocument();
+  });
+
+  it("drops a stale figure when a later read fails, rather than presenting it as current", async () => {
+    let fail = false;
+    const calls: Call[] = [];
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const init = args[1] as RequestInit | undefined;
+      calls.push({ path, method: init?.method ?? "GET" });
+      if (path === "/api/ai-credentials/spend") {
+        if (fail) throw new ApiError(500, "Internal Server Error");
+        return { kind: "exact", usd: 1.25 } satisfies CostSummary;
+      }
+      if (path === "/api/ai-credentials") return [googleKey];
+      if (path.endsWith("/test"))
+        return {
+          ok: true,
+          modelId: "gemini-3.7-flash",
+          cost: { kind: "exact", usd: 0.000021 },
+        } satisfies AiCredentialTestResult;
+      throw new Error(`unhandled request in test: ${path}`);
+    });
+    await renderSettings();
+    await screen.findByText(spendLine("$1.25"));
+
+    // The Test button spends money and re-reads the total; this time it fails.
+    fail = true;
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: en.SettingsPage.test }));
+
+    expect(await screen.findByText(en.SettingsPage.aiSpendError)).toBeInTheDocument();
+    expect(screen.queryByText(spendLine("$1.25"))).not.toBeInTheDocument();
   });
 });

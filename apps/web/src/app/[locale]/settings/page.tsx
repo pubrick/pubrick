@@ -78,10 +78,20 @@ export default function SettingsPage() {
   // including the visits where a key was about to appear.
   const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
   const [spend, setSpend] = useState<CostSummary | null>(null);
+  // The spend read had a `.catch(() => {})`, so a 500 left the em dash the
+  // loading state also shows. "Spent so far: —" reads as "nothing yet" — the
+  // most reassuring of all possible answers, and the one nobody had checked.
+  const [spendError, setSpendError] = useState<string | null>(null);
   const [provider, setProvider] = useState<AiProviderId>("google");
   const [apiKey, setApiKey] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
+  // PUT /api/ai-credentials is idempotent per provider, but each submit is a
+  // round trip with the key still in the field: a double-click sends the
+  // secret twice and races two `loadAi()` refreshes against each other. Same
+  // mechanism as onboarding's guard — `disabled` reaches the DOM before a
+  // second click can be dispatched, and it takes Enter-in-the-field with it.
+  const [saving, setSaving] = useState(false);
   const [testResults, setTestResults] = useState<
     Partial<Record<AiProviderId, AiCredentialTestResult | "loading">>
   >({});
@@ -98,10 +108,20 @@ export default function SettingsPage() {
 
   const loadAi = useCallback(() => {
     api<AiCredentialPublic[]>("/api/ai-credentials").then(setCredentials).catch(handleAiError);
+    setSpendError(null);
     api<CostSummary>("/api/ai-credentials/spend")
-      .then(setSpend)
-      .catch(() => {});
-  }, [handleAiError]);
+      .then((summary) => {
+        setSpend(summary);
+        setSpendError(null);
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.noActiveOrg) return;
+        // Back to "unknown", not to a stale figure: money on screen has to be
+        // either current or absent.
+        setSpend(null);
+        setSpendError(errorMessage(err, t("genericError")));
+      });
+  }, [handleAiError, t]);
 
   useEffect(loadAi, [loadAi]);
 
@@ -114,6 +134,7 @@ export default function SettingsPage() {
   async function saveKey(e: React.FormEvent) {
     e.preventDefault();
     setAiError(null);
+    setSaving(true);
     // The field is omitted rather than sent empty: null in that column means
     // "use the provider's own default model", and "" is not a model id.
     const trimmedModel = defaultModel.trim();
@@ -133,6 +154,8 @@ export default function SettingsPage() {
       loadAi();
     } catch (err) {
       handleAiError(err);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -214,7 +237,7 @@ export default function SettingsPage() {
     <AppShell
       title={t("title")}
       primaryAction={
-        <Button type="submit" form={AI_FORM_ID}>
+        <Button type="submit" form={AI_FORM_ID} disabled={saving}>
           {t("aiSave")}
         </Button>
       }
@@ -227,9 +250,20 @@ export default function SettingsPage() {
 
         <Card>
           <h2 className="mb-1 text-base font-semibold text-fg">{t("aiTitle")}</h2>
-          <p className="mb-3 text-sm text-fg-secondary">
-            {t("aiSpend", { amount: spend === null ? "—" : costText(spend) })}
-          </p>
+          {/* Three states, three sentences. The em dash used to stand for
+              "loading" AND "the request failed", and both read as "nothing
+              spent". */}
+          {spendError !== null ? (
+            <p role="alert" className="mb-3 text-sm text-danger">
+              {t("aiSpendError")}
+            </p>
+          ) : spend === null ? (
+            <Skeleton lines={1} className="mb-3 w-48 py-1" />
+          ) : (
+            <p className="mb-3 text-sm text-fg-secondary">
+              {t("aiSpend", { amount: costText(spend) })}
+            </p>
+          )}
 
           {aiError && (
             <p role="alert" className="mb-3 text-sm text-danger">
@@ -239,8 +273,12 @@ export default function SettingsPage() {
 
           {credentials === null ? (
             // Not an EmptyState: an empty state is a verdict, and we do not
-            // have one yet.
-            <Skeleton lines={2} className="mb-4 py-2" />
+            // have one yet. And not a skeleton either once the read has
+            // FAILED — the sentence above is the answer, and a placeholder
+            // beside it would go on claiming the list is still coming.
+            aiError === null ? (
+              <Skeleton lines={2} className="mb-4 py-2" />
+            ) : null
           ) : credentials.length === 0 ? (
             <EmptyState title={t("aiEmpty")} className="py-6" />
           ) : (

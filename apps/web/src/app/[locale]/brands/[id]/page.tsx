@@ -7,8 +7,10 @@ import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
+import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -26,46 +28,81 @@ type PlatformId = (typeof PLATFORM_IDS)[number];
 // `form={FORM_ID}` on a real type="submit" button.
 const FORM_ID = "channel-add-form";
 
+// Explicit id (not Input's auto-generated one) so the empty state's action can
+// focus the first field of the add form without lifting a ref just for that.
+const NAME_INPUT_ID = "channel-name";
+
 export default function BrandPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Channels");
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
-  const [channels, setChannels] = useState<Channel[]>([]);
+  // `null` is "not asked yet / could not ask", never "none" — the same
+  // distinction the title skeleton below already draws, and the one the
+  // channels list was missing.
+  const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [channelsError, setChannelsError] = useState<string | null>(null);
   const [platform, setPlatform] = useState<PlatformId>("telegram");
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, VerifyResult | "loading">>({});
+  // POST /api/channels is not idempotent: the same credentials submitted twice
+  // make two channels, and every future post goes out twice. A click is a
+  // discrete React event, so `disabled` is on the button in the DOM before an
+  // impatient second click can be dispatched — and a disabled submit takes
+  // Enter-in-the-field with it.
+  const [busy, setBusy] = useState(false);
+  // Removing a channel destroys credentials that are encrypted at rest and
+  // never returned by any endpoint: nothing on this screen, and nothing in the
+  // database, can put them back. Hence a confirmation — and a `Modal` rather
+  // than `confirm()`, which the constitution bans.
+  const [pendingRemoval, setPendingRemoval] = useState<Channel | null>(null);
 
   // A 403 from ActiveOrgGuard means the account has no organization yet — that is
   // an onboarding step, not an error to show the user. Every other failure
   // (including a network failure, which api() now wraps as ApiError(0, ...))
   // renders through errorMessage() so nobody sees a raw browser error string.
-  const handleError = useCallback(
-    (err: unknown) => {
+  // Returns the sentence to show, or null when it has been handled by
+  // navigating away.
+  const describeError = useCallback(
+    (err: unknown): string | null => {
       if (err instanceof ApiError && err.noActiveOrg) {
         router.replace(`/${locale}/onboarding`);
-        return;
+        return null;
       }
-      setError(errorMessage(err, t("genericError")));
+      return errorMessage(err, t("genericError"));
     },
     [router, locale, t],
   );
 
   const load = useCallback(() => {
-    api<Brand>(`/api/brands/${id}`).then(setBrand).catch(handleError);
+    api<Brand>(`/api/brands/${id}`)
+      .then(setBrand)
+      .catch((err) => setError(describeError(err)));
+    setChannelsError(null);
     api<Channel[]>(`/api/channels?brandId=${id}`)
       .then(setChannels)
-      .catch(() => {});
-  }, [id, handleError]);
+      .catch((err) => {
+        // This used to be `.catch(() => {})`. A 500 or a dead network then
+        // rendered the brand name, the "Channels" heading and the add form
+        // with no list — which is precisely what a brand with no channels
+        // looks like, so the reader concluded there were none and started
+        // adding a duplicate of one that already exists.
+        const message = describeError(err);
+        if (message === null) return;
+        setChannels(null);
+        setChannelsError(message);
+      });
+  }, [id, describeError]);
 
   useEffect(load, [load]);
 
   async function addChannel(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
       await api("/api/channels", {
         method: "POST",
@@ -75,17 +112,20 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       setCreds({});
       load();
     } catch (err) {
-      handleError(err);
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function remove(channelId: string) {
     setError(null);
+    setPendingRemoval(null);
     try {
       await api(`/api/channels/${channelId}`, { method: "DELETE" });
       load();
     } catch (err) {
-      handleError(err);
+      setError(describeError(err));
     }
   }
 
@@ -111,7 +151,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     <AppShell
       title={brand ? brand.name : <Skeleton lines={1} className="w-40" />}
       primaryAction={
-        <Button type="submit" form={FORM_ID}>
+        <Button type="submit" form={FORM_ID} disabled={busy}>
           {t("add")}
         </Button>
       }
@@ -124,7 +164,43 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
 
-      {channels.length > 0 && (
+      {/* Failed / not answered yet / genuinely none — three different things
+          to say, where there used to be one silence for all three. */}
+      {channelsError !== null ? (
+        <Card padded={false} className="mb-6">
+          <EmptyState
+            title={t("listError")}
+            action={
+              <Button variant="secondary" size="sm" type="button" onClick={load}>
+                {t("retry")}
+              </Button>
+            }
+          />
+          <p role="alert" className="px-6 pb-6 text-center text-sm text-danger">
+            {channelsError}
+          </p>
+        </Card>
+      ) : channels === null ? (
+        <div aria-busy="true" className="mb-6 rounded-card border border-border bg-panel px-4 py-3">
+          <Skeleton lines={2} />
+        </div>
+      ) : channels.length === 0 ? (
+        <Card padded={false} className="mb-6">
+          <EmptyState
+            title={t("empty")}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => document.getElementById(NAME_INPUT_ID)?.focus()}
+              >
+                {t("emptyAddAction")}
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
         <div className="mb-6 overflow-hidden rounded-card border border-border bg-panel">
           {channels.map((c) => {
             const result = testResults[c.id];
@@ -162,8 +238,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                         prior click to open anything — putting it in a Menu
                         (whose items render role="menuitem", not "button",
                         and stay hidden until the trigger opens) would break
-                        that lookup. */}
-                    <Button size="sm" variant="danger" onClick={() => remove(c.id)}>
+                        that lookup. It opens the confirmation below; it is not
+                        the delete. */}
+                    <Button size="sm" variant="danger" onClick={() => setPendingRemoval(c)}>
                       {t("remove")}
                     </Button>
                   </>
@@ -196,6 +273,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               ))}
             </Select>
             <Input
+              id={NAME_INPUT_ID}
               value={name}
               onChange={(e) => setName(e.target.value)}
               label={t("namePlaceholder")}
@@ -219,6 +297,32 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </div>
         </form>
       </Card>
+
+      <Modal
+        open={pendingRemoval !== null}
+        onClose={() => setPendingRemoval(null)}
+        title={t("removeTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPendingRemoval(null)}>
+              {t("removeCancel")}
+            </Button>
+            {/* Same one word as the row's button: the act has one verb. */}
+            <Button variant="danger" onClick={() => pendingRemoval && remove(pendingRemoval.id)}>
+              {t("remove")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">
+          {t("removeBody", {
+            channel:
+              pendingRemoval === null
+                ? ""
+                : channelLabel(pendingRemoval.platform, pendingRemoval.name),
+          })}
+        </p>
+      </Modal>
     </AppShell>
   );
 }
