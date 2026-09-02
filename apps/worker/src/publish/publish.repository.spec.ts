@@ -341,4 +341,193 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .where(eq(schema.publications.adaptationId, adaptationId));
     expect(pubsAfterSecond).toHaveLength(1);
   });
+
+  async function publicationsFor(adaptationId: string) {
+    return db
+      .select()
+      .from(schema.publications)
+      .where(eq(schema.publications.adaptationId, adaptationId));
+  }
+
+  it("claimSend writes an in-flight row carrying the attempt that markPublishing just bumped", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]?.status).toBe("in_flight");
+    // Read from adaptations.attempt_count in the same statement, so it cannot
+    // drift from the count the claim on the attempt just wrote.
+    expect(pubs[0]?.attempt).toBe(1);
+    expect(pubs[0]?.channelId).toBe(channelId);
+  });
+
+  // The guard behind findings (b) and (c): the second attempt is the
+  // redelivered one, and it must find the claim rather than an empty table.
+  it("claimSend refuses a second claim while one is unresolved, and writes nothing", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+
+    await repo.markPublishing(orgId, adaptationId); // the redelivery re-claims the attempt
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(false);
+
+    expect(await publicationsFor(adaptationId)).toHaveLength(1);
+  });
+
+  it("claimSend is org-scoped and reports false for an adaptation that is not there", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    expect(await repo.claimSend("some-other-org", adaptationId)).toBe(false);
+    expect(await publicationsFor(adaptationId)).toHaveLength(0);
+  });
+
+  it("releaseSend hands the claim back so an honest retry can take it again", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    await repo.releaseSend(orgId, adaptationId);
+    expect(await publicationsFor(adaptationId)).toHaveLength(0);
+
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+  });
+
+  it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markFailed(orgId, adaptationId, "first attempt");
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    await repo.releaseSend(orgId, adaptationId);
+
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]?.status).toBe("failed");
+  });
+
+  it("markPublished resolves the claim in place: one row, not a claim plus a delivery", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    await repo.markPublished(orgId, adaptationId, {
+      externalId: "77",
+      externalUrl: "https://t.me/x/77",
+    });
+
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]).toMatchObject({
+      status: "published",
+      externalId: "77",
+      externalUrl: "https://t.me/x/77",
+      attempt: 1,
+      error: null,
+    });
+    // And the claim is gone as a claim, so the next legitimate attempt after a
+    // re-approve is not blocked by it.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+  });
+
+  it("markFailed resolves the claim to failed rather than leaving one behind", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    await repo.markFailed(orgId, adaptationId, "Forbidden");
+
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]).toMatchObject({ status: "failed", error: "Forbidden", attempt: 1 });
+  });
+
+  // The whole point of the new status. The adaptation column has no way to say
+  // "we do not know" — it says `failed`, which is what every reader of it
+  // already understands — so the publications row is where the difference
+  // between "never went out" and "may be live" is kept.
+  it("markFailed with the unknown outcome: adaptation failed, publication unknown", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    await repo.markFailed(orgId, adaptationId, "outcome unknown, check the channel", "unknown");
+
+    const [row] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(row?.status).toBe("failed");
+    expect(row?.lastError).toBe("outcome unknown, check the channel");
+    expect(row?.attemptCount).toBe(1);
+
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]?.status).toBe("unknown");
+    expect(pubs[0]?.error).toBe("outcome unknown, check the channel");
+
+    // An unknown outcome is not a delivery on the record, so `hasPublished`
+    // must not report one — a human re-approving is exactly how this is meant
+    // to be resolved, and it has to be able to.
+    expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);
+  });
+
+  // Migration 0008, asserted by name and by shape rather than assumed. It is a
+  // second PARTIAL index alongside the published one: terminal rows stay
+  // unconstrained, so one adaptation can still accumulate a claim per attempt
+  // once each is resolved.
+  it("the database itself refuses a second in-flight claim for one adaptation", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+
+    const error = await db
+      .insert(schema.publications)
+      .values({ orgId, adaptationId, channelId, status: "in_flight", attempt: 2 })
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+    expect(error).not.toBeNull();
+    const cause = (error as { cause?: { code?: string; constraint?: string } }).cause;
+    expect(cause?.code).toBe("23505");
+    expect(cause?.constraint).toBe("publications_one_in_flight_per_adaptation");
+
+    // Partial: a resolved claim plus a fresh one is two rows and no violation.
+    await repo.markFailed(orgId, adaptationId, "unknown outcome", "unknown");
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+    const pubs = await publicationsFor(adaptationId);
+    expect(pubs).toHaveLength(2);
+    expect(pubs.map((row) => row.status).sort()).toEqual(["in_flight", "unknown"]);
+  });
+
+  it("0008 created the in-flight index as a partial unique index on adaptation_id", async () => {
+    const { rows } = await db.execute(
+      "SELECT indexdef FROM pg_indexes WHERE indexname = 'publications_one_in_flight_per_adaptation'",
+    );
+    expect(rows).toHaveLength(1);
+    const definition = String(rows[0]?.indexdef);
+    expect(definition).toContain("CREATE UNIQUE INDEX");
+    expect(definition).toContain("(adaptation_id)");
+    // The WHERE clause is what keeps it additive: no row written before 0008
+    // could carry this status, so the index is empty at creation and cannot
+    // fail on a populated table.
+    expect(definition).toContain("'in_flight'");
+  });
 });

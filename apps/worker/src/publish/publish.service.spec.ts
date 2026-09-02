@@ -1,7 +1,17 @@
-import { PermanentPublishError, TransientPublishError } from "@pubrick/integrations";
+import {
+  PermanentPublishError,
+  TELEGRAM_REQUEST_TIMEOUT_MS,
+  TransientPublishError,
+  UnknownOutcomePublishError,
+} from "@pubrick/integrations";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { PublishService } from "./publish.service";
+import {
+  PUBLISH_HEARTBEAT_WINDOW_MS,
+  PUBLISH_RECORD_BUDGET_MS,
+  PUBLISH_STOP_TIMEOUT_MS,
+  PublishService,
+} from "./publish.service";
 
 /**
  * The same shape the real telegram adapter exposes: the service validates
@@ -33,6 +43,8 @@ function fixture(overrides: Record<string, unknown> = {}) {
     credentials: vi.fn().mockResolvedValue({ botToken: "1:a", chatId: "-100" }),
     hasPublished: vi.fn().mockResolvedValue(false),
     markPublishing: vi.fn().mockResolvedValue(true),
+    claimSend: vi.fn().mockResolvedValue(true),
+    releaseSend: vi.fn().mockResolvedValue(undefined),
     markPublished: vi.fn().mockResolvedValue(undefined),
     markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
     markFailed: vi.fn().mockResolvedValue(undefined),
@@ -86,7 +98,7 @@ describe("PublishService.handle", () => {
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
-    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Forbidden");
+    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Forbidden", "failed");
   });
 
   it("rethrows transient errors so pg-boss retries", async () => {
@@ -99,6 +111,114 @@ describe("PublishService.handle", () => {
     );
     expect(repo.recordTransient).toHaveBeenCalled();
     expect(repo.markFailed).not.toHaveBeenCalled();
+    // A transient error is KNOWN-not-posted, so the retry pg-boss is about to
+    // make has nothing to duplicate — and must not be blocked by this attempt's
+    // claim. Holding it would turn every rate limit into "outcome unknown".
+    expect(repo.releaseSend).toHaveBeenCalledWith("o1", "a1");
+  });
+
+  it("still rethrows the transient error when handing the claim back fails", async () => {
+    const { repo } = fixture();
+    repo.releaseSend = vi.fn().mockRejectedValue(new Error("db down"));
+    const publish = vi.fn().mockRejectedValue(new TransientPublishError("Too Many Requests", 30));
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    // The retry still has to happen; the surviving claim only makes the NEXT
+    // delivery report an unknown outcome, which is the safe direction.
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).rejects.toBeInstanceOf(
+      TransientPublishError,
+    );
+  });
+
+  // Finding (a). The request left, the answer never came, and the old code
+  // called that transient: it rethrew, pg-boss redelivered, and the redelivery
+  // posted a second time with nothing on the record to say so.
+  it("does NOT rethrow an unknown outcome — a retry would be the second post", async () => {
+    const { repo } = fixture();
+    const publish = vi
+      .fn()
+      .mockRejectedValue(
+        new UnknownOutcomePublishError(
+          "Telegram request failed after the request was sent: other side closed",
+        ),
+      );
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(repo.recordTransient).not.toHaveBeenCalled();
+    // Terminal, and terminal as UNKNOWN — never "failed", which would invite a
+    // re-approve, and a re-approve here is a second post.
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("check the channel before re-approving"),
+      "unknown",
+    );
+    // The claim is resolved by markFailed, never handed back: another attempt
+    // must not be able to take it.
+    expect(repo.releaseSend).not.toHaveBeenCalled();
+  });
+
+  // Findings (b) and (c): the attempt that took this claim never came back to
+  // resolve it, which is only possible if it stopped running between the claim
+  // and its outcome — after, for all anyone here knows, the post went out.
+  it("does NOT send when a previous attempt left an unresolved in-flight claim", async () => {
+    const { repo } = fixture();
+    repo.claimSend = vi.fn().mockResolvedValue(false);
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("check the channel before re-approving"),
+      "unknown",
+    );
+  });
+
+  // Order is the whole guarantee: a claim written after the send would be
+  // exactly the `published` row we already had, and would bound nothing.
+  it("claims the send BEFORE calling the platform", async () => {
+    const order: string[] = [];
+    const { repo } = fixture();
+    repo.claimSend = vi.fn().mockImplementation(async () => {
+      order.push("claim");
+      return true;
+    });
+    const publish = vi.fn().mockImplementation(async () => {
+      order.push("publish");
+      return { externalId: "77", externalUrl: null };
+    });
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(order).toEqual(["claim", "publish"]);
+  });
+
+  // Nothing was ever sent on these branches, so they must not burn a claim the
+  // way a real attempt does — and must not report an unknown outcome either.
+  it("does not claim a send when the item was rejected, when already published, or when the row moved", async () => {
+    for (const [name, patch] of [
+      ["rejected item", { itemStatus: "rejected" }],
+      ["already published", {}],
+      ["lost row claim", {}],
+    ] as const) {
+      const { repo } = fixture(patch);
+      if (name === "already published") repo.hasPublished = vi.fn().mockResolvedValue(true);
+      if (name === "lost row claim") repo.markPublishing = vi.fn().mockResolvedValue(false);
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(vi.fn()),
+        "https://api",
+      );
+
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(repo.claimSend, name).not.toHaveBeenCalled();
+      expect(repo.markFailed, name).not.toHaveBeenCalled();
+    }
   });
 
   it("fails permanently when the platform has no adapter", async () => {
@@ -106,7 +226,12 @@ describe("PublishService.handle", () => {
     const service = new PublishService(repo as never, () => undefined, "https://api");
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
-    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", expect.stringContaining("vk"));
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("vk"),
+      "failed",
+    );
   });
 
   it("does NOT rethrow when markPublished keeps failing after a successful send — the post already went out, retrying would duplicate it", async () => {
@@ -124,7 +249,27 @@ describe("PublishService.handle", () => {
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(repo.markPublished).toHaveBeenCalledTimes(3);
+    expect(repo.markPublished).toHaveBeenCalledTimes(13);
+  });
+
+  // Finding (b) in one assertion. A recording budget shorter than pg-boss's
+  // heartbeat window guarantees that a database outage spanning the send ends
+  // with the job redelivered and no record of the post: give up in 0.6s, let
+  // `complete()` throw, let the supervisor fail the job 30s later. The budget
+  // has to outlast the outage that triggers the redelivery.
+  it("spends longer riding out a database outage than pg-boss waits before redelivering", () => {
+    expect(PUBLISH_RECORD_BUDGET_MS).toBeGreaterThan(PUBLISH_HEARTBEAT_WINDOW_MS);
+  });
+
+  // Finding (c). pg-boss's default stop timeout is 30s — the same number as the
+  // adapter's own request timeout — so a send that started a moment before
+  // SIGTERM is guaranteed to be cut off mid-request and its job failed, which
+  // is to say redelivered. The graceful window has to outlast a whole attempt:
+  // the request AND the recording that follows it.
+  it("waits out a whole publish attempt before a graceful stop gives up on it", () => {
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS,
+    );
   });
 
   it("fails permanently when credentials cannot be loaded (channel not found / decrypt failure) — never sends, never retries", async () => {
@@ -139,6 +284,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("Channel c1 not found"),
+      "failed",
     );
     expect(repo.recordTransient).not.toHaveBeenCalled();
   });
@@ -255,7 +401,7 @@ describe("PublishService.handle", () => {
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
     expect(repo.markAlreadyPublished).not.toHaveBeenCalled();
-    expect(repo.markPublished).toHaveBeenCalledTimes(3);
+    expect(repo.markPublished).toHaveBeenCalledTimes(13);
   });
 
   it("never rethrows when the convergence write itself fails — the post is live", async () => {
@@ -290,6 +436,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("chatId"), // names the offending field, not an opaque platform 400
+      "failed",
     );
   });
 });
@@ -300,7 +447,7 @@ describe("PublishService.markExhausted", () => {
     const service = new PublishService(repo as never, () => undefined, "https://api");
 
     await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
-    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Retries exhausted");
+    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Retries exhausted", "failed");
   });
 
   it("is idempotent: a no-op when the adaptation already failed", async () => {

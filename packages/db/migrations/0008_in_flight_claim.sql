@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "publications_one_in_flight_per_adaptation" ON "publications" USING btree ("adaptation_id") WHERE "publications"."status" = 'in_flight';

@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { telegramPublisher } from "./telegram.js";
-import { PermanentPublishError, type PublishInput, TransientPublishError } from "./types.js";
+import {
+  PermanentPublishError,
+  type PublishInput,
+  TransientPublishError,
+  UnknownOutcomePublishError,
+} from "./types.js";
 
 const CREDS = { botToken: "123:abc", chatId: "-1001234567890" };
 
 function fetchReturning(payload: unknown, status = 200) {
   return vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status }));
+}
+
+/**
+ * A rejected fetch shaped the way undici shapes one: the real reason hangs off
+ * `cause` with a `code`, and only the codes raised while CONNECTING prove the
+ * request never went out. Measured against Node's real fetch, not invented.
+ */
+function fetchRejectingWith(code: string | undefined, message: string) {
+  const cause = Object.assign(new Error(message), code === undefined ? {} : { code });
+  return vi.fn().mockRejectedValue(Object.assign(new TypeError("fetch failed"), { cause }));
 }
 
 function okMessage(overrides: Record<string, unknown> = {}) {
@@ -90,6 +105,20 @@ describe("telegramPublisher.publish", () => {
     expect(result.externalId).toBe("4711");
   });
 
+  // The resend is only safe because Telegram's own envelope said it did not
+  // accept the message. A 400 from a gateway, with an unrecognized body that
+  // happens to carry the same words, is not that proof — and resending on it
+  // would be a second post.
+  it("does NOT resend on a 400 whose body is not Telegram's envelope, even if it mentions parse entities", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response("proxy error: can't parse entities", { status: 400 }));
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "<b>hi", format: "html" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("throws TransientPublishError with retryAfter on 429", async () => {
     const fetchImpl = fetchReturning(
       {
@@ -110,28 +139,86 @@ describe("telegramPublisher.publish", () => {
     expect((caught as TransientPublishError).retryAfterSeconds).toBe(32);
   });
 
-  it("throws TransientPublishError on 5xx and on network failure", async () => {
+  it("throws TransientPublishError on Telegram's own 5xx envelope", async () => {
     const server = fetchReturning({ ok: false, error_code: 502, description: "Bad Gateway" }, 502);
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl: server }),
     ).rejects.toBeInstanceOf(TransientPublishError);
-
-    const network = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
-    await expect(
-      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl: network }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
   });
 
-  it("throws TransientPublishError, not a raw SyntaxError, when a 502 returns an HTML body", async () => {
+  // MUTATION PIN. `envelope.code >= 500` -> `> 500` survived the whole suite:
+  // every 5xx envelope under test was 502 or 503. A bare 500 is the boundary,
+  // and getting it wrong turns Telegram's own "try again" into a permanent
+  // failure — a post that silently never goes out.
+  it("treats Telegram's error_code 500 — the exact boundary — as transient, not permanent", async () => {
+    const fetchImpl = fetchReturning(
+      { ok: false, error_code: 500, description: "Internal Server Error" },
+      500,
+    );
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(TransientPublishError);
+    expect(caught).not.toBeInstanceOf(PermanentPublishError);
+  });
+
+  // The other half of the same boundary: 499 is not a server error, so
+  // Telegram saying it is Telegram refusing, permanently.
+  it("treats Telegram's error_code 499 as permanent", async () => {
+    const fetchImpl = fetchReturning({ ok: false, error_code: 499, description: "nope" }, 499);
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+  });
+
+  // A gateway's 502, not Telegram's. Nothing here says whether Telegram ever
+  // saw the request — the 502 may be on the REPLY leg, with the post already
+  // live — so this must never be retryable. It used to be transient, and that
+  // retry is finding (a)'s second post.
+  it("throws UnknownOutcomePublishError, not Transient, when a 502 returns an HTML body", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response("<html><body>502 Bad Gateway</body></html>", {
         status: 502,
         headers: { "content-type": "text/html" },
       }),
     );
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(UnknownOutcomePublishError);
+    expect(caught).not.toBeInstanceOf(TransientPublishError);
+  });
+
+  // MUTATION PIN for the unrecognized-body boundary. `status >= 500` -> `> 500`
+  // leaves a bare 500 falling into the 4xx branch and being called permanent —
+  // "we know this did not post" — when nothing here knows that at all.
+  it("calls an unrecognized body on HTTP 500 — the exact boundary — unknown, not permanent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("upstream exploded", { status: 500 }));
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(UnknownOutcomePublishError);
+    expect(caught).not.toBeInstanceOf(PermanentPublishError);
+  });
+
+  // And the other side of it: a 499 with an unrecognized body is a rejection by
+  // whatever answered, which is a refusal to forward, which is not a post.
+  it("calls an unrecognized body on HTTP 499 permanent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("nope", { status: 499 }));
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+  });
+
+  // 429 is carved out of the 4xx branch on purpose: an intermediary throttling
+  // us cannot be told apart from one throttling Telegram's reply.
+  it("calls an unrecognized body on HTTP 429 unknown, not permanent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("slow down", { status: 429 }));
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(UnknownOutcomePublishError);
+    expect(caught).not.toBeInstanceOf(PermanentPublishError);
   });
 
   it("throws PermanentPublishError when a 400 returns a non-JSON body", async () => {
@@ -141,14 +228,14 @@ describe("telegramPublisher.publish", () => {
     ).rejects.toBeInstanceOf(PermanentPublishError);
   });
 
-  it("throws TransientPublishError, not a raw TypeError, when fetchImpl rejects with undefined", async () => {
+  it("throws UnknownOutcomePublishError, not a raw TypeError, when fetchImpl rejects with undefined", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(undefined);
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
-  it("throws TransientPublishError, not a raw TypeError, when the body stream errors mid-read", async () => {
+  it("throws UnknownOutcomePublishError, not a raw TypeError, when the body stream errors mid-read", async () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.error(new TypeError("terminated"));
@@ -157,10 +244,10 @@ describe("telegramPublisher.publish", () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(stream, { status: 502 }));
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
-  it("throws TransientPublishError, not a raw DOMException, when the body read is aborted", async () => {
+  it("throws UnknownOutcomePublishError, not a raw DOMException, when the body read is aborted", async () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.error(new DOMException("The operation was aborted.", "AbortError"));
@@ -169,7 +256,7 @@ describe("telegramPublisher.publish", () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(stream, { status: 200 }));
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
   it("never leaks the bot token into a thrown error message", async () => {
@@ -188,7 +275,7 @@ describe("telegramPublisher.publish", () => {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(TransientPublishError);
+    expect(caught).toBeInstanceOf(UnknownOutcomePublishError);
     expect((caught as Error).message).not.toContain(CREDS.botToken);
   });
 
@@ -208,18 +295,21 @@ describe("telegramPublisher.publish", () => {
     });
   });
 
-  it("throws PermanentPublishError when the body is the JSON literal null on HTTP 200", async () => {
+  // A 200 whose body we cannot read as Telegram's envelope is the worst case
+  // there is: the status says something accepted the request and the body says
+  // we have no idea what. Unknown, never permanent.
+  it("throws UnknownOutcomePublishError when the body is the JSON literal null on HTTP 200", async () => {
     const fetchImpl = fetchReturning(null, 200);
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(PermanentPublishError);
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
-  it("throws TransientPublishError when the body is the JSON literal null on HTTP 503", async () => {
+  it("throws UnknownOutcomePublishError when the body is the JSON literal null on HTTP 503", async () => {
     const fetchImpl = fetchReturning(null, 503);
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
-    ).rejects.toBeInstanceOf(TransientPublishError);
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
   it("classifies a bare JSON string body instead of crashing", async () => {
@@ -232,9 +322,58 @@ describe("telegramPublisher.publish", () => {
       caught = error;
     }
 
-    expect(caught instanceof PermanentPublishError || caught instanceof TransientPublishError).toBe(
-      true,
-    );
+    expect(
+      caught instanceof PermanentPublishError ||
+        caught instanceof TransientPublishError ||
+        caught instanceof UnknownOutcomePublishError,
+    ).toBe(true);
+  });
+
+  // The connect-phase allowlist. These four are the only fetch rejections that
+  // prove no request bytes reached the wire, so they are the only ones a retry
+  // may act on.
+  it.each(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"])(
+    "treats a %s rejection as transient — the connection never carried a request",
+    async (code) => {
+      const fetchImpl = fetchRejectingWith(code, `connect ${code} 127.0.0.1:443`);
+      const caught = await telegramPublisher
+        .publish(CREDS, { text: "x" }, { fetchImpl })
+        .catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(TransientPublishError);
+      expect(caught).not.toBeInstanceOf(UnknownOutcomePublishError);
+    },
+  );
+
+  // The shape Node actually produces when the peer resets after the request
+  // body is written — finding (a) in one assertion. It is NOT a connect-phase
+  // code, so it must not be retryable.
+  it("treats a UND_ERR_SOCKET rejection as unknown — the body was already on the wire", async () => {
+    const fetchImpl = fetchRejectingWith("UND_ERR_SOCKET", "other side closed");
+    const caught = await telegramPublisher
+      .publish(CREDS, { text: "x" }, { fetchImpl })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(UnknownOutcomePublishError);
+    expect(caught).not.toBeInstanceOf(TransientPublishError);
+  });
+
+  it("treats a rejection with no code at all as unknown, not transient", async () => {
+    const fetchImpl = fetchRejectingWith(undefined, "something went wrong");
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+  });
+
+  // The adapter's own AbortSignal.timeout: it covers the whole request, so it
+  // cannot tell a connection that never opened from a reply that never came.
+  it("treats the request timeout as unknown", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      );
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
   });
 
   it("throws PermanentPublishError, without calling the API, when the request body cannot be JSON-serialized", async () => {
@@ -261,7 +400,36 @@ describe("telegramPublisher.publish", () => {
   it("rejects text over the platform limit without calling the API", async () => {
     const fetchImpl = vi.fn();
     await expect(
-      telegramPublisher.publish(CREDS, { text: "x".repeat(4097) }, { fetchImpl }),
+      telegramPublisher.publish(
+        CREDS,
+        { text: "x".repeat(telegramPublisher.maxTextLength + 1) },
+        { fetchImpl },
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // MUTATION PIN. `length > MAX_TEXT_LENGTH` -> `>=` survived the whole suite:
+  // the only length under test was 4097, which both forms reject. Text of
+  // exactly the limit is legal and must go out — the mutant silently refuses to
+  // publish every post that lands on the boundary.
+  it("accepts text of exactly the platform limit and sends it", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const text = "x".repeat(telegramPublisher.maxTextLength);
+    await expect(telegramPublisher.publish(CREDS, { text }, { fetchImpl })).resolves.toMatchObject({
+      externalId: "4711",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string).text).toBe(text);
+  });
+
+  // The lower boundary of the same check, for the same reason: `length === 0`
+  // must be refused, and refused without a call.
+  it("rejects empty text without calling the API", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "" }, { fetchImpl }),
     ).rejects.toBeInstanceOf(PermanentPublishError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });

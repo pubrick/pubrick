@@ -57,6 +57,13 @@
       "when": 1788299948328,
       "tag": "0007_ledger_draft_index",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788329387056,
+      "tag": "0008_in_flight_claim",
+      "breakpoints": true
     }
   ]
 }

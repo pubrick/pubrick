@@ -4,8 +4,10 @@ import {
   PermanentPublishError,
   type Publisher,
   type PublishResult,
+  TELEGRAM_REQUEST_TIMEOUT_MS,
+  UnknownOutcomePublishError,
 } from "@pubrick/integrations";
-import type { PublishJob } from "@pubrick/shared";
+import { PUBLISH_QUEUE_OPTIONS, type PublishJob } from "@pubrick/shared";
 import { env } from "../env";
 import { PublishRepository } from "./publish.repository";
 
@@ -13,8 +15,75 @@ export type { PublishJob } from "@pubrick/shared";
 
 type PublisherLookup = (platform: string) => Publisher<never> | undefined;
 
-/** Bounded — this is riding out a transient DB hiccup, not retrying forever. */
-const MARK_PUBLISHED_MAX_ATTEMPTS = 3;
+/** Backoff unit between markPublished retries; 0 in tests for determinism. */
+const DEFAULT_MARK_PUBLISHED_RETRY_DELAY_MS = 200;
+
+/**
+ * The post is already live when these retries run, so the budget is not "how
+ * long is polite to wait" — it is "how long must this outlast".
+ *
+ * The thing it has to outlast is pg-boss's own liveness check. `work()`
+ * refreshes `heartbeat_on` while a handler runs, and the maintenance pass fails
+ * (and therefore REDELIVERS) any active job whose heartbeat went stale by
+ * `heartbeatSeconds`. During a database outage the heartbeat cannot be written
+ * either — it is a write to the same database — so a recording budget shorter
+ * than the heartbeat window guarantees the shape of finding (b): give up on
+ * recording after 0.6s, return, have `complete()` throw, and let the supervisor
+ * redeliver the job 30s later with nothing on the record to say a post went
+ * out. The retry budget must be longer than the outage that triggers the
+ * redelivery, or it is not a budget at all.
+ *
+ * 13 attempts with a 5s-capped doubling backoff spend ~41s of sleeping, which
+ * clears the 30s window with room for the writes themselves. Derived from
+ * `PUBLISH_QUEUE_OPTIONS.heartbeatSeconds` and asserted against it in
+ * publish.service.spec.ts, so shortening the heartbeat fails a test rather than
+ * silently reopening the gap.
+ */
+const MARK_PUBLISHED_MAX_ATTEMPTS = 13;
+const MARK_PUBLISHED_RETRY_CAP_MS = 5_000;
+
+/** Backoff before the retry AFTER `attempt`; doubling, capped. */
+function markPublishedDelayMs(unitMs: number, attempt: number): number {
+  return Math.min(unitMs * 2 ** (attempt - 1), MARK_PUBLISHED_RETRY_CAP_MS);
+}
+
+/**
+ * Worst-case wall time `recordPublished` can occupy, at the default backoff
+ * unit — the sleeping only, since the writes themselves are unbounded from
+ * here. Exported because the worker's graceful-shutdown window has to cover it:
+ * a stop that gives up while this is still riding out a hiccup fails the job it
+ * was recording (apps/worker/src/main.ts).
+ */
+export const PUBLISH_RECORD_BUDGET_MS = Array.from(
+  { length: MARK_PUBLISHED_MAX_ATTEMPTS - 1 },
+  (_, i) => markPublishedDelayMs(DEFAULT_MARK_PUBLISHED_RETRY_DELAY_MS, i + 1),
+).reduce((total, delay) => total + delay, 0);
+
+/** Heartbeat window this budget must outlast; see MARK_PUBLISHED_MAX_ATTEMPTS. */
+export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSeconds * 1000;
+
+/**
+ * How long a graceful stop must wait for publish handlers before pg-boss's
+ * `failWip()` fails whatever is still active (apps/worker/src/main.ts).
+ *
+ * Derived, not picked, because the failure it prevents is a duplicate post: a
+ * job failed by `failWip()` is a job pg-boss redelivers, and a handler
+ * interrupted mid-request may already have posted. The window has to cover the
+ * longest one attempt can legitimately still be running — a platform request at
+ * its own timeout, plus the worst case of recording the result afterwards —
+ * with margin for the writes themselves. pg-boss's default is 30s, which is
+ * exactly the adapter's request timeout and so the worst possible value: a
+ * request that started a moment before SIGTERM is guaranteed to be cut off at
+ * its most ambiguous point. This is finding (c).
+ *
+ * Defence in depth, not the primary guard. A SIGKILL, a lost pod, or a stop
+ * that runs out anyway still cannot post twice — the in-flight claim outlives
+ * the process and the redelivered attempt refuses to send. What a long-enough
+ * window buys is that the ordinary case ends as `published` rather than as
+ * "outcome unknown, go look at the channel".
+ */
+export const PUBLISH_STOP_TIMEOUT_MS =
+  TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS + 10_000;
 
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
@@ -66,7 +135,8 @@ export class PublishService {
     @Optional() private readonly lookup: PublisherLookup = getPublisher,
     @Optional() private readonly baseUrl: string = env.TELEGRAM_API_BASE_URL,
     /** Backoff unit between markPublished retries; 0 in tests for determinism. */
-    @Optional() private readonly markPublishedRetryDelayMs: number = 200,
+    @Optional()
+    private readonly markPublishedRetryDelayMs: number = DEFAULT_MARK_PUBLISHED_RETRY_DELAY_MS,
   ) {}
 
   async handle(job: PublishJob): Promise<void> {
@@ -119,6 +189,24 @@ export class PublishService {
       );
       return;
     }
+
+    // The claim on the SEND, written before the platform is called. Losing it
+    // means a previous attempt wrote one and never came back to resolve it, and
+    // the ONLY thing that can leave a claim behind is an attempt that stopped
+    // running between the claim and its outcome — killed mid-send, unable to
+    // reach the database afterwards, failed by a graceful stop or by the
+    // heartbeat supervisor while its request was in flight. Every one of those
+    // may have posted. This is the guard that makes findings (b) and (c)
+    // terminal instead of duplicating: the redelivery pg-boss was always going
+    // to make now finds evidence where it used to find nothing.
+    if (!(await this.repo.claimSend(job.orgId, job.adaptationId))) {
+      await this.recordUnknownOutcome(
+        job.orgId,
+        job.adaptationId,
+        "an earlier attempt was interrupted after the post was sent to the platform and never reported back",
+      );
+      return;
+    }
     const text = adaptation.body ?? adaptation.itemBody;
 
     // Everything that can still be safely retried lives in this try — nothing
@@ -166,6 +254,17 @@ export class PublishService {
       result = await publisher.publish(parsed.data, { text }, { baseUrl: this.baseUrl });
     } catch (error) {
       const message = (error as Error).message;
+      if (error instanceof UnknownOutcomePublishError) {
+        // The request left this process and its answer never came back. Not
+        // retried, and deliberately NOT recorded as a failure: "failed" would
+        // invite a re-approve, and a re-approve here is a second post. The
+        // claim becomes an `unknown` publications row and the operator is told
+        // to look at the channel first. This is finding (a) — before, this
+        // error did not exist and the case above it took the branch below,
+        // where the rethrow is the second send.
+        await this.recordUnknownOutcome(job.orgId, job.adaptationId, message);
+        return;
+      }
       if (error instanceof PermanentPublishError) {
         // Never retried: returning normally completes the pg-boss job.
         // Nothing was accepted by the platform on this branch (publish()
@@ -174,6 +273,14 @@ export class PublishService {
         await this.safeMarkFailed(job.orgId, job.adaptationId, message);
         return;
       }
+      // Transient, which now means KNOWN-not-posted: the platform's own
+      // envelope said "not now", or the connection never got far enough to send
+      // anything. Nothing is out there, so the claim goes back before the
+      // rethrow — holding it would turn an honest retry into a permanent
+      // "outcome unknown" on the next delivery. Best effort on purpose: if the
+      // release cannot be written, the claim survives and the next attempt
+      // reports unknown, which is the safe direction to fail in.
+      await this.safeReleaseSend(job.orgId, job.adaptationId);
       await this.repo.recordTransient(job.orgId, job.adaptationId, message);
       throw error;
     }
@@ -213,6 +320,50 @@ export class PublishService {
     if (adaptation.status !== "publishing") return;
 
     await this.safeMarkFailed(job.orgId, job.adaptationId, "Retries exhausted");
+  }
+
+  /**
+   * The attempt ended without an answer: terminal, never retried, and never
+   * called a failure.
+   *
+   * `markFailed` is what moves the adaptation, because `failed` is the only
+   * terminal-and-not-published status the adaptation column has and every
+   * reader of it already means exactly that. The publications row is where the
+   * distinction lives — `unknown`, not `failed` — and `lastError` is where the
+   * operator reads it. Returning normally is the whole point: pg-boss completes
+   * the job, and no retry sends a second post.
+   */
+  private async recordUnknownOutcome(
+    orgId: string,
+    adaptationId: string,
+    detail: string,
+  ): Promise<void> {
+    const reason =
+      "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
+      `confirmed (${detail}). A copy may already be live — check the channel before re-approving, ` +
+      "because re-approving will send again.";
+    this.logger.error(`${reason} orgId=${orgId} adaptationId=${adaptationId}`);
+    await this.safeMarkFailed(orgId, adaptationId, reason, "unknown");
+  }
+
+  /**
+   * Hands the in-flight claim back after a KNOWN-not-posted ending. Never
+   * throws: the caller is about to rethrow a transient error that pg-boss will
+   * retry, and a failed release must not replace that with a different error —
+   * the claim simply survives, and the next delivery reports an unknown
+   * outcome rather than sending again.
+   */
+  private async safeReleaseSend(orgId: string, adaptationId: string): Promise<void> {
+    try {
+      await this.repo.releaseSend(orgId, adaptationId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        "SEND CLAIM RELEASE FAILED: a transient failure could not give its in-flight claim back — " +
+          "the next delivery will report an unknown outcome instead of retrying. " +
+          `orgId=${orgId} adaptationId=${adaptationId} error=${message}`,
+      );
+    }
   }
 
   /**
@@ -257,7 +408,7 @@ export class PublishService {
           );
           return;
         }
-        await sleep(this.markPublishedRetryDelayMs * attempt);
+        await sleep(markPublishedDelayMs(this.markPublishedRetryDelayMs, attempt));
       }
     }
   }
@@ -291,11 +442,19 @@ export class PublishService {
    * this" — so this logs and returns instead of propagating. Unlike
    * recordPublished, nothing was ever delivered to the platform on any of
    * these paths, so a missing failed-state write means a stuck/inconsistent
-   * adaptation status to reconcile manually — never a duplicate post.
+   * adaptation status to reconcile manually — never a duplicate post. The one
+   * caller that passes `outcome: "unknown"` is the exception to "nothing was
+   * delivered", and it is exactly why the publications row needs a status the
+   * adaptation column does not have.
    */
-  private async safeMarkFailed(orgId: string, adaptationId: string, reason: string): Promise<void> {
+  private async safeMarkFailed(
+    orgId: string,
+    adaptationId: string,
+    reason: string,
+    outcome: "failed" | "unknown" = "failed",
+  ): Promise<void> {
     try {
-      await this.repo.markFailed(orgId, adaptationId, reason);
+      await this.repo.markFailed(orgId, adaptationId, reason, outcome);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(

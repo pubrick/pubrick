@@ -20,6 +20,15 @@ type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
 type FakeTelegramResponse = { status: number; body: unknown };
 
 /**
+ * "Accept the request body, then kill the connection before replying" — a
+ * socket reset AFTER the post has left this process. The counter below proves
+ * the request arrived; the reset is what makes its outcome unknowable from
+ * here. This is finding (a) reproduced with real sockets rather than a mocked
+ * fetch.
+ */
+type FakeTelegramBehaviour = FakeTelegramResponse | "reset-after-request";
+
+/**
  * The publish service's own unit tests mock PublishRepository entirely, so nothing
  * else drives a job through the REAL machinery: a real pg-boss queue created by
  * QueueService.registerAll(), a real PublishRepository hitting Postgres, and a real
@@ -52,7 +61,12 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   let server: http.Server;
   let orgId: string;
   let brandId: string;
+  let service: InstanceType<PublishServiceCtor>;
   const fakeResponses = new Map<string, FakeTelegramResponse>();
+  /** Per-chat script, consumed in order; falls back to `fakeResponses`. */
+  const fakeScripts = new Map<string, FakeTelegramBehaviour[]>();
+  /** sendMessage requests whose BODY the fake server actually received. */
+  const sendCounts = new Map<string, number>();
 
   beforeAll(async () => {
     // Fake Telegram: a real HTTP server (not a mocked fetch) so the worker's own
@@ -77,16 +91,22 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
         } catch {
           // Falls through to "no fake response configured" below.
         }
-        const response = fakeResponses.get(chatId) ?? {
-          status: 500,
-          body: {
-            ok: false,
-            error_code: 500,
-            description: `fake telegram: no response configured for chat ${chatId}`,
-          },
-        };
-        res.writeHead(response.status, { "content-type": "application/json" });
-        res.end(JSON.stringify(response.body));
+        sendCounts.set(chatId, (sendCounts.get(chatId) ?? 0) + 1);
+        const behaviour = fakeScripts.get(chatId)?.shift() ??
+          fakeResponses.get(chatId) ?? {
+            status: 500,
+            body: {
+              ok: false,
+              error_code: 500,
+              description: `fake telegram: no response configured for chat ${chatId}`,
+            },
+          };
+        if (behaviour === "reset-after-request") {
+          req.socket.destroy();
+          return;
+        }
+        res.writeHead(behaviour.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(behaviour.body));
       });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
@@ -122,7 +142,9 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       QueueService: QueueServiceCtor;
     };
     const repo = new PublishRepository();
-    const service = new PublishService(repo);
+    // 0 backoff: the recording retries are budgeted in seconds by design (see
+    // PUBLISH_RECORD_BUDGET_MS) and nothing here is testing that budget.
+    service = new PublishService(repo, undefined, undefined, 0);
     // A no-op generate side: registerAll wires every queue the worker consumes,
     // and this file is about the publish path. Its generate consumer sits on the
     // private pair above, where nothing enqueues anything.
@@ -337,5 +359,118 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // (handle() returned normally) never "retry" (handle() rethrew).
     const job = await waitForJobState(jobId);
     expect(job.state).toBe("completed");
+  }, 25_000);
+
+  /**
+   * FINDING (a), end to end. The stub takes the whole request body — the
+   * counter it bumps is the proof the post was EXECUTED — and then destroys
+   * the socket instead of replying. Node's fetch rejects with
+   * `UND_ERR_SOCKET`, which is not a connect-phase failure, so nothing here
+   * can say whether a message is now sitting in the channel.
+   *
+   * Before the fix this was a `TransientPublishError`: the handler rethrew, the
+   * pg-boss job went to "retry", and the redelivery sent a SECOND message that
+   * the second stub call happily accepted — two posts, one `published` row,
+   * `attempt_count` 2, `last_error` null, and nothing anywhere recording that
+   * the channel had two copies. (Measured on the pre-fix code by driving
+   * handle() twice: sends=2, publications=1/published.)
+   *
+   * The job must now COMPLETE, not retry. That is the assertion that makes the
+   * second send impossible rather than merely unlikely: a completed job is
+   * never redelivered.
+   */
+  it("does not retry — and so cannot post twice — when the reply is lost after the send", async () => {
+    const chatId = `-100${Date.now()}4`;
+    // A second call would be answered with a perfectly good success. If the
+    // handler ever sends again, this test sees two sends and a published row.
+    fakeScripts.set(chatId, ["reset-after-request"]);
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: {
+        ok: true,
+        result: { message_id: 8080, chat: { id: Number(chatId), username: "lostreply" } },
+      },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+    expect(sendCounts.get(chatId)).toBe(1);
+
+    const publication = await publicationFor(adaptationId);
+    // Not "published" (it might not be) and not "failed" (it might be) — the
+    // record now holds the thing that is actually true.
+    expect(publication?.status).toBe("unknown");
+
+    const [adaptation] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(adaptation?.status).toBe("failed");
+    expect(adaptation?.lastError).toContain("check the channel before re-approving");
+
+    // Driving the handler again by hand — the redelivery pg-boss is no longer
+    // going to make — still sends nothing.
+    await service.handle({ adaptationId, orgId });
+    expect(sendCounts.get(chatId)).toBe(1);
+  }, 25_000);
+
+  /**
+   * The mechanism findings (b) and (c) share, executed rather than argued.
+   *
+   * Both end the same way: an attempt takes the claim, calls the platform, and
+   * then stops running before it can resolve the claim — (b) because the
+   * database is unreachable for longer than the heartbeat window and the
+   * supervisor fails the job, (c) because a graceful stop's `failWip()` fails
+   * it. Either way pg-boss redelivers, and the redelivery is what used to post
+   * a second time: `hasPublished` found nothing, `markPublishing` re-claimed
+   * from `publishing`, and the send went out again.
+   *
+   * What is executed here is exactly the state such a dead attempt leaves —
+   * `publishing` with an unresolved `in_flight` claim — followed by a REAL
+   * redelivery through the real queue. What is not executed is the dying: this
+   * process cannot be its own killed pod, and pg-boss's internal `complete()`
+   * failure and `failWip()` are not reachable from a test.
+   */
+  it("refuses to send when a redelivered job finds a claim its predecessor never resolved", async () => {
+    const chatId = `-100${Date.now()}5`;
+    // Configured to ACCEPT: if the handler sends, the post goes through and
+    // this test sees it.
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: {
+        ok: true,
+        result: { message_id: 9090, chat: { id: Number(chatId), username: "interrupted" } },
+      },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+
+    // The state a killed attempt leaves behind, written through the real
+    // repository: the attempt claimed, sent, and never came back.
+    const { PublishRepository } = (await import("./publish.repository")) as {
+      PublishRepository: PublishRepositoryCtor;
+    };
+    const repo = new PublishRepository();
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(true);
+    expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+    expect(sendCounts.get(chatId) ?? 0).toBe(0);
+
+    const publication = await publicationFor(adaptationId);
+    expect(publication?.status).toBe("unknown");
+    const [adaptation] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(adaptation?.status).toBe("failed");
+    expect(adaptation?.lastError).toContain("check the channel before re-approving");
   }, 25_000);
 });

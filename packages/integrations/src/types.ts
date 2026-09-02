@@ -42,3 +42,37 @@ export {
   PermanentError as PermanentPublishError,
   TransientError as TransientPublishError,
 } from "@pubrick/shared";
+
+/**
+ * The third outcome, and the only one that is not a claim about the platform:
+ * "the request left this process and we never learned what the platform did
+ * with it".
+ *
+ * Permanent and Transient both assert KNOWN-NOT-POSTED — a permanent error is
+ * the platform refusing, a transient one is the platform being unavailable or
+ * the request never leaving. Retrying either is safe precisely because nothing
+ * was delivered. This class is what the publish path had no way to say before:
+ * a socket reset after the request body went out, the adapter's own request
+ * timeout, a body read that failed on a response we never got to parse, a
+ * gateway answering where the platform should have. In every one of those the
+ * post may well be live in someone's channel, and a retry would post it again.
+ *
+ * It therefore lives OUTSIDE the permanent/transient hierarchy on purpose: any
+ * `catch` that routes on `instanceof PermanentPublishError` with a transient
+ * `else` must not silently swallow this — it has to name it, and the publish
+ * service's job is to end the attempt terminally and tell a human to look at
+ * the channel before re-approving. It is not in `@pubrick/shared` alongside the
+ * other two because "did the request reach the platform" is a question only a
+ * publisher asks; a generation step's outcome is visible in its own database
+ * row, not in a stranger's channel.
+ */
+export class UnknownOutcomePublishError extends Error {
+  readonly name = "UnknownOutcomePublishError";
+  constructor(
+    message: string,
+    /** HTTP status, when a response was received but never understood. */
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
