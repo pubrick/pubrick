@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import type { LanguageModelV4Prompt, SharedV4ProviderMetadata } from "@ai-sdk/provider";
 import { PermanentError, TransientError } from "@pubrick/shared";
 import { APICallError } from "ai";
@@ -856,6 +857,8 @@ describe("generateStructured", () => {
   });
 
   describe("the time budget", () => {
+    /** The sentence a cancelled call is reported with. Pinned in classify.test.ts. */
+    const CANCELLED_MESSAGE = "the model call was cancelled before it finished";
     const TIMED_OUT =
       "the model call ran out of time before the provider answered; whether it was billed is unknown";
 
@@ -977,6 +980,181 @@ describe("generateStructured", () => {
       expect(calls).toBe(1);
       expect(error).toBeInstanceOf(TransientError);
       expect((error as TransientError).message).toBe(TIMED_OUT);
+    });
+
+    /**
+     * A provider that always fails RETRYABLY, so the SDK sleeps between round
+     * trips instead of returning.
+     *
+     * The sleep is the whole point. `retryWithExponentialBackoff` waits two
+     * seconds by default, and a signal firing during that wait is rejected by
+     * the SDK's own `delay()` with a reason it CONSTRUCTS —
+     * `DOMException("Delay was aborted", "AbortError")` — not with the reason
+     * our signal carries. Every other path preserves the reason, which is why
+     * this one hid: measured against ai@7.0.83 through the real Google provider
+     * against a local server, a timeout landing here was reported `cancelled`
+     * and one landing in the provider call was reported `timed_out`.
+     *
+     * No `retry-after` header on purpose: a hint would shorten the sleep the
+     * budget has to land inside.
+     */
+    function alwaysRetryable() {
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async () => {
+          calls += 1;
+          throw new APICallError({
+            message: "service unavailable",
+            url: "https://example.invalid",
+            requestBodyValues: {},
+            statusCode: 503,
+          });
+        },
+      });
+      return { model, calls: () => calls };
+    }
+
+    it("says timed out when the budget expires inside the SDK's own retry backoff", async () => {
+      // The reported failure, end to end through the real retry loop. The SDK
+      // is two seconds into its sleep when our 50ms budget fires; before the
+      // budget could say so, this arrived as a `cancelled` PermanentError — a
+      // run that is checkpointed, resumable and already paid for, ended for
+      // good and labelled with the one action the user did not take.
+      const rows: UsageRecord[] = [];
+      const { model, calls } = alwaysRetryable();
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        timeoutMs: 50,
+        onUsage: (record) => {
+          rows.push(record);
+        },
+      }).catch((e) => e);
+
+      expect(calls()).toBe(1);
+      expect(error).toBeInstanceOf(TransientError);
+      expect((error as TransientError).message).toBe(TIMED_OUT);
+      expect(runFailureOf(error)).toBe("timed_out");
+      expect(runFailureOf(error)).not.toBe("cancelled");
+    });
+
+    it("still says cancelled when the CALLER aborts inside that same backoff", async () => {
+      // The other half, and the reason the fix cannot be "treat every backoff
+      // abort as a timeout": the error the SDK constructs is identical in both
+      // tests. Only the signal that fired differs, and only the composition
+      // site ever knew which one it was.
+      const controller = new AbortController();
+      const { model } = alwaysRetryable();
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, 50);
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        timeoutMs: 60_000,
+        onUsage: vi.fn(),
+      }).catch((e) => e);
+      clearTimeout(timer);
+
+      expect(error).toBeInstanceOf(PermanentError);
+      expect((error as PermanentError).message).toBe(CANCELLED_MESSAGE);
+      expect(runFailureOf(error)).toBe("cancelled");
+    });
+
+    it("says timed out when the budget expires in the REPAIR call's backoff too", async () => {
+      // The repair retry re-enters the same path, so it needs the same
+      // attribution: a budget that expires on the second attempt is still our
+      // budget. Without this the second `classifyAiError` call site could drop
+      // the attribution and every test still pass — the failure would only show
+      // up on a run whose model answered badly once and then hit a slow
+      // provider.
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              content: [{ type: "text" as const, text: "not json at all" }],
+              finishReason: stop,
+              usage,
+              warnings: [],
+            };
+          }
+          throw new APICallError({
+            message: "service unavailable",
+            url: "https://example.invalid",
+            requestBodyValues: {},
+            statusCode: 503,
+          });
+        },
+      });
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        timeoutMs: 50,
+        onUsage: vi.fn(),
+      }).catch((e) => e);
+
+      expect(calls).toBe(2);
+      expect(error).toBeInstanceOf(TransientError);
+      expect(runFailureOf(error)).toBe("timed_out");
+      expect(runFailureOf(error)).not.toBe("cancelled");
+    });
+
+    it("records the round trip abandoned in backoff as unknown, not as free", async () => {
+      // The money half of the same event, and the one a different consumer
+      // reads: the run row says `timed_out` while the ledger row says the cost
+      // is unknown. The provider was answering a 503 rather than generating
+      // here, but the row's shape must not depend on which round trip the
+      // budget happened to land in.
+      const rows: UsageRecord[] = [];
+      const { model } = alwaysRetryable();
+
+      await expect(
+        generateStructured({
+          ...base,
+          model,
+          timeoutMs: 50,
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(TransientError);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        status: "errored",
+        attempt: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: null,
+        costSource: "unknown",
+        outcome: "refused",
+      });
+    });
+
+    it("leaves no listener behind on the caller's signal", async () => {
+      // One model call per step, many steps per run, one worker signal for all
+      // of them: a listener kept per call is an unbounded leak. The composition
+      // adds one to answer "which signal fired"; the call has to give it back.
+      const controller = new AbortController();
+      const before = getEventListeners(controller.signal, "abort").length;
+
+      await generateStructured({
+        ...base,
+        model: textModel('{"headline":"done"}'),
+        abortSignal: controller.signal,
+        timeoutMs: 60_000,
+        onUsage: vi.fn(),
+      });
+
+      expect(getEventListeners(controller.signal, "abort").length).toBe(before);
     });
 
     it("leaves a caller's own cancellation saying cancelled, not timed out", async () => {

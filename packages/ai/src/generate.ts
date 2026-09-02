@@ -7,6 +7,7 @@ import {
   NoOutputGeneratedError,
   Output,
 } from "ai";
+import { createCallBudget } from "./budget.js";
 import { classifyAiError, withRunFailure } from "./classify.js";
 import type { AiProvider } from "./provider.js";
 import {
@@ -135,43 +136,62 @@ export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Pr
 
   // Started here, not per attempt: the budget is the whole logical call's, so
   // an attempt that burns 110 seconds leaves the repair retry ten and not
-  // another two minutes. `AbortSignal.timeout`'s timer does not hold the event
-  // loop open, so a call that returns early leaves nothing running behind it.
-  const budget = AbortSignal.timeout(args.timeoutMs ?? MODEL_CALL_TIMEOUT_MS);
-  // `any`, so the caller's own signal keeps working and each of the two keeps
-  // its own abort reason — which is what lets `classifyAiError` tell "someone
-  // cancelled this" from "it ran out of time".
-  const signal =
-    args.abortSignal === undefined ? budget : AbortSignal.any([args.abortSignal, budget]);
+  // another two minutes.
+  //
+  // Through `createCallBudget` rather than `AbortSignal.any` directly, because
+  // composing the two signals is exactly what destroys the evidence of which
+  // one fired: the SDK's retry backoff rejects with an `AbortError` it builds
+  // itself, so our budget reaches the classifier wearing a user's cancellation
+  // — permanent, on a run that would have resumed. The budget watches both
+  // signals and answers the question the error no longer can.
+  const budget = createCallBudget(args.timeoutMs ?? MODEL_CALL_TIMEOUT_MS, args.abortSignal);
 
   try {
-    return await attempt(args, args.prompt, 1, clock, signal);
-  } catch (firstError) {
-    if (!NoObjectGeneratedError.isInstance(firstError)) throw classifyAiError(firstError);
-
-    // A tool call instead of text is a different failure: there is no offending
-    // text to quote back, so a repair prompt would be a guess. See `attempt`.
-    let repaired: T;
     try {
-      repaired = await attempt(args, repairPrompt(args.prompt, firstError), 2, clock, signal);
-    } catch (repairError) {
-      if (!NoObjectGeneratedError.isInstance(repairError)) throw classifyAiError(repairError);
-      const failure = withRunFailure(
-        new PermanentError(
-          `the model returned output that does not match the required schema, twice: ${validationMessage(repairError)}`,
-        ),
-        "no_structured_output",
-      );
-      // The originating error travels along as `cause`, and callers that need to
-      // know WHICH rule was broken must read the validation issues through it.
-      // The message above is not a safe substitute: it renders the model's own
-      // output verbatim, so a model can write any sentence it likes into it —
-      // including one that impersonates a validation failure. The adapter's
-      // platform-limit check reads the issues for exactly that reason.
-      failure.cause = repairError;
-      throw failure;
+      return await attempt(args, args.prompt, 1, clock, budget.signal);
+    } catch (firstError) {
+      if (!NoObjectGeneratedError.isInstance(firstError)) {
+        throw classifyAiError(firstError, budget.abortedBy());
+      }
+
+      // A tool call instead of text is a different failure: there is no
+      // offending text to quote back, so a repair prompt would be a guess. See
+      // `attempt`.
+      let repaired: T;
+      try {
+        repaired = await attempt(
+          args,
+          repairPrompt(args.prompt, firstError),
+          2,
+          clock,
+          budget.signal,
+        );
+      } catch (repairError) {
+        if (!NoObjectGeneratedError.isInstance(repairError)) {
+          throw classifyAiError(repairError, budget.abortedBy());
+        }
+        const failure = withRunFailure(
+          new PermanentError(
+            `the model returned output that does not match the required schema, twice: ${validationMessage(repairError)}`,
+          ),
+          "no_structured_output",
+        );
+        // The originating error travels along as `cause`, and callers that need
+        // to know WHICH rule was broken must read the validation issues through
+        // it. The message above is not a safe substitute: it renders the model's
+        // own output verbatim, so a model can write any sentence it likes into
+        // it — including one that impersonates a validation failure. The
+        // adapter's platform-limit check reads the issues for exactly that
+        // reason.
+        failure.cause = repairError;
+        throw failure;
+      }
+      return repaired;
     }
-    return repaired;
+  } finally {
+    // The caller's signal can outlive this call by a whole worker process, and
+    // one listener per model call left on it is a leak nothing would notice.
+    budget.release();
   }
 }
 
@@ -203,8 +223,10 @@ async function attempt<T>(
   // Here rather than at the top of `generateStructured`, because it must guard
   // BOTH attempts: an abort while the first call is in flight must not buy the
   // repair call, and neither must a budget the first call already spent.
-  // `throwIfAborted` throws the signal's own reason, which `classifyAiError`
-  // turns into the cancellation sentence or the timeout one.
+  // `throwIfAborted` throws the composite signal's own reason — the one case
+  // where the reason is still intact — and the budget's attribution says which
+  // of the two it belongs to, so this reaches the user as the cancellation
+  // sentence or the timeout one and never as the other.
   signal.throwIfAborted();
 
   const recorder = createCallRecorder(modelIdOf(args.model));

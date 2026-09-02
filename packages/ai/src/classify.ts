@@ -38,6 +38,18 @@ export function runFailureOf(error: unknown): RunFailure | undefined {
 }
 
 /**
+ * Which of the two signals a model call listens to actually fired.
+ *
+ * `"timeout"` is OUR budget (`MODEL_CALL_TIMEOUT_MS`), `"caller"` the signal a
+ * caller handed us. They are the same SHAPE by the time an error is caught —
+ * both arrive as a `DOMException` whose `name` is the only discriminator, and
+ * the SDK rewrites even that — so the answer travels from the site that
+ * COMPOSED the two (`createCallBudget`) rather than being read back off the
+ * error.
+ */
+export type AbortCause = "timeout" | "caller";
+
+/**
  * Reduce an unknown thrown value to the two error classes the job queue
  * understands, TAGGED with the closed code that reaches the user.
  *
@@ -58,7 +70,15 @@ export function runFailureOf(error: unknown): RunFailure | undefined {
  * with a status refused), so a key that fails a run and a key that fails the
  * Test are described to the user in the same words.
  */
-export function classifyAiError(error: unknown): PermanentError | TransientError {
+export function classifyAiError(
+  error: unknown,
+  /**
+   * Which signal ended the call, from the caller that composed them. Omitted by
+   * a caller that composes no budget of its own — the Test button's probe —
+   * where the error's own name is the only evidence there is.
+   */
+  abortedBy?: AbortCause,
+): PermanentError | TransientError {
   // Already classified upstream (the repair wrapper throws PermanentError).
   // It carries its own tag; re-tagging here would overwrite what the throw site
   // knew with what this function can only guess.
@@ -66,40 +86,52 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
 
   const cause = unwrapRetry(error);
 
-  // Permanent, and a code of its own. A cancelled call is not a failure the
-  // provider had anything to do with, so it is not an `APICallError` and used
-  // to fall through to the bare branch below — which would show a user the
-  // DOM's own words, "This operation was aborted": true, and about nothing they
-  // recognise as having done. Permanent rather than transient because nobody is
-  // waiting for the answer any more; a retry would spend money on a result the
-  // caller has already withdrawn its request for.
-  if (isAbortError(cause)) return withRunFailure(new PermanentError(CANCELLED), "cancelled");
-
-  // Our own budget ran out (see `MODEL_CALL_TIMEOUT_MS`). Distinguished from
-  // the abort above by name, because `AbortSignal.timeout()` aborts with a
-  // `TimeoutError` and nobody asked for it — telling a user their call was
-  // "cancelled" would name an action they did not take.
+  // A cancelled call and a call that ran out of time are ONE arm, because they
+  // are one shape: an abort. Which of the two it was is not in the shape.
   //
-  // TRANSIENT, and the choice is not free. A retry may pay again for a call the
-  // provider already billed, which is the argument the abort branch above uses
-  // for being permanent. It goes the other way here because the caller has not
-  // withdrawn anything: a stuck provider is the ordinary reason to hit this,
-  // every finished step is checkpointed so only the timed-out step re-runs, and
-  // the alternative — one 121-second generation killing a run for good — is a
-  // worse failure than a second attempt. What made the old behaviour dangerous
-  // was not the retry but its invisibility; the round trip now writes a ledger
-  // row with `outcome = 'unknown'`, so each attempt's possible charge is
-  // counted and the org's total says "≥".
+  // It used to be read off `name`, and for a call the SDK abandons mid-flight
+  // that works — `AbortSignal.timeout()` aborts with `TimeoutError`, an
+  // `AbortController` with `AbortError`, and `AbortSignal.any` passes the
+  // reason of whichever fired straight through. What it does not survive is the
+  // SDK's own retry backoff: aborting while `retryWithExponentialBackoff` is
+  // sleeping is rejected by its `delay()` with a reason that helper
+  // CONSTRUCTS, `DOMException("Delay was aborted", "AbortError")`. Measured
+  // against ai@7.0.83 through the real Google provider: a 503 followed by our
+  // two-minute budget expiring during the two-second sleep arrived here named
+  // `AbortError`, and this arm called our own budget a user's cancellation —
+  // permanent, on a run that was checkpointed and paid for and would have
+  // resumed. So the attribution comes from `createCallBudget`, which watched
+  // both signals, and the name is only the fallback for a caller that composed
+  // none.
   //
-  // `timed_out`, which is a member of both closed sets precisely so that this
-  // arm does not have to borrow one. It was `internal` for the few hours
-  // between the budget landing and the code existing, and `internal` is the
-  // generic for "we do not know" — but this branch knows exactly what happened,
-  // and the Test button's copy of the mapping turned the same borrowing into an
-  // outright lie ("the provider is rate-limiting"). A closed set that cannot say
-  // the true thing is a set with a member missing, not a licence to pick the
-  // least-wrong neighbour.
-  if (isTimeoutError(cause)) return withRunFailure(new TransientError(TIMED_OUT), "timed_out");
+  // The two verdicts, and why they differ:
+  //
+  // - CANCELLED is permanent. Nobody is waiting for the answer any more; a
+  //   retry would spend money on a result the caller has withdrawn its request
+  //   for. It also gets its own sentence rather than the DOM's "This operation
+  //   was aborted" — true, and about nothing a user recognises as having done.
+  //
+  // - TIMED OUT is transient, and the choice is not free: a retry may pay
+  //   again for a call the provider already billed. It goes the other way
+  //   because the caller withdrew nothing. A stuck provider is the ordinary
+  //   reason to reach it, every finished step is checkpointed so only the
+  //   timed-out step re-runs, and one 121-second generation ending a run for
+  //   good is the worse failure. What made the old behaviour dangerous was not
+  //   the retry but its invisibility; the round trip now writes a ledger row
+  //   with `outcome = 'unknown'`, so each attempt's possible charge is counted
+  //   and the org's total says "≥".
+  //
+  // `timed_out` is a member of both closed sets precisely so this arm need not
+  // borrow one. Each fold available to it says something false: `cancelled`
+  // names an action the user did not take, `rate_limited` — what the Test
+  // button's copy of this mapping reported — blames a provider that never said
+  // it was busy, and `internal` is the generic for "we do not know" when this
+  // branch knows exactly what happened.
+  if (isAbortShaped(cause)) {
+    return ranOutOfTime(abortedBy, cause)
+      ? withRunFailure(new TransientError(TIMED_OUT), "timed_out")
+      : withRunFailure(new PermanentError(CANCELLED), "cancelled");
+  }
 
   if (APICallError.isInstance(cause) && cause.isRetryable === true) {
     return withRunFailure(
@@ -111,9 +143,15 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
   if (APICallError.isInstance(cause)) {
     return withRunFailure(
       new PermanentError(redactSecrets(cause.message), cause.statusCode),
-      // No status at all still reads as `provider_refused` rather than
-      // `internal`: the call failed at the provider boundary, and "check the key
-      // and the model id" remains the useful thing to say about it.
+      // A status-less `APICallError` would read as `provider_refused` here, and
+      // that sub-case is not reachable through either supported provider:
+      // measured against @ai-sdk/provider-utils@5.0.32 and
+      // @openrouter/ai-sdk-provider@3.0.0, the only construction without a
+      // status is "Cannot connect to API", which sets `isRetryable: true` and
+      // is therefore taken by the arm above — a connect failure is told as a
+      // retryable one ("rate-limiting or temporarily unavailable", which is
+      // what it is and it IS retried), never as a refusal. The default here is
+      // for the statuses that exist and are not 401/403/404.
       codeForStatus(cause.statusCode),
     );
   }
@@ -180,38 +218,59 @@ export function redactSecrets(message: string, secret?: string): string {
 }
 
 /**
- * Did this end because someone cancelled it?
+ * Is this the shape an abort arrives in?
  *
  * Keyed on `name`, never on the message: the message differs by construction
- * site — `AbortController#abort()` gives "This operation was aborted", while an
- * abort landing inside the SDK's own retry backoff gives
- * `DOMException("Delay was aborted", "AbortError")` — and a provider whose 500
- * body merely mentioned aborting would otherwise be reported as a cancellation
- * nobody asked for. `DOMException` is the usual carrier, but runtimes differ,
- * so anything named `AbortError` counts.
+ * site — `AbortController#abort()` gives "This operation was aborted", the SDK's
+ * retry backoff gives "Delay was aborted" — and a provider whose 500 body merely
+ * mentioned aborting would otherwise be reported as a cancellation nobody asked
+ * for. `DOMException` is the usual carrier, but runtimes differ, so anything so
+ * named counts.
+ *
+ * Both names, one predicate, because the name no longer decides WHICH abort this
+ * was — `abortedBy` does. What it still decides is whether an abort happened at
+ * all, which is what keeps a `TypeError` out of this arm even on a call whose
+ * budget had expired.
  *
  * Written here rather than imported: the SDK's own `isAbortError` lives in
  * `@ai-sdk/provider-utils`, which this package does not depend on, and it also
- * folds in `TimeoutError`, which is a different thing said in the same shape.
+ * counts `ResponseAborted` — a Next.js shape neither the worker nor the probe
+ * can produce.
  */
-function isAbortError(error: unknown): boolean {
-  return nameOf(error) === "AbortError";
+function isAbortShaped(error: unknown): boolean {
+  const name = nameOf(error);
+  return name === "AbortError" || name === "TimeoutError";
 }
 
 /**
- * Did this end because our own time budget ran out?
+ * Was it OUR clock that ran out, rather than a caller giving up?
+ *
+ * The composition site's answer wins when there is one. The name is consulted
+ * only without one, and it is not a dead fallback: it is what the Test button's
+ * probe classifies by, and `AbortSignal.timeout` and the SDK's own per-request
+ * `setAbortTimeout` both abort with a `TimeoutError` that no cancellation
+ * shares.
+ */
+function ranOutOfTime(abortedBy: AbortCause | undefined, cause: unknown): boolean {
+  if (abortedBy !== undefined) return abortedBy === "timeout";
+  return isTimeoutError(cause);
+}
+
+/**
+ * Does the error name itself a timeout?
  *
  * `AbortSignal.timeout()` aborts with `DOMException("…due to timeout",
  * "TimeoutError")`, and `AbortSignal.any()` passes that reason through — which
- * is what lets the composite signal say WHICH of the two fired. The SDK's own
- * `isAbortError` folds the two together; here they are two different sentences
- * about two different things, so they are kept apart.
+ * is what let the composite signal say which of the two fired, for as long as
+ * nothing rewrote it. The SDK's own `isAbortError` folds this in with
+ * `AbortError`; here they are two different sentences about two different
+ * things, so they stay apart.
  */
 function isTimeoutError(error: unknown): boolean {
   return nameOf(error) === "TimeoutError";
 }
 
-/** Keyed on `name`, never on the message — see `isAbortError`. */
+/** Keyed on `name`, never on the message — see `isAbortShaped`. */
 function nameOf(error: unknown): unknown {
   if (typeof error !== "object" || error === null) return undefined;
   return (error as { name?: unknown }).name;

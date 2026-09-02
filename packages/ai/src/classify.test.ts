@@ -217,6 +217,83 @@ describe("classifyAiError", () => {
     });
   });
 
+  describe("our own budget, told apart from the caller's cancellation", () => {
+    // The finding this arm exists for, reproduced against the real SDK:
+    //
+    //   timeout inside the SDK's retry backoff (maxRetries default) -> AbortError
+    //   timeout during the provider call        (maxRetries 0)      -> TimeoutError
+    //
+    // One event, two names, because `retryWithExponentialBackoff`'s `delay()`
+    // rejects with a reason it CONSTRUCTS instead of the signal's own. Reading
+    // the name alone therefore called our budget a user's cancellation — and a
+    // cancellation is permanent, so a slow provider ended a checkpointed run
+    // that would have resumed, under the one word that is never true of it.
+    //
+    // `generate.test.ts` drives both of these end to end through the SDK's real
+    // retry loop; here they are the classifier's own two arms.
+    const CANCELLED = "the model call was cancelled before it finished";
+    const TIMED_OUT =
+      "the model call ran out of time before the provider answered; whether it was billed is unknown";
+
+    /** Exactly what the SDK's retry backoff rejects with. */
+    const delayAborted = () => new DOMException("Delay was aborted", "AbortError");
+    /** Exactly what `AbortSignal.timeout()` aborts with. */
+    const timedOut = () =>
+      new DOMException("The operation was aborted due to timeout", "TimeoutError");
+
+    it("calls the SDK's backoff abort a TIMEOUT when our budget is what fired", () => {
+      const classified = classifyAiError(delayAborted(), "timeout");
+
+      expect(classified).toBeInstanceOf(TransientError);
+      expect(classified.message).toBe(TIMED_OUT);
+      expect(runFailureOf(classified)).toBe("timed_out");
+    });
+
+    it("calls the same abort a CANCELLATION when the caller's signal is what fired", () => {
+      // Same error object, opposite verdict: the shape carries no answer, so
+      // the answer has to come from the site that composed the two signals.
+      const classified = classifyAiError(delayAborted(), "caller");
+
+      expect(classified).toBeInstanceOf(PermanentError);
+      expect(classified.message).toBe(CANCELLED);
+      expect(runFailureOf(classified)).toBe("cancelled");
+    });
+
+    it("lets the attribution beat the error's own name in the other direction too", () => {
+      // A `TimeoutError` reason belonging to a caller's signal is the caller's
+      // withdrawal, not our budget. If the name won here, the fix would work
+      // only for the half of the problem that was reported.
+      const classified = classifyAiError(timedOut(), "caller");
+
+      expect(classified).toBeInstanceOf(PermanentError);
+      expect(runFailureOf(classified)).toBe("cancelled");
+    });
+
+    it("falls back to the name when nobody composed a budget", () => {
+      // The Test button's probe classifies without an attribution, and
+      // `AbortSignal.timeout` — plus the SDK's own per-request timeout — really
+      // does name itself. The fallback is load bearing, not decoration.
+      expect(runFailureOf(classifyAiError(timedOut()))).toBe("timed_out");
+      expect(runFailureOf(classifyAiError(delayAborted()))).toBe("cancelled");
+    });
+
+    it("does not let an expired budget swallow an error the abort had nothing to do with", () => {
+      // The attribution says which signal fired, never that every subsequent
+      // failure is that signal's doing. Widening it that far would restore the
+      // lie with the roles swapped: a 401 reported as a timeout, retried
+      // forever against a key that will never work.
+      expect(runFailureOf(classifyAiError(apiError(401), "timeout"))).toBe("invalid_key");
+      expect(runFailureOf(classifyAiError(new TypeError("boom"), "timeout"))).toBe("internal");
+      expect(runFailureOf(classifyAiError(apiError(429), "caller"))).toBe("rate_limited");
+    });
+
+    it("keeps the two codes distinct — the whole point of the arm", () => {
+      expect(runFailureOf(classifyAiError(delayAborted(), "timeout"))).not.toBe(
+        runFailureOf(classifyAiError(delayAborted(), "caller")),
+      );
+    });
+  });
+
   it("handles a thrown non-error", () => {
     expect(classifyAiError("just a string")).toBeInstanceOf(PermanentError);
     expect(classifyAiError("just a string").message).toBe("just a string");

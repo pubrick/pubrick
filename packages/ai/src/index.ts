@@ -1,4 +1,10 @@
-export { classifyAiError, redactSecrets, runFailureOf, withRunFailure } from "./classify.js";
+export {
+  type AbortCause,
+  classifyAiError,
+  redactSecrets,
+  runFailureOf,
+  withRunFailure,
+} from "./classify.js";
 export {
   type GenerateStructuredArgs,
   generateStructured,
