@@ -5,7 +5,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { runFailureOf } from "./classify.js";
-import { generateStructured } from "./generate.js";
+import { generateStructured, MODEL_CALL_TIMEOUT_MS } from "./generate.js";
 import type { UsageRecord } from "./usage.js";
 
 const schema = z.object({ headline: z.string() });
@@ -170,6 +170,10 @@ describe("generateStructured", () => {
         // The two failures reported no tokens, so they cannot be priced.
         expect(rows.map((r) => r.costSource)).toEqual(["unknown", "unknown", "price_table"]);
         expect(rows.map((r) => r.attempt)).toEqual([1, 1, 1]);
+        // The two 500s are verdicts the provider delivered instead of work, so
+        // they are known-free and leave the org's total alone; the third round
+        // trip came back, so its outcome is settled whatever the answer was.
+        expect(rows.map((r) => r.outcome)).toEqual(["refused", "refused", "completed"]);
       },
       RETRY_BACKOFF_BUDGET_MS,
     );
@@ -194,6 +198,10 @@ describe("generateStructured", () => {
         expect(rows).toHaveLength(3);
         expect(rows.every((r) => r.status === "errored")).toBe(true);
         expect(rows.every((r) => r.costUsd === null && r.costSource === "unknown")).toBe(true);
+        // Three refusals, so a provider having a bad hour cannot stamp "≥" on
+        // an org's lifetime total. That is the whole reason the outcome column
+        // is three-valued rather than a boolean "did it fail".
+        expect(rows.every((r) => r.outcome === "refused")).toBe(true);
       },
       RETRY_BACKOFF_BUDGET_MS,
     );
@@ -230,7 +238,90 @@ describe("generateStructured", () => {
         outputTokens: 0,
         costUsd: null,
         costSource: "unknown",
+        outcome: "refused",
       });
+    });
+
+    it("marks a 200 the provider package could not parse as an unknown outcome", async () => {
+      // `createJsonResponseHandler` throws `APICallError` carrying the
+      // SUCCESSFUL status when the body does not match the provider's own
+      // schema — the model finished, we were billed, and we cannot read the
+      // answer. Zero tokens on the row, because nothing reported any; the
+      // outcome is what stops that reading as free.
+      const rows: UsageRecord[] = [];
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw new APICallError({
+            message: "Invalid JSON response",
+            url: "https://example.invalid",
+            requestBodyValues: {},
+            statusCode: 200,
+          });
+        },
+      });
+
+      await expect(
+        generateStructured({
+          ...base,
+          model,
+          maxRetries: 0,
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(PermanentError);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ inputTokens: 0, outputTokens: 0, outcome: "unknown" });
+    });
+
+    it("marks a transport failure carrying no status as an unknown outcome", async () => {
+      const rows: UsageRecord[] = [];
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw new APICallError({
+            message: "Cannot connect to API: socket hang up",
+            url: "https://example.invalid",
+            requestBodyValues: {},
+          });
+        },
+      });
+
+      await expect(
+        generateStructured({
+          ...base,
+          model,
+          maxRetries: 0,
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(PermanentError);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.outcome).toBe("unknown");
+    });
+
+    it("marks a round trip that came back as completed, whatever the attempt then did", async () => {
+      // The answer was unusable — not JSON at all — but the provider's side is
+      // over and its tokens are on the row. `status` says the attempt failed;
+      // `outcome` is about the money, and these are different questions.
+      const rows: UsageRecord[] = [];
+
+      await expect(
+        generateStructured({
+          ...base,
+          model: textModel("not json at all", "still not json"),
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(PermanentError);
+
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.status === "errored")).toBe(true);
+      expect(rows.every((r) => r.outcome === "completed")).toBe(true);
+      expect(rows.every((r) => r.inputTokens === 10)).toBe(true);
     });
   });
 
@@ -645,15 +736,12 @@ describe("generateStructured", () => {
       // may have been billed in full: the provider can have finished the work
       // and started answering when we hung up.
       //
-      // KNOWN CONSEQUENCE, stated rather than hidden — and measured against
-      // `spend()` rather than assumed. These rows carry no tokens, which is
-      // what puts them in `cost-display.ts`'s IGNORED bucket, whose premise is
-      // that such a row cost nothing. So they are not summed as $0: they are
-      // dropped, and they do not raise the unpriced count either, so the
-      // settings figure understates real spend WITHOUT gaining the "≥" that
-      // exists to say a total is only a floor. The row cannot tell an abort
-      // from a 429 rejected before counting, so nothing here can fix it; it is
-      // why a caller must set `maxRetries` deliberately.
+      // Those rows carry no tokens, and until 2026-09-02 that alone put them in
+      // `cost-display.ts`'s IGNORED bucket, whose premise is that the call cost
+      // nothing — true of the 500 below, not true of the abort. They now carry
+      // `outcome: "unknown"`, which is what makes the org's total say "≥"
+      // instead of quietly shrinking. Both outcomes appear here on purpose: one
+      // round trip of each kind, in one call.
       //
       // The shape those rows have is what this test pins.
       const rows: UsageRecord[] = [];
@@ -701,6 +789,8 @@ describe("generateStructured", () => {
       expect(rows.map((r) => r.status)).toEqual(["errored", "errored"]);
       expect(rows.every((r) => r.inputTokens === 0 && r.outputTokens === 0)).toBe(true);
       expect(rows.every((r) => r.costUsd === null && r.costSource === "unknown")).toBe(true);
+      // The 500 was a refusal; the abort was a call we stopped listening to.
+      expect(rows.map((r) => r.outcome)).toEqual(["refused", "unknown"]);
       expect((error as PermanentError).message).toBe(CANCELLED);
     });
 
@@ -762,6 +852,150 @@ describe("generateStructured", () => {
       expect(rows.map((r) => r.attempt)).toEqual([1, 2]);
       expect(rows.map((r) => r.inputTokens)).toEqual([10, 0]);
       expect(rows.every((r) => r.status === "errored")).toBe(true);
+    });
+  });
+
+  describe("the time budget", () => {
+    const TIMED_OUT =
+      "the model call ran out of time before the provider answered; whether it was billed is unknown";
+
+    /**
+     * A provider that has stopped talking: it never answers, and the only thing
+     * that can end the call is the signal it was handed.
+     *
+     * Rejecting with the signal's own `reason` is what a real `fetch` does, and
+     * it is load bearing twice over — it is how the budget can end a call at
+     * all, and it is how `classifyAiError` can tell a timeout from a
+     * cancellation. A mock that ignored the signal would hang here exactly as
+     * an unbounded call hangs in production, which is the failure this is
+     * about.
+     */
+    function hangs() {
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async (options) => {
+          calls += 1;
+          return await new Promise((_resolve, reject) => {
+            options.abortSignal?.addEventListener("abort", () => {
+              reject(options.abortSignal?.reason);
+            });
+          });
+        },
+      });
+      return { model, calls: () => calls };
+    }
+
+    it("is two minutes, so no honest generation reaches it and no stuck one runs for ever", () => {
+      // Pinned as a number because nothing else can fail when it changes: a
+      // structured call on the default model finishes in seconds, so a longer
+      // budget is invisible until a provider hangs and an org is billed for
+      // round trips it never saw. Before this existed the only bound was the
+      // HTTP client's default of 300 seconds PER ROUND TRIP.
+      expect(MODEL_CALL_TIMEOUT_MS).toBe(120_000);
+    });
+
+    it("ends a call the provider never answers, instead of waiting on the HTTP default", async () => {
+      const rows: UsageRecord[] = [];
+      const { model } = hangs();
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        timeoutMs: 30,
+        onUsage: (record) => {
+          rows.push(record);
+        },
+      }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(TransientError);
+      expect((error as TransientError).message).toBe(TIMED_OUT);
+      // Not `cancelled`: nobody withdrew this request, and telling a user their
+      // call was cancelled would name an action they did not take.
+      expect(runFailureOf(error)).toBe("internal");
+      expect(rows).toHaveLength(1);
+    });
+
+    it("records the timed-out round trip as an unknown outcome, not as free", async () => {
+      // The whole point. The provider may have finished generating and been
+      // billing while we hung up, so this row must raise the "≥" rather than
+      // sit in the bucket whose premise is that the call cost nothing.
+      const rows: UsageRecord[] = [];
+      const { model } = hangs();
+
+      await expect(
+        generateStructured({
+          ...base,
+          model,
+          timeoutMs: 30,
+          onUsage: (record) => {
+            rows.push(record);
+          },
+        }),
+      ).rejects.toBeInstanceOf(TransientError);
+
+      expect(rows[0]).toMatchObject({
+        status: "errored",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: null,
+        costSource: "unknown",
+        outcome: "unknown",
+      });
+    });
+
+    it("is the whole call's budget, so a spent one does not buy the repair retry", async () => {
+      // A per-attempt budget would double on the repair, and double again on
+      // every transport retry inside each attempt — which is how six round
+      // trips at 300 seconds each became half an hour of invisible spend.
+      let calls = 0;
+      const model = new MockLanguageModelV4({
+        modelId: "gemini-3.7-flash",
+        doGenerate: async () => {
+          calls += 1;
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          return {
+            content: [{ type: "text" as const, text: "not json at all" }],
+            finishReason: stop,
+            usage,
+            warnings: [],
+          };
+        },
+      });
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        timeoutMs: 40,
+        onUsage: vi.fn(),
+      }).catch((e) => e);
+
+      // The first attempt came back — late — with output the schema refuses.
+      // The repair would be a second billable call on a budget already spent.
+      expect(calls).toBe(1);
+      expect(error).toBeInstanceOf(TransientError);
+      expect((error as TransientError).message).toBe(TIMED_OUT);
+    });
+
+    it("leaves a caller's own cancellation saying cancelled, not timed out", async () => {
+      // Both signals are live at once and `AbortSignal.any` passes through the
+      // reason of whichever fired. Reporting one as the other would tell a user
+      // the provider was slow when they pressed stop, or the reverse.
+      const controller = new AbortController();
+      controller.abort();
+
+      const error = await generateStructured({
+        ...base,
+        model: textModel('{"headline":"never asked"}'),
+        abortSignal: controller.signal,
+        timeoutMs: 60_000,
+        onUsage: vi.fn(),
+      }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(PermanentError);
+      expect((error as PermanentError).message).toBe(
+        "the model call was cancelled before it finished",
+      );
     });
   });
 

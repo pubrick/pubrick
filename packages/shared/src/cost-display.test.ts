@@ -12,12 +12,14 @@ const reported = (usd: number): CostRow => ({
   costSource: "provider_reported",
   inputTokens: 12,
   outputTokens: 3,
+  outcome: "completed",
 });
 const estimated = (usd: number): CostRow => ({
   costUsd: usd,
   costSource: "price_table",
   inputTokens: 12,
   outputTokens: 3,
+  outcome: "completed",
 });
 /** A model that answered, at a price nothing could name. Real money, unknown amount. */
 const unpriced = (): CostRow => ({
@@ -25,13 +27,35 @@ const unpriced = (): CostRow => ({
   costSource: "unknown",
   inputTokens: 12,
   outputTokens: 3,
+  outcome: "completed",
 });
-/** A 429 or a connection reset: rejected before the provider counted anything. */
-const rejectedBeforeTokens = (): CostRow => ({
+/** A 429: the provider delivered a verdict instead of a generation. Free, and known to be. */
+const refusedBeforeTokens = (): CostRow => ({
   costUsd: null,
   costSource: "unknown",
   inputTokens: 0,
   outputTokens: 0,
+  outcome: "refused",
+});
+/**
+ * A call that was dispatched and then lost — a timeout, a socket reset, a 200
+ * whose body would not parse. Identical to the row above in every column the
+ * ledger had before `outcome` existed, and not the same thing at all.
+ */
+const lostAfterDispatch = (): CostRow => ({
+  costUsd: null,
+  costSource: "unknown",
+  inputTokens: 0,
+  outputTokens: 0,
+  outcome: "unknown",
+});
+/** A row written before the outcome column existed. Reads as `completed`. */
+const beforeTheColumn = (): CostRow => ({
+  costUsd: null,
+  costSource: "unknown",
+  inputTokens: 0,
+  outputTokens: 0,
+  outcome: null,
 });
 
 /**
@@ -82,9 +106,9 @@ describe("the three cost display rules", () => {
  * failed attempts write rows too, and a rule that ignored tokens would let one
  * 429 degrade a lifetime total to "≥ $X (1 unpriced)" forever.
  */
-describe("a round trip rejected before any tokens were counted", () => {
+describe("a round trip the provider refused before counting any tokens", () => {
   it("does not degrade the label: its cost is known to be zero, not unknown", () => {
-    const summary = summarizeCost(costTotals([reported(1.23), rejectedBeforeTokens()]));
+    const summary = summarizeCost(costTotals([reported(1.23), refusedBeforeTokens()]));
 
     expect(summary).toEqual({ kind: "exact", usd: 1.23 });
   });
@@ -95,6 +119,7 @@ describe("a round trip rejected before any tokens were counted", () => {
       costSource: "unknown",
       inputTokens: 900,
       outputTokens: 0,
+      outcome: "completed",
     };
 
     expect(summarizeCost(costTotals([reported(1.23), burned]))).toEqual({
@@ -110,17 +135,90 @@ describe("a round trip rejected before any tokens were counted", () => {
       costSource: "unknown",
       inputTokens: 0,
       outputTokens: 7,
+      outcome: "completed",
     };
 
     expect(costTotals([outputOnly]).unpricedCalls).toBe(1);
   });
 
   it("adds nothing to the sum, so it cannot inflate the total either", () => {
-    expect(costTotals([rejectedBeforeTokens()])).toEqual({
+    expect(costTotals([refusedBeforeTokens()])).toEqual({
       usd: 0,
       unpricedCalls: 0,
       estimatedCalls: 0,
     });
+  });
+});
+
+/**
+ * The other half of that refinement, and the one that cost real money.
+ *
+ * A zero-token row is what a 429 writes AND what every failure after dispatch
+ * writes — a timeout, a socket reset, a 200 whose body would not parse, an
+ * abort. Filed together they were all treated as free, so a quarter-paid bill
+ * rendered as a complete one and the symbol beside it said "estimate" rather
+ * than "at least".
+ */
+describe("a round trip whose outcome we never learned", () => {
+  it("makes the total a floor, though it counted no tokens at all", () => {
+    const summary = summarizeCost(costTotals([reported(0.007875), lostAfterDispatch()]));
+
+    expect(summary).toEqual({ kind: "atLeast", usd: 0.007875, unpricedCalls: 1 });
+  });
+
+  it("counts one per physical round trip, so three lost calls are three", () => {
+    const summary = summarizeCost(
+      costTotals([
+        reported(0.007875),
+        lostAfterDispatch(),
+        lostAfterDispatch(),
+        lostAfterDispatch(),
+      ]),
+    );
+
+    // The measured case: $0.007875 shown against $0.0315 spent. The figure is
+    // still the only one anything can name — what changes is that it now says
+    // so, and says how many calls it is missing.
+    expect(summary).toEqual({ kind: "atLeast", usd: 0.007875, unpricedCalls: 3 });
+  });
+
+  it("adds nothing to the sum — it is a floor marker, not an invented number", () => {
+    expect(costTotals([lostAfterDispatch()])).toEqual({
+      usd: 0,
+      unpricedCalls: 1,
+      estimatedCalls: 0,
+    });
+  });
+
+  it("is the only zero-token outcome that degrades the label", () => {
+    // The two rows are identical in every column the ledger had before
+    // `outcome` existed. If this passes with only one of them counted, the
+    // column is doing exactly the work it was added for.
+    expect(costTotals([refusedBeforeTokens(), lostAfterDispatch()]).unpricedCalls).toBe(1);
+  });
+
+  it("leaves a row written before the column exactly as it read then", () => {
+    // NULL means "nobody recorded this", not "unknown outcome". Reading it the
+    // other way would stamp "≥" on every existing org's lifetime total for a
+    // transient blip that may well have been a 429.
+    const summary = summarizeCost(costTotals([reported(1.23), beforeTheColumn()]));
+
+    expect(summary).toEqual({ kind: "exact", usd: 1.23 });
+  });
+
+  it("still adds a PRICED row to the sum whatever its outcome says", () => {
+    // The buckets are ordered: priced wins. An outcome column that could veto a
+    // figure the provider itself reported would be a second, worse source of
+    // truth about money we were told the amount of.
+    const priced: CostRow = {
+      costUsd: 0.5,
+      costSource: "provider_reported",
+      inputTokens: 10,
+      outputTokens: 2,
+      outcome: "unknown",
+    };
+
+    expect(summarizeCost(costTotals([priced]))).toEqual({ kind: "exact", usd: 0.5 });
   });
 });
 
@@ -142,6 +240,7 @@ describe("costTotals", () => {
       costSource: "unknown",
       inputTokens: 10,
       outputTokens: 1,
+      outcome: "completed",
     };
 
     expect(costTotals([lying])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });
@@ -153,6 +252,7 @@ describe("costTotals", () => {
       costSource: "provider_reported",
       inputTokens: 10,
       outputTokens: 1,
+      outcome: "completed",
     };
 
     expect(costTotals([lying])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });

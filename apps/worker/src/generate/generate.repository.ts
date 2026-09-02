@@ -383,10 +383,20 @@ export class GenerateRepository {
       reasoningTokens: record.reasoningTokens,
       // `numeric(12,6)` is a string column in drizzle, and the conversion is not
       // `String(cost)`: `toLedgerCostUsd` floors a real sub-micro-dollar cost so
-      // a billed call never stores 0.000000.
+      // a billed call never stores 0.000000. This path writes essentially every
+      // row in the table, so bypassing it here would report a whole run's worth
+      // of cheap calls as free; `generate.service.spec.ts` pins the floor
+      // through this method rather than only through `toLedgerCostUsd`'s own
+      // unit test, because a unit test of the helper cannot notice a caller
+      // that stopped using it.
       costUsd: toLedgerCostUsd(record.costUsd),
       costSource: record.costSource,
       status: record.status,
+      // What became of the round trip. A zero-token row is written by a 429 AND
+      // by a call lost after dispatch; this is the only column that says which,
+      // and `AiCredentialsRepository.spend` reads it to decide whether the org's
+      // total is a floor.
+      outcome: record.outcome,
       responseMs: record.responseMs,
       keyOwnership: "byok" as const,
     };

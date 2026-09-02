@@ -134,6 +134,13 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
  * — so no step could bound its retries, and the credential probe set
  * `maxRetries: 0` by calling `generateStructured` directly instead, giving up
  * the prompt boundary and the metering that live on this path to get it.
+ *
+ * Every member of `ModelCallOptions` is listed here BY NAME rather than spread —
+ * a spread would also carry `brand`, `model`, `provider` and `onUsage` into an
+ * argument object that has its own meanings for two of them — and a
+ * hand-written list is exactly the thing that quietly stops being complete. So
+ * each of the five has a behaviour test of its own in `steps.test.ts` under
+ * "what a step's context lets its caller bound"; a sixth knob owes one too.
  */
 async function callStep<O>(
   ctx: StepContext,
@@ -154,6 +161,7 @@ async function callStep<O>(
     onUsageError: ctx.onUsageError,
     maxRetries: ctx.maxRetries,
     now: ctx.now,
+    timeoutMs: ctx.timeoutMs,
     abortSignal: ctx.abortSignal,
   });
 }

@@ -4,7 +4,9 @@ export {
   preferredCredential,
 } from "./ai-credential-order.js";
 export {
+  AI_CALL_OUTCOMES,
   AI_COST_SOURCES,
+  type AiCallOutcome,
   type AiCostSource,
   type CostRow,
   type CostSummary,

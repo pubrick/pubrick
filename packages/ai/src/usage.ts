@@ -1,3 +1,4 @@
+import { APICallError } from "ai";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { AiProvider } from "./provider.js";
 
@@ -6,6 +7,15 @@ export type CostSource = "provider_reported" | "price_table" | "unknown";
 
 /** A row exists even when the call failed after the provider had counted tokens. */
 export type UsageStatus = "ok" | "errored";
+
+/**
+ * What became of one physical round trip. Mirrors `CALL_OUTCOMES` in `@pubrick/db`.
+ *
+ * `UsageStatus` says how the ATTEMPT ended; this says what happened to the
+ * money. The two are independent: a round trip that `completed` can belong to
+ * an attempt that went on to fail on the schema, and both rows are real spend.
+ */
+export type CallOutcome = "completed" | "refused" | "unknown";
 
 /**
  * One **physical** round trip to the provider, in the shape the ledger stores it.
@@ -29,6 +39,13 @@ export type UsageRecord = {
   costSource: CostSource;
   responseMs: number;
   status: UsageStatus;
+  /**
+   * Whether the provider's side of this round trip is known to be over. An
+   * `unknown` row is counted as unpriced by both readers even though it carries
+   * no tokens — it is the one thing that separates a call the provider refused
+   * from a call it may have generated, billed, and never delivered.
+   */
+  outcome: CallOutcome;
 };
 
 export type UsageSink = (record: UsageRecord) => Promise<void> | void;
@@ -60,7 +77,53 @@ export type MeteredCall = {
   result?: ProviderCallResult;
   /** False when the round trip itself failed, whatever the attempt went on to do. */
   transportOk: boolean;
+  /**
+   * What became of it — `completed` when it returned, otherwise the verdict
+   * `callOutcomeOf` reached about the error it threw. This is the only place
+   * that verdict can be reached: by the time the ledger row exists the error is
+   * gone, and a zero-token row cannot tell a refusal from a lost generation.
+   */
+  outcome: CallOutcome;
 };
+
+/**
+ * Did the provider refuse this request, or did we simply never learn what it
+ * did with it?
+ *
+ * A NON-2xx HTTP status is the one thing that proves a refusal: the provider
+ * answered, and what it answered was a verdict about the request rather than
+ * work done on it. A 429, a 401, a 400 — nothing was generated, so nothing was
+ * billed, and the row belongs in the bucket whose cost is known to be zero.
+ *
+ * Everything else is `unknown`, and the ledger says so rather than pretending
+ * the call was free:
+ *
+ * - a timeout or an abort — the provider may have finished and been billing
+ *   while we hung up;
+ * - a socket reset mid-body, or a body read that failed;
+ * - a transport error carrying NO status at all (the SDK's "Cannot connect to
+ *   API" wraps a connect failure in an `APICallError` with `statusCode`
+ *   undefined) — some of those really did reach nobody, but the error does not
+ *   say which, and the honest answer to "did this cost money" is that we cannot
+ *   tell;
+ * - anything thrown by our own code.
+ *
+ * THE 2xx CARVE-OUT IS THE POINT, not defensive padding. `createJsonResponseHandler`
+ * in @ai-sdk/provider-utils throws `APICallError` with `statusCode: response.status`
+ * when the response body does not match the provider's own schema — and that
+ * status is 200, because the request succeeded and the model finished. A rule
+ * that read "any status means refused" would file the most expensive failure of
+ * the four — a full generation we could not parse — as free.
+ *
+ * `APICallError.isInstance`, never `instanceof`: the marker symbol survives
+ * duplicate copies of `@ai-sdk/provider` in the tree.
+ */
+export function callOutcomeOf(error: unknown): CallOutcome {
+  if (!APICallError.isInstance(error)) return "unknown";
+  const status = error.statusCode;
+  if (typeof status !== "number") return "unknown";
+  return status >= 200 && status < 300 ? "unknown" : "refused";
+}
 
 /**
  * OpenRouter reports what the call actually cost. The field is **optional** —
@@ -130,6 +193,10 @@ export function toUsageRecord(
     costSource,
     responseMs: Math.round(call.responseMs),
     status: options.status,
+    // Decided where the error still existed, carried through unchanged. There
+    // is nothing to derive it from here: tokens are zero for a refusal and for
+    // a lost generation alike.
+    outcome: call.outcome,
   };
 }
 
@@ -178,10 +245,20 @@ export function createCallRecorder(fallbackModelId: string): {
             // is pinned by the tests rather than by this cast.
             result: result as ProviderCallResult,
             transportOk: true,
+            outcome: "completed",
           });
           return result;
         } catch (error) {
-          calls.push({ modelId, responseMs: Date.now() - startedAt, transportOk: false });
+          // The error is classified HERE and nowhere later. This catch is the
+          // last place that knows whether the provider delivered a verdict or
+          // simply stopped talking to us; the row it writes carries zero tokens
+          // either way, and a reader looking at zero tokens has to guess.
+          calls.push({
+            modelId,
+            responseMs: Date.now() - startedAt,
+            transportOk: false,
+            outcome: callOutcomeOf(error),
+          });
           throw error;
         }
       },

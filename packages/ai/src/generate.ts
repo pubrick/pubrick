@@ -18,11 +18,30 @@ import {
 } from "./usage.js";
 
 /**
+ * How long one logical model call gets, in total, before it is abandoned.
+ *
+ * Two minutes against a structured call on the default model that finishes in
+ * seconds — wide enough that no honest generation reaches it, narrow enough to
+ * bound what a stuck provider can cost. Until 2026-09-02 there was no bound of
+ * ours at all: the only limit was the HTTP client's default of 300 SECONDS per
+ * round trip, so one step could sit for the SDK's retries plus the repair
+ * retry — six round trips, half an hour — with every one of them possibly
+ * billed and none of them visible in the total.
+ *
+ * TOTAL, not per round trip. The budget is the wall clock of the whole logical
+ * call, repair retry included, because it exists to bound what the CALLER
+ * waits and what the caller can be charged; a per-round-trip bound multiplies
+ * by however many trips the SDK decides to make.
+ */
+export const MODEL_CALL_TIMEOUT_MS = 120_000;
+
+/**
  * The knobs a model call takes that are not the call itself: how hard to try,
- * where to report a lost ledger row, what time it is, and how to stop.
+ * where to report a lost ledger row, what time it is, how long to wait, and how
+ * to stop.
  *
  * Named as one type because they travel as one set — `StepContext` carries
- * exactly these four so that `callStep` can forward exactly these four. The
+ * exactly these five so that `callStep` can forward exactly these five. The
  * type keeps the set in step; only the forwarding tests keep it forwarded.
  */
 export type ModelCallOptions = {
@@ -45,26 +64,29 @@ export type ModelCallOptions = {
   /** Injectable clock, so the price table's effective dates are testable. */
   now?: () => Date;
   /**
+   * How long the whole logical call may take before it is abandoned. Defaults
+   * to `MODEL_CALL_TIMEOUT_MS`; a caller that knows better may narrow it, and
+   * tests set it small to prove the bound exists.
+   */
+  timeoutMs?: number;
+  /**
    * Cancels the call, and is threaded into BOTH attempts — the repair retry
    * re-enters the same path, so a signal given to one and not the other still
    * buys a second call.
    *
-   * ⚠ What an aborted call WRITES is not one row, and what the org is then
-   * SHOWN is not the truth. The recorder pushes a record per PHYSICAL round
-   * trip, so an abort after dispatch leaves one `status = 'errored'`,
-   * `cost_source = 'unknown'`, zero-token row per round trip already made — up
-   * to six by default with two logical attempts and the SDK's own retries. Each
-   * of those round trips may have been billed in full: the provider can have
-   * finished the work and started answering when we hung up.
+   * An abort after dispatch is a charge we cannot see the size of: the provider
+   * can have finished the work and started answering when we hung up. The
+   * recorder pushes a record per PHYSICAL round trip, so each of those writes a
+   * zero-token row — and until 2026-09-02 zero tokens was enough to put it in
+   * `cost-display.ts`'s IGNORED bucket, whose premise is that the call cost
+   * nothing. True of a 429 the provider rejected before counting anything; not
+   * true of this. Those rows now carry `outcome: "unknown"` and are counted as
+   * unpriced, so the total says "≥" instead of quietly shrinking.
    *
-   * Zero tokens is what puts them in `cost-display.ts`'s IGNORED bucket, whose
-   * whole premise is that such a row cost nothing — true of a 429 the provider
-   * rejected before counting anything, NOT true of an abort. So `spend()`
-   * neither adds them to the total nor counts them as unpriced, which means the
-   * settings figure understates real spend AND does not gain the "≥" that
-   * exists to say a total is only a floor. Nothing here can fix that: the
-   * ledger row cannot tell the two cases apart. It is why a caller must set
-   * `maxRetries` deliberately rather than inherit the default of two.
+   * That makes the retry budget a question of money rather than of honesty, but
+   * it is still a question: a caller that hands over a signal is still buying up
+   * to six round trips per attempt if it leaves `maxRetries` at the SDK's
+   * default of two.
    */
   abortSignal?: AbortSignal;
 };
@@ -111,8 +133,19 @@ export type GenerateStructuredArgs<T> = ModelCallOptions & {
 export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Promise<T> {
   const clock = args.now ?? (() => new Date());
 
+  // Started here, not per attempt: the budget is the whole logical call's, so
+  // an attempt that burns 110 seconds leaves the repair retry ten and not
+  // another two minutes. `AbortSignal.timeout`'s timer does not hold the event
+  // loop open, so a call that returns early leaves nothing running behind it.
+  const budget = AbortSignal.timeout(args.timeoutMs ?? MODEL_CALL_TIMEOUT_MS);
+  // `any`, so the caller's own signal keeps working and each of the two keeps
+  // its own abort reason — which is what lets `classifyAiError` tell "someone
+  // cancelled this" from "it ran out of time".
+  const signal =
+    args.abortSignal === undefined ? budget : AbortSignal.any([args.abortSignal, budget]);
+
   try {
-    return await attempt(args, args.prompt, 1, clock);
+    return await attempt(args, args.prompt, 1, clock, signal);
   } catch (firstError) {
     if (!NoObjectGeneratedError.isInstance(firstError)) throw classifyAiError(firstError);
 
@@ -120,7 +153,7 @@ export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Pr
     // text to quote back, so a repair prompt would be a guess. See `attempt`.
     let repaired: T;
     try {
-      repaired = await attempt(args, repairPrompt(args.prompt, firstError), 2, clock);
+      repaired = await attempt(args, repairPrompt(args.prompt, firstError), 2, clock, signal);
     } catch (repairError) {
       if (!NoObjectGeneratedError.isInstance(repairError)) throw classifyAiError(repairError);
       const failure = withRunFailure(
@@ -155,6 +188,8 @@ async function attempt<T>(
   prompt: string,
   attemptNumber: number,
   clock: () => Date,
+  /** The caller's signal and the time budget, already composed. */
+  signal: AbortSignal,
 ): Promise<T> {
   // Before the recorder exists, so a call that never happened leaves no row.
   //
@@ -167,9 +202,10 @@ async function attempt<T>(
   //
   // Here rather than at the top of `generateStructured`, because it must guard
   // BOTH attempts: an abort while the first call is in flight must not buy the
-  // repair call. `throwIfAborted` throws the signal's own reason, which
-  // `classifyAiError` turns into the cancellation sentence.
-  args.abortSignal?.throwIfAborted();
+  // repair call, and neither must a budget the first call already spent.
+  // `throwIfAborted` throws the signal's own reason, which `classifyAiError`
+  // turns into the cancellation sentence or the timeout one.
+  signal.throwIfAborted();
 
   const recorder = createCallRecorder(modelIdOf(args.model));
 
@@ -183,7 +219,10 @@ async function attempt<T>(
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
       // The in-flight half of the same rule: a signal that fires after dispatch
       // has to reach the provider, and this attempt may be either of the two.
-      abortSignal: args.abortSignal,
+      // This is also the ONLY thing that makes the budget a bound on a call
+      // already on the wire — without it the timeout could not interrupt the
+      // 300-second wait it exists to cut short.
+      abortSignal: signal,
       // Per call, never registerTelemetry: the global registry has no
       // unregister, so a sink registered once would outlive its run and leak
       // into the next test file. Per-call integrations replace the global list.

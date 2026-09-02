@@ -75,6 +75,27 @@ export function classifyAiError(error: unknown): PermanentError | TransientError
   // caller has already withdrawn its request for.
   if (isAbortError(cause)) return withRunFailure(new PermanentError(CANCELLED), "cancelled");
 
+  // Our own budget ran out (see `MODEL_CALL_TIMEOUT_MS`). Distinguished from
+  // the abort above by name, because `AbortSignal.timeout()` aborts with a
+  // `TimeoutError` and nobody asked for it — telling a user their call was
+  // "cancelled" would name an action they did not take.
+  //
+  // TRANSIENT, and the choice is not free. A retry may pay again for a call the
+  // provider already billed, which is the argument the abort branch above uses
+  // for being permanent. It goes the other way here because the caller has not
+  // withdrawn anything: a stuck provider is the ordinary reason to hit this,
+  // every finished step is checkpointed so only the timed-out step re-runs, and
+  // the alternative — one 121-second generation killing a run for good — is a
+  // worse failure than a second attempt. What made the old behaviour dangerous
+  // was not the retry but its invisibility; the round trip now writes a ledger
+  // row with `outcome = 'unknown'`, so each attempt's possible charge is
+  // counted and the org's total says "≥".
+  //
+  // `internal` rather than a code of its own: the closed set has no member for
+  // "we do not know", and `internal` is the documented generic for exactly that
+  // — the bound that fired is ours, not the provider's.
+  if (isTimeoutError(cause)) return withRunFailure(new TransientError(TIMED_OUT), "internal");
+
   if (APICallError.isInstance(cause) && cause.isRetryable === true) {
     return withRunFailure(
       new TransientError(redactSecrets(cause.message), retryAfterSeconds(cause.responseHeaders)),
@@ -109,6 +130,13 @@ function codeForStatus(statusCode: number | undefined): RunFailure {
  * `cancelled` code's own translated sentence instead.
  */
 const CANCELLED = "the model call was cancelled before it finished";
+
+/**
+ * What a call that outlived its budget is reported as, in the log. The user is
+ * shown the code's own translated sentence instead.
+ */
+const TIMED_OUT =
+  "the model call ran out of time before the provider answered; whether it was billed is unknown";
 
 /**
  * Take the secrets out of a provider's own sentence before it reaches a log.
@@ -162,11 +190,26 @@ export function redactSecrets(message: string, secret?: string): string {
  * folds in `TimeoutError`, which is a different thing said in the same shape.
  */
 function isAbortError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { name?: unknown }).name === "AbortError"
-  );
+  return nameOf(error) === "AbortError";
+}
+
+/**
+ * Did this end because our own time budget ran out?
+ *
+ * `AbortSignal.timeout()` aborts with `DOMException("…due to timeout",
+ * "TimeoutError")`, and `AbortSignal.any()` passes that reason through — which
+ * is what lets the composite signal say WHICH of the two fired. The SDK's own
+ * `isAbortError` folds the two together; here they are two different sentences
+ * about two different things, so they are kept apart.
+ */
+function isTimeoutError(error: unknown): boolean {
+  return nameOf(error) === "TimeoutError";
+}
+
+/** Keyed on `name`, never on the message — see `isAbortError`. */
+function nameOf(error: unknown): unknown {
+  if (typeof error !== "object" || error === null) return undefined;
+  return (error as { name?: unknown }).name;
 }
 
 /**

@@ -1,5 +1,11 @@
+import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
-import { type MeteredCall, providerReportedCostUsd, toUsageRecord } from "./usage.js";
+import {
+  callOutcomeOf,
+  type MeteredCall,
+  providerReportedCostUsd,
+  toUsageRecord,
+} from "./usage.js";
 
 describe("providerReportedCostUsd", () => {
   it("reads the cost OpenRouter reports", () => {
@@ -25,6 +31,65 @@ describe("providerReportedCostUsd", () => {
   });
 });
 
+/**
+ * The verdict that decides whether a zero-token row is free or a floor.
+ *
+ * It can only be reached inside the recorder's `catch`, because it is the last
+ * place the error exists: by the time the ledger row is written a refusal and a
+ * lost generation are the same four columns.
+ */
+describe("callOutcomeOf", () => {
+  function apiError(statusCode?: number) {
+    return new APICallError({
+      message: "boom",
+      url: "https://example.invalid",
+      requestBodyValues: {},
+      ...(statusCode === undefined ? {} : { statusCode }),
+    });
+  }
+
+  it("reads a refusal off a non-2xx status — a verdict delivered instead of work", () => {
+    // Nothing was generated, so nothing was billed. This is the row the IGNORED
+    // bucket exists for, and the reason a flaky provider cannot stamp "≥" on an
+    // org's lifetime total.
+    expect(callOutcomeOf(apiError(429))).toBe("refused");
+    expect(callOutcomeOf(apiError(401))).toBe("refused");
+    expect(callOutcomeOf(apiError(500))).toBe("refused");
+  });
+
+  it("calls a 2xx that still threw unknown — the model finished and we could not read it", () => {
+    // `createJsonResponseHandler` throws `APICallError` with the SUCCESSFUL
+    // status when the body does not match the provider's schema. A rule reading
+    // "any status means refused" would file the most expensive failure of all —
+    // a whole generation, paid for, unparseable — as free.
+    expect(callOutcomeOf(apiError(200))).toBe("unknown");
+    expect(callOutcomeOf(apiError(299))).toBe("unknown");
+  });
+
+  it("puts the boundary at 300, so a redirect is still a verdict", () => {
+    expect(callOutcomeOf(apiError(300))).toBe("refused");
+  });
+
+  it("calls a provider error with NO status unknown", () => {
+    // The SDK wraps a connect failure as `APICallError` with `statusCode`
+    // undefined. Some of those really did reach nobody — and the error does not
+    // say which, so "we cannot tell" is the only honest answer.
+    expect(callOutcomeOf(apiError())).toBe("unknown");
+  });
+
+  it("calls a timeout, an abort and anything else unknown", () => {
+    expect(callOutcomeOf(new DOMException("aborted due to timeout", "TimeoutError"))).toBe(
+      "unknown",
+    );
+    expect(callOutcomeOf(new DOMException("This operation was aborted", "AbortError"))).toBe(
+      "unknown",
+    );
+    expect(callOutcomeOf(new TypeError("fetch failed"))).toBe("unknown");
+    expect(callOutcomeOf("a thrown string")).toBe("unknown");
+    expect(callOutcomeOf(undefined)).toBe("unknown");
+  });
+});
+
 describe("toUsageRecord", () => {
   // The nested provider-level usage shape, which is what
   // `executeLanguageModelCall`'s `execute()` resolves to.
@@ -32,6 +97,7 @@ describe("toUsageRecord", () => {
     modelId: "gemini-3.7-flash",
     responseMs: 812.4,
     transportOk: true,
+    outcome: "completed",
     result: {
       usage: {
         inputTokens: { total: 1000, cacheRead: 400 },
@@ -54,6 +120,7 @@ describe("toUsageRecord", () => {
       costSource: "price_table",
       responseMs: 812,
       status: "ok",
+      outcome: "completed",
     });
   });
 
@@ -81,7 +148,13 @@ describe("toUsageRecord", () => {
     // missing count by a known rate yields 0, which the display rules render as
     // a definite "≈ $0.00" — a confident claim that a billed call was free.
     const record = toUsageRecord(
-      { modelId: "gemini-3.7-flash", responseMs: 5, transportOk: true, result: {} },
+      {
+        modelId: "gemini-3.7-flash",
+        responseMs: 5,
+        transportOk: true,
+        outcome: "completed",
+        result: {},
+      },
       { provider: "google", attempt: 1, status: "ok", at },
     );
     expect(record.costUsd).toBeNull();
@@ -90,7 +163,7 @@ describe("toUsageRecord", () => {
 
   it("records unknown for a round trip that threw before reporting anything", () => {
     const record = toUsageRecord(
-      { modelId: "gemini-3.7-flash", responseMs: 20, transportOk: false },
+      { modelId: "gemini-3.7-flash", responseMs: 20, transportOk: false, outcome: "refused" },
       { provider: "google", attempt: 1, status: "errored", at },
     );
     expect(record).toMatchObject({
@@ -100,6 +173,19 @@ describe("toUsageRecord", () => {
       costSource: "unknown",
       status: "errored",
     });
+  });
+
+  it("carries the round trip's outcome onto the row unchanged", () => {
+    // Nothing downstream can re-derive it: a refusal and a lost generation both
+    // arrive here with zero tokens and no cost, and the error that told them
+    // apart is two frames gone.
+    for (const outcome of ["completed", "refused", "unknown"] as const) {
+      const record = toUsageRecord(
+        { modelId: "gemini-3.7-flash", responseMs: 20, transportOk: false, outcome },
+        { provider: "google", attempt: 1, status: "errored", at },
+      );
+      expect(record.outcome).toBe(outcome);
+    }
   });
 
   it("prefers the provider's own figure over the table's estimate", () => {
@@ -120,6 +206,7 @@ describe("toUsageRecord", () => {
         modelId: "gemini-3.7-flash",
         responseMs: 1,
         transportOk: true,
+        outcome: "completed",
         result: { usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
       },
       { provider: "google", attempt: 1, status: "ok", at },

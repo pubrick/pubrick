@@ -4,9 +4,12 @@ import type { AiCredential, UsageRecord } from "@pubrick/ai";
 import { createDb, schema } from "@pubrick/db";
 import {
   type AiProviderId,
+  type CostRow,
   type CostSummary,
+  costTotals,
   encryptJson,
   preferredCredential,
+  summarizeCost,
 } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import request from "supertest";
@@ -119,6 +122,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       costSource: "price_table",
       responseMs: 210,
       status: "ok",
+      outcome: "completed",
       ...overrides,
     };
   }
@@ -417,6 +421,74 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       expect(rows).toEqual([{ step: "test", runId: null }]);
     });
 
+    it("stores what became of the Test call, so a lost one cannot read as free", async () => {
+      // A Test that was dispatched and then lost — the button's own path to the
+      // same defect. The row carries no tokens and no cost, exactly like the
+      // 429 a rate-limited Test writes; `outcome` is the only thing that stops
+      // the org's total treating it as a free call, and the writer has to carry
+      // it from the record rather than stamping a value of its own.
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      probeOutcome = {
+        ok: false,
+        reason: "refused",
+        records: [
+          usage({
+            status: "errored",
+            costUsd: null,
+            costSource: "unknown",
+            inputTokens: 0,
+            outputTokens: 0,
+            outcome: "unknown",
+          }),
+        ],
+      };
+
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      const rows = await direct.db
+        .select({ outcome: schema.usageLedger.outcome })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId));
+      expect(rows).toEqual([{ outcome: "unknown" }]);
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0,
+        unpricedCalls: 1,
+      });
+    });
+
+    it("stores a refused Test call as refused, which is free and known to be", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      probeOutcome = {
+        ok: false,
+        reason: "rate_limited",
+        records: [
+          usage({
+            status: "errored",
+            costUsd: null,
+            costSource: "unknown",
+            inputTokens: 0,
+            outputTokens: 0,
+            outcome: "refused",
+          }),
+        ],
+      };
+
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      const rows = await direct.db
+        .select({ outcome: schema.usageLedger.outcome })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId));
+      expect(rows).toEqual([{ outcome: "refused" }]);
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 0,
+      });
+    });
+
     it("stores a sub-micro-dollar reported cost instead of rounding it away to zero", async () => {
       const { agent, orgId } = await orgAgent();
       await save(agent).expect(200);
@@ -631,6 +703,217 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         usd: 0,
         unpricedCalls: 1,
       });
+    });
+
+    /**
+     * The measured case from the review, end to end through the SQL reader.
+     *
+     * One call the price table could name, and three that were dispatched and
+     * lost — a timeout, a reset, a body that would not parse. Every one of the
+     * three may have been billed in full. Before `outcome` existed all three
+     * were zero-token rows indistinguishable from a 429, so this org's screen
+     * read "≈ $0.007875": a quarter of the bill, under a symbol meaning
+     * "estimate" rather than "at least".
+     */
+    it("says at least, not approximately, when three calls were lost after dispatch", async () => {
+      const { agent, orgId } = await orgAgent();
+      const priced = {
+        orgId,
+        step: "writer",
+        provider: "google" as const,
+        modelId: "gemini-3.7-flash",
+        // 3000 in + 1500 out at $0.75 / $3.75 per 1M.
+        costUsd: "0.007875",
+        costSource: "price_table" as const,
+        inputTokens: 3000,
+        outputTokens: 1500,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      };
+      const lost = {
+        orgId,
+        step: "writer",
+        provider: "google" as const,
+        modelId: "gemini-3.7-flash",
+        costUsd: null,
+        costSource: "unknown" as const,
+        inputTokens: 0,
+        outputTokens: 0,
+        status: "errored" as const,
+        outcome: "unknown" as const,
+      };
+      await direct.db.insert(schema.usageLedger).values([priced, lost, lost, lost]);
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0.007875,
+        unpricedCalls: 3,
+      });
+    });
+
+    it("still ignores a refusal, so a bad hour cannot stamp ≥ on a lifetime total", async () => {
+      // The other half of the same column, and the reason it is three-valued
+      // rather than a boolean "did it fail": a 429 or a 500 is a verdict the
+      // provider delivered instead of work, and the ledger is lifetime.
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.usageLedger).values([
+        {
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: "1.230000",
+          costSource: "provider_reported",
+          inputTokens: 900,
+          outputTokens: 120,
+          status: "ok",
+          outcome: "completed",
+        },
+        {
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          status: "errored",
+          outcome: "refused",
+        },
+      ]);
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 1.23,
+      });
+    });
+
+    it("reads a row written before the outcome column as one that came back", async () => {
+      // NULL means "nobody recorded this", not "unknown outcome". `NULL =
+      // 'unknown'` is NULL rather than false, which happens to fall out right
+      // where the predicate sits today — inside an OR under an AND — and would
+      // stop doing so the moment it were negated or moved. `is not distinct
+      // from` is two-valued wherever it stands; this test pins the answer, not
+      // the spelling.
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.usageLedger).values([
+        {
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: "1.230000",
+          costSource: "provider_reported",
+          inputTokens: 900,
+          outputTokens: 120,
+          status: "ok",
+          outcome: null,
+        },
+        {
+          orgId,
+          step: "writer",
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          status: "errored",
+          outcome: null,
+        },
+      ]);
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 1.23,
+      });
+    });
+
+    /**
+     * The seam this finding came from, closed by comparison rather than by
+     * discipline.
+     *
+     * `costTotals()` and this SQL aggregate implement one rule twice. The rule
+     * that was missing from BOTH was added to both; nothing but a test that
+     * runs the same rows through each of them can say they still agree.
+     */
+    it("gives the same answer as costTotals() over the same rows", async () => {
+      const { agent, orgId } = await orgAgent();
+      const rows: CostRow[] = [
+        {
+          costUsd: 0.002,
+          costSource: "price_table",
+          inputTokens: 900,
+          outputTokens: 120,
+          outcome: "completed",
+        },
+        {
+          costUsd: 0.5,
+          costSource: "provider_reported",
+          inputTokens: 10,
+          outputTokens: 2,
+          outcome: "completed",
+        },
+        {
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 700,
+          outputTokens: 0,
+          outcome: "completed",
+        },
+        {
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          outcome: "unknown",
+        },
+        {
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          outcome: "refused",
+        },
+        { costUsd: null, costSource: "unknown", inputTokens: 0, outputTokens: 0, outcome: null },
+      ];
+      await direct.db.insert(schema.usageLedger).values(
+        rows.map((row, index) => ({
+          orgId,
+          step: `step-${index}`,
+          provider: "google" as const,
+          modelId: "gemini-3.7-flash",
+          costUsd: row.costUsd === null ? null : row.costUsd.toFixed(6),
+          costSource: row.costSource,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          status: "ok" as const,
+          outcome: row.outcome,
+        })),
+      );
+
+      const fromSql = (await agent.get("/api/ai-credentials/spend").expect(200)).body;
+
+      expect(fromSql).toEqual(summarizeCost(costTotals(rows)));
+      // Named too, so a day when both readers are wrong in the same way still
+      // fails: two unpriced calls — the one that burned tokens and the one we
+      // lost — and the refusal and the legacy NULL counted by neither.
+      expect(fromSql).toEqual({ kind: "atLeast", usd: 0.502, unpricedCalls: 2 });
+    });
+
+    it("refuses an outcome outside the value set, in the database", async () => {
+      // The CHECK from migration 0012. A misspelled value would read as
+      // `completed` to both readers — silently free — and every set operation
+      // in the product is written against the enum.
+      const { orgId } = await orgAgent();
+
+      await expect(
+        direct.db.execute(
+          sql`insert into usage_ledger (org_id, step, provider, model_id, cost_source, status, outcome)
+              values (${orgId}, 'writer', 'google', 'gemini-3.7-flash', 'unknown', 'errored', 'unkown')`,
+        ),
+      ).rejects.toMatchObject({ cause: { code: "23514" } });
     });
 
     it("counts only the asking org's rows", async () => {

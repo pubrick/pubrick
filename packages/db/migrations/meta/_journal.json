@@ -78,6 +78,13 @@
       "when": 1788348189052,
       "tag": "0011_publication_outlives_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788348393850,
+      "tag": "0012_ledger_call_outcome",
+      "breakpoints": true
     }
   ]
 }

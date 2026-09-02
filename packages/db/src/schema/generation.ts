@@ -43,6 +43,34 @@ export const LEDGER_STATUSES = ["ok", "errored"] as const;
 export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
 
 /**
+ * Whether we know what the provider did with this round trip — the same
+ * distinction `publications.status` draws for a delivery, drawn here for a
+ * charge.
+ *
+ * `status` says how the ATTEMPT ended. This says what happened to the money,
+ * and only these three answers are honest:
+ *
+ * - `completed` — the round trip came back. Whether we could parse it or liked
+ *   it is `status`'s business; the provider's side of it is over and its tokens
+ *   are on the row.
+ * - `refused` — the provider answered with a NON-2xx HTTP status instead of a
+ *   generation: a 429, a 401, a 400. A verdict delivered in place of work, so
+ *   the call really did cost nothing.
+ * - `unknown` — the request was dispatched and we never learned what came of
+ *   it: a timeout, a socket reset, a 200 whose body the provider package could
+ *   not parse, a transport error carrying no status, an abort. Google bills a
+ *   completed generation whether or not the client received it and OpenRouter
+ *   charges on upstream completion, so this row may be a full charge.
+ *
+ * NULL is what rows written before this column carry. The readers treat it as
+ * `completed`, which is exactly the meaning those rows already had — nothing
+ * can retroactively know which of the three a historical failure was, and
+ * guessing `unknown` would stamp "≥" on every old org's lifetime total.
+ */
+export const CALL_OUTCOMES = ["completed", "refused", "unknown"] as const;
+export type CallOutcome = (typeof CALL_OUTCOMES)[number];
+
+/**
  * Whose key paid for the call. Always `byok` in increment 1 — the column exists
  * now so the later platform-key quota queries need no migration.
  */
@@ -233,6 +261,17 @@ export const usageLedger = pgTable(
     costUsd: numeric("cost_usd", { precision: 12, scale: 6 }),
     costSource: text("cost_source", { enum: COST_SOURCES }).notNull(),
     status: text("status", { enum: LEDGER_STATUSES }).notNull(),
+    /**
+     * What became of the round trip — see `CALL_OUTCOMES`. Nullable ONLY so
+     * this column could be added to a populated table; every writer sets it.
+     *
+     * It is what separates the two failures a zero-token row cannot otherwise
+     * tell apart: a 429 the provider rejected before counting anything (free)
+     * from a call it may have generated and billed in full while we were
+     * hanging up (`unknown`). Both readers count an `unknown` row as unpriced,
+     * which is what puts the "≥" on the org's total.
+     */
+    outcome: text("outcome", { enum: CALL_OUTCOMES }),
     responseMs: integer("response_ms").notNull().default(0),
     keyOwnership: text("key_ownership", { enum: KEY_OWNERSHIPS }).notNull().default("byok"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -280,6 +319,13 @@ export const usageLedger = pgTable(
     enumCheck("usage_ledger_cost_source_check", t.costSource, COST_SOURCES),
     enumCheck("usage_ledger_status_check", t.status, LEDGER_STATUSES),
     enumCheck("usage_ledger_key_ownership_check", t.keyOwnership, KEY_OWNERSHIPS),
+    /**
+     * Pinned like the rest, and it holds for a nullable column: `NULL in (…)`
+     * evaluates to NULL, which a CHECK admits, so the pre-existing rows stay
+     * legal while a misspelled `unkown` is refused. A value outside the set
+     * would read as `completed` to both readers — silently free.
+     */
+    enumCheck("usage_ledger_outcome_check", t.outcome, CALL_OUTCOMES),
   ],
 );
 

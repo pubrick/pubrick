@@ -1,0 +1,39 @@
+-- 0012 — "we do not know what this call cost" becomes a value the ledger holds.
+--
+-- WHAT WAS LOST. A round trip that threw wrote a row with zero tokens, no cost
+-- and `cost_source = 'unknown'` — the same row a 429 writes. Both readers of
+-- the ledger file a zero-token unpriced row under "its cost is known to be
+-- zero": it neither adds to the sum nor raises the "≥" that says a total is
+-- only a floor. That is true of the 429. It is not true of a call that was
+-- dispatched and then lost — a timeout, a socket reset mid-body, a 200 whose
+-- body the provider package could not parse, a transport error carrying no
+-- status. Google bills a completed generation whether or not the client
+-- received it, and OpenRouter charges on upstream completion. Measured on this
+-- database: one priced call plus three lost ones rendered "≈ $0.007875"
+-- against a true $0.0315, and the symbol said "estimate", not "at least".
+--
+-- `outcome` is what the row could not say. `completed` / `refused` /
+-- `unknown`, decided at the moment the round trip throws: a NON-2xx HTTP
+-- status is a verdict the provider delivered INSTEAD of a generation, so it is
+-- genuinely free; anything else means we do not know. The readers count an
+-- `unknown` row as unpriced, which is what puts the "≥" back.
+--
+-- NULLABLE, AND WHAT NULL MEANS. Every writer sets it; the column is nullable
+-- only because it lands on a populated table. NULL is what rows written before
+-- this migration carry, and both readers treat NULL exactly as they treat
+-- `completed` — which is precisely the meaning those rows already had. Nothing
+-- can retroactively learn which of the three a historical failure was, and
+-- back-filling `unknown` would stamp "≥" on every existing org's lifetime
+-- total for ever.
+--
+-- NO PREFLIGHT, unlike 0009's own CHECK constraints. That one pinned columns
+-- holding real data, so it had to scan for a row it would refuse and name it.
+-- This constraint arrives with the column it constrains: every row's value is
+-- NULL, `NULL in (…)` evaluates to NULL, and a CHECK admits NULL. There is
+-- nothing here for a preflight to find, on any database.
+--
+-- ADDITIVE. One nullable column and one CHECK over it. No row is rewritten, no
+-- existing value can stop being valid, and every statement in this file is
+-- valid against a database that already holds rows in `usage_ledger`.
+ALTER TABLE "usage_ledger" ADD COLUMN "outcome" text;--> statement-breakpoint
+ALTER TABLE "usage_ledger" ADD CONSTRAINT "usage_ledger_outcome_check" CHECK ("usage_ledger"."outcome" in ('completed', 'refused', 'unknown'));

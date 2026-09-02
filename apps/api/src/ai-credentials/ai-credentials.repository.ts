@@ -124,18 +124,30 @@ export class AiCredentialsRepository {
    * single statement of the rule, and two code paths answering one question is
    * how a total starts depending on which screen asked. `PRICED` is
    * `cost_usd IS NOT NULL AND cost_source <> 'unknown'`; anything else that
-   * counted tokens is unpriced; anything else that did not (a 429 rejected
-   * before the provider counted anything) is ignored, because its cost is known
-   * to be zero and the ledger is lifetime — one blip must not stamp "≥" on an
-   * org's total forever.
+   * counted tokens OR whose outcome is `unknown` is unpriced; anything else (a
+   * 429 the provider refused before generating) is ignored, because its cost is
+   * known to be zero and the ledger is lifetime — one blip must not stamp "≥"
+   * on an org's total forever.
+   *
+   * A bucket rule pinned in one of the two readers and not the other is exactly
+   * the seam the outcome clause came from, so the e2e drives THIS path over the
+   * same rows `cost-display.test.ts` folds in memory.
    */
   async spend(orgId: string): Promise<CostSummary> {
     const priced = sql`${schema.usageLedger.costUsd} is not null and ${schema.usageLedger.costSource} <> 'unknown'`;
     const countedTokens = sql`${schema.usageLedger.inputTokens} + ${schema.usageLedger.outputTokens} > 0`;
+    // `is not distinct from`, not `=`: the column is NULL on every row written
+    // before it existed, and `NULL = 'unknown'` is NULL rather than false. That
+    // happens to give the same answer where this expression sits today — inside
+    // an OR, under an AND, where NULL and false are indistinguishable to
+    // `count(*) filter` — and stops doing so the moment it is negated or moved
+    // out. This form is two-valued wherever it stands: a NULL outcome reads as
+    // `completed`, which is the meaning those rows already had.
+    const outcomeUnknown = sql`${schema.usageLedger.outcome} is not distinct from 'unknown'`;
     const rows = await db
       .select({
         usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}) filter (where ${priced}), 0)`,
-        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and ${countedTokens})`,
+        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${countedTokens} or ${outcomeUnknown}))`,
         estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${schema.usageLedger.costSource} = 'price_table')`,
       })
       .from(schema.usageLedger)
@@ -293,6 +305,11 @@ export class AiCredentialsRepository {
           costUsd: toLedgerCostUsd(record.costUsd),
           costSource: record.costSource,
           status: record.status,
+          // What became of the round trip. A zero-token row is written by a 429
+          // AND by a call lost after dispatch; this is the only column that
+          // says which, and `spend()` reads it to decide whether the total is a
+          // floor.
+          outcome: record.outcome,
           responseMs: record.responseMs,
           keyOwnership: "byok" as const,
         })),

@@ -29,6 +29,32 @@ describe("generation schema", () => {
     expect(schema.COST_SOURCES).toEqual(["provider_reported", "price_table", "unknown"]);
   });
 
+  /**
+   * The column that separates a call the provider refused from one it may have
+   * generated, billed, and never delivered. Both write a zero-token row with no
+   * cost; without this they are the same row, and both readers of the ledger
+   * file such a row as free.
+   */
+  it("lets a ledger row say we do not know what became of the call", () => {
+    expect(schema.CALL_OUTCOMES).toEqual(["completed", "refused", "unknown"]);
+    // Bounded BY that list rather than merely alongside it — `text("outcome")`
+    // with no enum stores whatever a caller sends, and a value outside the set
+    // reads as `completed` to both readers: silently free.
+    expect(schema.usageLedger.outcome.enumValues).toEqual(schema.CALL_OUTCOMES);
+  });
+
+  /**
+   * NULLABLE, and it must stay that way for a reason that outlives the
+   * migration: it is what every row written before the column carries, and
+   * NULL is read as `completed` — the meaning those rows already had. A
+   * `notNull` with a default of `unknown` would stamp "≥" on every existing
+   * org's lifetime total; one of `completed` would be a claim nothing checked.
+   */
+  it("leaves the outcome nullable, because history cannot be re-derived", () => {
+    expect(schema.usageLedger.outcome.notNull).toBe(false);
+    expect(schema.usageLedger.outcome.default).toBeUndefined();
+  });
+
   it("defaults existing rows to human origin", () => {
     expect(schema.contentItems.origin.default).toBe("human");
     expect(schema.adaptations.origin.default).toBe("human");

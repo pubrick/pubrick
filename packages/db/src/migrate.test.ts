@@ -20,6 +20,9 @@ const INDEX_MIGRATION = "0007_ledger_draft_index";
 /** The constraint-only migration, proved against a populated database below. */
 const CONSTRAINT_MIGRATION = "0009_declared_invariants";
 
+/** The migration that adds the ledger's outcome column, proved additive below. */
+const OUTCOME_MIGRATION = "0012_ledger_call_outcome";
+
 /**
  * Every column 0009 pins, with a value that is not in its set.
  *
@@ -45,6 +48,10 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
   { table: "usage_ledger", column: "cost_source", bogus: "guessed" },
   { table: "usage_ledger", column: "status", bogus: "OK" },
   { table: "usage_ledger", column: "key_ownership", bogus: "ours" },
+  // 0012's, and nullable — which the CHECK admits (`NULL in (…)` is NULL) while
+  // still refusing a misspelling. A value outside the set would read as
+  // `completed` to both readers of the ledger: silently free.
+  { table: "usage_ledger", column: "outcome", bogus: "unkown" },
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -851,6 +858,83 @@ describe.skipIf(!url)("runMigrations", () => {
       expectNoRowRewritten(rows, seeded);
       expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length);
       expect(index.rows[0]?.indexdef).toContain("WHERE (status <> 'published'::text)");
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * 0012 lands a nullable column and a CHECK on a table whose whole point is
+   * that it is written to constantly. Two claims, both of which have to hold on
+   * a database that already holds ledger rows.
+   *
+   * ROWS WRITTEN BEFORE IT KEEP THE MEANING THEY HAD. They come back with
+   * `outcome` NULL, which both readers treat as `completed` — the reading those
+   * rows already got. Back-filling `unknown` instead would stamp "≥" on every
+   * existing org's lifetime total for a blip that may well have been a 429, and
+   * nothing can retroactively learn which it was.
+   *
+   * AND THE CHECK ADMITS THEM. `NULL in (…)` evaluates to NULL and a CHECK
+   * admits NULL, which is what lets a constraint arrive on a nullable column
+   * with no preflight and no back-fill — while still refusing a misspelling
+   * that would read as `completed` to every reader.
+   */
+  it("adds the ledger's outcome to a populated table without touching a row", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(OUTCOME_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: pg.QueryResultRow[];
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the column were already here, "written before the migration" would
+        // be a lie and everything below would prove nothing.
+        const pre = await pool.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'usage_ledger' AND column_name = 'outcome'",
+        );
+        expect(pre.rows).toHaveLength(0);
+
+        await seedEveryTable(pool, "org_outcome");
+        // A second row, of the kind this column exists to disambiguate: zero
+        // tokens, no cost, errored — a 429 and a lost generation are the same
+        // four columns until `outcome` tells them apart.
+        await pool.query(
+          `INSERT INTO usage_ledger (org_id, step, provider, model_id, cost_usd, cost_source, status)
+             VALUES ('org_outcome', 'writer', 'google', 'gemini-3-flash', NULL, 'unknown', 'errored')`,
+        );
+        seeded = (await pool.query("SELECT * FROM usage_ledger ORDER BY id")).rows;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const rows = await after.query("SELECT * FROM usage_ledger ORDER BY id");
+      const column = await after.query(
+        "SELECT is_nullable, data_type, column_default FROM information_schema.columns WHERE table_name = 'usage_ledger' AND column_name = 'outcome'",
+      );
+      const refusedBogus = await refusal(
+        after,
+        `INSERT INTO usage_ledger (org_id, step, provider, model_id, cost_source, status, outcome)
+           VALUES ('org_outcome', 'writer', 'google', 'gemini-3-flash', 'unknown', 'errored', 'unkown')`,
+      );
+      const acceptedReal = await refusal(
+        after,
+        `INSERT INTO usage_ledger (org_id, step, provider, model_id, cost_source, status, outcome)
+           VALUES ('org_outcome', 'writer', 'google', 'gemini-3-flash', 'unknown', 'errored', 'unknown')`,
+      );
+      await after.end();
+
+      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, outcome: null })));
+      expect(column.rows[0]).toMatchObject({
+        is_nullable: "YES",
+        data_type: "text",
+        column_default: null,
+      });
+      expect(refusedBogus).toBe(CHECK_VIOLATION);
+      expect(acceptedReal).toBeNull();
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();

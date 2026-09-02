@@ -33,6 +33,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     costSource: "price_table",
     responseMs: 210,
     status: "ok",
+    outcome: "completed",
     ...overrides,
   };
 }

@@ -760,7 +760,8 @@ describe("what a step's context lets its caller bound", () => {
   // the credential probe — set `maxRetries: 0` by bypassing steps entirely, and
   // with it the prompt boundary and the metering that live on that path. A
   // hand-written forwarding list is exactly the thing that quietly stops being
-  // complete, so each of the four is pinned by a behaviour here.
+  // complete, so each of the five — `timeoutMs` joined them on the same day the
+  // model call got a bound at all — is pinned by a behaviour here.
 
   const ECHO: Step<{ text: string }, { body: string }> = defineStep({
     name: "echo",
@@ -825,6 +826,35 @@ describe("what a step's context lets its caller bound", () => {
     expect(error).toBeInstanceOf(PermanentError);
     expect((error as PermanentError).message).toBe(
       "the model call was cancelled before it finished",
+    );
+  });
+
+  it("bounds a step's wall clock with ctx.timeoutMs", async () => {
+    // Without this knob forwarded, a step inherits the two-minute default and
+    // nothing can narrow it — and before the default existed, nothing bounded a
+    // step at all. The model here answers only when its signal fires, which is
+    // what a provider that has stopped talking looks like.
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      modelId: "gemini-3.7-flash",
+      doGenerate: async (options) => {
+        calls += 1;
+        return await new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener("abort", () => {
+            reject(options.abortSignal?.reason);
+          });
+        });
+      },
+    });
+
+    const error = await ECHO.run(contextWith(model, { timeoutMs: 30 }), {
+      text: DRAFT_MARKER,
+    }).catch((e) => e);
+
+    expect(calls).toBe(1);
+    expect(error).toBeInstanceOf(TransientError);
+    expect((error as TransientError).message).toBe(
+      "the model call ran out of time before the provider answered; whether it was billed is unknown",
     );
   });
 

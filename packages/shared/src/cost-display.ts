@@ -15,16 +15,30 @@
  *   PRICED    `cost_usd IS NOT NULL AND cost_source <> 'unknown'`
  *             The only rows that add to the sum. `price_table` ones make it an
  *             estimate.
- *   UNPRICED  not priced, AND the provider counted tokens (input + output > 0).
- *             Real money was spent that nothing can name, so the total is a floor.
- *   IGNORED   not priced, no tokens. A round trip the provider rejected before
- *             counting anything — a 429, a connection reset. Its cost is KNOWN,
- *             and it is zero: it neither adds to the sum nor degrades the label.
+ *   UNPRICED  not priced, AND either the provider counted tokens
+ *             (input + output > 0) OR the row's outcome is `unknown`. Money was
+ *             spent, or may have been, and nothing can name the amount — so the
+ *             total is a floor.
+ *   IGNORED   not priced, no tokens, and the outcome is not `unknown`. A round
+ *             trip the provider REFUSED before generating anything — a 429, a
+ *             401. Its cost is KNOWN, and it is zero: it neither adds to the sum
+ *             nor degrades the label.
  *
  * That last bucket is the refinement §4 gained once metering moved to every
  * physical round trip: failed attempts write rows too, and the ledger is
  * lifetime, so a rule that called every null-cost row "unpriced" would let one
  * transient blip stamp "≥ $X (1 unpriced)" on an org's total forever.
+ *
+ * THE OUTCOME CLAUSE IS THE OTHER HALF OF THAT, and it was missing until
+ * 2026-09-02. A zero-token row is written by a 429 AND by every failure after
+ * dispatch — a timeout, a socket reset, a 200 whose body would not parse, an
+ * abort — and the second kind may have been billed in full: Google bills a
+ * completed generation whether or not the client received it. Filed under
+ * IGNORED they neither added to the sum nor raised the "≥", so the figure
+ * shrank AND kept the symbol that means "estimate". Measured: one priced call
+ * plus three timed-out ones rendered "≈ $0.007875" against a true $0.0315.
+ * `usage_ledger.outcome` is what tells the two apart; NULL (a row written
+ * before that column) reads as `completed`, which is the meaning it already had.
  *
  * The display rules are then exactly three:
  *
@@ -40,6 +54,18 @@
 /** Where a ledger row's dollar figure came from. Mirrors `COST_SOURCES` in `@pubrick/db`. */
 export const AI_COST_SOURCES = ["provider_reported", "price_table", "unknown"] as const;
 export type AiCostSource = (typeof AI_COST_SOURCES)[number];
+
+/**
+ * What became of the round trip a row records. Mirrors `CALL_OUTCOMES` in
+ * `@pubrick/db`.
+ *
+ * `refused` is a verdict the provider delivered instead of a generation, so it
+ * is genuinely free. `unknown` is a request that left and never came back, so
+ * it may be a full charge. `completed` is a round trip that returned — whether
+ * the ANSWER was usable is `cost_source`'s business, not this column's.
+ */
+export const AI_CALL_OUTCOMES = ["completed", "refused", "unknown"] as const;
+export type AiCallOutcome = (typeof AI_CALL_OUTCOMES)[number];
 
 /**
  * A total plus the provenance needed to render it truthfully.
@@ -65,15 +91,23 @@ export type LedgerCostTotals = {
 /**
  * One ledger row, in the shape both the SQL aggregate and a `UsageRecord` share.
  *
- * The token counts are not decoration: they are what separates "the model
- * answered and we cannot price it" from "the provider hung up before counting
- * anything".
+ * Neither the token counts nor `outcome` is decoration. Together they separate
+ * "the model answered and we cannot price it" and "we never learned what the
+ * provider did" — both real money — from "the provider refused before
+ * generating anything", which is the only one that is free.
  */
 export type CostRow = {
   costUsd: number | null;
   costSource: AiCostSource;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * NULL for a row written before the column existed, and read as `completed`.
+   * Required rather than optional so a new producer of these rows has to decide
+   * — the whole defect this closed was a writer that had no way to say
+   * "unknown" and a reader that therefore never heard it.
+   */
+  outcome: AiCallOutcome | null;
 };
 
 /** Fold rows into totals, applying the three buckets above. */
@@ -88,7 +122,9 @@ export function costTotals(rows: readonly CostRow[]): LedgerCostTotals {
       if (row.costSource === "price_table") estimatedCalls += 1;
       continue;
     }
-    if (row.inputTokens + row.outputTokens > 0) unpricedCalls += 1;
+    // Either half is enough. Tokens mean the provider metered work; `unknown`
+    // means we cannot say it did not.
+    if (row.inputTokens + row.outputTokens > 0 || row.outcome === "unknown") unpricedCalls += 1;
   }
   return { usd, unpricedCalls, estimatedCalls };
 }

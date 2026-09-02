@@ -148,6 +148,51 @@ describe("classifyAiError", () => {
     });
   });
 
+  describe("a call that ran out of time", () => {
+    // `AbortSignal.timeout()` aborts with a `TimeoutError`, which the SDK's own
+    // `isAbortError` folds in with `AbortError`. They are two different things
+    // said in the same shape, and only one of them was asked for by a user.
+    const TIMED_OUT =
+      "the model call ran out of time before the provider answered; whether it was billed is unknown";
+
+    it("gets its own sentence, and not the cancellation one", () => {
+      // The reason `AbortSignal.timeout()` aborts with, constructed directly —
+      // reading `.reason` off a fresh signal would read it before the timer
+      // fires and hand this `undefined`.
+      const classified = classifyAiError(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      );
+
+      expect(classified.message).toBe(TIMED_OUT);
+      expect(classified.message).not.toBe("the model call was cancelled before it finished");
+    });
+
+    it("recognises a TimeoutError that is a plain Error rather than a DOMException", () => {
+      const error = new Error("The operation was aborted due to timeout");
+      error.name = "TimeoutError";
+      expect(classifyAiError(error).message).toBe(TIMED_OUT);
+    });
+
+    it("is transient, so a stuck provider does not kill a run that can resume", () => {
+      // The opposite call to the cancellation above, and for the opposite
+      // reason: nobody withdrew this request. Every finished step is
+      // checkpointed, so the retry re-runs one step — and the round trip it
+      // gave up on left a ledger row saying its cost is unknown, so a second
+      // attempt's possible charge is counted rather than hidden.
+      const classified = classifyAiError(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      );
+
+      expect(classified).toBeInstanceOf(TransientError);
+      expect(runFailureOf(classified)).toBe("internal");
+    });
+
+    it("does not mistake an ordinary error that merely mentions a timeout", () => {
+      const classified = classifyAiError(new Error("upstream timeout while reading"));
+      expect(classified.message).toBe("upstream timeout while reading");
+    });
+  });
+
   it("handles a thrown non-error", () => {
     expect(classifyAiError("just a string")).toBeInstanceOf(PermanentError);
     expect(classifyAiError("just a string").message).toBe("just a string");

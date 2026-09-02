@@ -969,8 +969,9 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     it("fails a run whose channels have all been deleted rather than writing a draft nobody can publish", async () => {
       const seeded = await seed({ channels: 1 });
       await db.delete(schema.channels).where(eq(schema.channels.brandId, seeded.brandId));
+      const script = scriptedModel();
 
-      await serviceFor(scriptedModel()).handle({
+      await serviceFor(script).handle({
         id: "job-nochan",
         data: { runId: seeded.runId, orgId: seeded.orgId },
       });
@@ -979,6 +980,14 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(run?.status).toBe("failed");
       expect(run?.error).toBe("every_channel_deleted");
       expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+      // AND NOT A SINGLE MODEL CALL. Without the refusal in `loadContext` the
+      // run researches, writes, edits and fact-checks — four paid calls — and
+      // only discovers at the terminal write that there is nowhere to publish
+      // to, ending in this same status with this same code. The terminal
+      // assertions above are all satisfied either way, which is exactly why the
+      // early refusal could be deleted with every test still green.
+      expect(script.calls).toHaveLength(0);
+      expect(await ledgerOf(seeded.orgId)).toHaveLength(0);
     }, 20_000);
   });
 
@@ -1407,6 +1416,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           costSource: "price_table",
           responseMs: 12,
           status: "ok",
+          outcome: "completed",
         },
       );
 
@@ -1414,6 +1424,85 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(ledger).toHaveLength(1);
       expect(ledger[0]?.channelId).toBeNull();
       expect(ledger[0]?.runId).toBe(seeded.runId);
+    }, 20_000);
+
+    it("floors a sub-micro-dollar cost instead of storing a billed call as 0.000000", async () => {
+      // `numeric(12,6)` cannot hold 5e-8, and the naive conversion rounds it to
+      // `0.000000` — a call that WAS billed, recorded as free, in the column
+      // every cost figure sums. `toLedgerCostUsd` floors it; this pins the
+      // CALL SITE rather than the helper, because a unit test of the helper
+      // cannot notice a caller that stopped using it. This path writes
+      // essentially every row in the table.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      await repo.claim(seeded.orgId, seeded.runId, "job-floor#1", "job-floor");
+
+      await repo.recordUsage(
+        seeded.orgId,
+        seeded.runId,
+        { step: "writer" },
+        {
+          provider: "openrouter",
+          modelId: "google/gemini-3.7-flash",
+          attempt: 1,
+          inputTokens: 1,
+          outputTokens: 1,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          // What OpenRouter reports for a tiny call. It never passes through
+          // `estimateCostUsd`, which is where the other floor lives.
+          costUsd: 5e-8,
+          costSource: "provider_reported",
+          responseMs: 12,
+          status: "ok",
+          outcome: "completed",
+        },
+      );
+
+      const ledger = await ledgerOf(seeded.orgId);
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]?.costUsd).toBe("0.000001");
+      expect(ledger[0]?.costUsd).not.toBe("0.000000");
+    }, 20_000);
+
+    it("stores what became of the round trip, so a lost call cannot read as free", async () => {
+      // The column the org's total reads to decide whether it is a floor. A
+      // writer that dropped it would leave every lost call looking exactly like
+      // a 429 — which is the defect this whole column exists to close.
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      await repo.claim(seeded.orgId, seeded.runId, "job-outcome#1", "job-outcome");
+
+      for (const outcome of ["completed", "refused", "unknown"] as const) {
+        await repo.recordUsage(
+          seeded.orgId,
+          seeded.runId,
+          { step: outcome },
+          {
+            provider: "google",
+            modelId: "gemini-3.7-flash",
+            attempt: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedInputTokens: 0,
+            reasoningTokens: 0,
+            costUsd: null,
+            costSource: "unknown",
+            responseMs: 12,
+            status: "errored",
+            outcome,
+          },
+        );
+      }
+
+      const ledger = await ledgerOf(seeded.orgId);
+      expect(new Map(ledger.map((row) => [row.step, row.outcome]))).toEqual(
+        new Map([
+          ["completed", "completed"],
+          ["refused", "refused"],
+          ["unknown", "unknown"],
+        ]),
+      );
     }, 20_000);
 
     it("attributes every ledger row to the step that made the call", async () => {
