@@ -5,6 +5,13 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
+/**
+ * The same database, tagged. `application_name` rides in the connection string and
+ * lands in `pg_stat_activity.application_name`, which is what makes "this file's own
+ * backend" a fact rather than a guess about statement text.
+ */
+const APP_NAME = "channels-e2e";
+const appUrl = url ? `${url}${url.includes("?") ? "&" : "?"}application_name=${APP_NAME}` : url;
 
 /** The key every spec in this suite encrypts and decrypts with. */
 const ENCRYPTION_KEY = "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
@@ -13,7 +20,10 @@ describe.skipIf(!url)("channels e2e", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    process.env.DATABASE_URL = url as string;
+    // The app pool this file drives gets its own `application_name`, so
+    // `waitForLockWaiter` below can recognise a backend of ITS OWN rather than
+    // trusting statement text — see the comment there.
+    process.env.DATABASE_URL = appUrl;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     // Migrations run once for the whole suite in vitest.global-setup.ts (a single
@@ -544,13 +554,18 @@ describe.skipIf(!url)("channels e2e", () => {
   }
 
   /**
-   * Waits until some backend is parked on a row lock inside a statement matching
-   * `queryLike` — i.e. until the interleaving under test is a FACT rather than a
-   * hope about how two promises happened to schedule.
+   * Waits until THIS FILE'S app backend is parked on a row lock inside a statement
+   * matching `queryLike` — i.e. until the interleaving under test is a FACT rather
+   * than a hope about how two promises happened to schedule.
    *
-   * Scoped by the statement text on purpose: `wait_event_type = 'Lock'` alone
-   * would also count a waiter belonging to whichever other spec file vitest is
-   * running beside this one.
+   * Scoped by `application_name`, not by statement text alone. Statement text does
+   * not identify the waiter: brands.e2e.spec.ts runs against the same database
+   * (vitest runs two files at once, and both deletes cascade through `adaptations`)
+   * and its pre-lock SELECT reaches pg_stat_activity as the byte-identical
+   * `select "id", "status", "attempt_count" from "adaptations" where ...`. Matching
+   * on text alone, this poll could therefore return on the OTHER file's waiter,
+   * before this file's delete had parked at all — and the "interleaving as a fact"
+   * this helper exists to establish would be neither.
    */
   async function waitForLockWaiter(patterns: string[]): Promise<void> {
     const { createDb } = await import("@pubrick/db");
@@ -562,6 +577,7 @@ describe.skipIf(!url)("channels e2e", () => {
         const { rows } = await db.execute(
           `SELECT count(*)::int AS n FROM pg_stat_activity
             WHERE datname = current_database()
+              AND application_name = '${APP_NAME}'
               AND wait_event_type = 'Lock'
               AND (${matches})`,
         );
