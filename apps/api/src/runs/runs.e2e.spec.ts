@@ -1,6 +1,9 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { EDITOR, editSchema, FACTCHECK, factcheckSchema, type RunStepContext } from "@pubrick/ai";
 import { MAX_CONCURRENT_RUNS } from "@pubrick/shared";
+import { MockLanguageModelV4 } from "ai/test";
+import { sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -73,6 +76,80 @@ describe.skipIf(!url)("runs e2e", () => {
       `UPDATE pipeline_runs SET status = '${status}', error = ${error ? `'${error}'` : "NULL"},
          updated_at = now() WHERE id = '${runId}'`,
     );
+    await pool.end();
+  }
+
+  /**
+   * A model that answers with one canned JSON body. The V4 usage shape is
+   * nested and `finishReason` is an object — a bare string passes vitest and
+   * fails `tsc` (see `packages/ai`'s steps.test.ts, where both traps are
+   * documented). NO provider is reached: house rule, and this suite has no key.
+   */
+  function jsonModel(text: string) {
+    return new MockLanguageModelV4({
+      modelId: "gemini-3.7-flash",
+      doGenerate: async () => ({
+        content: [{ type: "text" as const, text }],
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 5, text: 5, reasoning: 0 },
+        },
+        warnings: [],
+      }),
+    });
+  }
+
+  function stepContext(model: MockLanguageModelV4): RunStepContext {
+    return {
+      brand: { name: "B", voice: null, audience: null, contentLanguage: "en" },
+      brief: "Write about our new release",
+      model,
+      provider: "google",
+      onUsage: () => {},
+    };
+  }
+
+  /**
+   * Checkpoint one step onto a run the way `GenerateRepository.writeCheckpoint`
+   * does — `steps || $patch::jsonb`, on the real column.
+   *
+   * There is no worker in this suite, and the point of these tests is what the
+   * API does with a real row rather than how the row got there. The VALUE is
+   * not hand-written either: it is what the real step returned, so a test here
+   * cannot pass by agreeing with a shape nobody produces.
+   */
+  async function checkpoint(runId: string, key: string, output: unknown) {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const patch = JSON.stringify({ [key]: { status: "succeeded", output } });
+    await db.execute(
+      sql`UPDATE pipeline_runs SET steps = steps || ${patch}::jsonb WHERE id = ${runId}`,
+    );
+    await pool.end();
+  }
+
+  /** Point a run at the item it produced, as the worker's terminal write does. */
+  async function attachItem(runId: string, contentItemId: string | null) {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.execute(
+      sql`UPDATE pipeline_runs SET content_item_id = ${contentItemId}, status = 'succeeded'
+            WHERE id = ${runId}`,
+    );
+    await pool.end();
+  }
+
+  /**
+   * Deletes a row the API has no endpoint for. Both directions of the item/run
+   * link have to survive the other end going away, and the FK behaviours that
+   * make that true (`content_item_id` ON DELETE SET NULL; the run row outliving
+   * the draft it bought) can only be exercised by removing the row.
+   */
+  async function deleteRow(table: "pipeline_runs" | "content_items", id: string) {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE id = ${id}`);
     await pool.end();
   }
 
@@ -510,4 +587,194 @@ describe.skipIf(!url)("runs e2e", () => {
       .send({ brandId, brief: "x", channelIds: [channelId, channelId] })
       .expect(400);
   });
+  describe("a run's step output reaches the client", () => {
+    it("hands back the fact-checker's own list, unchanged, from a real run row", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+
+      // The REAL step, against a mock model. The value written to the column is
+      // therefore the shape the worker actually produces, not one this test
+      // invented and then confirmed.
+      const model = jsonModel(
+        JSON.stringify({
+          claims: [
+            { text: "Revenue tripled in the second quarter.", needsCheck: true },
+            { text: "Our office is in Lisbon.", needsCheck: false },
+          ],
+        }),
+      );
+      const produced = await FACTCHECK.run(stepContext(model), { body: "A draft." });
+      await checkpoint(run.id, FACTCHECK.name, produced);
+
+      const got = await agent.get(`/api/runs/${run.id}`).expect(200);
+
+      // Parsed with the step's OWN schema rather than compared to a literal: a
+      // field renamed upstream fails here instead of quietly arriving as a key
+      // the receipt does not render.
+      const output = factcheckSchema.parse(got.body.steps[FACTCHECK.name].output);
+      expect(output).toEqual(produced);
+      expect(output.claims).toHaveLength(2);
+      expect(got.body.steps[FACTCHECK.name].status).toBe("succeeded");
+    });
+
+    it("hands back the editor's change notes the same way", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+
+      const model = jsonModel(
+        JSON.stringify({ body: "The edited post.", changes: ["Cut the closing line."] }),
+      );
+      const produced = await EDITOR.run(stepContext(model), {
+        research: { angle: "A", keyPoints: ["p"], avoid: [] },
+        body: "A draft.",
+      });
+      await checkpoint(run.id, EDITOR.name, produced);
+
+      const got = await agent.get(`/api/runs/${run.id}`).expect(200);
+
+      expect(editSchema.parse(got.body.steps[EDITOR.name].output)).toEqual(produced);
+    });
+
+    /**
+     * ...and the LIST still does not carry it. Each checkpoint holds that
+     * step's whole model output, so a queue strip of a dozen runs would ship
+     * several hundred kilobytes of draft text on every poll to draw rows that
+     * read three columns. The detail/list split is what the receipt's data now
+     * depends on, in both directions.
+     */
+    it("keeps the checkpoint map off the queue strip", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      await checkpoint(run.id, FACTCHECK.name, { claims: [] });
+
+      const list = await agent.get("/api/runs").expect(200);
+      const row = (list.body as Array<{ id: string }>).find((r) => r.id === run.id);
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty("steps");
+      // ...while the same run, asked for by id, has it.
+      expect((await agent.get(`/api/runs/${run.id}`).expect(200)).body.steps).toBeDefined();
+    });
+
+    it("refuses a run belonging to another org rather than leaking its output", async () => {
+      const owner = await orgAgent();
+      const theirs = await brandWithChannel(owner);
+      const run = await startRun(owner, theirs.brandId, [theirs.channelId]);
+      await checkpoint(run.id, FACTCHECK.name, {
+        claims: [{ text: "A private claim.", needsCheck: true }],
+      });
+
+      const stranger = await orgAgent();
+      await stranger.get(`/api/runs/${run.id}`).expect(404);
+    });
+  });
+
+  /**
+   * The receipt has to stay reachable FROM the finished item, which means the
+   * item has to know which run made it. The run already carries the item's id;
+   * this is the reverse, and it rides on the item's own response rather than a
+   * second endpoint — the item screen already reads (and polls) the item, so a
+   * property costs no round trip and cannot go stale against the thing it
+   * describes.
+   */
+  describe("an item points back at the run that made it", () => {
+    async function itemOn(agent: request.Agent, brandId: string, channelId: string) {
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, channelIds: [channelId], title: "T", body: "A body." })
+        .expect(201);
+      return created.body.id as string;
+    }
+
+    it("reports the run id on the item the run produced", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      const itemId = await itemOn(agent, brandId, channelId);
+      await attachItem(run.id, itemId);
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(item.body.runId).toBe(run.id);
+
+      // ...and the forward direction still holds on the same pair, so the link
+      // is a round trip rather than two half-facts.
+      const back = await agent.get(`/api/runs/${run.id}`).expect(200);
+      expect(back.body.contentItemId).toBe(itemId);
+    });
+
+    it("reports no run for a hand-written item — the ordinary case", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const itemId = await itemOn(agent, brandId, channelId);
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+      // The key is PRESENT and null: a missing key and "nothing generated this"
+      // are different answers, and the screen renders one of them.
+      expect(item.body).toHaveProperty("runId", null);
+    });
+
+    it("reports no run for an item whose run is gone", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      const itemId = await itemOn(agent, brandId, channelId);
+      await attachItem(run.id, itemId);
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.runId).toBe(run.id);
+
+      await deleteRow("pipeline_runs", run.id);
+
+      // The draft survives its receipt, and says so rather than 500ing or
+      // offering a link to a run that is not there.
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.runId).toBeNull();
+    });
+
+    it("keeps the run when its item is deleted, and drops the dead item id", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      const itemId = await itemOn(agent, brandId, channelId);
+      await attachItem(run.id, itemId);
+      await checkpoint(run.id, FACTCHECK.name, {
+        claims: [{ text: "Revenue tripled.", needsCheck: true }],
+      });
+
+      await deleteRow("content_items", itemId);
+
+      // ON DELETE SET NULL, not cascade: a run is the record of what the org
+      // was charged and must outlive the draft it bought — so the receipt, and
+      // the claims on it, are still readable.
+      const got = await agent.get(`/api/runs/${run.id}`).expect(200);
+      expect(got.body.contentItemId).toBeNull();
+      expect(got.body.status).toBe("succeeded");
+      expect(factcheckSchema.parse(got.body.steps[FACTCHECK.name].output).claims).toHaveLength(1);
+    });
+
+    it("never reports another org's run on this org's item", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const itemId = await itemOn(agent, brandId, channelId);
+
+      // A run of a DIFFERENT org, pointed at this org's item — which the FK
+      // permits and only the org predicate on the lookup refuses. Drop that
+      // predicate and this item starts naming a stranger's receipt.
+      const stranger = await orgAgent();
+      const theirs = await brandWithChannel(stranger);
+      const foreignRun = await startRun(stranger, theirs.brandId, [theirs.channelId]);
+      await attachItem(foreignRun.id, itemId);
+
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.runId).toBeNull();
+    });
+  });
+  /**
+   * A RUN'S REFUSALS NAME THEMSELVES — through the HTTP response, so the code
+   * is proved to survive the exception filter and JSON serialisation and not
+   * merely to exist on a thrown object.
+   *
+   * The English sentence is asserted beside every code on purpose: it is the
+   * developer's, the API consumer's, and an older web build's only account of
+   * what happened, and a change that replaced it with the code would pass a
+   * code-only assertion.
+   */
 });

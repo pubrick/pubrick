@@ -207,6 +207,9 @@
       "skipped": "Não executado"
     },
     "stepProgress": "{done} de {total} canais",
+    "claimsEmpty": "Nenhuma afirmação factual foi listada para este rascunho.",
+    "claimNeedsCheck": "Vale verificar",
+    "changesEmpty": "A edição não mudou nada.",
     "status": {
       "queued": "Na fila",
       "running": "Em andamento",
@@ -230,6 +233,8 @@
       "unreadable_key": "Não foi possível ler a chave de API salva. Salve-a novamente em Configurações."
     },
     "draftReady": "Rascunho pronto",
+    "draftDeleted": "O rascunho desta geração foi excluído.",
+    "viewRun": "Ver geração",
     "cancel": "Cancelar",
     "stripsTitle": "Gerando",
     "tryAgain": "Tentar de novo",

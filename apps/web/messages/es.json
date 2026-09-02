@@ -207,6 +207,9 @@
       "skipped": "No ejecutado"
     },
     "stepProgress": "{done} de {total} canales",
+    "claimsEmpty": "No se listó ninguna afirmación factual para este borrador.",
+    "claimNeedsCheck": "Conviene verificar",
+    "changesEmpty": "La edición no cambió nada.",
     "status": {
       "queued": "En cola",
       "running": "En curso",
@@ -230,6 +233,8 @@
       "unreadable_key": "No se pudo leer la clave de API guardada. Vuelve a guardarla en Ajustes."
     },
     "draftReady": "Borrador listo",
+    "draftDeleted": "El borrador de esta generación fue eliminado.",
+    "viewRun": "Ver generación",
     "cancel": "Cancelar",
     "stripsTitle": "Generando",
     "tryAgain": "Reintentar",

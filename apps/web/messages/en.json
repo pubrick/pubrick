@@ -207,6 +207,9 @@
       "skipped": "Not run"
     },
     "stepProgress": "{done} of {total} channels",
+    "claimsEmpty": "No factual claims were listed for this draft.",
+    "claimNeedsCheck": "Worth checking",
+    "changesEmpty": "The editor changed nothing.",
     "status": {
       "queued": "Queued",
       "running": "Running",
@@ -230,6 +233,8 @@
       "unreadable_key": "The stored API key could not be read. Save it again in Settings."
     },
     "draftReady": "Draft ready",
+    "draftDeleted": "This run's draft has been deleted.",
+    "viewRun": "View generation",
     "cancel": "Cancel",
     "stripsTitle": "Generating",
     "tryAgain": "Try again",

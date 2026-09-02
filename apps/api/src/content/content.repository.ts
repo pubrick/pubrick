@@ -531,6 +531,47 @@ export class ContentRepository {
       .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id));
   }
 
+  /**
+   * The id of the run that produced this item, or `null` — the receipt's
+   * address, in the reverse direction.
+   *
+   * On the ITEM's response rather than behind a `GET /api/runs?contentItemId=`
+   * lookup, for three reasons. The item screen already reads this endpoint, and
+   * polls it while a post is on its way out, so a property costs no extra round
+   * trip while a second endpoint would be either polled alongside it or left to
+   * go stale against the thing it describes. A lookup would also be a second
+   * way to ask one question ("which run made this"), and this repository layer
+   * answers each question in exactly one place on purpose. And this is a
+   * PROPERTY of the item, not a collection: `pipeline_runs.content_item_id` is
+   * written once, by one run's terminal write, so there is nothing to page or
+   * filter.
+   *
+   * Ordered and limited all the same. The column carries no unique constraint,
+   * so "at most one" is a fact about the writer rather than one the database
+   * enforces, and an unordered read of a set that grew a second member would
+   * hand back whichever row the planner reached first — a link that changed on
+   * refresh. `created_at, id` is the same total order every other read here
+   * uses, and the tiebreak is load-bearing for the same reason.
+   *
+   * `org_id` is in the predicate and is not decoration: the FK does not require
+   * a run and its item to share an org, so without it an item could be made to
+   * name a stranger's receipt.
+   */
+  private async runIdFor(orgId: string, contentItemId: string): Promise<string | null> {
+    const rows = await db
+      .select({ id: schema.pipelineRuns.id })
+      .from(schema.pipelineRuns)
+      .where(
+        and(
+          eq(schema.pipelineRuns.orgId, orgId),
+          eq(schema.pipelineRuns.contentItemId, contentItemId),
+        ),
+      )
+      .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
+      .limit(1);
+    return rows[0]?.id ?? null;
+  }
+
   async get(orgId: string, id: string) {
     const rows = await db
       .select(ITEM_COLUMNS)
@@ -542,9 +583,10 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions] = await Promise.all([
+    const [adaptations, aiVersions, runId] = await Promise.all([
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
+      this.runIdFor(orgId, item.id),
     ]);
     /**
      * The provenance lens's reference text. Returned rather than a
@@ -568,6 +610,12 @@ export class ContentRepository {
     return {
       ...item,
       adaptations,
+      /**
+       * The run that made this item, so the delivery receipt stays reachable
+       * from the finished draft (dossier §6.3). `null` for a hand-written item
+       * — the ordinary case — and for one whose run row is gone.
+       */
+      runId,
       /**
        * The origin badge's answer — computed here rather than in the browser,
        * because the QUEUE has to be able to give it too and the queue has no

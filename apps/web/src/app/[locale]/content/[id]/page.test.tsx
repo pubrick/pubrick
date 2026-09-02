@@ -56,6 +56,8 @@ type ContentItem = {
   adaptations: Adaptation[];
   bodyIsAiVerbatim: boolean;
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
+  /** The run that generated this item, or null for a hand-written one. */
+  runId: string | null;
 };
 
 type Channel = { id: string; platform: string; name: string };
@@ -94,6 +96,10 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // The real GET always carries this key; `[]` is what it holds for an item
     // with no `ai` version rows (a human-written draft).
     aiVersionBodies: { item: [] as string[], adaptations: {} as Record<string, string[]> },
+    // ...and this one, null for the ordinary hand-written item. The API returns
+    // the key either way, so a fixture that omitted it would be a payload the
+    // API cannot produce.
+    runId: null as string | null,
     ...overrides,
   };
   return {
@@ -1286,5 +1292,54 @@ describe("the rest of the review's web findings", () => {
     });
     // The list still renders, by id, rather than looking like an empty one.
     expect(within(resultsList()).getByText("ch1")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The receipt has to stay reachable from the finished item (dossier §6.3).
+ *
+ * Before this, the run screen linked forward to the draft and the draft had no
+ * way back — so a person looking at an AI-written post could not reach the one
+ * screen that says what was generated, what it cost and which claims nobody
+ * checked. The id rides on the item's own response, so the link is present on
+ * the first paint rather than after a second request.
+ */
+describe("the way back to the run that made this", () => {
+  const RUN_ID = "77777777-7777-4777-8777-777777777777";
+
+  it("links to the run's receipt when a run produced this item", async () => {
+    installBaseHandlers({ current: makeItem({ runId: RUN_ID }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const link = await screen.findByRole("link", { name: en.Runs.viewRun });
+    expect(link).toHaveAttribute("href", `/en/content/runs/${RUN_ID}`);
+  });
+
+  it("offers no link for a hand-written item, and none for one whose run is gone", async () => {
+    // One fixture covers both: the API reports `null` for an item nothing
+    // generated AND for one whose run row has been deleted, because the screen
+    // has nothing different to say about them — in each case there is no
+    // receipt to open.
+    installBaseHandlers({ current: makeItem({ runId: null }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByText(en.Publish.backToQueue);
+    expect(screen.queryByRole("link", { name: en.Runs.viewRun })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The link is a LINK and it does not steal the screen's one primary action.
+   * `Approve` is what the queue sends people here to do; a receipt is context.
+   */
+  it("keeps the primary slot for Approve", async () => {
+    installBaseHandlers({ current: makeItem({ runId: RUN_ID }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByRole("link", { name: en.Runs.viewRun });
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Runs.viewRun })).not.toBeInTheDocument();
   });
 });

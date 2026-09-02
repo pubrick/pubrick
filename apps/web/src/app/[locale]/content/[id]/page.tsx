@@ -77,6 +77,15 @@ type ContentItem = {
    * boolean with nothing to align.
    */
   aiVersionBodies: AiVersionBodies;
+  /**
+   * The run that generated this item, or `null` — for a hand-written draft (the
+   * ordinary case) and for one whose run row is gone.
+   *
+   * A property of the item rather than a second request: this screen already
+   * polls the item, so the receipt's address arrives with everything else and
+   * cannot go stale against it.
+   */
+  runId: string | null;
 };
 
 /**
@@ -100,6 +109,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params);
   const t = useTranslations("Publish");
   const tc = useTranslations("Content");
+  /**
+   * One string, from the namespace it belongs to: the label names the run
+   * screen, so it lives with that screen's vocabulary and is translated once.
+   * A second `Publish.*` copy of the same words is how two screens end up
+   * calling one destination two things.
+   */
+  const tr = useTranslations("Runs");
   const locale = useLocale();
   const router = useRouter();
 
@@ -372,6 +388,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {tc(`status.${item.status}`)}
         </StatusBadge>
         <OriginBadge origin={deriveOrigin(item)} />
+        {/*
+          The way back to the receipt, beside the badge that raises the question
+          it answers: the badge says this text came from a model, and this is
+          where the reader finds out what that model was asked, what it changed
+          and which claims it could not check. A quiet link, not a button — the
+          screen's one primary action is Approve.
+        */}
+        {item.runId && (
+          <Link
+            href={`/${locale}/content/runs/${item.runId}`}
+            className="font-normal text-fg-secondary hover:text-accent"
+          >
+            {tr("viewRun")}
+          </Link>
+        )}
         {/*
           The lens switch: one control for the whole screen (constitution: one
           place), and a checkbox rather than a button so a view option can

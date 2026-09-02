@@ -92,8 +92,14 @@ export type Run = {
   updatedAt: string;
 };
 
-/** One finished step, as checkpointed by the worker. */
-export type RunStepCheckpoint = { status: "succeeded" | "failed" };
+/**
+ * One finished step, as checkpointed by the worker.
+ *
+ * `output` is the step's own model output, `unknown` because it is a jsonb
+ * column and its shape is whatever the worker build that wrote it produced.
+ * The readers below narrow it; nothing else in this app may touch it raw.
+ */
+export type RunStepCheckpoint = { status: "succeeded" | "failed"; output?: unknown };
 
 /** `GET /api/runs/:id` — the receipt's shape, which adds the checkpoint map. */
 export type RunDetail = Run & { steps: Record<string, RunStepCheckpoint> };
@@ -211,4 +217,85 @@ export function runFailureMessage(
 ): string | null {
   if (errorCode === null || errorCode === "") return null;
   return isRunFailure(errorCode) ? t(RUN_FAILURE_KEYS[errorCode]) : t("genericError");
+}
+
+/**
+ * One claim the fact-checking step listed, in the shape it stores.
+ *
+ * `needsCheck` is the model's judgement that a reader could reasonably ask
+ * whether the claim is true — NOT a verdict about the claim, and not the
+ * result of a check. Nothing was checked: this step has no sources (see
+ * `@pubrick/ai`'s FACTCHECK, and `CLAIMS_TO_VERIFY_LABEL`, which is what the
+ * heading over this list says).
+ */
+export type RunClaim = { text: string; needsCheck: boolean };
+
+/**
+ * A step's stored output, but only from a checkpoint that SUCCEEDED.
+ *
+ * A `failed` checkpoint is written by a step that broke, and whatever sits in
+ * its `output` is not a result. Returning it would put half a list under a
+ * heading promising a whole one.
+ */
+function succeededOutput(run: RunDetail, key: RunStepKey): unknown {
+  const checkpoint = run.steps?.[key];
+  return checkpoint?.status === "succeeded" ? checkpoint.output : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The claims a run listed, for the reader who has to verify them.
+ *
+ * THREE answers, and the screen says a different sentence for each — collapsing
+ * any two of them is how this receipt starts lying:
+ * - an array — these are the claims (possibly a long list);
+ * - `[]` — the step ran and listed nothing, which is a real outcome: a post can
+ *   make no factual claim at all, and the step is instructed to return an empty
+ *   list rather than invent one to fill the slot;
+ * - `null` — there is nothing to say. No checkpoint (the run never got there,
+ *   or is still on its way), a failed one, or stored output this build cannot
+ *   read. A jsonb column written by an older worker is a real possibility here,
+ *   and rendering junk at a user is worse than rendering nothing.
+ *
+ * The whole array is refused when any element is unreadable, rather than the
+ * bad elements being dropped: a partial list under "claims to verify" is the
+ * one failure mode that would send someone to publish having checked
+ * everything they were shown.
+ */
+export function runClaims(run: RunDetail): RunClaim[] | null {
+  const output = succeededOutput(run, "factcheck");
+  if (!isRecord(output) || !Array.isArray(output.claims)) return null;
+  const claims: RunClaim[] = [];
+  for (const claim of output.claims) {
+    if (!isRecord(claim)) return null;
+    const { text, needsCheck } = claim;
+    if (typeof text !== "string" || text === "" || typeof needsCheck !== "boolean") return null;
+    claims.push({ text, needsCheck });
+  }
+  return claims;
+}
+
+/**
+ * What the editor changed, in its own words — the same three answers as
+ * `runClaims`, for the same reasons. `[]` means it changed nothing, which the
+ * step is told to report honestly rather than inventing an edit to satisfy the
+ * shape.
+ *
+ * The checkpoint also holds the edited BODY, and that is deliberately left
+ * behind: the draft belongs on the item screen, where it can be edited, and a
+ * receipt that reprinted it would put a second, frozen copy of the post on a
+ * screen whose job is to say what happened to it.
+ */
+export function runEditorChanges(run: RunDetail): string[] | null {
+  const output = succeededOutput(run, "editor");
+  if (!isRecord(output) || !Array.isArray(output.changes)) return null;
+  const changes: string[] = [];
+  for (const change of output.changes) {
+    if (typeof change !== "string" || change === "") return null;
+    changes.push(change);
+  }
+  return changes;
 }

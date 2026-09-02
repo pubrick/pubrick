@@ -1,12 +1,17 @@
 import { RUN_FAILURES } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import en from "../../messages/en.json";
+import es from "../../messages/es.json";
+import pt from "../../messages/pt.json";
+import ru from "../../messages/ru.json";
 import {
   isTerminalRunStatus,
   RUN_BADGE_STATUS,
   RUN_STATUSES,
   type RunDetail,
   type RunStepKey,
+  runClaims,
+  runEditorChanges,
   runFailureMessage,
   runStepStates,
 } from "./runs";
@@ -191,5 +196,155 @@ describe("runFailureMessage", () => {
     );
     // ...and a code from a newer API than this build knows.
     expect(runFailureMessage(t, "some_future_code")).toBe("translated:genericError");
+  });
+});
+
+/**
+ * The output the org paid for, on its way to a reader.
+ *
+ * Both readers take it from a SUCCEEDED checkpoint and from nowhere else, and
+ * both distinguish three answers, because the screen has three sentences to
+ * say: a list (here is what was produced), an empty list (it ran and produced
+ * nothing), and `null` (nothing readable — do not claim either of the above).
+ * Collapsing the last two is how "the step found nothing to flag" gets printed
+ * over a step that never ran.
+ */
+describe("runClaims", () => {
+  const claims = [
+    { text: "Revenue tripled in Q2.", needsCheck: true },
+    { text: "Water is wet.", needsCheck: false },
+  ];
+
+  it("reads the claims out of a succeeded factcheck checkpoint", () => {
+    const run = makeRun({ steps: { factcheck: { status: "succeeded", output: { claims } } } });
+    expect(runClaims(run)).toEqual(claims);
+  });
+
+  it("says [] — ran, listed nothing — for an empty list, and null for no checkpoint", () => {
+    const ran = makeRun({ steps: { factcheck: { status: "succeeded", output: { claims: [] } } } });
+    expect(runClaims(ran)).toEqual([]);
+    // A run that never reached the step. Not the same answer, on purpose.
+    expect(runClaims(makeRun())).toBeNull();
+  });
+
+  it("ignores a failed checkpoint: a step that broke produced no list", () => {
+    const run = makeRun({ steps: { factcheck: { status: "failed", output: { claims } } } });
+    expect(runClaims(run)).toBeNull();
+  });
+
+  it("refuses output it cannot read rather than rendering junk at a user", () => {
+    // `steps` is a jsonb column written by whatever worker build was deployed
+    // at the time. Everything here is a shape the API can really hand over.
+    const shapes: unknown[] = [
+      undefined,
+      null,
+      "claims",
+      { claims: "one, two" },
+      { claims: [{ text: "", needsCheck: true }] },
+      { claims: [{ text: "No flag field" }] },
+      { claims: [{ text: 42, needsCheck: true }] },
+    ];
+    for (const output of shapes) {
+      expect(
+        runClaims(makeRun({ steps: { factcheck: { status: "succeeded", output } } })),
+      ).toBeNull();
+    }
+  });
+
+  it("drops nothing it CAN read: a long list survives whole and in order", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      text: `Claim ${i}`,
+      needsCheck: i % 2 === 0,
+    }));
+    const run = makeRun({
+      steps: { factcheck: { status: "succeeded", output: { claims: many } } },
+    });
+    expect(runClaims(run)).toEqual(many);
+  });
+});
+
+describe("runEditorChanges", () => {
+  it("reads the change lines out of a succeeded editor checkpoint", () => {
+    const changes = ["Cut the second paragraph.", "Tightened the opening line."];
+    const run = makeRun({
+      steps: { editor: { status: "succeeded", output: { body: "Edited body", changes } } },
+    });
+    expect(runEditorChanges(run)).toEqual(changes);
+  });
+
+  it("says [] — the editor changed nothing — apart from null for no checkpoint", () => {
+    const ran = makeRun({
+      steps: { editor: { status: "succeeded", output: { body: "Body", changes: [] } } },
+    });
+    expect(runEditorChanges(ran)).toEqual([]);
+    expect(runEditorChanges(makeRun())).toBeNull();
+  });
+
+  it("refuses output it cannot read", () => {
+    const shapes: unknown[] = [
+      undefined,
+      { changes: "one" },
+      { body: "b", changes: [""] },
+      { body: "b", changes: [7] },
+    ];
+    for (const output of shapes) {
+      expect(
+        runEditorChanges(makeRun({ steps: { editor: { status: "succeeded", output } } })),
+      ).toBeNull();
+    }
+  });
+
+  /**
+   * The editor's checkpoint also holds the edited BODY, which is the draft
+   * itself. This reader hands back the change notes and nothing else: the body
+   * belongs on the item screen, where it can be edited, and a receipt that
+   * reprinted it would put a second, frozen copy of the post on a screen whose
+   * job is to say what happened to it.
+   */
+  it("returns only the notes, never the body it sits beside", () => {
+    const run = makeRun({
+      steps: {
+        editor: { status: "succeeded", output: { body: "The whole post", changes: ["x"] } },
+      },
+    });
+    expect(runEditorChanges(run)).toEqual(["x"]);
+  });
+});
+
+/**
+ * The sentences that sit UNDER the fact-check heading are held to the same
+ * promise the heading is.
+ *
+ * `src/test/factcheck-label.test.ts` guards `Runs.step.factcheck` itself: the
+ * step verifies nothing, and no string may say otherwise. These three are new
+ * text in the same place, saying it in four languages, and the tempting
+ * one-word "improvement" — "worth checking" to "checked", "listed" to
+ * "verified" — is exactly as invisible here as it was there, in a language
+ * nobody on the review reads.
+ *
+ * Same forbidden past participles as that test, for the same reason: an
+ * infinitive or a gerund is an instruction to the reader, a past participle is
+ * a claim about what already happened.
+ */
+describe("the claims list never says anything was checked", () => {
+  /** Exactly the strings this receipt prints about the claims, in one locale. */
+  type ClaimStrings = {
+    claimsEmpty: string;
+    claimNeedsCheck: string;
+    step: { factcheck: string };
+  };
+
+  const cases: Array<[locale: string, runs: ClaimStrings, forbidden: RegExp[]]> = [
+    ["en", en.Runs, [/\bverified\b/i, /\bchecked\b/i, /\bconfirmed\b/i]],
+    ["es", es.Runs, [/verificad[oa]s?\b/i, /comprobad[oa]s?\b/i]],
+    ["pt", pt.Runs, [/verificad[oa]s?\b/i, /checad[oa]s?\b/i]],
+    ["ru", ru.Runs, [/проверен/i, /подтвержд/i]],
+  ];
+
+  it.each(cases)("holds every %s string under the heading to it", (_locale, runs, forbidden) => {
+    const under = [runs.claimsEmpty, runs.claimNeedsCheck, runs.step.factcheck];
+    for (const text of under) {
+      for (const pattern of forbidden) expect(text).not.toMatch(pattern);
+    }
   });
 });

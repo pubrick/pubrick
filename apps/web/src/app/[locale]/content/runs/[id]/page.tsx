@@ -14,13 +14,80 @@ import {
   isTerminalRunStatus,
   RUN_BADGE_STATUS,
   RUN_STEP_BADGE_STATUS,
+  type RunClaim,
   type RunDetail,
+  type RunStepKey,
+  runClaims,
+  runEditorChanges,
   runFailureMessage,
   runStepStates,
 } from "@/lib/runs";
 
 /** Module-level so it is a stable `usePoll` dependency (see that hook's contract). */
 const isRunFinished = (run: RunDetail) => isTerminalRunStatus(run.status);
+
+/**
+ * The lines a step produced, under that step's own heading.
+ *
+ * Shared by the two steps that produce something a human reads, because they
+ * have the identical three-way problem and it must be answered the same way on
+ * both: `null` says nothing at all (no checkpoint, a failed one, or stored
+ * output this build cannot read — a step that never ran has the badge to speak
+ * for it and this row is entitled to no other claim); `[]` says, in words, that
+ * the step ran and produced nothing, which is a real and paid-for outcome that
+ * silence would render indistinguishable from never running; and a list is the
+ * list.
+ *
+ * Inline rather than behind a disclosure: this output is the thing the run was
+ * bought for, and folding it away is how it came to be rendered nowhere. And
+ * not an `EmptyState` either — that component is a verdict about a list with a
+ * next action to teach, and "the step listed nothing" is a finding with no next
+ * action, so it would have to invent one.
+ */
+function StepLines({ lines, empty, mark }: StepLinesProps) {
+  if (lines === null) return null;
+  if (lines.length === 0) {
+    return <p className="mt-2 text-sm text-fg-tertiary">{empty}</p>;
+  }
+  return (
+    <ul className="mt-2 flex list-disc flex-col gap-1.5 pl-5">
+      {lines.map((line, index) => (
+        <li
+          // biome-ignore lint/suspicious/noArrayIndexKey: a frozen checkpoint's list — never reordered, inserted into or edited
+          key={index}
+          className="text-sm text-fg-secondary"
+        >
+          {line.text}
+          {line.marked && mark !== undefined && (
+            <span className="ml-2 text-[13px] text-fg-tertiary">{mark}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type StepLine = { text: string; marked: boolean };
+
+/**
+ * The two step outputs, each in the one shape `StepLines` renders — and each
+ * carrying its `null` through unchanged, because `null` is an answer here
+ * ("nothing to say") and not an absence to be mapped over.
+ */
+function claimLines(claims: RunClaim[] | null): StepLine[] | null {
+  return claims === null ? null : claims.map((c) => ({ text: c.text, marked: c.needsCheck }));
+}
+
+function changeLines(changes: string[] | null): StepLine[] | null {
+  return changes === null ? null : changes.map((text) => ({ text, marked: false }));
+}
+type StepLinesProps = {
+  lines: StepLine[] | null;
+  /** What to say when the step ran and produced an empty list. */
+  empty: string;
+  /** Suffix for a marked line. Only the claims have one. */
+  mark?: string;
+};
 
 /**
  * The generation receipt: five steps as a live checklist, the error when the
@@ -79,6 +146,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   // submitted API key gets quoted back at whoever is looking at this page.
   const failure = runFailureMessage(t, run?.errorCode ?? null);
   const draftHref = run?.contentItemId ? `/${locale}/content/${run.contentItemId}` : null;
+  /**
+   * A succeeded run always wrote a content item, and `content_item_id` is
+   * ON DELETE SET NULL because the run outlives the draft it bought. So this
+   * combination has exactly one cause, and naming it beats leaving a blank
+   * where the link used to be.
+   */
+  const draftDeleted = run?.status === "succeeded" && run.contentItemId === null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
   // One primary action, and only one: the finished draft while there is one to
@@ -97,6 +171,40 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         {t("cancel")}
       </Button>
     );
+  }
+
+  /**
+   * Which steps have something to show, and what it is called.
+   *
+   * A closed switch over `RunStepKey` rather than a lookup that silently
+   * returns nothing: a sixth step added upstream arrives here as a decision to
+   * make, not as output quietly dropped on the floor — the exact way the
+   * fact-checker's list came to be paid for and rendered nowhere.
+   *
+   * `needsCheck` marks the claims the model judged a reader could reasonably
+   * question. It is NOT a verdict on the claim and not the residue of a check:
+   * nothing was checked, and the heading over the whole list says every one of
+   * them is to be verified. The marker only says which ones to start with.
+   */
+  function detailFor(key: RunStepKey): React.ReactNode {
+    if (run === null) return null;
+    switch (key) {
+      case "factcheck":
+        return (
+          <StepLines
+            lines={claimLines(runClaims(run))}
+            empty={t("claimsEmpty")}
+            mark={t("claimNeedsCheck")}
+          />
+        );
+      case "editor":
+        return <StepLines lines={changeLines(runEditorChanges(run))} empty={t("changesEmpty")} />;
+      // The other three steps produce the draft itself (or a per-channel copy
+      // of it), and the draft belongs on the item screen where it can be
+      // edited. A receipt is not a second, frozen copy of the post.
+      default:
+        return null;
+    }
   }
 
   return (
@@ -135,25 +243,40 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             </p>
           )}
 
+          {/*
+            Not an alert and not the danger color: the draft being deleted is
+            something a person did on purpose, not a failure of this run. Five
+            statuses exist and none of them is "a thing that used to be here".
+          */}
+          {draftDeleted && <p className="mb-6 text-sm text-fg-tertiary">{t("draftDeleted")}</p>}
+
           <h2 className="mb-3 text-lg font-semibold text-fg">{t("stepsTitle")}</h2>
           <Card padded={false}>
             <ul className="px-4">
               {runStepStates(run).map((step) => (
-                <li
-                  key={step.key}
-                  className="flex flex-wrap items-center justify-between gap-2 border-b border-border-soft py-3 last:border-b-0"
-                >
-                  <span className="text-sm text-fg">
-                    {t(`step.${step.key}`)}
-                    {step.total > 1 && (
-                      <span className="ml-2 text-[13px] text-fg-tertiary">
-                        {t("stepProgress", { done: step.done, total: step.total })}
-                      </span>
-                    )}
-                  </span>
-                  <StatusBadge status={RUN_STEP_BADGE_STATUS[step.state]}>
-                    {t(`stepState.${step.state}`)}
-                  </StatusBadge>
+                <li key={step.key} className="border-b border-border-soft py-3 last:border-b-0">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm text-fg">
+                      {t(`step.${step.key}`)}
+                      {step.total > 1 && (
+                        <span className="ml-2 text-[13px] text-fg-tertiary">
+                          {t("stepProgress", { done: step.done, total: step.total })}
+                        </span>
+                      )}
+                    </span>
+                    <StatusBadge status={RUN_STEP_BADGE_STATUS[step.state]}>
+                      {t(`stepState.${step.state}`)}
+                    </StatusBadge>
+                  </div>
+                  {/*
+                    The step's own output, under the step's own heading — which
+                    for the fact-checker is the heading its prompt promises the
+                    model the list will appear under (`CLAIMS_TO_VERIFY_LABEL`,
+                    pinned to `step.factcheck` by `factcheck-label.test.ts`).
+                    A separate section further down would put that phrase on the
+                    screen twice.
+                  */}
+                  {detailFor(step.key)}
                 </li>
               ))}
             </ul>

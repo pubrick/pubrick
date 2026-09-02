@@ -3,7 +3,7 @@ import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import type { RunDetail, RunStatus } from "@/lib/runs";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { act, fireEvent, renderAsync, screen, waitFor } from "@/test/render";
+import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import RunPage from "./page";
 
@@ -244,6 +244,194 @@ describe("the finished draft is offered, never forced", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * The step whose whole purpose is honesty about what it could NOT verify.
+ *
+ * Its list is generated, billed and stored on the run; until this it was
+ * rendered nowhere, so the one step that exists to say "I could not check
+ * these" was the one step whose output nobody could read. The heading it
+ * appears under is `Runs.step.factcheck`, pinned to `CLAIMS_TO_VERIFY_LABEL`
+ * by `src/test/factcheck-label.test.ts` — the same phrase the step's own
+ * prompt promises the model the list will be shown under.
+ */
+describe("the claims the run listed", () => {
+  const CLAIMS = [
+    { text: "Revenue tripled in the second quarter.", needsCheck: true },
+    { text: "Our office is in Lisbon.", needsCheck: false },
+  ];
+
+  /** The `factcheck` row, which is the heading this list lives under. */
+  const factcheckRow = async () => {
+    const rows = await screen.findAllByRole("listitem");
+    return rows.find((row) => row.textContent?.startsWith(en.Runs.step.factcheck)) as HTMLElement;
+  };
+
+  it("renders every claim under the fact-check heading", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: { factcheck: { status: "succeeded", output: { claims: CLAIMS } } },
+      }),
+    });
+
+    await renderRun();
+
+    const row = await factcheckRow();
+    // Under the heading, not merely somewhere on the page: a claims list that
+    // floated free of the step that produced it would be a second, unlabelled
+    // place for the same thing.
+    for (const claim of CLAIMS) expect(within(row).getByText(claim.text)).toBeInTheDocument();
+    // ...and the flagged one is marked as worth a human's time, while the one
+    // the model called common knowledge carries no marker of its own.
+    expect(within(row).getAllByText(en.Runs.claimNeedsCheck)).toHaveLength(1);
+    expect(row).not.toHaveTextContent(en.Runs.claimsEmpty);
+  });
+
+  /**
+   * "It ran and listed nothing" and "it never ran" are different sentences, and
+   * this screen must not use one for the other. An empty list is a real,
+   * paid-for outcome — a post can make no factual claim at all — and printing
+   * nothing for it is indistinguishable from a step that never happened.
+   */
+  it("says the list was empty when the step ran and listed nothing", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: { factcheck: { status: "succeeded", output: { claims: [] } } },
+      }),
+    });
+
+    await renderRun();
+
+    const row = await factcheckRow();
+    expect(row).toHaveTextContent(en.Runs.claimsEmpty);
+    expect(row).toHaveTextContent(en.Runs.stepState.done);
+  });
+
+  /** ...and the run that died before the step gets NEITHER. */
+  it("claims nothing about a run that never reached the fact-checker", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "failed",
+        currentStep: "writer",
+        steps: { researcher: { status: "succeeded" } },
+        errorCode: "provider_refused",
+      }),
+    });
+
+    await renderRun();
+
+    const row = await factcheckRow();
+    // Not "found nothing to flag" — nothing was looked for. The badge is the
+    // only thing this row is entitled to say.
+    expect(screen.queryByText(en.Runs.claimsEmpty)).not.toBeInTheDocument();
+    expect(row).toHaveTextContent(en.Runs.stepState.skipped);
+  });
+
+  it("shows nothing rather than junk when the stored output cannot be read", async () => {
+    // `steps` is jsonb written by whatever worker build was deployed; an older
+    // shape must not become a rendered artefact or an empty-list claim.
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: { factcheck: { status: "succeeded", output: { claims: "one, two" } } },
+      }),
+    });
+
+    await renderRun();
+
+    const row = await factcheckRow();
+    expect(row).not.toHaveTextContent(en.Runs.claimsEmpty);
+    expect(row).not.toHaveTextContent("one, two");
+  });
+});
+
+describe("what the editor changed", () => {
+  const editorRow = async () => {
+    const rows = await screen.findAllByRole("listitem");
+    return rows.find((row) => row.textContent?.startsWith(en.Runs.step.editor)) as HTMLElement;
+  };
+
+  it("lists the editor's own change notes under its step", async () => {
+    const changes = ["Cut the closing paragraph.", "Tightened the opening line."];
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: {
+          editor: { status: "succeeded", output: { body: "The edited post", changes } },
+        },
+      }),
+    });
+
+    await renderRun();
+
+    const row = await editorRow();
+    for (const change of changes) expect(within(row).getByText(change)).toBeInTheDocument();
+    // The checkpoint also holds the edited BODY. The receipt says what happened
+    // to the post; the post itself lives on the item screen, where it can be
+    // edited, and a frozen second copy here would be a rival to it.
+    expect(screen.queryByText("The edited post")).not.toBeInTheDocument();
+  });
+
+  it("says the editor changed nothing rather than falling silent", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: { editor: { status: "succeeded", output: { body: "Body", changes: [] } } },
+      }),
+    });
+
+    await renderRun();
+
+    expect(await editorRow()).toHaveTextContent(en.Runs.changesEmpty);
+  });
+});
+
+/**
+ * The other half of "the receipt stays reachable from the finished item": a run
+ * whose item is gone.
+ *
+ * `pipeline_runs.content_item_id` is ON DELETE SET NULL, because a run is the
+ * record of what was spent and outlives the draft it bought. So a SUCCEEDED run
+ * with no item did produce one and no longer has it — the only way to reach
+ * that state — and saying so is better than an empty space where the link was.
+ */
+describe("a succeeded run whose draft is gone", () => {
+  it("says the draft was deleted instead of silently dropping the link", async () => {
+    installHandlers({
+      current: makeRun({ status: "succeeded", currentStep: null, contentItemId: null }),
+    });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.draftDeleted)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: en.Runs.draftReady })).not.toBeInTheDocument();
+  });
+
+  it("says it only about a run that HAD a draft — never about one that failed", async () => {
+    installHandlers({
+      current: makeRun({ status: "failed", currentStep: "writer", errorCode: "internal" }),
+    });
+
+    await renderRun();
+
+    // "Failed" is on the run's badge AND on the step's, so wait on the run's
+    // own failure sentence instead — it exists exactly once.
+    await screen.findByText(en.Runs.failure.internal);
+    expect(screen.queryByText(en.Runs.draftDeleted)).not.toBeInTheDocument();
   });
 });
 
