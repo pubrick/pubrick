@@ -41,12 +41,18 @@ const enumColumns: EnumColumn[] = tables.flatMap(({ table, config }) =>
     })),
 );
 
-/** The string literals a check constraint's expression names, in sorted order. */
-function literalsOf(table: string, name: string): string[] | null {
+/** A check constraint's expression as Postgres will receive it, or null. */
+function expressionOf(table: string, name: string): string | null {
   const config = tables.find((entry) => entry.config.name === table)?.config;
   const check = config?.checks.find((candidate) => candidate.name === name);
   if (!check) return null;
-  const { sql } = dialect.sqlToQuery(check.value);
+  return dialect.sqlToQuery(check.value).sql;
+}
+
+/** The string literals a check constraint's expression names, in sorted order. */
+function literalsOf(table: string, name: string): string[] | null {
+  const sql = expressionOf(table, name);
+  if (sql === null) return null;
   return [...sql.matchAll(/'([^']*)'/g)].map((match) => match[1] as string).sort();
 }
 
@@ -95,6 +101,39 @@ describe("enum columns are pinned in the database, not only in the types", () =>
       }))
       .filter((entry) => JSON.stringify(entry.declared) !== JSON.stringify(entry.pinned));
     expect(drifted, "CHECK constraint out of step with its TypeScript enum:").toEqual([]);
+  });
+
+  /**
+   * THE OPERATOR, not only the values.
+   *
+   * The two checks above read the constraint through `literalsOf`, which pulls
+   * the quoted strings out of the rendered expression — so `in` flipped to
+   * `not in` renders exactly the same literals in exactly the same order and
+   * both of them stay green. The constraint would then say the opposite of what
+   * it is for, and nothing here would notice, because `enumCheck` renders into
+   * a MIGRATION: the checks already in the database were generated before the
+   * edit, so no query, no insert and no db-backed suite in this repo runs
+   * against the flipped expression. The first row to meet it is the first row
+   * written after somebody adds an enum column and generates a migration — at
+   * which point every valid value is refused, at boot, in production.
+   *
+   * Asserted over every check rather than one, so a new column joins the
+   * ratchet by existing.
+   */
+  it("pins each column INTO its value set, rather than out of it", () => {
+    const expressions = enumColumns.map((entry) => ({
+      column: `${entry.table}.${entry.column}`,
+      sql: expressionOf(entry.table, `${entry.table}_${entry.column}_check`),
+    }));
+    expect(expressions.length).toBeGreaterThan(10);
+    for (const { column, sql } of expressions) {
+      expect(sql, `${column} has no check to read`).not.toBeNull();
+      expect(sql, `${column}'s check does not name its own column`).toContain(
+        `"${column.split(".")[1]}"`,
+      );
+      expect(sql, `${column} is pinned OUT of its value set`).not.toMatch(/\bnot\s+in\s*\(/i);
+      expect(sql, `${column} is not an "in (...)" check at all`).toMatch(/\bin\s*\(/i);
+    }
   });
 
   /**
@@ -154,6 +193,57 @@ describe("adaptations", () => {
       (candidate) => candidate.name === "adaptations_id_content_item_id_key",
     );
     expect(key?.columns.map((column) => column.name)).toEqual(["id", "content_item_id"]);
+  });
+});
+
+/**
+ * The two partial unique indexes that stand between one approval and two posts
+ * in somebody's channel.
+ *
+ * Neither was pinned anywhere. They are DDL, so nothing in this repo runs
+ * against the declaration: the database the suites use was migrated from
+ * `packages/db/migrations`, and an edit here — a renamed index, a different
+ * column, a predicate that no longer names `in_flight` — changes what the NEXT
+ * generated migration says and nothing else. The first sign would be a
+ * duplicate post.
+ */
+describe("publications", () => {
+  const config = getTableConfig(schema.publications);
+
+  function partialUnique(name: string) {
+    const index = config.indexes.find((candidate) => candidate.config.name === name);
+    expect(index, `${name} is gone`).toBeDefined();
+    expect(index?.config.unique, `${name} is no longer unique`).toBe(true);
+    return {
+      columns: index?.config.columns.map((column) => (column as { name: string }).name),
+      where: index?.config.where ? dialect.sqlToQuery(index.config.where).sql : "",
+    };
+  }
+
+  /**
+   * The claim. It is written BEFORE the platform is called and resolved on
+   * every ending the attempt survives, so a claim that outlives its attempt is
+   * itself the evidence that the outcome is unknown — and the index is what
+   * makes "one claim" true when pg-boss redelivers a job whose predecessor is
+   * still holding it. A predicate that named any other status would leave the
+   * redelivered attempt free to send a second time.
+   */
+  it("admits one in-flight claim per adaptation, and only for in_flight", () => {
+    const { columns, where } = partialUnique("publications_one_in_flight_per_adaptation");
+    expect(columns).toEqual(["adaptation_id"]);
+    expect(where).toContain("= 'in_flight'");
+  });
+
+  /**
+   * The bookkeeping half: two workers racing past the read-then-write guard
+   * cannot leave two contradictory `published` rows behind. It is also what
+   * makes `ADAPTATION_COLUMNS`' `external_url` subquery a question with one
+   * answer — see the comment there.
+   */
+  it("admits one published receipt per adaptation, and only for published", () => {
+    const { columns, where } = partialUnique("publications_one_published_per_adaptation");
+    expect(columns).toEqual(["adaptation_id"]);
+    expect(where).toContain("= 'published'");
   });
 });
 

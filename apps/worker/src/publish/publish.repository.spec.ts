@@ -1376,4 +1376,48 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await adaptationStatus(adaptationIds[0] as string)).toBe("published");
     expect(await itemStatus(itemId)).toBe("approved");
   });
+
+  /**
+   * THE FAILING ARM OF THE SAME `every`, which the test above does not reach.
+   *
+   * It pins `rows.every(published)` and nothing else, so `every` → `some` on
+   * the NEXT line — `rows.every((r) => r.status === "failed")` — walks through
+   * the whole suite untouched. Under it, one channel Telegram refused marks the
+   * WHOLE item `failed` while its other channels are still sitting in the
+   * queue, waiting to go out perfectly well.
+   *
+   * That is not a wrong word on a screen. `failed` is a terminal item status
+   * the queue offers as re-approvable, so the reader is invited to approve an
+   * item whose other deliveries are already on their way — and `approve`
+   * targets `failed` adaptations, so the one that genuinely failed is
+   * re-enqueued alongside them.
+   *
+   * The second half is the other direction, and it is what stops this test
+   * being satisfied by deleting the arm: once the LAST channel fails, the item
+   * does become `failed`.
+   */
+  it("a partial fan-out is not a failure: the item fails only when its last channel does", async () => {
+    const { itemId, adaptationIds } = await seedFanOut(["queued", "queued"]);
+    const [first, second] = adaptationIds as [string, string];
+
+    expect(
+      await repo.markFailed(orgId, first, "Telegram: chat not found", {
+        status: "queued",
+        attemptCount: 0,
+      }),
+    ).toBe(true);
+
+    expect(await adaptationStatus(first)).toBe("failed");
+    expect(await adaptationStatus(second)).toBe("queued");
+    expect(await itemStatus(itemId)).toBe("approved");
+
+    expect(
+      await repo.markFailed(orgId, second, "Telegram: chat not found", {
+        status: "queued",
+        attemptCount: 0,
+      }),
+    ).toBe(true);
+
+    expect(await itemStatus(itemId)).toBe("failed");
+  });
 });

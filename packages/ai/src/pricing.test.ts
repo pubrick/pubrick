@@ -193,6 +193,15 @@ describe("priceFor — a family lends its rate to nobody else", () => {
     // A generation the table has never seen.
     "gemini-4-flash",
     "gemini-9.9-imaginary",
+    // A family ends at a HYPHEN, and this is the only id here that says so.
+    // Every other unknown above is `<family>-<something the qualifier rule
+    // refuses>`, so it is refused by the qualifier rule and would still be
+    // refused if the boundary were any character at all. This one is
+    // `<family><character><digits>`: with the hyphen it is not the family and
+    // is priced as unknown; without it, `gemini-3.5-flash` claims the id, the
+    // suffix reads as a version number, and a model nobody has read a pricing
+    // page for is reported at Flash's rate.
+    "gemini-3.5-flash001",
   ])("prices %s as unknown rather than lending it a neighbour's rate", (id) => {
     expect(priceFor("google", id, TODAY)).toBeNull();
   });

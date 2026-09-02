@@ -193,6 +193,16 @@ const ADAPTATION_COLUMNS = {
    * them, because the answer that would have carried the id never arrived. That
    * absence IS the outcome, and the screens say where the post may have gone by
    * naming the CHANNEL, which they know without asking this subquery.
+   *
+   * The `order by`/`limit 1` are shape, not choice, and a mutation of either is
+   * an equivalent one: `publications_one_published_per_adaptation` is a unique
+   * partial index, so this filtered set holds at most ONE row and there is
+   * nothing for an ordering to pick between. The scope is the same story from
+   * the other side — every non-published receipt carries `external_url = null`,
+   * and a `published` adaptation is terminal (`approve` does not target it), so
+   * no receipt can ever be newer than the published one. The load-bearing part
+   * is the correlation on `adaptation_id`, which is a tenancy question and is
+   * tested as one.
    */
   externalUrl: sql<string | null>`(
     select external_url from publications
@@ -767,6 +777,9 @@ export class ContentRepository {
             eq(schema.adaptations.id, adaptationId),
           ),
         )
+        // Belt and braces, and a mutation that drops it is an equivalent one:
+        // the predicate above names the primary key, so this matches at most
+        // one row whatever the limit says.
         .limit(1)
         .for("update");
       const current = locked[0];

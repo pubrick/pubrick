@@ -921,6 +921,41 @@ describe("generateStructured", () => {
       expect(rows).toHaveLength(1);
     });
 
+    it("still ends a hung call on time when the caller handed us a signal of its own", async () => {
+      // The two signals are COMPOSED, and this is the half of that composition
+      // no test above could see. Every timeout test here passes no
+      // `abortSignal`, and every test that passes one gives the budget 60
+      // seconds it never reaches — so a call that watched only the caller's
+      // signal, and left a hung provider to the HTTP client's 300 seconds per
+      // round trip, passed the whole suite. No caller threads a signal through
+      // today, which is exactly why the hole is invisible; the editor work that
+      // will thread one is what makes this the moment to pin it.
+      //
+      // The controller is never aborted, so the ending asserted below can only
+      // be our deadline.
+      const controller = new AbortController();
+      const rows: UsageRecord[] = [];
+      const { model, calls } = hangs();
+
+      const error = await generateStructured({
+        ...base,
+        model,
+        abortSignal: controller.signal,
+        timeoutMs: 30,
+        onUsage: (record) => {
+          rows.push(record);
+        },
+      }).catch((e) => e);
+
+      expect(controller.signal.aborted).toBe(false);
+      expect(calls()).toBe(1);
+      expect(error).toBeInstanceOf(TransientError);
+      expect((error as TransientError).message).toBe(TIMED_OUT);
+      expect(runFailureOf(error)).toBe("timed_out");
+      // And the round trip we hung up on is still counted as possibly billed.
+      expect(rows).toHaveLength(1);
+    });
+
     it("records the timed-out round trip as an unknown outcome, not as free", async () => {
       // The whole point. The provider may have finished generating and been
       // billing while we hung up, so this row must raise the "≥" rather than

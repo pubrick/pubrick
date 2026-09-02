@@ -214,6 +214,30 @@ describe.skipIf(!url)("content e2e", () => {
    * alone, which would also count a waiter belonging to whichever other spec
    * file vitest is running beside this one.
    */
+  /**
+   * Waits until a request is parked on a row lock inside the ADAPTATIONS walk —
+   * `lockAdaptations`' own statement, whether or not it carries its ORDER BY.
+   */
+  async function waitForAdaptationLockWaiters(
+    db: Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"],
+    count: number,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await db.execute(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query ILIKE '%from "adaptations"%for update%'`,
+      );
+      if ((rows[0] as { n: number }).n >= count) return;
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${count} request(s) blocked on adaptations`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async function waitForItemLockWaiters(
     db: Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"],
     count: number,
@@ -982,6 +1006,174 @@ describe.skipIf(!url)("content e2e", () => {
     // the same adaptation and checks the id derivation.
   });
 
+  /**
+   * `approve` MUST NOT TAKE A CHANNEL BACK OFF A LIVE ATTEMPT.
+   *
+   * `lockAdaptations` is asked for `pending`/`failed`/`scheduled` and for
+   * nothing else, and the repository says why in prose — a `publishing`
+   * adaptation is mid-attempt, possibly mid-retry-chain, and re-enqueueing it
+   * cancels a live job for no user-visible gain. Nothing tested it. The
+   * "approve twice" case above cannot: after one approve the adaptation is
+   * `queued` at the same `attempt_count`, so `publishJobId` derives the id the
+   * first approve already used and pg-boss's ON CONFLICT DO NOTHING keeps the
+   * count at one whether the status filter is there or not — the test says so
+   * itself.
+   *
+   * A `publishing` row separates them, because `markPublishing` has already
+   * advanced `attempt_count`: a second enqueue for it derives a DIFFERENT job
+   * id, so it lands, and the adaptation the worker is currently sending is
+   * flipped back to `queued` under a job that is still running. Two jobs, one
+   * channel, and the second one sends again.
+   */
+  it("leaves an adaptation the worker is mid-send alone: approve targets neither its row nor its queue", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Going out now", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    // What `markPublishing` leaves behind: the attempt is claimed and its count
+    // advanced, which is what makes a second enqueue a genuinely new job.
+    const { createDb } = await import("@pubrick/db");
+    {
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'publishing', attempt_count = 1 WHERE id = '${adaptationId}'`,
+      );
+      await pool.end();
+    }
+
+    const reApproved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    expect(reApproved.body.adaptations[0].status).toBe("publishing");
+
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n FROM pgboss.job WHERE name = 'publish'
+         AND data->>'adaptationId' = '${adaptationId}'`,
+    );
+    await pool.end();
+    expect((jobs.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  /**
+   * `lockAdaptations` WALKS ITS SET `ORDER BY id`, and nothing observed it.
+   *
+   * The order is not decoration and not a preference: it is one half of the
+   * product's single lock order (`docs/lock-order.md`), and the worker's sweep
+   * has a test of its own for the other half —
+   * "sweepAbandoned locks in id order, so it cannot deadlock against an item's
+   * ordered lock". That test writes the API's ordered walk out BY HAND, in its
+   * own session, so it passes whether or not the repository still orders
+   * anything. Dropping `.orderBy(schema.adaptations.id)` here left all 90 tests
+   * in this file green.
+   *
+   * Without it a bulk-locking SELECT takes rows in scan order — heap order,
+   * which reverses freely as rows are rewritten and has nothing to do with id
+   * order. Two writers over one item's adaptations then walk the same set in
+   * opposite directions, Postgres kills one of them with 40P01, and if the
+   * victim is the request, somebody publishing or cancelling a delivery gets a
+   * 500 for a thing they did once.
+   *
+   * The two rows are inserted HIGH id first so heap order IS the reverse of id
+   * order — the same premise, and the same shape, as the worker's test. The
+   * other session stands in for any writer that obeys the order: it holds the
+   * LOW row and then walks on. Ordered, `approve` is parked on that same LOW row
+   * holding nothing, and both finish. Unordered, `approve` is holding HIGH and
+   * waiting for LOW while the other session waits for HIGH, and one of the two
+   * assertions below is the deadlock victim.
+   */
+  it("locks an item's adaptations in id order, so a second writer over the same set cannot deadlock it", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const second = await agent
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "telegram",
+        name: "Second",
+        credentials: { botToken: "123:abc", chatId: "-1009876543210" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Two channels", channelIds: [channelId, second.body.id] })
+      .expect(201);
+    const itemId = created.body.id as string;
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const [owner] = (
+        await db.execute(
+          `SELECT org_id FROM adaptations WHERE content_item_id = '${itemId}' LIMIT 1`,
+        )
+      ).rows as { org_id: string }[];
+      const orgId = owner?.org_id as string;
+
+      // Re-seeded with ids of our own, written high-first: the API's own ids are
+      // random, and this test is about which of two known rows is taken first.
+      const run = randomUUID().slice(0, 8);
+      const ids = [2, 1].map((n) => `${run}-0000-4000-8000-${String(n).padStart(12, "0")}`);
+      // SORTED, and that is the load-bearing detail. Postgres plans this
+      // predicate as an index scan on `adaptations_one_live_per_item_channel`
+      // — `(content_item_id, channel_id)` — so an UNORDERED walk takes the rows
+      // in ascending CHANNEL id, not in heap order. Channel ids are random, so
+      // pairing the rows arbitrarily makes the unordered walk a coin toss and
+      // the deadlock appear in about half of runs: measured, one kill in three.
+      // Giving the HIGH adaptation id the LOW channel id makes every plan
+      // available here — this index, the item index, a seq scan of rows written
+      // high-first — agree on taking the high row first.
+      const channels = [channelId, second.body.id as string].sort();
+      await db.execute(`DELETE FROM adaptations WHERE content_item_id = '${itemId}'`);
+      for (const [index, id] of ids.entries()) {
+        await db.execute(
+          `INSERT INTO adaptations (id, org_id, content_item_id, channel_id, status, attempt_count)
+           VALUES ('${id}', '${orgId}', '${itemId}', '${channels[index]}', 'pending', 0)`,
+        );
+      }
+      const [low] = [...ids].sort() as [string, string];
+
+      const other = await pool.connect();
+      let otherError: string | null = null;
+      let approve: Promise<request.Response> | undefined;
+      try {
+        await other.query("BEGIN");
+        await other.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [low]);
+
+        approve = Promise.resolve(agent.post(`/api/content/${itemId}/approve`).send({}));
+        // The interleaving is a fact rather than a hope: approve is parked on a
+        // row lock — on LOW when it is ordered, on nothing but HIGH's successor
+        // when it is not.
+        await waitForAdaptationLockWaiters(db, 1);
+
+        otherError = await other
+          .query(
+            `SELECT id FROM adaptations
+              WHERE content_item_id = $1 AND status IN ('pending','failed','scheduled')
+              ORDER BY id FOR UPDATE`,
+            [itemId],
+          )
+          .then(
+            () => null,
+            (error: { code?: string }) => String(error.code),
+          );
+        await other.query("COMMIT");
+      } finally {
+        await other.query("ROLLBACK").catch(() => {});
+        other.release();
+      }
+
+      expect(otherError, "the other writer was the deadlock victim").toBeNull();
+      expect((await (approve as Promise<request.Response>)).status).toBe(200);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("re-approves a failed adaptation: attemptCount makes the retry's job id fresh, so it actually enqueues", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -1238,6 +1430,116 @@ describe.skipIf(!url)("content e2e", () => {
 
       const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
       expect(fetched.body.adaptations[0].deliveryOutcome).toBe("unknown");
+    });
+
+    /**
+     * TWO FINISHED ATTEMPTS, AND ONLY THE LAST ONE DESCRIBES THIS DELIVERY.
+     *
+     * Every other test in this block seeds exactly ONE finished receipt, which
+     * makes "first" and "last" the same row — so `order by created_at desc`
+     * flipped to `asc` is invisible to all of them, and an ordering the api
+     * consumes silently rather than returns has nothing else that could notice.
+     * A retried adaptation has a receipt per attempt, and the two orderings
+     * then disagree about the one question this field exists to answer.
+     *
+     * The history is the ordinary one: an attempt whose answer never came back,
+     * a human who opened the channel and found nothing, a re-approve — and then
+     * a second attempt that ended differently from the first. Both directions
+     * are seeded because the two wrong answers are wrong in opposite ways, and
+     * one of them is the expensive one.
+     */
+    async function seedAttempts(
+      adaptationId: string,
+      channelId: string,
+      statuses: readonly string[],
+    ) {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', last_error = 'whatever the worker logged'
+         WHERE id = '${adaptationId}'`,
+      );
+      // `created_at` is written explicitly, oldest attempt first. Two inserts in
+      // one statement share `now()`, and receipts a millisecond apart would make
+      // "most recent" a coin toss rather than the thing under test.
+      for (const [index, status] of statuses.entries()) {
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at)
+           VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', '${status}', NULL, NULL, ${index + 1},
+                   now() - interval '${statuses.length - index} minutes')`,
+        );
+      }
+      await pool.end();
+    }
+
+    it("reads the LAST attempt's verdict: an unknown after a clean failure is still unknown", async () => {
+      // The expensive direction. The first attempt never reached Telegram; the
+      // retry did reach it and never answered. Reading the older receipt calls
+      // that `failed` — a status the queue offers as re-approvable — and the
+      // re-approve puts a second copy in the channel, which is the entire
+      // reason this field is not just `adaptations.status`.
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(
+        agent,
+        "Failed, then lost",
+      );
+      await seedAttempts(adaptationId, channelId, ["failed", "unknown"]);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0].deliveryOutcome).toBe("unknown");
+    });
+
+    it("reads the LAST attempt's verdict: a clean failure after an unknown is a plain failure", async () => {
+      // The other direction, so this pair cannot be satisfied by a query that
+      // simply prefers `unknown`. Here the human already did what the first
+      // attempt asked — checked the channel, found nothing, approved again —
+      // and the retry failed outright. Sending them back to look a second time
+      // is a worse answer than the truth.
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(
+        agent,
+        "Lost, then failed",
+      );
+      await seedAttempts(adaptationId, channelId, ["unknown", "failed"]);
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0].deliveryOutcome).toBe("failed");
+    });
+
+    /**
+     * The link is THIS adaptation's own, whoever else has published lately.
+     *
+     * The subquery is correlated on `adaptation_id`, and nothing above could
+     * tell that predicate from its absence: every test here has exactly one
+     * adaptation with receipts, so "this adaptation's newest published row" and
+     * "the newest published row in the table" are the same row. A stranger org
+     * with a NEWER published receipt separates them, and the failure it guards
+     * against is one org's post appearing as another org's link.
+     */
+    it("takes the link from this adaptation's own receipt, not the newest one in the database", async () => {
+      const stranger = await orgAgent();
+      const strangerItem = await itemWithOneChannel(stranger, "Someone else's post");
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "No link yet");
+      await seedUnknownDelivery(adaptationId, channelId);
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${strangerItem.adaptationId}'`)
+      ).rows as { org_id: string }[];
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at)
+         VALUES ('${row?.org_id}', '${strangerItem.adaptationId}', '${strangerItem.channelId}',
+                 'published', '5150', 'https://t.me/someoneelse/5150', 1, now() + interval '1 hour')`,
+      );
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0].externalUrl).toBeNull();
     });
 
     it("keeps a failure that delivered nothing a plain failure", async () => {

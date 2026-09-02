@@ -206,6 +206,40 @@ describe("Modal focus trap", () => {
     expect(insideDialog()).toBe(true);
   });
 
+  /**
+   * THE SAME ARM, FROM THE SIDE WHERE THE BROWSER DOES NOT HELP.
+   *
+   * The test above cannot see this handler at all. "Before the dialog" sits
+   * immediately in front of the dialog in DOM order, so the browser's own next
+   * tab stop is already the Close button — focus lands inside whether the arm
+   * runs or not, and deleting the arm outright leaves that test green.
+   *
+   * From "After the dialog" there is nothing left to tab to, and from "Before
+   * the dialog" backwards there is nothing behind it, so these two are the only
+   * presses whose landing place can ONLY have come from the handler. They pin
+   * which end it picks as well as that it picks one: `shiftKey ? last : first`
+   * reversed drops the user at the wrong end of a dialog they are entering.
+   */
+  it("Tab from a control after the dialog enters at the dialog's first control", async () => {
+    render(<Fixture />);
+    const user = userEvent.setup();
+    screen.getByRole("button", { name: "After the dialog" }).focus();
+
+    await user.tab();
+
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  });
+
+  it("Shift+Tab from a control before the dialog enters at its last control", async () => {
+    render(<Fixture />);
+    const user = userEvent.setup();
+    screen.getByRole("button", { name: "Before the dialog" }).focus();
+
+    await user.tab({ shift: true });
+
+    expect(screen.getByRole("button", { name: "Discard and generate" })).toHaveFocus();
+  });
+
   it("traps Tab even when the dialog holds nothing focusable", async () => {
     render(
       <Modal open onClose={vi.fn()} title="Nothing here">
