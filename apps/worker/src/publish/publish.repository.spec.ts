@@ -29,6 +29,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   let pool: Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
   let schema: Schema;
   let eq: typeof import("drizzle-orm").eq;
+  let sql: typeof import("drizzle-orm").sql;
   let orgId: string;
   let brandId: string;
   let channelId: string;
@@ -46,7 +47,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     schema = dbModule.schema;
     await dbModule.runMigrations(url as string);
     ({ db, pool } = dbModule.createDb(url as string));
-    ({ eq } = await import("drizzle-orm"));
+    ({ eq, sql } = await import("drizzle-orm"));
     const { encryptJson } = await import("@pubrick/shared");
 
     const { PublishRepository } = await import("./publish.repository");
@@ -277,7 +278,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("a call carrying another org's id moves nothing: every writer is a no-op", async () => {
     const adaptationId = await seedAdaptation("queued");
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(true);
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
     expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
 
     const before = {
@@ -290,11 +291,14 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       externalUrl: "https://t.me/theirs/999",
     });
     await repo.markAlreadyPublished(strangerOrgId, adaptationId);
-    await repo.markFailed(strangerOrgId, adaptationId, "not your delivery");
-    await repo.recordTransient(strangerOrgId, adaptationId, "not your retry");
+    // The fence is the one this row's own attempt holds, so `org_id` is the
+    // only thing left that can refuse these writes — which is the point.
+    const fence = { status: "publishing", attemptCount: 1 } as const;
+    await repo.markFailed(strangerOrgId, adaptationId, "not your delivery", fence);
+    await repo.recordTransient(strangerOrgId, adaptationId, "not your retry", fence);
     await repo.releaseSend(strangerOrgId, adaptationId);
     // The two that answer rather than write: a claim another org cannot take.
-    expect(await repo.markPublishing(strangerOrgId, adaptationId)).toBe(false);
+    expect(await repo.markPublishing(strangerOrgId, adaptationId)).toBeNull();
     expect(await repo.claimSend(strangerOrgId, adaptationId)).toBe(false);
 
     expect({
@@ -350,7 +354,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markFailed on a fresh (queued) adaptation: attempt_count advances by exactly one and a failed publications row is written", async () => {
     const adaptationId = await seedAdaptation("queued");
 
-    await repo.markFailed(orgId, adaptationId, "No adapter for platform vk");
+    await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", {
+      status: "queued",
+      attemptCount: 0,
+    });
 
     const [row] = await db
       .select()
@@ -369,6 +376,156 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(pubs[0]?.attempt).toBe(1);
   });
 
+  /**
+   * THE CHECK-THEN-ACT, closed. `markExhausted` read `publishing` through
+   * `load()` and then wrote unconditionally; a reject and a re-approve landing
+   * in between left the freshly re-approved adaptation `failed` with "Retries
+   * exhausted" — and the live job the re-approve had just enqueued then found a
+   * failed row, was refused the claim, and completed having sent nothing.
+   *
+   * Here the interleaving is not raced, it is simply performed: the fence is
+   * built from the row as the DLQ handler read it, the api's two writes are
+   * applied, and the write is then offered. It must be refused, and the row
+   * must be exactly as the user left it.
+   */
+  it("markFailed is fenced: the verdict of an attempt the row has moved on from does not land", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const attempt = await repo.markPublishing(orgId, adaptationId);
+    expect(attempt).toBe(1);
+    const fence = { status: "publishing", attemptCount: attempt as number } as const;
+
+    // reject(): back to pending, count bumped, last_error cleared.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "pending", attemptCount: 2, lastError: null })
+      .where(eq(schema.adaptations.id, adaptationId));
+    // approve(): queued again, with a fresh job of its own on the way.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    expect(await repo.markFailed(orgId, adaptationId, "Retries exhausted", fence)).toBe(false);
+
+    expect(await adaptationRow(adaptationId)).toMatchObject({
+      status: "queued",
+      attemptCount: 2,
+      lastError: null,
+    });
+    // And no corpse in the delivery log either.
+    expect(await publicationRows(adaptationId)).toHaveLength(0);
+  });
+
+  /**
+   * The half of the fence a status check alone cannot do. A reject followed by
+   * a re-approve puts the row back into a status the dead attempt also saw, so
+   * `status` agrees and only the count disagrees — which is exactly why the
+   * fence is the PAIR the api already keys a publish job on.
+   */
+  it("markFailed is fenced on the attempt COUNT too, not just the status", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    // What the no-adapter path holds: the row exactly as `load()` returned it.
+    const fence = { status: "queued", attemptCount: 0 } as const;
+    // reject() + approve(): same status, one attempt further on.
+    await db
+      .update(schema.adaptations)
+      .set({ attemptCount: 1 })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    expect(await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", fence)).toBe(
+      false,
+    );
+
+    expect(await adaptationRow(adaptationId)).toMatchObject({
+      status: "queued",
+      attemptCount: 1,
+      lastError: null,
+    });
+  });
+
+  /**
+   * And the other half of the pair. A dead-letter copy delivered after the
+   * attempt it belongs to actually SUCCEEDED carries a fence whose count is
+   * still right — `markPublished` does not touch `attempt_count` — so only the
+   * status half can refuse it. Without that half a delivered post is recorded
+   * as a failure, with a `failed` publications row filed next to the
+   * `published` one.
+   */
+  it("markFailed is fenced on the STATUS too, not just the count", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const attempt = await repo.markPublishing(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId);
+    await repo.markPublished(orgId, adaptationId, {
+      externalId: "4242",
+      externalUrl: "https://t.me/x/4242",
+    });
+
+    expect(
+      await repo.markFailed(orgId, adaptationId, "Retries exhausted", {
+        status: "publishing",
+        attemptCount: attempt as number,
+      }),
+    ).toBe(false);
+
+    expect(await adaptationRow(adaptationId)).toMatchObject({
+      status: "published",
+      attemptCount: 1,
+      lastError: null,
+    });
+    const pubs = await publicationRows(adaptationId);
+    expect(pubs).toHaveLength(1);
+    expect(pubs[0]?.status).toBe("published");
+  });
+
+  /**
+   * `reject()` clears `last_error` on its way to `pending` precisely so a
+   * rejected adaptation does not read as a failed one. The transient path used
+   * to stamp the dying attempt's platform error straight back onto it.
+   */
+  it("recordTransient is fenced: it cannot re-stamp an error a reject has just cleared", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const attempt = await repo.markPublishing(orgId, adaptationId);
+    const fence = { status: "publishing", attemptCount: attempt as number } as const;
+
+    await db
+      .update(schema.adaptations)
+      .set({ status: "pending", attemptCount: 2, lastError: null })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    expect(await repo.recordTransient(orgId, adaptationId, "Too Many Requests", fence)).toBe(false);
+    expect(await adaptationRow(adaptationId)).toMatchObject({
+      status: "pending",
+      lastError: null,
+    });
+  });
+
+  /** The same write, offered to the row it does belong to, still lands. */
+  it("recordTransient lands on the attempt that owns the row, and renews its updated_at", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const attempt = await repo.markPublishing(orgId, adaptationId);
+    await db
+      .update(schema.adaptations)
+      .set({ updatedAt: sql`now() - interval '1 hour'` })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    expect(
+      await repo.recordTransient(orgId, adaptationId, "Too Many Requests", {
+        status: "publishing",
+        attemptCount: attempt as number,
+      }),
+    ).toBe(true);
+
+    const [row] = await db
+      .select({ lastError: schema.adaptations.lastError, updatedAt: schema.adaptations.updatedAt })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(row?.lastError).toBe("Too Many Requests");
+    // The renewal is not cosmetic: it is what keeps a live retry chain out of
+    // sweepAbandoned's candidate set.
+    const updatedAt = row?.updatedAt as Date;
+    expect(Date.now() - updatedAt.getTime()).toBeLessThan(60_000);
+  });
+
   it("markFailed on a row already 'publishing' (markPublishing already bumped it): attempt_count does NOT bump a second time", async () => {
     const adaptationId = await seedAdaptation("queued");
 
@@ -382,7 +539,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       expect(row?.attemptCount).toBe(1);
     }
 
-    await repo.markFailed(orgId, adaptationId, "Forbidden");
+    await repo.markFailed(orgId, adaptationId, "Forbidden", {
+      status: "publishing",
+      attemptCount: 1,
+    });
 
     const [row] = await db
       .select()
@@ -439,8 +599,14 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("the index is PARTIAL: any number of failed publications rows for one adaptation are fine", async () => {
     const adaptationId = await seedAdaptation("queued");
 
-    await repo.markFailed(orgId, adaptationId, "first");
-    await repo.markFailed(orgId, adaptationId, "second");
+    await repo.markFailed(orgId, adaptationId, "first", { status: "queued", attemptCount: 0 });
+    // A re-approve between the two attempts, which is the only way one
+    // adaptation legitimately fails twice — and the fence follows the row.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markFailed(orgId, adaptationId, "second", { status: "queued", attemptCount: 1 });
 
     const pubs = await db
       .select()
@@ -504,7 +670,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);
 
     // A failed attempt is not a delivery.
-    await repo.markFailed(orgId, adaptationId, "nope");
+    await repo.markFailed(orgId, adaptationId, "nope", { status: "queued", attemptCount: 0 });
     expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);
 
     await db
@@ -530,7 +696,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // This is what stops a reject that commits between load() and the claim
     // from being published anyway: both sides take the same row lock.
     const rejected = await seedAdaptation("pending");
-    expect(await repo.markPublishing(orgId, rejected)).toBe(false);
+    expect(await repo.markPublishing(orgId, rejected)).toBeNull();
     {
       const [row] = await db
         .select()
@@ -541,18 +707,20 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     }
 
     const alreadyDone = await seedAdaptation("published");
-    expect(await repo.markPublishing(orgId, alreadyDone)).toBe(false);
+    expect(await repo.markPublishing(orgId, alreadyDone)).toBeNull();
 
     // Claimable: freshly queued, scheduled, and a pg-boss retry of a
     // transiently failed attempt (which leaves the row at "publishing").
     for (const status of ["queued", "scheduled", "publishing"] as const) {
       const adaptationId = await seedAdaptation(status);
-      expect(await repo.markPublishing(orgId, adaptationId)).toBe(true);
+      // The answer is the attempt's own number, which is what every later
+      // write of it is fenced on — not a bare true.
+      expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
     }
 
     // Org-scoped: another org cannot claim this org's row.
     const mine = await seedAdaptation("queued");
-    expect(await repo.markPublishing("some-other-org", mine)).toBe(false);
+    expect(await repo.markPublishing("some-other-org", mine)).toBeNull();
   });
 
   it("markExhausted: marks failed with a retries-exhausted reason, writes the publications row, and is idempotent on a second delivery", async () => {
@@ -649,7 +817,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markFailed(orgId, adaptationId, "first attempt");
+    await repo.markFailed(orgId, adaptationId, "first attempt", {
+      status: "queued",
+      attemptCount: 0,
+    });
     await db
       .update(schema.adaptations)
       .set({ status: "queued" })
@@ -698,7 +869,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     await repo.markPublishing(orgId, adaptationId);
     await repo.claimSend(orgId, adaptationId);
 
-    await repo.markFailed(orgId, adaptationId, "Forbidden");
+    await repo.markFailed(orgId, adaptationId, "Forbidden", {
+      status: "publishing",
+      attemptCount: 1,
+    });
 
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(1);
@@ -714,7 +888,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     await repo.markPublishing(orgId, adaptationId);
     await repo.claimSend(orgId, adaptationId);
 
-    await repo.markFailed(orgId, adaptationId, "outcome unknown, check the channel", "unknown");
+    await repo.markFailed(
+      orgId,
+      adaptationId,
+      "outcome unknown, check the channel",
+      { status: "publishing", attemptCount: 1 },
+      "unknown",
+    );
 
     const [row] = await db
       .select()
@@ -757,7 +937,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(cause?.constraint).toBe("publications_one_in_flight_per_adaptation");
 
     // Partial: a resolved claim plus a fresh one is two rows and no violation.
-    await repo.markFailed(orgId, adaptationId, "unknown outcome", "unknown");
+    await repo.markFailed(
+      orgId,
+      adaptationId,
+      "unknown outcome",
+      { status: "publishing", attemptCount: 1 },
+      "unknown",
+    );
     await db
       .update(schema.adaptations)
       .set({ status: "queued" })

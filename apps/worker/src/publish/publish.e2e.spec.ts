@@ -57,6 +57,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   let workerPool: Pool;
   let schema: Schema;
   let eq: typeof import("drizzle-orm").eq;
+  let sql: typeof import("drizzle-orm").sql;
+  let repo: InstanceType<PublishRepositoryCtor>;
   let boss: PgBossInstance;
   let server: http.Server;
   let orgId: string;
@@ -121,7 +123,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     const dbModule = await import("@pubrick/db");
     schema = dbModule.schema;
     ({ db, pool } = dbModule.createDb(url as string));
-    ({ eq } = await import("drizzle-orm"));
+    ({ eq, sql } = await import("drizzle-orm"));
 
     const { PgBoss } = await import("pg-boss");
     boss = new (PgBoss as PgBossCtor)(url as string);
@@ -140,8 +142,10 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     };
     const queueModule = (await import("../queue.service")) as {
       QueueService: QueueServiceCtor;
+      publishSweepQueueOf: (publishQueue: string) => string;
+      sweepQueueOf: (generateQueue: string) => string;
     };
-    const repo = new PublishRepository();
+    repo = new PublishRepository();
     // 0 backoff: the recording retries are budgeted in seconds by design (see
     // PUBLISH_RECORD_BUDGET_MS) and nothing here is testing that budget.
     service = new PublishService(repo, undefined, undefined, 0);
@@ -151,6 +155,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     const noGenerate = {
       handle: async () => {},
       markExhausted: async () => {},
+      sweepAbandoned: async () => {},
     } as unknown as import("../generate/generate.service").GenerateService;
     const queueService = new queueModule.QueueService(service, noGenerate);
     await queueService.registerAll(boss, {
@@ -162,6 +167,14 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       generate: TEST_GENERATE_QUEUE,
       generateDeadLetter: TEST_GENERATE_DLQ,
     });
+    // registerAll also puts both sweeps on a cron. Unscheduled here so nothing
+    // sweeps behind this file's back: the sweep tests below drive
+    // `sweepAbandoned` directly, and an unattended tick landing between a
+    // fixture's write and its assertion would make them flaky in one direction
+    // (a row swept early) and blind in the other. Same reasoning, same move, as
+    // generate.e2e.spec.ts.
+    await boss.unschedule(queueModule.publishSweepQueueOf(TEST_PUBLISH_QUEUE));
+    await boss.unschedule(queueModule.sweepQueueOf(TEST_GENERATE_QUEUE));
 
     // "../db" is the worker's own module-level pool (imported transitively by
     // PublishRepository above); grab a handle so afterAll can close it too.
@@ -450,11 +463,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
 
     // The state a killed attempt leaves behind, written through the real
     // repository: the attempt claimed, sent, and never came back.
-    const { PublishRepository } = (await import("./publish.repository")) as {
-      PublishRepository: PublishRepositoryCtor;
-    };
-    const repo = new PublishRepository();
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(true);
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
     expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
@@ -473,4 +482,385 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     expect(adaptation?.status).toBe("failed");
     expect(adaptation?.lastError).toContain("check the channel before re-approving");
   }, 25_000);
+
+  /**
+   * FINDING 1, executed: a re-approval that lands between the dead-letter
+   * handler's read and its write.
+   *
+   * `markExhausted` read `publishing` through `load()` and then called a write
+   * whose UPDATE was unconditional. Reject and re-approve committing in that
+   * gap left the freshly re-approved adaptation `failed` with "Retries
+   * exhausted" and its count bumped a second time; the job the re-approve had
+   * just enqueued then loaded a `failed` row, `markPublishing` refused the
+   * claim, and the handler completed having sent nothing.
+   *
+   * MEASURED ON THE PRE-FIX CODE by running exactly this test against it: the
+   * adaptation ended `failed` / attempt_count 3 / lastError "Retries
+   * exhausted", the job went to `completed`, and the fake Telegram received
+   * ZERO posts. No exception, no failed job, no post — the user's decision
+   * simply gone. After the fix: `queued` / attempt_count 2 / lastError null,
+   * and ONE post.
+   *
+   * The read is gated rather than raced, because a race that reproduces once in
+   * a thousand runs is not a test. Everything else is real: the real
+   * repository, the real service, the real queue, the real socket.
+   */
+  it("does not lose a re-approval that lands between the dead-letter read and its write", async () => {
+    const chatId = `-100${Date.now()}6`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: {
+        ok: true,
+        result: { message_id: 6161, chat: { id: Number(chatId), username: "reapproved" } },
+      },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+
+    // The attempt whose retries ran out: every one of them transient, so the
+    // row is `publishing` and the dead-letter copy is on its way.
+    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+
+    const { PublishRepository } = (await import("./publish.repository")) as {
+      PublishRepository: PublishRepositoryCtor;
+    };
+    const { PublishService } = (await import("./publish.service")) as {
+      PublishService: PublishServiceCtor;
+    };
+    const gated = new PublishRepository();
+    let readHappened = (): void => {};
+    const hasRead = new Promise<void>((resolve) => {
+      readHappened = resolve;
+    });
+    let releaseRead = (): void => {};
+    const mayWrite = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const realLoad = gated.load.bind(gated);
+    gated.load = async (loadOrgId, loadAdaptationId) => {
+      const row = await realLoad(loadOrgId, loadAdaptationId);
+      readHappened();
+      await mayWrite;
+      return row;
+    };
+    const deadLetter = new PublishService(gated, undefined, undefined, 0);
+
+    const exhausting = deadLetter.markExhausted({ adaptationId, orgId });
+    await hasRead;
+
+    // The api's reject(), then its approve(): `pending` with the count bumped
+    // and `last_error` cleared, then `queued` again with a fresh job to come.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "pending", attemptCount: 2, lastError: null })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued", lastError: null })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    releaseRead();
+    await exhausting;
+
+    // The user's decision, still standing. This is what the bug erased.
+    const [afterExhaust] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(afterExhaust).toMatchObject({ status: "queued", attemptCount: 2, lastError: null });
+    // And no corpse in the delivery log to confuse the screen either.
+    expect(await publicationFor(adaptationId)).toBeUndefined();
+
+    // And the post the re-approval was FOR actually goes out.
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+    const adaptation = await waitUntilLeftQueued(adaptationId);
+    expect(adaptation.status).toBe("published");
+    expect(sendCounts.get(chatId)).toBe(1);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+  }, 25_000);
+
+  /**
+   * FINDING 2: the publish queue's copy of the stuck-forever hole the generate
+   * sweep closed, and the one place the two sweeps must NOT behave alike.
+   *
+   * The mechanism is identical and lives in `packages/shared/src/jobs.ts`: a
+   * heartbeat re-dispatch hands handler B a job id handler A still holds, A
+   * returns into pg-boss's wrapper, the wrapper's `complete()` lands on B's
+   * live incarnation, and from then on nothing can retry or dead-letter it. The
+   * adaptation stays `publishing` — a status `approve` deliberately does not
+   * target, so not even a re-approve can move it.
+   *
+   * What differs is the VERDICT. A generation run that was abandoned delivered
+   * nothing to anybody. A publish attempt may have put a post in a channel, and
+   * nothing here can ask. The `in_flight` claim is the evidence, and it is what
+   * these tests are about: with one, the sweep says "unknown, go look"; without
+   * one, it says "nothing was delivered".
+   *
+   * Nothing here is faked except the passage of time: the rows are written
+   * through the real repository, the jobs are real pg-boss jobs in real states,
+   * and the sweep is the production statement.
+   */
+  describe("abandoned-publish sweep", () => {
+    /**
+     * A queue with no registered consumer, so this block can park a job in a
+     * chosen state instead of having the live consumer eat it. `retryDelay: 0`
+     * and no backoff are the only production values changed, and neither is
+     * under test: what matters is the job's STATE, not when it would run.
+     */
+    const SWEEP_QUEUE = "publish-sweep-e2e";
+    const SWEEP_DLQ = "publish-sweep-e2e-dlq";
+    let seq = 0;
+
+    beforeAll(async () => {
+      const options = { retryLimit: 5, retryDelay: 0, deadLetter: SWEEP_DLQ };
+      await boss.createQueue(SWEEP_DLQ);
+      await boss.createQueue(SWEEP_QUEUE, options);
+      await boss.updateQueue(SWEEP_QUEUE, options);
+      // Every test below fetches or inspects; a job left over from an earlier
+      // run would silently test something else.
+      await db.execute(sql`delete from pgboss.job where name in (${SWEEP_QUEUE}, ${SWEEP_DLQ})`);
+    });
+
+    /**
+     * An adaptation in `publishing` that has been silent for `secondsAgo`, with
+     * or without the send claim its attempt would have taken.
+     *
+     * The silence is written onto `updated_at` directly, which is the one thing
+     * a test cannot get by waiting. Everything before it — the claim on the
+     * attempt, the claim on the send — goes through the real repository.
+     */
+    async function stuck(secondsAgo: number, claim: boolean) {
+      seq += 1;
+      const chatId = `-100${Date.now()}${seq}`;
+      const { adaptationId } = await seedQueuedAdaptation(chatId);
+      expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+      if (claim) expect(await repo.claimSend(orgId, adaptationId)).toBe(true);
+      await db
+        .update(schema.adaptations)
+        .set({ updatedAt: sql`now() - make_interval(secs => ${secondsAgo})` })
+        .where(eq(schema.adaptations.id, adaptationId));
+      return { adaptationId, chatId };
+    }
+
+    /**
+     * The row is the oracle, never the sweep's return value: the sweep is a
+     * global maintenance pass and this database is shared with other suites, so
+     * "how many did it take" says nothing about this adaptation.
+     */
+    async function statusOf(adaptationId: string): Promise<string | undefined> {
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      return row?.status;
+    }
+
+    async function publicationsOf(adaptationId: string) {
+      return db
+        .select()
+        .from(schema.publications)
+        .where(eq(schema.publications.adaptationId, adaptationId));
+    }
+
+    it("sweeps an attempt whose send claim outlived it, and refuses to call the outcome a failure", async () => {
+      const { adaptationId, chatId } = await stuck(40 * 60, true);
+
+      await service.sweepAbandoned();
+
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(row?.status).toBe("failed");
+      // The adaptation column has no way to say "we do not know" — it says
+      // `failed`, which every reader of it already understands as
+      // terminal-and-not-published — so the sentence is what carries the
+      // distinction to the human, and the publications row carries it to the
+      // machine.
+      expect(row?.lastError).toContain("check the channel before re-approving");
+      // Counted once, by markPublishing, and not again here.
+      expect(row?.attemptCount).toBe(1);
+
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs).toHaveLength(1);
+      expect(pubs[0]).toMatchObject({ status: "unknown", attempt: 1 });
+      // The claim was RESOLVED, not left standing: an in_flight row that
+      // outlives everything blocks claimSend for ever, so an adaptation left
+      // with one could never be published again by any route.
+      expect(pubs[0]?.status).not.toBe("in_flight");
+      // Nothing was sent by the sweep itself, obviously — but assert it, since
+      // the whole subject is a post that may or may not exist.
+      expect(sendCounts.get(chatId) ?? 0).toBe(0);
+    });
+
+    it("sweeps an attempt that never claimed the send, and says plainly that nothing was delivered", async () => {
+      const { adaptationId } = await stuck(40 * 60, false);
+
+      await service.sweepAbandoned();
+
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(row?.status).toBe("failed");
+      expect(row?.lastError).toContain("nothing was delivered");
+      expect(row?.lastError).not.toContain("check the channel");
+
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs).toHaveLength(1);
+      expect(pubs[0]).toMatchObject({ status: "failed", attempt: 1 });
+
+      // And the parent item goes with it: this adaptation is its only one, so
+      // an item left at `approved` beside a dead delivery is the same stuck
+      // screen one level up.
+      const [item] = await db
+        .select()
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, row?.contentItemId as string));
+      expect(item?.status).toBe("failed");
+    });
+
+    it("leaves an adaptation whose attempt wrote ten minutes ago", async () => {
+      // Absolute, not derived from PUBLISH_ABANDONED_AFTER_SECONDS: a fixture
+      // computed from the constant moves with it and pins nothing. This and the
+      // forty-minute cases above bracket the threshold to (10min, 40min], which
+      // a refactor that rounds twenty minutes down to five or up to an hour
+      // breaks.
+      const { adaptationId } = await stuck(10 * 60, true);
+      await service.sweepAbandoned();
+      expect(await statusOf(adaptationId)).toBe("publishing");
+      expect(await publicationsOf(adaptationId)).toHaveLength(1); // claim untouched
+    });
+
+    it.each(["pending", "queued", "scheduled", "published", "failed"] as const)(
+      "leaves a %s adaptation however long it has been silent",
+      async (status) => {
+        const { adaptationId } = await stuck(40 * 60, false);
+        await db
+          .update(schema.adaptations)
+          .set({ status, updatedAt: sql`now() - make_interval(secs => ${40 * 60})` })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await service.sweepAbandoned();
+        expect(await statusOf(adaptationId)).toBe(status);
+      },
+    );
+
+    it.each(["created", "active", "retry"] as const)(
+      "leaves an adaptation a %s job still names, however long it has been silent",
+      async (state) => {
+        const { adaptationId } = await stuck(40 * 60, true);
+        const jobId = await boss.send(SWEEP_QUEUE, { adaptationId, orgId });
+        if (!jobId) throw new Error("boss.send returned null");
+        if (state !== "created") {
+          const [job] = await boss.fetch(SWEEP_QUEUE);
+          expect(job?.id).toBe(jobId);
+        }
+        if (state === "retry") await boss.fail(SWEEP_QUEUE, jobId, { message: "transient" });
+        expect((await boss.getJobById(SWEEP_QUEUE, jobId))?.state).toBe(state);
+
+        try {
+          // A row with a job still coming for it is waiting, not abandoned —
+          // and a `retry` job is exactly the transient chain the publish queue
+          // spends up to an hour of backoff on.
+          await service.sweepAbandoned();
+          expect(await statusOf(adaptationId)).toBe("publishing");
+        } finally {
+          await boss.cancel(SWEEP_QUEUE, jobId);
+        }
+      },
+    );
+
+    it("leaves an adaptation whose only live job is on the dead-letter queue", async () => {
+      // Retries just ran out and `markExhausted` is on its way, which writes a
+      // verdict of its own. Sweeping would be this code racing that consumer.
+      const { adaptationId } = await stuck(40 * 60, true);
+      const jobId = await boss.send(SWEEP_DLQ, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+
+      try {
+        await service.sweepAbandoned();
+        expect(await statusOf(adaptationId)).toBe("publishing");
+      } finally {
+        await boss.cancel(SWEEP_DLQ, jobId);
+      }
+    });
+
+    it("sweeps an adaptation whose only job is already completed — the defect's own shape", async () => {
+      const { adaptationId } = await stuck(40 * 60, true);
+      const jobId = await boss.send(SWEEP_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+      await boss.fetch(SWEEP_QUEUE);
+      // What pg-boss's wrapper does to a re-dispatched id when the DISPLACED
+      // handler returns: the completion lands on the live incarnation.
+      await boss.complete(SWEEP_QUEUE, jobId);
+      expect((await boss.getJobById(SWEEP_QUEUE, jobId))?.state).toBe("completed");
+
+      await service.sweepAbandoned();
+
+      expect(await statusOf(adaptationId)).toBe("failed");
+    });
+
+    it("loses the race to a live attempt's write rather than winning it", async () => {
+      // The case this must never win: an attempt that is alive and mid-send
+      // while its job has already gone terminal underneath it. The sweep loses
+      // structurally, not by timing — it is ONE statement, so a concurrent
+      // write that reaches the row first makes it block on the row lock and
+      // then re-evaluate its whole WHERE against the version that committed.
+      const { adaptationId } = await stuck(40 * 60, true);
+
+      const attempt = await pool.connect();
+      try {
+        await attempt.query("begin");
+        // What `recordTransient` does on a transient ending, uncommitted.
+        await attempt.query(
+          "update adaptations set last_error = $2, updated_at = now() where id = $1",
+          [adaptationId, "Too Many Requests"],
+        );
+
+        const sweeping = service.sweepAbandoned();
+        // Long enough for the sweep to reach the row and block on the lock.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(await statusOf(adaptationId)).toBe("publishing");
+
+        await attempt.query("commit");
+        await sweeping;
+      } finally {
+        attempt.release();
+      }
+
+      expect(await statusOf(adaptationId)).toBe("publishing");
+    }, 30_000);
+
+    it("hands the claim back well enough that a deliberate re-approve can publish again", async () => {
+      // The other half of the recovery, and the reason the sweep resolves the
+      // claim rather than merely reading it. The operator does what the
+      // sentence told them to — checks the channel, finds nothing, re-approves
+      // — and that must actually send.
+      const { adaptationId, chatId } = await stuck(40 * 60, true);
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: 7272, chat: { id: Number(chatId), username: "recovered" } },
+        },
+      });
+
+      await service.sweepAbandoned();
+      expect(await statusOf(adaptationId)).toBe("failed");
+
+      // approve() on a failed adaptation.
+      await db
+        .update(schema.adaptations)
+        .set({ status: "queued", lastError: null })
+        .where(eq(schema.adaptations.id, adaptationId));
+      const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+
+      const adaptation = await waitUntilLeftQueued(adaptationId);
+      expect(adaptation.status).toBe("published");
+      expect(sendCounts.get(chatId)).toBe(1);
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs.map((row) => row.status).sort()).toEqual(["published", "unknown"]);
+    }, 25_000);
+  });
 });

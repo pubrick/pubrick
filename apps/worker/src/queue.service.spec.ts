@@ -8,7 +8,7 @@ import {
   PUBLISH_QUEUE_OPTIONS,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
-import { QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
+import { publishSweepQueueOf, QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
 
 function bossStub() {
   return {
@@ -20,7 +20,7 @@ function bossStub() {
 }
 
 function serviceStub() {
-  const publish = { handle: vi.fn(), markExhausted: vi.fn() };
+  const publish = { handle: vi.fn(), markExhausted: vi.fn(), sweepAbandoned: vi.fn() };
   const generate = { handle: vi.fn(), markExhausted: vi.fn(), sweepAbandoned: vi.fn() };
   return { publish, generate, service: new QueueService(publish as never, generate as never) };
 }
@@ -132,6 +132,35 @@ describe("QueueService.registerAll", () => {
     expect(generate.sweepAbandoned).toHaveBeenCalledTimes(1);
   });
 
+  it("puts the abandoned-publish sweep on a schedule and consumes its ticks", async () => {
+    const boss = bossStub();
+    const { publish, service } = serviceStub();
+
+    await service.registerAll(boss as never);
+
+    // The publish queue has the same hole and until now had no sweep: an
+    // adaptation left in "publishing" with its job completed under it can be
+    // moved by nothing — not a retry, not the dead-letter consumer, and not
+    // even a re-approve, since `approve` does not target `publishing`.
+    const sweepQueue = publishSweepQueueOf(PUBLISH_QUEUE);
+    expect(boss.createQueue).toHaveBeenCalledWith(sweepQueue);
+    expect(boss.schedule).toHaveBeenCalledWith(sweepQueue, SWEEP_CRON);
+    expect(boss.work).toHaveBeenCalledWith(sweepQueue, expect.anything(), expect.any(Function));
+
+    const tick = boss.work.mock.calls.find((call) => call[0] === sweepQueue)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    await tick([{ id: "tick-1", data: {} }]);
+    expect(publish.sweepAbandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the two sweeps on separate queues, one per pair", async () => {
+    // Not one tick driving both: a spec overrides the publish pair and the
+    // generate pair independently, so a single sweep queue derived from one of
+    // them would be the wrong private queue for the other.
+    expect(publishSweepQueueOf(PUBLISH_QUEUE)).not.toBe(sweepQueueOf(GENERATE_QUEUE));
+  });
+
   it("gives an overridden generate queue its own sweep queue, so a spec cannot eat production's ticks", async () => {
     const boss = bossStub();
     const { service } = serviceStub();
@@ -149,6 +178,27 @@ describe("QueueService.registerAll", () => {
       expect.any(Function),
     );
     expect(boss.work.mock.calls.map((call) => call[0])).not.toContain(sweepQueueOf(GENERATE_QUEUE));
+  });
+
+  it("gives an overridden publish queue its own sweep queue too", async () => {
+    const boss = bossStub();
+    const { service } = serviceStub();
+
+    await service.registerAll(boss as never, {
+      publish: "publish-x",
+      publishDeadLetter: "publish-x-dlq",
+      generate: "generate-x",
+      generateDeadLetter: "generate-x-dlq",
+    });
+
+    expect(boss.work).toHaveBeenCalledWith(
+      "publish-x-sweep",
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(boss.work.mock.calls.map((call) => call[0])).not.toContain(
+      publishSweepQueueOf(PUBLISH_QUEUE),
+    );
   });
 
   it("consumes only the queue pairs it is given, so a test consumer cannot eat production jobs", async () => {

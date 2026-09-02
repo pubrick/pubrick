@@ -4,8 +4,13 @@ import {
   TransientPublishError,
   UnknownOutcomePublishError,
 } from "@pubrick/integrations";
+import { PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import {
+  PUBLISH_ABANDONED_AFTER_SECONDS,
+  PUBLISH_ABANDONED_GRACE_SECONDS,
+} from "./publish.repository";
 import {
   PUBLISH_HEARTBEAT_WINDOW_MS,
   PUBLISH_RECORD_BUDGET_MS,
@@ -42,13 +47,17 @@ function fixture(overrides: Record<string, unknown> = {}) {
     load: vi.fn().mockResolvedValue(adaptation),
     credentials: vi.fn().mockResolvedValue({ botToken: "1:a", chatId: "-100" }),
     hasPublished: vi.fn().mockResolvedValue(false),
-    markPublishing: vi.fn().mockResolvedValue(true),
+    // The attempt's own number, not a bare true: every terminal write of this
+    // attempt is fenced on `(publishing, attemptCount)` and the number comes
+    // from here.
+    markPublishing: vi.fn().mockResolvedValue(1),
     claimSend: vi.fn().mockResolvedValue(true),
     releaseSend: vi.fn().mockResolvedValue(undefined),
     markPublished: vi.fn().mockResolvedValue(undefined),
     markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
-    markFailed: vi.fn().mockResolvedValue(undefined),
-    recordTransient: vi.fn().mockResolvedValue(undefined),
+    // Both answer whether the fenced statement matched a row.
+    markFailed: vi.fn().mockResolvedValue(true),
+    recordTransient: vi.fn().mockResolvedValue(true),
   };
   return { adaptation, repo };
 }
@@ -98,7 +107,13 @@ describe("PublishService.handle", () => {
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
-    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Forbidden", "failed");
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      "Forbidden",
+      { status: "publishing", attemptCount: 1 },
+      "failed",
+    );
   });
 
   it("rethrows transient errors so pg-boss retries", async () => {
@@ -153,6 +168,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("check the channel before re-approving"),
+      { status: "publishing", attemptCount: 1 },
       "unknown",
     );
     // The claim is resolved by markFailed, never handed back: another attempt
@@ -175,6 +191,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("check the channel before re-approving"),
+      { status: "publishing", attemptCount: 1 },
       "unknown",
     );
   });
@@ -208,7 +225,7 @@ describe("PublishService.handle", () => {
     ] as const) {
       const { repo } = fixture(patch);
       if (name === "already published") repo.hasPublished = vi.fn().mockResolvedValue(true);
-      if (name === "lost row claim") repo.markPublishing = vi.fn().mockResolvedValue(false);
+      if (name === "lost row claim") repo.markPublishing = vi.fn().mockResolvedValue(null);
       const service = new PublishService(
         repo as never,
         () => publisherStub(vi.fn()),
@@ -226,10 +243,13 @@ describe("PublishService.handle", () => {
     const service = new PublishService(repo as never, () => undefined, "https://api");
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    // Fenced on the row AS LOADED — this path fails before `markPublishing`,
+    // so the attempt it must not outlive is the one the api owns.
     expect(repo.markFailed).toHaveBeenCalledWith(
       "o1",
       "a1",
       expect.stringContaining("vk"),
+      { status: "queued", attemptCount: 0 },
       "failed",
     );
   });
@@ -272,6 +292,28 @@ describe("PublishService.handle", () => {
     );
   });
 
+  /**
+   * The sweep's threshold, derived rather than picked — and the derivation
+   * asserted, so shortening the queue's expiry fails here instead of quietly
+   * moving a destructive write inside a live attempt.
+   *
+   * pg-boss's expiry does not stop a handler, it only stops waiting for one, so
+   * an attempt whose job expired can still be finishing: a platform request at
+   * its own timeout, then `recordPublished`'s retry budget riding out a
+   * database hiccup. The threshold has to outlast the expiry PLUS all of that.
+   */
+  it("the abandoned-publish threshold outlasts everything one attempt can still be doing", () => {
+    expect(PUBLISH_ABANDONED_GRACE_SECONDS).toBe(PUBLISH_QUEUE_OPTIONS.expireInSeconds);
+    expect(PUBLISH_ABANDONED_AFTER_SECONDS).toBe(
+      PUBLISH_QUEUE_OPTIONS.expireInSeconds + PUBLISH_ABANDONED_GRACE_SECONDS,
+    );
+    expect(PUBLISH_ABANDONED_AFTER_SECONDS * 1000).toBeGreaterThan(
+      PUBLISH_QUEUE_OPTIONS.expireInSeconds * 1000 +
+        TELEGRAM_REQUEST_TIMEOUT_MS +
+        PUBLISH_RECORD_BUDGET_MS,
+    );
+  });
+
   it("fails permanently when credentials cannot be loaded (channel not found / decrypt failure) — never sends, never retries", async () => {
     const { repo } = fixture();
     repo.credentials = vi.fn().mockRejectedValue(new Error("Channel c1 not found for org o1"));
@@ -284,6 +326,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("Channel c1 not found"),
+      { status: "publishing", attemptCount: 1 },
       "failed",
     );
     expect(repo.recordTransient).not.toHaveBeenCalled();
@@ -327,7 +370,7 @@ describe("PublishService.handle", () => {
 
   it("does NOT send when the claim is lost (the api moved the row between load and claim)", async () => {
     const { repo } = fixture();
-    repo.markPublishing = vi.fn().mockResolvedValue(false);
+    repo.markPublishing = vi.fn().mockResolvedValue(null);
     const publish = vi.fn();
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
@@ -436,6 +479,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("chatId"), // names the offending field, not an opaque platform 400
+      { status: "publishing", attemptCount: 1 },
       "failed",
     );
   });
@@ -447,7 +491,13 @@ describe("PublishService.markExhausted", () => {
     const service = new PublishService(repo as never, () => undefined, "https://api");
 
     await service.markExhausted({ adaptationId: "a1", orgId: "o1" });
-    expect(repo.markFailed).toHaveBeenCalledWith("o1", "a1", "Retries exhausted", "failed");
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      "Retries exhausted",
+      { status: "publishing", attemptCount: 0 },
+      "failed",
+    );
   });
 
   it("is idempotent: a no-op when the adaptation already failed", async () => {

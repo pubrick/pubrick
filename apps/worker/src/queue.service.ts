@@ -43,13 +43,15 @@ const DEFAULT_QUEUE_NAMES: QueueNames = {
 };
 
 /**
- * How often the abandoned-run sweep runs.
+ * How often the abandoned-work sweeps run — both of them, generate's and
+ * publish's.
  *
- * Five minutes, not one: the sweep is a maintenance pass whose whole design is
- * to be LATE — a run only becomes a candidate `ABANDONED_GRACE_SECONDS` after
- * its lease expired, so the poll adds at most a rounding error to a latency
- * already measured in tens of minutes. Running it every minute would multiply
- * the table scans by five and change nothing about when a run recovers.
+ * Five minutes, not one: a sweep is a maintenance pass whose whole design is to
+ * be LATE — a row only becomes a candidate a whole further grace period after
+ * the queue could still have been working on it, so the poll adds at most a
+ * rounding error to a latency already measured in tens of minutes. Running it
+ * every minute would multiply the table scans by five and change nothing about
+ * when anything recovers.
  */
 export const SWEEP_CRON = "*/5 * * * *";
 
@@ -70,6 +72,22 @@ export const SWEEP_CRON = "*/5 * * * *";
  */
 export function sweepQueueOf(generateQueue: string): string {
   return `${generateQueue}-sweep`;
+}
+
+/**
+ * The publish sweep's own queue, derived from the publish queue for exactly the
+ * reason above — and a SEPARATE queue from generate's rather than one tick
+ * driving both.
+ *
+ * The derivation is what makes it separate: a spec overrides the publish pair
+ * and the generate pair independently (publish.e2e.spec.ts overrides both and
+ * unschedules the sweeps it does not want firing behind its back), so a single
+ * shared sweep queue derived from one of them would be the wrong private queue
+ * for the other. The passes themselves are independent global scans over
+ * different tables, so nothing is lost by ticking them apart.
+ */
+export function publishSweepQueueOf(publishQueue: string): string {
+  return `${publishQueue}-sweep`;
 }
 
 @Injectable()
@@ -121,6 +139,22 @@ export class QueueService {
     // Retries exhausted: the dead-letter copy records the terminal failure.
     await boss.work<PublishJob>(names.publishDeadLetter, { batchSize: 1 }, async ([job]) => {
       if (job) await this.publish.markExhausted(job.data);
+    });
+
+    // And the publish queue's copy of "pg-boss will never deliver ANYTHING
+    // again": the same heartbeat re-dispatch, the same `complete()` landing on
+    // the live incarnation of a reused job id, and an adaptation left in
+    // `publishing` with no job behind it — which `approve` deliberately does
+    // not target, so not even a re-approve can move it. The publish sweep
+    // differs from the generate one in its verdict, not its shape: an
+    // unresolved in-flight claim means the post MAY be live, so such a row is
+    // recorded `unknown` rather than `failed` (see
+    // `PublishRepository.sweepAbandoned`).
+    const publishSweepQueue = publishSweepQueueOf(names.publish);
+    await boss.createQueue(publishSweepQueue);
+    await boss.schedule(publishSweepQueue, SWEEP_CRON);
+    await boss.work(publishSweepQueue, { batchSize: 1 }, async () => {
+      await this.publish.sweepAbandoned();
     });
 
     const generateOptions = { ...GENERATE_QUEUE_OPTIONS, deadLetter: names.generateDeadLetter };

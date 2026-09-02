@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { PublishResult } from "@pubrick/integrations";
-import { decryptJson } from "@pubrick/shared";
+import { decryptJson, PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
@@ -23,6 +23,66 @@ export type LoadedAdaptation = {
 const CLAIMABLE_STATUSES = ["queued", "scheduled", "publishing"] as const;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Every write in this file that touches `adaptations` stamps `updated_at`
+ * ITSELF, with `now()` evaluated by Postgres — never drizzle's `$onUpdate`.
+ *
+ * `$onUpdate` sends a client-side `new Date()`, and `updated_at` is `timestamp`
+ * WITHOUT time zone: node-postgres serialises the Date with the worker's local
+ * offset and Postgres, parsing a value for a column that has no zone, keeps the
+ * wall clock and drops the offset. On a worker running in Europe/Moscow the
+ * column would land three hours ahead of the `now()` it is later compared with.
+ * That comparison is exactly what `sweepAbandoned` makes: a row's silence is
+ * measured against this column, so a client-side stamp would make the sweep
+ * either blind for ever or wildly early depending on the sign of that
+ * offset. Same
+ * reasoning, same defect class, as `nowSql()` in generate.repository.ts.
+ */
+function nowSql() {
+  return sql`now()`;
+}
+
+/**
+ * WHICH ATTEMPT A WRITE BELONGS TO — and therefore whether it is still allowed
+ * to land at all.
+ *
+ * `(status, attempt_count)` is not a pair invented here. It is the identity the
+ * api already keys a publish job on (`publishJobId(adaptationId, attemptCount)`,
+ * apps/api/src/queue/queue.service.ts), and every act that takes the row away
+ * from an attempt moves it: `reject` bumps the count and sets `pending`,
+ * `approve` then sets `queued`, `markPublishing` bumps it again when the next
+ * attempt starts. A write whose fence still matches therefore comes from the
+ * attempt the row is currently living; one whose fence does not match is the
+ * verdict of an attempt the user has already overruled.
+ *
+ * Checking this BEFORE the write is what the defect was. `markExhausted` read
+ * `publishing` through `load()` and then wrote UNCONDITIONALLY, so a reject and
+ * a re-approve landing in between left the freshly re-approved adaptation
+ * `failed` with "Retries exhausted" and its count bumped — and the re-approve's
+ * own live job then found a `failed` row, was refused the claim by
+ * `markPublishing`, and completed having sent nothing. Zero posts, no error
+ * anywhere, and a user whose decision simply vanished. So the guard lives in
+ * the statement's WHERE, where Postgres re-evaluates it under the row lock, and
+ * the caller is told whether it matched.
+ */
+export type AttemptFence = {
+  status: (typeof schema.ADAPTATION_STATUSES)[number];
+  attemptCount: number;
+};
+
+/**
+ * The fence as a predicate, written once so there is one place to get it wrong
+ * and one place to fix it.
+ */
+function fencedBy(orgId: string, adaptationId: string, fence: AttemptFence) {
+  return and(
+    eq(schema.adaptations.orgId, orgId),
+    eq(schema.adaptations.id, adaptationId),
+    eq(schema.adaptations.status, fence.status),
+    eq(schema.adaptations.attemptCount, fence.attemptCount),
+  );
+}
 
 /**
  * `attempt_count` must move by the end of ANY call that lands the adaptation
@@ -132,6 +192,76 @@ async function resolveClaim(
   });
 }
 
+/**
+ * pg-boss's own schema, as `main.ts` configures it: `new PgBoss(url)` with no
+ * `schema` option, whose default is `pgboss`.
+ *
+ * Named here because `sweepAbandoned` is the one query in this file that reads
+ * the QUEUE's tables rather than ours. It has to: "is there still a job that
+ * could move this adaptation" is a fact only pg-boss holds, and the alternative
+ * — trusting our own silence alone — is what would let the sweep fail an
+ * adaptation whose retry is merely waiting out its backoff. Spelled out again
+ * rather than shared with generate.repository.ts's copy: `@pubrick/shared` is
+ * the contract between the api and the worker, and a queue vendor's schema name
+ * is neither app's business to publish.
+ */
+const PGBOSS_SCHEMA = "pgboss";
+
+/**
+ * How long PAST the ceiling on one whole attempt an adaptation must lie
+ * untouched in `publishing` before the sweep is willing to call it abandoned.
+ *
+ * Read from `PUBLISH_QUEUE_OPTIONS.expireInSeconds`, like the ceiling itself,
+ * because the two have to move together — a grace shorter than the window
+ * pg-boss still allows one attempt would have the sweep firing at a handler the
+ * queue has not given up on.
+ *
+ * Why a WHOLE further attempt-window, when the ceiling has already passed?
+ * Because pg-boss's expiry does not stop a handler, it only stops WAITING for
+ * one: `resolveWithinSeconds` loses the race, the wrapper fails the job itself
+ * and walks away, and the publish handler — which takes no `signal` — carries
+ * on. What it can still be doing is bounded and known: a platform request at
+ * `TELEGRAM_REQUEST_TIMEOUT_MS`, then `recordPublished`'s retry budget
+ * (`PUBLISH_RECORD_BUDGET_MS`) riding out a database hiccup, together barely
+ * over a minute. The grace is many times that on purpose. This write is
+ * destructive and it must be late rather than wrong; the relationship is
+ * asserted in publish.service.spec.ts so that shortening the expiry fails a
+ * test instead of quietly moving the sweep inside a live attempt.
+ */
+export const PUBLISH_ABANDONED_GRACE_SECONDS = PUBLISH_QUEUE_OPTIONS.expireInSeconds;
+
+/** Total silence, from the last write of the attempt, before a row is a candidate. */
+export const PUBLISH_ABANDONED_AFTER_SECONDS =
+  PUBLISH_QUEUE_OPTIONS.expireInSeconds + PUBLISH_ABANDONED_GRACE_SECONDS;
+
+/**
+ * What a swept adaptation says happened — and there are TWO answers, which is
+ * the whole difference between this sweep and the generate one.
+ *
+ * A generation run that was abandoned never delivered anything to anybody: the
+ * work is lost and `failed` is the entire truth. A publish attempt might have
+ * put a post in someone's channel. The evidence is the `in_flight` claim: an
+ * attempt writes it BEFORE calling the platform, resolves it on every ending it
+ * survives, and DELETES it on the one ending that is known not to have posted
+ * (`releaseSend`, after a transient failure). So a claim that outlived its
+ * attempt means the request may have left the process, and a swept adaptation
+ * with one gets the operator's sentence — go and look at the channel — rather
+ * than a flat "failed" that invites a re-approve, which would post again.
+ * Without a claim, nothing reached the platform and `failed` is honest.
+ */
+const ABANDONED_UNKNOWN_ERROR =
+  "DELIVERY OUTCOME UNKNOWN: an attempt claimed the send and never reported back, and no queue " +
+  "job is left that could finish it. A copy may already be live — check the channel before " +
+  "re-approving, because re-approving will send again.";
+
+/** The other half: the attempt stopped before it ever told the platform anything. */
+const ABANDONED_FAILED_ERROR =
+  "The publish attempt stopped before it reached the platform and no queue job is left to retry " +
+  "it; nothing was delivered.";
+
+/** One recovered adaptation, and which of the two verdicts it got. */
+export type SweptAdaptation = { id: string; orgId: string; outcome: "failed" | "unknown" };
+
 @Injectable()
 export class PublishRepository {
   /**
@@ -224,11 +354,23 @@ export class PublishRepository {
    *
    * `publishing` is claimable so that a pg-boss retry of a transiently failed
    * attempt (which leaves the status alone) can proceed.
+   *
+   * Returns THIS ATTEMPT'S NUMBER — `attempt_count` after the bump, read back
+   * out of the same statement — or `null` when the claim was refused. That
+   * number is the attempt's half of the fence every later write of it is
+   * guarded by (see `AttemptFence`). Read back rather than derived as
+   * `loaded.attemptCount + 1`, because a derived value is a guess and it is
+   * wrong in exactly the case the fence exists for: a concurrent delivery that
+   * bumped the count first.
    */
-  async markPublishing(orgId: string, adaptationId: string): Promise<boolean> {
+  async markPublishing(orgId: string, adaptationId: string): Promise<number | null> {
     const rows = await db
       .update(schema.adaptations)
-      .set({ status: "publishing", attemptCount: sql`${schema.adaptations.attemptCount} + 1` })
+      .set({
+        status: "publishing",
+        attemptCount: sql`${schema.adaptations.attemptCount} + 1`,
+        updatedAt: nowSql(),
+      })
       .where(
         and(
           eq(schema.adaptations.orgId, orgId),
@@ -236,8 +378,8 @@ export class PublishRepository {
           inArray(schema.adaptations.status, [...CLAIMABLE_STATUSES]),
         ),
       )
-      .returning({ id: schema.adaptations.id });
-    return rows.length > 0;
+      .returning({ attemptCount: schema.adaptations.attemptCount });
+    return rows[0]?.attemptCount ?? null;
   }
 
   /**
@@ -308,7 +450,7 @@ export class PublishRepository {
     await db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
-        .set({ status: "published", lastError: null })
+        .set({ status: "published", lastError: null, updatedAt: nowSql() })
         .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
         .returning({
           channelId: schema.adaptations.channelId,
@@ -346,7 +488,7 @@ export class PublishRepository {
     await db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
-        .set({ status: "published", lastError: null })
+        .set({ status: "published", lastError: null, updatedAt: nowSql() })
         .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
         .returning({ contentItemId: schema.adaptations.contentItemId });
       const updated = rows[0];
@@ -370,25 +512,40 @@ export class PublishRepository {
    * and "we told the platform to post and never heard back". Only the second
    * asks a human to look at the channel before re-approving, and only the
    * publications row can say so.
+   *
+   * FENCED, and it returns whether the fence matched. This verdict belongs to
+   * ONE attempt, and an attempt that the api has already ended — a reject, or a
+   * reject and a re-approve — no longer owns the row: writing `failed` over the
+   * re-approved row is how a user's decision was silently lost (see
+   * `AttemptFence`). A refused write is not an error and nothing else is done
+   * about it here; in particular an `in_flight` claim is deliberately LEFT
+   * standing, because it belongs to whatever attempt now owns the row and
+   * releasing another attempt's claim is how a duplicate post gets sent.
    */
   async markFailed(
     orgId: string,
     adaptationId: string,
     error: string,
+    fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
-  ): Promise<void> {
-    await db.transaction(async (tx) => {
+  ): Promise<boolean> {
+    return db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
-        .set({ status: "failed", lastError: error, attemptCount: FAILED_ATTEMPT_COUNT })
-        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .set({
+          status: "failed",
+          lastError: error,
+          attemptCount: FAILED_ATTEMPT_COUNT,
+          updatedAt: nowSql(),
+        })
+        .where(fencedBy(orgId, adaptationId, fence))
         .returning({
           channelId: schema.adaptations.channelId,
           contentItemId: schema.adaptations.contentItemId,
           attemptCount: schema.adaptations.attemptCount,
         });
       const updated = rows[0];
-      if (!updated) return;
+      if (!updated) return false;
 
       await resolveClaim(tx, orgId, adaptationId, {
         channelId: updated.channelId,
@@ -400,15 +557,166 @@ export class PublishRepository {
       });
 
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+      return true;
     });
   }
 
-  /** Transient error: record the reason for visibility, leave status/attempt_count alone — pg-boss will retry. */
-  async recordTransient(orgId: string, adaptationId: string, error: string): Promise<void> {
-    await db
+  /**
+   * Transient error: record the reason for visibility, leave status and
+   * `attempt_count` alone — pg-boss will retry.
+   *
+   * Fenced like `markFailed`, and for a smaller but real version of the same
+   * reason: `reject` CLEARS `last_error` on its way to `pending` precisely so a
+   * rejected adaptation does not read as a failed one, and an unguarded write
+   * here stamps the dying attempt's platform error straight back onto the row
+   * the user just cleared. It renews `updated_at` too, which is what keeps a
+   * live retry chain out of `sweepAbandoned`'s candidate set.
+   */
+  async recordTransient(
+    orgId: string,
+    adaptationId: string,
+    error: string,
+    fence: AttemptFence,
+  ): Promise<boolean> {
+    const rows = await db
       .update(schema.adaptations)
-      .set({ lastError: error })
-      .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+      .set({ lastError: error, updatedAt: nowSql() })
+      .where(fencedBy(orgId, adaptationId, fence))
+      .returning({ id: schema.adaptations.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Terminate every adaptation left in `publishing` that no job can ever move
+   * again — and say honestly which of two things happened to it.
+   *
+   * THE HOLE THIS CLOSES is the one `packages/shared/src/jobs.ts` names and the
+   * generate sweep already covers on its own queue. pg-boss re-inserts a failed
+   * job under the SAME id (`failJobsBody`), so the supervisor's
+   * `failJobsByHeartbeat` hands handler B a job id handler A is still holding.
+   * When A finally returns, pg-boss's wrapper runs `complete(name, [id])`,
+   * guarded `state = 'active'` — and the active incarnation of that id is B's.
+   * B's live job goes `completed` underneath it, and from that moment B's own
+   * throw settles nothing (`failJobsById` is guarded `state < 'completed'`): no
+   * retry, no dead letter, and therefore no `markExhausted`. The adaptation
+   * sits in `publishing` for ever, and because `approve` deliberately does not
+   * target `publishing`, a re-approve cannot move it either — only a reject can,
+   * which is a thing the user has to know to do about a screen that says the
+   * post is going out right now.
+   *
+   * WHY IT DOES NOT SIMPLY WRITE `failed`, unlike the generate sweep. A run
+   * that was abandoned mid-step delivered nothing to anybody. A publish attempt
+   * may have put a post in a channel, and this code cannot ask. Sweeping such a
+   * row to a plain `failed` would assert something unknown AND invite the one
+   * act that makes it worse: `failed` is re-approvable, and a re-approve after
+   * a send that did land is a second post. So the verdict is taken from the
+   * `in_flight` claim, which exists precisely to answer this question — written
+   * before the platform call, resolved on every ending the attempt survives,
+   * and deleted only on an ending known not to have posted. Claim present:
+   * `unknown` on the publications row and the "check the channel" sentence on
+   * the adaptation. No claim: `failed`, and nothing went out.
+   *
+   * Resolving the claim is not bookkeeping either — it is the other half of the
+   * recovery. An `in_flight` row that outlives its attempt blocks
+   * `claimSend` for ever, so an adaptation left with one can never be published
+   * again by any route, however deliberately the operator re-approves it after
+   * checking the channel.
+   *
+   * HOW IT AVOIDS KILLING A LIVE ATTEMPT — three conditions:
+   *
+   *  1. `status = 'publishing'`. Every other status is either terminal, or a
+   *     row the api owns (`pending`, `queued`, `scheduled`) with a job of its
+   *     own coming for it.
+   *  2. `updated_at` older than `PUBLISH_ABANDONED_AFTER_SECONDS`. Every write
+   *     an attempt makes while it holds the row — `markPublishing` at the
+   *     start, `recordTransient` on each transient ending — stamps this column
+   *     with `now()` (see `nowSql`), so a live attempt and a live retry chain
+   *     both keep renewing it and neither can be in the candidate set.
+   *  3. NO job anywhere in pg-boss still names this adaptation in a
+   *     non-terminal state. This is what separates "abandoned" from "waiting":
+   *     a transient failure whose retry starts in 30s has a `retry` job, and an
+   *     attempt on its way to `markExhausted` has one on the DLQ. Both are
+   *     alive and neither is swept. Asked of ANY job rather than of a list of
+   *     queue names the caller passes in — a guard whose safety depends on an
+   *     argument is a weaker guard, and specs here override queue names on
+   *     purpose, so that argument would be wrong sooner or later.
+   *
+   * And the race: the UPDATE is ONE statement, so under READ COMMITTED a
+   * concurrent write that reaches the row first makes it block on the row lock
+   * and then RE-EVALUATE its whole WHERE against the version that committed. A
+   * renewed `updated_at` — or a status the attempt moved on to — fails that
+   * second look and the sweep matches nothing. It loses the race by
+   * construction rather than by timing, which is the only acceptable direction
+   * here: the case it must lose is an attempt that is alive and mid-send.
+   *
+   * `attempt_count` is deliberately NOT bumped: `markPublishing` already
+   * counted this attempt when it started, and the rule at the top of this file
+   * is exactly once per real attempt. Bumping again would make the api derive a
+   * `publishJobId` two ahead of the job that actually ran.
+   *
+   * NOT org-scoped, unlike every other query here: it is a maintenance pass
+   * over the whole table with no request and no org to scope to, and it reads
+   * no rows out to anybody.
+   */
+  async sweepAbandoned(): Promise<SweptAdaptation[]> {
+    // Evaluated twice in the one statement — once to choose the sentence stored
+    // on the adaptation, once to name the outcome for the publications row —
+    // and both times against the same snapshot, so the two cannot disagree.
+    const claimed = sql`exists (
+      select 1
+        from publications p
+       where p.adaptation_id = ${schema.adaptations.id}
+         and p.status = 'in_flight'
+    )`;
+    return db.transaction(async (tx) => {
+      const swept = await tx
+        .update(schema.adaptations)
+        .set({
+          status: "failed",
+          lastError: sql`case when ${claimed} then ${ABANDONED_UNKNOWN_ERROR} else ${ABANDONED_FAILED_ERROR} end`,
+          updatedAt: nowSql(),
+        })
+        .where(
+          and(
+            eq(schema.adaptations.status, "publishing"),
+            sql`${schema.adaptations.updatedAt} < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})`,
+            // `state < 'completed'` is pg-boss's own spelling for "not
+            // terminal" (`created` < `retry` < `active` < `completed` in its
+            // enum), the same comparison `failJobsById` is guarded by. Cast
+            // explicitly: the literal has to resolve to pgboss's enum type,
+            // not to text.
+            sql`not exists (
+              select 1
+                from ${sql.raw(PGBOSS_SCHEMA)}.job j
+               where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+                 and j.data->>'adaptationId' = ${schema.adaptations.id}::text
+            )`,
+          ),
+        )
+        .returning({
+          id: schema.adaptations.id,
+          orgId: schema.adaptations.orgId,
+          channelId: schema.adaptations.channelId,
+          contentItemId: schema.adaptations.contentItemId,
+          attemptCount: schema.adaptations.attemptCount,
+          lastError: schema.adaptations.lastError,
+          outcome: sql<"failed" | "unknown">`case when ${claimed} then 'unknown' else 'failed' end`,
+        });
+
+      for (const row of swept) {
+        await resolveClaim(tx, row.orgId, row.id, {
+          channelId: row.channelId,
+          status: row.outcome,
+          externalId: null,
+          externalUrl: null,
+          error: row.lastError,
+          attempt: row.attemptCount,
+        });
+        await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+      }
+
+      return swept.map((row) => ({ id: row.id, orgId: row.orgId, outcome: row.outcome }));
+    });
   }
 
   /**

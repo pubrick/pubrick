@@ -9,7 +9,7 @@ import {
 } from "@pubrick/integrations";
 import { PUBLISH_QUEUE_OPTIONS, type PublishJob } from "@pubrick/shared";
 import { env } from "../env";
-import { PublishRepository } from "./publish.repository";
+import { type AttemptFence, PublishRepository } from "./publish.repository";
 
 export type { PublishJob } from "@pubrick/shared";
 
@@ -171,10 +171,17 @@ export class PublishService {
 
     const publisher = this.lookup(adaptation.platform);
     if (!publisher) {
+      // Fenced on the row EXACTLY as it was loaded a moment ago, because this
+      // is the one terminal path that runs before `markPublishing` and so has
+      // no attempt of its own to name. A reject (or a reject and a re-approve)
+      // landing in the gap moves both halves of that pair, and the verdict of
+      // an attempt the user has overruled must not land on the row they now
+      // own — see `AttemptFence`.
       await this.safeMarkFailed(
         job.orgId,
         job.adaptationId,
         `No adapter for platform ${adaptation.platform}`,
+        { status: adaptation.status, attemptCount: adaptation.attemptCount },
       );
       return;
     }
@@ -183,12 +190,18 @@ export class PublishService {
     // lost claim means the api changed the row (rejected, re-approved) between
     // load() and here, under the row lock — do not send, and do not fail the
     // adaptation either: its new status is the truth now.
-    if (!(await this.repo.markPublishing(job.orgId, job.adaptationId))) {
+    const attempt = await this.repo.markPublishing(job.orgId, job.adaptationId);
+    if (attempt === null) {
       this.logger.log(
         `Skipping publish for adaptation ${job.adaptationId}: no longer in a publishable status`,
       );
       return;
     }
+    // This attempt's identity, from here to whatever ends it: the status it
+    // just wrote and the count it just took. Every terminal write below is
+    // guarded on it, so a reject or a re-approve that lands mid-attempt wins
+    // and this attempt's verdict is dropped rather than written over it.
+    const fence: AttemptFence = { status: "publishing", attemptCount: attempt };
 
     // The claim on the SEND, written before the platform is called. Losing it
     // means a previous attempt wrote one and never came back to resolve it, and
@@ -204,6 +217,7 @@ export class PublishService {
         job.orgId,
         job.adaptationId,
         "an earlier attempt was interrupted after the post was sent to the platform and never reported back",
+        fence,
       );
       return;
     }
@@ -262,7 +276,7 @@ export class PublishService {
         // to look at the channel first. This is finding (a) — before, this
         // error did not exist and the case above it took the branch below,
         // where the rethrow is the second send.
-        await this.recordUnknownOutcome(job.orgId, job.adaptationId, message);
+        await this.recordUnknownOutcome(job.orgId, job.adaptationId, message, fence);
         return;
       }
       if (error instanceof PermanentPublishError) {
@@ -270,7 +284,7 @@ export class PublishService {
         // Nothing was accepted by the platform on this branch (publish()
         // itself rejected it, or we never got as far as calling it) — no
         // duplicate-post risk here, unlike recordPublished below.
-        await this.safeMarkFailed(job.orgId, job.adaptationId, message);
+        await this.safeMarkFailed(job.orgId, job.adaptationId, message, fence);
         return;
       }
       // Transient, which now means KNOWN-not-posted: the platform's own
@@ -281,7 +295,12 @@ export class PublishService {
       // release cannot be written, the claim survives and the next attempt
       // reports unknown, which is the safe direction to fail in.
       await this.safeReleaseSend(job.orgId, job.adaptationId);
-      await this.repo.recordTransient(job.orgId, job.adaptationId, message);
+      if (!(await this.repo.recordTransient(job.orgId, job.adaptationId, message, fence))) {
+        this.logger.log(
+          `Transient error not recorded for adaptation ${job.adaptationId}: the row moved on from ` +
+            "this attempt, and the status it moved to owns its own last_error",
+        );
+      }
       throw error;
     }
 
@@ -313,13 +332,65 @@ export class PublishService {
    * `scheduled`) or rejected back to `pending`. Failing it then would clobber
    * a live job's adaptation with the corpse of an attempt that is already
    * over.
+   *
+   * And the guard that matters is IN THE STATEMENT, not here. Reading the
+   * status and then writing unconditionally is a check-then-act: a reject and a
+   * re-approve committing between the two left the re-approved adaptation
+   * `failed` with "Retries exhausted", and its live job then found a `failed`
+   * row, was refused the claim, and completed having sent nothing — the user's
+   * decision lost with no error anywhere and no post in the channel. The read
+   * below survives only as a cheap short-circuit (it also supplies the fence's
+   * attempt number); the thing that makes the write safe is that `markFailed`
+   * re-checks `(status, attempt_count)` under the row lock.
    */
   async markExhausted(job: PublishJob): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation) return;
     if (adaptation.status !== "publishing") return;
 
-    await this.safeMarkFailed(job.orgId, job.adaptationId, "Retries exhausted");
+    await this.safeMarkFailed(job.orgId, job.adaptationId, "Retries exhausted", {
+      status: "publishing",
+      attemptCount: adaptation.attemptCount,
+    });
+  }
+
+  /**
+   * The scheduled sweep: end every adaptation no job can ever move again.
+   *
+   * The state it recovers from is the publish queue's copy of the one the
+   * generate sweep covers, and `packages/shared/src/jobs.ts` names it: a
+   * heartbeat re-dispatch hands handler B a job id handler A still holds, A
+   * returns into pg-boss's wrapper, the wrapper completes that id — which is
+   * now B's live incarnation — and from then on nothing can retry or
+   * dead-letter it. The adaptation stays `publishing`, `markExhausted` never
+   * runs, and `approve` does not target `publishing`, so a re-approve cannot
+   * move it either.
+   *
+   * Never throws, for the same reason `markExhausted` does not: this runs on a
+   * schedule with nobody waiting on it, and a rethrow would only redeliver the
+   * sweep tick to do the same thing again.
+   */
+  async sweepAbandoned(): Promise<void> {
+    try {
+      const swept = await this.repo.sweepAbandoned();
+      for (const adaptation of swept) {
+        // `error`, not `warn`, and loudest for the `unknown` half: the queue
+        // lost a job that was supposed to finish a delivery, and where a claim
+        // was left standing nobody can say whether a post is now live in a
+        // customer's channel. Neither half is ever routine.
+        this.logger.error(
+          `SWEPT ABANDONED PUBLISH: adaptation ${adaptation.id} sat in "publishing" with no queue ` +
+            `job left anywhere to move it; failed it with outcome "${adaptation.outcome}"` +
+            (adaptation.outcome === "unknown"
+              ? " — an unresolved send claim means a post MAY be live; check the channel before re-approving."
+              : " — nothing had reached the platform.") +
+            ` orgId=${adaptation.orgId}`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`ABANDONED-PUBLISH SWEEP FAILED: ${message}`);
+    }
   }
 
   /**
@@ -337,13 +408,14 @@ export class PublishService {
     orgId: string,
     adaptationId: string,
     detail: string,
+    fence: AttemptFence,
   ): Promise<void> {
     const reason =
       "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
       `confirmed (${detail}). A copy may already be live — check the channel before re-approving, ` +
       "because re-approving will send again.";
     this.logger.error(`${reason} orgId=${orgId} adaptationId=${adaptationId}`);
-    await this.safeMarkFailed(orgId, adaptationId, reason, "unknown");
+    await this.safeMarkFailed(orgId, adaptationId, reason, fence, "unknown");
   }
 
   /**
@@ -446,15 +518,30 @@ export class PublishService {
    * caller that passes `outcome: "unknown"` is the exception to "nothing was
    * delivered", and it is exactly why the publications row needs a status the
    * adaptation column does not have.
+   *
+   * The other way this can fail to write is the fence refusing it, which is not
+   * a failure at all and is handled differently: nothing is stuck, the row
+   * simply belongs to a newer decision. See `AttemptFence`.
    */
   private async safeMarkFailed(
     orgId: string,
     adaptationId: string,
     reason: string,
+    fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
   ): Promise<void> {
     try {
-      await this.repo.markFailed(orgId, adaptationId, reason, outcome);
+      if (!(await this.repo.markFailed(orgId, adaptationId, reason, fence, outcome))) {
+        // Not an error, and emphatically not something to retry or force: the
+        // row moved out from under this attempt, which only the api does and
+        // only because a human rejected or re-approved. Their decision is the
+        // truth now; this attempt's verdict is dropped on purpose.
+        this.logger.warn(
+          `Terminal outcome NOT recorded for adaptation ${adaptationId}: the row left ` +
+            `${fence.status}/attempt ${fence.attemptCount} before this attempt could write it, so a ` +
+            `newer decision stands. orgId=${orgId} droppedReason=${reason}`,
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
