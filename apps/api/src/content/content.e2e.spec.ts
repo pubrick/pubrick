@@ -224,11 +224,16 @@ describe.skipIf(!url)("content e2e", () => {
    * turns on. `replaceExisting` drops the item's own rows first, for the shapes
    * that are about what is MISSING. `createdAt` is spelled out only by the
    * tests that turn on ROW ORDER — `defaultNow()` would make "the fragment was
-   * written before the full row" depend on how fast the inserts ran.
+   * written before the full row" depend on how fast the inserts ran. `id` is
+   * spelled out by the tests that turn on the ORDER BY's TIEBREAK, and by the
+   * ones that must pin `created_at` itself: with random ids, dropping
+   * `asc(created_at)` leaves `asc(id)` picking a first `full` row by coin
+   * flip, and a mutation that survives half the time is not pinned at all.
    */
   async function addItemVersions(
     itemId: string,
     versions: {
+      id?: string;
       body: string;
       origin?: "ai" | "human";
       scope?: "full" | "fragment";
@@ -259,6 +264,7 @@ describe.skipIf(!url)("content e2e", () => {
         origin: version.origin ?? ("ai" as const),
         scope: version.scope ?? ("full" as const),
         ...(version.createdAt ? { createdAt: version.createdAt } : {}),
+        ...(version.id ? { id: version.id } : {}),
       })),
     );
     await pool.end();
@@ -1387,6 +1393,99 @@ describe.skipIf(!url)("content e2e", () => {
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
     });
 
+    /**
+     * WHICH row the gate counts against, pinned on the gate's own path.
+     *
+     * The badge's two order tests below (a deletion counted against the first
+     * `full` row, and the same-instant tiebreak) read the ORDER BACK: `get`
+     * returns the rows and `list` returns a verdict computed from them, so a
+     * wrong order shows up in an assertion. The gate returns neither — it
+     * consumes the order inside `collectAiEvidence` and answers 200 or 409 —
+     * and every other fixture in this file inserts its versions in
+     * chronological order, where heap order and `created_at` order agree and an
+     * unordered read is right by accident. Deleting this query's `ORDER BY`
+     * outright changed nothing in the whole file before these two tests.
+     *
+     * Two `full` rows, and the gate's verdict is opposite for each:
+     *
+     * - the model's FIRST full draft — two sentences, exactly the body the item
+     *   still carries — is the only correct anchor. Untouched AI, nobody opened
+     *   it: the gate must refuse.
+     * - a LONGER re-generation, three sentences, written FIRST physically and
+     *   lowest by id but stamped an hour LATER. Anchor on it and the body has
+     *   fewer sentences than "the model wrote", which reads as a human's
+     *   deletion — the gate opens and publishes a draft no human ever saw.
+     *
+     * The ids are spelled out for the same reason the timestamps are: with
+     * random ones, dropping `asc(created_at)` alone would leave `asc(id)`
+     * choosing between the two `full` rows by coin flip.
+     */
+    it("refuses on the FIRST full row by created_at, not on whichever row comes back first", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
+      await addItemVersions(
+        itemId,
+        [
+          {
+            id: lowId,
+            body: `${AI_BODY} On vous attend dès sept heures.`,
+            createdAt: new Date("2026-08-01T11:00:00Z"),
+          },
+          { id: highId, body: AI_BODY, createdAt: new Date("2026-08-01T10:00:00Z") },
+        ],
+        { replaceExisting: true },
+      );
+
+      const refused = await agent.post(`/api/content/${itemId}/approve`).send({});
+      expect(refused.status).toBe(409);
+      // The body HAS a complete `ai` version to be judged against, so the
+      // refusal is the one an edit can clear — not the dead-end sentence.
+      expect(refused.body.message).toMatch(/open it, or edit it/i);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    /**
+     * The other half of the same order, and the other direction of being wrong.
+     *
+     * The worker writes an item's versions and all its adaptations' in ONE
+     * transaction, where `now()` — and therefore `created_at` — is identical
+     * across them, so `created_at` alone is not a total order and the tiebreak
+     * decides which row is "first". Here the two `full` rows share an instant
+     * and the ids are chosen so heap order and id order DISAGREE: the
+     * one-sentence row is written first physically, the two-sentence one is
+     * first by id.
+     *
+     * A human then deletes one of the model's two sentences — every sentence
+     * LEFT is still the model's, so only the count against the first `full` row
+     * can see the human. Anchored correctly (two sentences) it does, and the
+     * publish goes through. Anchored on the row the planner happened to return
+     * (one sentence) the count matches, the draft reads as untouched AI, and
+     * the caller who really did edit it is told to go and edit it.
+     */
+    it("breaks a same-instant tie by id, so a real edit is not refused", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
+      const sameInstant = new Date("2026-08-01T10:00:00Z");
+      await addItemVersions(
+        itemId,
+        [
+          { id: highId, body: "Passez nous voir.", createdAt: sameInstant },
+          { id: lowId, body: AI_BODY, createdAt: sameInstant },
+        ],
+        { replaceExisting: true },
+      );
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Café ouvert." }).expect(200);
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(1);
+    });
+
     it("refuses a level whose only ai evidence is a fragment", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
@@ -1972,18 +2071,34 @@ describe.skipIf(!url)("content e2e", () => {
      *   table order rather than in `created_at` order anchors on one sentence
      *   and excuses the deletion below.
      * - the FIRST `full` row, two sentences, is the only correct anchor.
+     *
+     * The ids are spelled out so that id order disagrees with `created_at`
+     * order too — the shorter `full` row sorts first by id. Left random, this
+     * fixture pinned only the ORDER BY as a whole: dropping `asc(created_at)`
+     * and keeping the tiebreak picked between the two `full` rows by coin
+     * flip, and a mutation that survives half the runs is not pinned at all.
      */
     it("reads Human-edited for a deletion, counting against the first FULL row", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
       const { itemId } = await aiDraft(agent, brandId, [channelId]);
 
+      const [lowId, midId, highId] = [randomUUID(), randomUUID(), randomUUID()].sort() as [
+        string,
+        string,
+        string,
+      ];
       await addItemVersions(
         itemId,
         [
-          { body: AI_FRAGMENT, scope: "fragment", createdAt: new Date("2026-08-01T09:00:00Z") },
-          { body: "Passez nous voir.", createdAt: new Date("2026-08-01T11:00:00Z") },
-          { body: AI_BODY, createdAt: new Date("2026-08-01T10:00:00Z") },
+          {
+            id: midId,
+            body: AI_FRAGMENT,
+            scope: "fragment",
+            createdAt: new Date("2026-08-01T09:00:00Z"),
+          },
+          { id: lowId, body: "Passez nous voir.", createdAt: new Date("2026-08-01T11:00:00Z") },
+          { id: highId, body: AI_BODY, createdAt: new Date("2026-08-01T10:00:00Z") },
         ],
         { replaceExisting: true },
       );
@@ -1996,6 +2111,48 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
 
       expect(edited.body.bodyIsAiVerbatim).toBe(false);
+      const listed = (await agent.get("/api/content").expect(200)).body as {
+        id: string;
+        bodyIsAiVerbatim: boolean;
+      }[];
+      expect(listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim).toBe(false);
+    });
+
+    /**
+     * The same-instant tiebreak, asked of the CARD.
+     *
+     * `get` returns the version rows, so the tiebreak in its read is pinned by
+     * reading the order back ("orders same-instant version rows by id" above).
+     * The queue's read returns no rows at all — only this boolean — so nothing
+     * here reads an order back, and every other list fixture gives its rows
+     * distinct timestamps, under which `created_at` alone already totally
+     * orders them. Deleting `asc(id)` from the queue's query changed nothing in
+     * this file before this test.
+     *
+     * One transaction's worth of rows: two `full` versions at the same instant,
+     * ids chosen so heap order and id order disagree, the one-sentence row
+     * written first physically. A human then deletes one of the model's two
+     * sentences — countable only against the two-sentence row that is first by
+     * id. Anchored on the other, the card captions a trimmed draft "AI-drafted"
+     * and the deletion clause is a no-op on every card in the queue.
+     */
+    it("breaks a same-instant tie by id on the card, which returns no rows to check", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
+      const sameInstant = new Date("2026-08-01T10:00:00Z");
+      await addItemVersions(
+        itemId,
+        [
+          { id: highId, body: "Passez nous voir.", createdAt: sameInstant },
+          { id: lowId, body: AI_BODY, createdAt: sameInstant },
+        ],
+        { replaceExisting: true },
+      );
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Café ouvert." }).expect(200);
+
       const listed = (await agent.get("/api/content").expect(200)).body as {
         id: string;
         bodyIsAiVerbatim: boolean;
