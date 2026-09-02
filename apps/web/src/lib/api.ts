@@ -11,11 +11,13 @@ import { reportUnauthorized } from "./unauthorized";
  * not part of the wire contract: no server sends them, and putting them in
  * `API_ERROR_CODES` would advertise a code the api can never emit.
  *
- * `no_active_organization` is the api's refusal read through a sniff rather than
- * a code (`ActiveOrgGuard` is the one refusal path outside this change's reach),
- * which is why it lives here beside the two the web really does author.
+ * `no_active_organization` used to be here too, as the api's refusal read
+ * through a sniff on its English sentence. `ActiveOrgGuard` now names it, so it
+ * has moved to `API_ERROR_CODES` where a code the server really does send
+ * belongs. The union below is unchanged by that move, which is the point: the
+ * message map stays total over exactly the same set.
  */
-export const TRANSPORT_ERROR_CODES = ["signed_out", "no_active_organization", "forbidden"] as const;
+export const TRANSPORT_ERROR_CODES = ["signed_out", "forbidden"] as const;
 export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 
 /** Everything `errorMessage` can translate: the wire's codes plus the web's own. */
@@ -146,15 +148,17 @@ export type ErrorTranslator = (key: string, values?: Record<string, string | num
  *    (see `api()` below) and must land here too — hence the lower bound on the
  *    status test, not just `< 500`.
  *
- * `t` IS OPTIONAL, and that is a migration state rather than a design: a call
- * site that passes none keeps step 2 exactly as it behaved before codes
- * existed, so the screens this change does not reach (the brand list, one
- * brand's channels, the run receipt) still show the api's sentence rather than
- * nothing. Converting one is adding one argument.
+ * `t` IS REQUIRED. It was optional for exactly as long as the conversion took:
+ * an omitted translator does not fail, it silently drops the reader to step 2
+ * and puts the api's English on a Spanish screen, which is the defect this
+ * whole path exists to remove — and no test of a screen that never provokes a
+ * refusal can see it. Making it required moves that from something each new
+ * screen has to remember to something the compiler will not let it forget;
+ * `error-message-arity.test.ts` asks the compiler whether it still would.
  */
-export function errorMessage(err: unknown, fallback: string, t?: ErrorTranslator): string {
+export function errorMessage(err: unknown, fallback: string, t: ErrorTranslator): string {
   if (!(err instanceof ApiError)) return fallback;
-  if (t !== undefined && isErrorCode(err.code)) {
+  if (isErrorCode(err.code)) {
     return t(ERROR_MESSAGE_KEYS[err.code], ERROR_MESSAGE_VALUES[err.code]);
   }
   return err.status >= 400 && err.status < 500 && err.message.length > 0 ? err.message : fallback;
@@ -228,12 +232,18 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       throw new ApiError(401, "You're signed out. Log in again to continue.", false, "signed_out");
     }
     if (res.status === 403) {
-      // Still a sniff on the sentence rather than a code: `ActiveOrgGuard` is
-      // the one refusal path this change did not reach. The sniff decides the
-      // CODE now instead of a boolean flag, so the screens' `err.noActiveOrg`
-      // branch and the translated sentence can no longer disagree about which
-      // 403 this is.
-      const noActiveOrg = /no active organization/i.test(detail ?? "");
+      // THE CODE, not the sentence. This branch decides whether the reader is
+      // sent to onboarding, and it used to decide it by matching
+      // /no active organization/i against prose written for a network tab —
+      // so rewording that sentence server-side, or translating it, would have
+      // silently stranded an account on a screen it can never load.
+      //
+      // Deliberately NOT a code-or-sniff disjunction. A fallback would keep
+      // this working with the guard's code removed, which is exactly the
+      // shape of test that reports a line as pinned while pinning nothing:
+      // the api and the web ship together here, and the one thing worth
+      // knowing is that the code arrives.
+      const noActiveOrg = code === "no_active_organization";
       throw new ApiError(
         403,
         noActiveOrg

@@ -225,6 +225,16 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   boundary the screen actually talks to. `api.ts` itself is unit-tested
   directly against a stubbed `fetch` — never left uncovered because pages
   mock it away.
+- **A refusal must reach the reader in the reader's language.** Anything a
+  screen shows for a failed request goes through `errorMessage(err, fallback,
+  t)`, and the third argument — `useTranslations("Errors")` — is REQUIRED, so
+  forgetting it is a build failure rather than a screen that quietly shows the
+  api's English. Passing it is not the same as using it: prove the refusal on
+  each rendered error site, driven by a real HTTP body built with `refusalBody`
+  and rendered in a non-English locale (`render`/`renderAsync` take
+  `{ locale }`). `src/app/[locale]/refusals.test.tsx` is where those live, and
+  why — a screen with two error sites has two calls, and a mutation drops one
+  at a time.
 - Request bodies are pinned twice: a literal `toEqual`/`toBe` for what the
   screen sends, plus a parse against the `@pubrick/shared` schema the API
   validates with (`contentCreateSchema`, `contentApproveSchema`,

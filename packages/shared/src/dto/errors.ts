@@ -117,6 +117,28 @@ export const API_ERROR_CODES = [
   /** Test or Remove against a provider whose key is no longer stored. */
   "ai_credential_not_found",
 
+  // ── the session's organization ────────────────────────────────────────────
+  /**
+   * `ActiveOrgGuard` refusing a request whose session names no organization —
+   * the one refusal the web used to identify by SNIFFING the English sentence
+   * of a 403 (`/no active organization/i`, `apps/web/src/lib/api.ts`).
+   *
+   * A sniff is not a contract: it reads a sentence written for a developer's
+   * network tab as if it were a machine field, so rewording that sentence —
+   * or translating it, which is the whole direction this product is going —
+   * silently turns "send this person to onboarding" into "show them a 403".
+   * The web branches on this to REDIRECT, not merely to phrase, so the failure
+   * would not have been a worse sentence; it would have been an account stuck
+   * on a screen it can never load.
+   *
+   * The guard's OTHER 403 — a session pointing at an organization the caller
+   * is not a member of — deliberately stays uncoded. The web replaces every
+   * non-org 403's sentence with one of its own (`forbidden`, a code no server
+   * sends), so a code there would name a refusal the reader is already
+   * answered about without one.
+   */
+  "no_active_organization",
+
   // ── the validation boundary ───────────────────────────────────────────────
   /**
    * A body zod refused.
@@ -151,7 +173,7 @@ export function isApiErrorCode(value: unknown): value is ApiErrorCode {
 }
 
 /**
- * The three statuses a coded refusal is allowed to use, and the name Nest gives
+ * The four statuses a coded refusal is allowed to use, and the name Nest gives
  * each one.
  *
  * A closed map rather than a lookup, so `refusalBody(410, …)` does not compile.
@@ -162,6 +184,7 @@ export function isApiErrorCode(value: unknown): value is ApiErrorCode {
  */
 const REFUSAL_STATUS_NAME = {
   400: "Bad Request",
+  403: "Forbidden",
   404: "Not Found",
   409: "Conflict",
 } as const;

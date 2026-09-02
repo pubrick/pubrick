@@ -7,21 +7,43 @@
 import { act, type RenderOptions, render as rtlRender } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import { type ReactElement, type ReactNode, Suspense } from "react";
-import messages from "../../messages/en.json";
+import en from "../../messages/en.json";
+import es from "../../messages/es.json";
+import pt from "../../messages/pt.json";
+import ru from "../../messages/ru.json";
 
-function Providers({ children }: { children: ReactNode }) {
-  // The app's own layout passes no props (next-intl reads server context);
-  // in tests the provider needs them explicitly.
-  return (
-    <NextIntlClientProvider locale="en" messages={messages}>
-      <Suspense fallback={<div>loading</div>}>{children}</Suspense>
-    </NextIntlClientProvider>
-  );
+/**
+ * Every language this product ships, so a test can render a screen in one that
+ * is not English.
+ *
+ * `en` is the default and every existing test relies on it. The other three are
+ * here because a whole class of defect is invisible in English: a screen that
+ * renders the api's own sentence rather than asking for a translated one looks
+ * perfectly correct to an English reader and is the api's English to everyone
+ * else. `refusals.test.tsx` is what that buys — it asserts on the Spanish and
+ * Russian sentences themselves, out of the shipped message files.
+ */
+const MESSAGES = { en, es, ru, pt } as const;
+export type TestLocale = keyof typeof MESSAGES;
+
+export type TestRenderOptions = Omit<RenderOptions, "wrapper"> & { locale?: TestLocale };
+
+function providersFor(locale: TestLocale) {
+  return function Providers({ children }: { children: ReactNode }) {
+    // The app's own layout passes no props (next-intl reads server context);
+    // in tests the provider needs them explicitly.
+    return (
+      <NextIntlClientProvider locale={locale} messages={MESSAGES[locale]}>
+        <Suspense fallback={<div>loading</div>}>{children}</Suspense>
+      </NextIntlClientProvider>
+    );
+  };
 }
 
 /** For components that do NOT suspend. */
-export function render(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
-  return rtlRender(ui, { wrapper: Providers, ...options });
+export function render(ui: ReactElement, options?: TestRenderOptions) {
+  const { locale = "en", ...rest } = options ?? {};
+  return rtlRender(ui, { wrapper: providersFor(locale), ...rest });
 }
 
 /**
@@ -32,10 +54,11 @@ export function render(ui: ReactElement, options?: Omit<RenderOptions, "wrapper"
  * Suspense fallback until the test times out. This is undocumented
  * upstream and was established by bisection — do not "simplify" it.
  */
-export async function renderAsync(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
+export async function renderAsync(ui: ReactElement, options?: TestRenderOptions) {
+  const { locale = "en", ...rest } = options ?? {};
   let result!: ReturnType<typeof rtlRender>;
   await act(async () => {
-    result = rtlRender(ui, { wrapper: Providers, ...options });
+    result = rtlRender(ui, { wrapper: providersFor(locale), ...rest });
   });
   return result;
 }

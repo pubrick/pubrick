@@ -103,6 +103,15 @@ type StepLinesProps = {
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Runs");
+  /**
+   * The refusals' own namespace, and a second one on this screen rather than a
+   * widening of `Runs`: `runFailureMessage` below already translates why a run
+   * DIED, which is a different question from why the api refused to cancel it.
+   * Cancel is the only write this screen makes, and every reason it can be
+   * refused (the run finished, failed, or was already cancelled) is a sentence
+   * only `errorMessage` can put in the reader's language.
+   */
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
 
@@ -134,13 +143,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       await api(`/api/runs/${id}/cancel`, { method: "POST" });
       await refresh();
     } catch (err) {
-      setActionError(errorMessage(err, t("genericError")));
+      setActionError(errorMessage(err, t("genericError"), te));
     } finally {
       setCancelling(false);
     }
   }
 
-  const error = actionError ?? (pollError ? errorMessage(pollError, t("genericError")) : null);
+  const error = actionError ?? (pollError ? errorMessage(pollError, t("genericError"), te) : null);
   // Our sentence for the run's failure code, in the reader's language. Never
   // the provider's own words: those are English, and they are where a
   // submitted API key gets quoted back at whoever is looking at this page.

@@ -1,9 +1,14 @@
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { type ApiErrorCode, refusalBody } from "@pubrick/shared";
 
 /**
- * The three ways this api refuses a well-authenticated request, each one paired
- * ONCE with the status code its body claims.
+ * The four ways this api refuses a request it has authenticated, each one
+ * paired ONCE with the status code its body claims.
  *
  * The pairing is the entire reason these exist rather than
  * `new ConflictException(refusalBody(409, …))` at every throw site. Written out
@@ -28,3 +33,16 @@ export const notFound = (code: ApiErrorCode, message: string) =>
 
 export const conflict = (code: ApiErrorCode, message: string) =>
   new ConflictException(refusalBody(409, code, message));
+
+/**
+ * A 403 that names itself.
+ *
+ * The only caller is `ActiveOrgGuard`'s "no active organization", and that is
+ * the point rather than an oversight: until this existed the web identified
+ * that refusal by matching `/no active organization/i` against the English
+ * sentence in the body, and it branches on the answer to send the account to
+ * onboarding. Every other 403 has its sentence replaced by the web's own
+ * before a reader sees it, so none of them needs a code to be answered.
+ */
+export const forbidden = (code: ApiErrorCode, message: string) =>
+  new ForbiddenException(refusalBody(403, code, message));

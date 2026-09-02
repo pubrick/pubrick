@@ -28,6 +28,10 @@ const FORM_ID = "brand-create-form";
 
 export default function BrandsPage() {
   const t = useTranslations("Brands");
+  // The refusals' own namespace. Both places this screen shows a failure — the
+  // sentence beside the create form, and the one under the list's empty state —
+  // are written by `describeError`, so one translator serves both.
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
   const [brands, setBrands] = useState<Brand[] | null>(null);
@@ -54,9 +58,9 @@ export default function BrandsPage() {
         router.replace(`/${locale}/onboarding`);
         return null;
       }
-      return errorMessage(err, t("genericError"));
+      return errorMessage(err, t("genericError"), te);
     },
-    [router, locale, t],
+    [router, locale, t, te],
   );
 
   const load = useCallback(() => {

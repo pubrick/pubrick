@@ -5,6 +5,7 @@ import {
   PLATFORM_FIELDS,
   PLATFORM_IDS,
   PUBLISHABLE_PLATFORM_IDS,
+  refusalBody,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -441,8 +442,10 @@ describe("Test connection (Step 3)", () => {
 /**
  * See content/[id]'s twin: the copied `noActiveOrg` branch, asserted per page.
  * This page runs the REAL `api.ts` against a stubbed `fetch`, so the 403 has
- * to arrive the way the server sends it — the "no active organization"
- * message is what `api()` matches on to set `ApiError.noActiveOrg`.
+ * to arrive the way the server sends it — which now means CODED. `api()` reads
+ * `ActiveOrgGuard`'s `no_active_organization` off the body; it no longer
+ * matches the English sentence, so a body built any other way would be a
+ * response the api cannot produce.
  */
 describe("no active organization redirects to onboarding", () => {
   beforeEach(() => {
@@ -451,7 +454,14 @@ describe("no active organization redirects to onboarding", () => {
 
   it("replaces to /<locale>/onboarding instead of rendering an error", async () => {
     vi.mocked(fetch).mockImplementation(async () =>
-      jsonResponse(403, { statusCode: 403, message: "No active organization", error: "Forbidden" }),
+      jsonResponse(
+        403,
+        refusalBody(
+          403,
+          "no_active_organization",
+          "No active organization; create or select one first",
+        ),
+      ),
     );
 
     await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);

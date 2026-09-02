@@ -71,9 +71,45 @@ describe.skipIf(!url)("org scoping e2e", () => {
     return created.body.id as string;
   }
 
-  it("403s when no active organization is set", async () => {
+  it("403s when no active organization is set, and NAMES the refusal in the body", async () => {
     const agent = await signUpAgent();
-    await agent.get("/api/org-probe").expect(403);
+    const refused = await agent.get("/api/org-probe").expect(403);
+
+    // The code, not the sentence. The web branches on this to send the account
+    // to onboarding, and it used to decide that by matching
+    // /no active organization/i against the prose below — so a reword here, or
+    // a translation of it, would silently strand an account on a screen it can
+    // never load. The sentence stays, for the network tab and for an API
+    // consumer; what a browser acts on is the code beside it.
+    expect(refused.body.code).toBe("no_active_organization");
+    expect(refused.body.statusCode).toBe(403);
+    expect(refused.body.message).toBe("No active organization; create or select one first");
+  });
+
+  it("403s a caller who is not a member WITHOUT that code", async () => {
+    // The guard's other refusal, and it must not look like the one above: this
+    // account HAS an organization, it simply is not in this one, so sending it
+    // to onboarding would be a loop. One code shared by both is the single
+    // mistake this pair exists to prevent.
+    const agent = request.agent(app.getHttpServer());
+    const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+    const signUp = await agent
+      .post("/api/auth/sign-up/email")
+      .send({ email, password: "password1234", name: "U" })
+      .expect(200);
+    const cookie = sessionTokenCookie(signUp.headers["set-cookie"]);
+    const userId = signUp.body.user.id as string;
+
+    const stranger = await signUpAgent();
+    const theirs = await createOrg(stranger, "notmine");
+    await setSessionActiveOrg(userId, theirs);
+
+    const refused = await request(app.getHttpServer())
+      .get("/api/org-probe")
+      .set("Cookie", cookie)
+      .expect(403);
+
+    expect(refused.body.code).toBeUndefined();
   });
 
   it("passes org id through after create + set-active", async () => {

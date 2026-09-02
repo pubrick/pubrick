@@ -91,6 +91,14 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const { id } = use(params);
   const t = useTranslations("Channels");
   const tb = useTranslations("Brands");
+  /**
+   * The refusals' own namespace. This screen renders a failure in FIVE places —
+   * the sentence at the top, the one under the channel list, one inside each of
+   * the two modals, and the verdict beside a channel's Test button — and they
+   * are fed by exactly two calls into `errorMessage`: `describeError` and
+   * `testConnection`. Both take this, or four of the five stay English.
+   */
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
@@ -149,9 +157,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         router.replace(`/${locale}/onboarding`);
         return null;
       }
-      return errorMessage(err, t("genericError"));
+      return errorMessage(err, t("genericError"), te);
     },
-    [router, locale, t],
+    [router, locale, t, te],
   );
 
   const load = useCallback(() => {
@@ -326,7 +334,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       // translated generic text instead of a raw browser error string.
       setTestResults((prev) => ({
         ...prev,
-        [channelId]: { ok: false, reason: errorMessage(err, t("genericError")) },
+        [channelId]: { ok: false, reason: errorMessage(err, t("genericError"), te) },
       }));
     }
   }

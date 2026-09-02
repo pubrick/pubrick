@@ -116,6 +116,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * calling one destination two things.
    */
   const tr = useTranslations("Runs");
+  /**
+   * The refusals' own namespace. This screen is where the publish gate says no
+   * — "nobody has read this AI-written draft" — and where a pinned post refuses
+   * an edit, which are the two sentences a reviewer is most likely to be told
+   * and the two the api can only say in English. Both reach a reader through
+   * `errorMessage`, and only if it is handed this.
+   */
+  const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
 
@@ -142,9 +150,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         router.replace(`/${locale}/onboarding`);
         return;
       }
-      setActionError(errorMessage(err, t("genericError")));
+      setActionError(errorMessage(err, t("genericError"), te));
     },
-    [router, locale, t],
+    [router, locale, t, te],
   );
 
   /**
@@ -337,7 +345,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    */
   const pollErrorMessage =
     pollError && !(pollError instanceof ApiError && pollError.noActiveOrg)
-      ? errorMessage(pollError, t("genericError"))
+      ? errorMessage(pollError, t("genericError"), te)
       : null;
   const error = actionError ?? pollErrorMessage;
 

@@ -21,6 +21,20 @@ import {
 } from "./api";
 import { onUnauthorized } from "./unauthorized";
 
+/**
+ * The real `Errors` translator, built from the shipped English file.
+ *
+ * `errorMessage` now REQUIRES one, so even the tests that are about something
+ * else (status classification, the network-failure fallback) have to hand it a
+ * real translator rather than a stub that echoes its key — a stub would make
+ * every "is this still English?" assertion below pass for the wrong reason.
+ */
+const english = createTranslator({
+  locale: "en",
+  messages: en as Record<string, unknown>,
+  namespace: "Errors",
+}) as unknown as ErrorTranslator;
+
 function jsonResponse(status: number, body: unknown, statusText = ""): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -124,7 +138,7 @@ describe("api", () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(500);
-    expect(errorMessage(error, "Something went wrong")).toBe("Something went wrong");
+    expect(errorMessage(error, "Something went wrong", english)).toBe("Something went wrong");
   });
 
   it("wraps a network failure in an ApiError with sentinel status 0", async () => {
@@ -142,18 +156,25 @@ describe("api", () => {
 
     const error = await api("/orgs").catch((e) => e as ApiError);
 
-    expect(errorMessage(error, "Something went wrong. Please try again.")).toBe(
+    expect(errorMessage(error, "Something went wrong. Please try again.", english)).toBe(
       "Something went wrong. Please try again.",
     );
   });
 
-  it("marks a 403 with the 'no active organization' detail as noActiveOrg", async () => {
+  it("marks a 403 that CARRIES the organization code as noActiveOrg", async () => {
+    // Built by `refusalBody`, exactly as `ActiveOrgGuard` throws it. This used
+    // to be decided by matching the sentence — so the guard could reword it,
+    // or this product could translate it, and the redirect to onboarding would
+    // quietly stop happening.
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse(403, {
-        statusCode: 403,
-        message: "No active organization",
-        error: "Forbidden",
-      }),
+      jsonResponse(
+        403,
+        refusalBody(
+          403,
+          "no_active_organization",
+          "No active organization; create or select one first",
+        ),
+      ),
     );
 
     const error = await api("/orgs").catch((e) => e as ApiError);
@@ -164,6 +185,27 @@ describe("api", () => {
     expect((error as ApiError).message).toBe(
       "No active organization — create or select one first.",
     );
+  });
+
+  it("does NOT read the sentence: a 403 saying it, but carrying no code, is an ordinary 403", async () => {
+    // The load-bearing test for removing the sniff, and the reason it is worth
+    // writing: the guard's coded refusal carries that same English sentence, so
+    // a `code ?? /no active organization/i.test(message)` disjunction would
+    // pass every OTHER assertion in this file while pinning nothing. Only a
+    // body where the two answers DISAGREE can tell the code path from the
+    // sentence path.
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(403, {
+        statusCode: 403,
+        error: "Forbidden",
+        message: "No active organization; create or select one first",
+      }),
+    );
+
+    const error = await api("/orgs").catch((e) => e as ApiError);
+
+    expect((error as ApiError).noActiveOrg).toBe(false);
+    expect((error as ApiError).code).toBe("forbidden");
   });
 
   it("does not mark an unrelated 403 as noActiveOrg", async () => {
@@ -218,11 +260,14 @@ describe("apiVoid", () => {
 
   it("marks a 403 with no active organization, like api()", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse(403, {
-        statusCode: 403,
-        message: "No active organization",
-        error: "Forbidden",
-      }),
+      jsonResponse(
+        403,
+        refusalBody(
+          403,
+          "no_active_organization",
+          "No active organization; create or select one first",
+        ),
+      ),
     );
 
     const error = await apiVoid("/api/content/1/opened", { method: "POST" }).catch(
@@ -235,15 +280,15 @@ describe("apiVoid", () => {
 
 describe("errorMessage", () => {
   it("shows a 4xx ApiError's own message", () => {
-    expect(errorMessage(new ApiError(404, "Not found"), "fallback")).toBe("Not found");
+    expect(errorMessage(new ApiError(404, "Not found"), "fallback", english)).toBe("Not found");
   });
 
   it("falls back for a 5xx ApiError", () => {
-    expect(errorMessage(new ApiError(500, "boom"), "fallback")).toBe("fallback");
+    expect(errorMessage(new ApiError(500, "boom"), "fallback", english)).toBe("fallback");
   });
 
   it("falls back for a non-ApiError", () => {
-    expect(errorMessage(new Error("boom"), "fallback")).toBe("fallback");
+    expect(errorMessage(new Error("boom"), "fallback", english)).toBe("fallback");
   });
 });
 
@@ -360,7 +405,14 @@ describe("a coded refusal, end to end from the HTTP body", () => {
     expect(errorMessage(signedOut, "fallback", translator("ru"))).toBe(ru.Errors.signed_out);
 
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse(403, { statusCode: 403, message: "No active organization", error: "Forbidden" }),
+      jsonResponse(
+        403,
+        refusalBody(
+          403,
+          "no_active_organization",
+          "No active organization; create or select one first",
+        ),
+      ),
     );
     const noOrg = (await api("/api/content").catch((e) => e)) as ApiError;
     expect(noOrg.noActiveOrg).toBe(true);
@@ -397,14 +449,23 @@ describe("a coded refusal, end to end from the HTTP body", () => {
     expect(errorMessage(error, "Algo salió mal.", translator("es"))).toBe("Algo salió mal.");
   });
 
-  it("keeps the untranslated contract for a caller that passes no translator", async () => {
-    // Three screens are not converted yet (brands, one brand's channels, the run
-    // receipt). They must keep showing the api's sentence rather than nothing.
-    const error = await refuse(
-      refusalBody(409, "content_already_published", "This content has already been published"),
+  it("a 403 the guard did NOT code is an ordinary forbidden, not a trip to onboarding", async () => {
+    // `ActiveOrgGuard`'s other refusal — a session pointing at an organization
+    // the caller is not a member of — carries no code, on purpose. Reading it
+    // as "no active organization" would send an account that HAS one to
+    // onboarding, and onboarding would send it back.
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(403, {
+        statusCode: 403,
+        error: "Forbidden",
+        message: "Not a member of the active organization",
+      }),
     );
+    const error = (await api("/api/content").catch((e) => e)) as ApiError;
 
-    expect(errorMessage(error, "fallback")).toBe("This content has already been published");
+    expect(error.noActiveOrg).toBe(false);
+    expect(error.code).toBe("forbidden");
+    expect(errorMessage(error, "fallback", translator("ru"))).toBe(ru.Errors.forbidden);
   });
 
   it("has a real sentence for every code, in every language", () => {
