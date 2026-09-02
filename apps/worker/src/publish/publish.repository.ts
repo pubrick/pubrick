@@ -411,7 +411,61 @@ export class PublishRepository {
       .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
   }
 
+  /**
+   * Promotes the parent item once EVERY adaptation has reached the same
+   * terminal state — `published` when they all published, `failed` when they
+   * all failed — and leaves it alone otherwise.
+   *
+   * **The item is taken `FOR UPDATE` before the siblings are read, and that
+   * lock is the whole of what makes this function work at all.** Without it the
+   * sibling read is an unlocked SELECT taken after this transaction has updated
+   * only its OWN row, so two adaptations of one item landing at the same moment
+   * each read the other as still `publishing` — the other's write is not
+   * committed — each decides "not everyone is done", and NEITHER promotes.
+   * Both commit, every channel is published, and the item is left at `approved`
+   * with nothing in the system that will ever recompute it: this function is
+   * the only writer of that promotion, and it only ever runs from a delivery.
+   * The damage is not a stale word on a screen — an item stored as `approved`
+   * beside live posts refuses to be edited AND still accepts a `reject`, which
+   * flips a fully published item to `rejected`.
+   *
+   * Under the lock the second transaction waits for the first, and its sibling
+   * SELECT then takes a fresh snapshot (READ COMMITTED, the default this app
+   * runs on) in which the first's `published` is visible: exactly one of the
+   * two promotes, and it is the one that finished last.
+   *
+   * The lock order is the documented one, not against it: the caller has
+   * already taken its own adaptation's row lock with the UPDATE above, so
+   * `adaptations` then `content_items` is the same order the api takes in
+   * `approve`/`reject` (`lockAdaptations`) and in `updateAdaptation`.
+   *
+   * **The siblings are deliberately NOT locked.** Each of these transactions
+   * already holds its own adaptation row, so a `FOR UPDATE` on the others would
+   * have two concurrent deliveries of one item wait on each other — a genuine
+   * deadlock in exactly the case this lock exists for. The parent lock is
+   * sufficient because it serialises the recompute itself, and every transition
+   * INTO a terminal status — the only kind that can change this function's
+   * answer — happens in a transaction that must take this same parent lock:
+   * `markPublished`, `markAlreadyPublished` and `markFailed` all end here.
+   * (`markPublishing` moves a sibling without the parent lock, and cannot
+   * matter: nothing it writes makes an item eligible for promotion.)
+   *
+   * `every`, never `some`: `some` would mark the item `published` the moment
+   * the FIRST channel lands, so an item reads delivered while its other
+   * channels are still queued — and is pinned against approve/reject while a
+   * delivery is still outstanding.
+   */
   private async recomputeItemStatus(tx: Tx, orgId: string, contentItemId: string): Promise<void> {
+    const locked = await tx
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+      .limit(1)
+      .for("update");
+    // Gone (a deleted brand cascades), or another org's: nothing to promote,
+    // and the UPDATE below would match no rows anyway.
+    if (locked.length === 0) return;
+
     const rows = await tx
       .select({ status: schema.adaptations.status })
       .from(schema.adaptations)

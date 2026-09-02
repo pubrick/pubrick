@@ -205,6 +205,35 @@ describe.skipIf(!url)("content e2e", () => {
     return { itemId, adaptationIds: ordered.map((a) => a.id) };
   }
 
+  /**
+   * Waits until `count` backends are parked on a row lock inside a statement
+   * naming `content_items` — i.e. until the interleaving a race test is about
+   * is a FACT rather than a hope about how two requests happened to schedule.
+   *
+   * Matched on the statement text rather than on `wait_event_type = 'Lock'`
+   * alone, which would also count a waiter belonging to whichever other spec
+   * file vitest is running beside this one.
+   */
+  async function waitForItemLockWaiters(
+    db: Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"],
+    count: number,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await db.execute(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query ILIKE '%content_items%'`,
+      );
+      if ((rows[0] as { n: number }).n >= count) return;
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${count} request(s) blocked on content_items`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   async function publishJobCount(adaptationId: string): Promise<number> {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
@@ -705,6 +734,171 @@ describe.skipIf(!url)("content e2e", () => {
     expect((await agent.get(`/api/content/${created.body.id}`).expect(200)).body.status).toBe(
       "published",
     );
+  });
+
+  /**
+   * The approve that arrives while the worker is COMMITTING the last channel.
+   *
+   * `requireNotPublished` read `content_items.status` without a row lock, so
+   * this sequence returned 200 and stored `approved` over `published`: the
+   * worker's transaction has written the adaptation, the delivery record and
+   * the item's promotion but not committed, every other session therefore
+   * still reads `approved`, the check passes — and approve's own UPDATE then
+   * queues behind the worker's row lock and lands AFTER it. The lasting damage
+   * is not the wrong word on a screen: an item stored as `approved` beside a
+   * live post can be REJECTED, which is how a published item ends up reading
+   * `rejected` next to a post nobody can take back.
+   *
+   * The comment that justified the unlocked read claimed a `FOR UPDATE` here
+   * "would invert the lock order". It would not, and that wrong reason is
+   * exactly how this comes back: `approve` and `reject` have already taken the
+   * adaptation locks by this point, so locking the item AFTER them is the
+   * documented order, not against it.
+   */
+  it("409s an approve that arrives while the worker is committing the last channel's publish", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Going out right now", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+      const orgId = row?.org_id as string;
+      // The worker claimed this channel (`markPublishing`) and is now landing it.
+      await db.execute(`UPDATE adaptations SET status = 'publishing' WHERE id = '${adaptationId}'`);
+
+      // `markPublished` + `recomputeItemStatus`, statement for statement, held
+      // OPEN: adaptation published, delivery logged, item promoted — none of it
+      // committed, so every other session still reads `approved`.
+      const worker = await pool.connect();
+      await worker.query("BEGIN");
+      await worker.query(
+        "UPDATE adaptations SET status = 'published', last_error = NULL WHERE id = $1",
+        [adaptationId],
+      );
+      await worker.query(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+         VALUES ($1, $2, $3, 'published', '99', 'https://t.me/c/99', 1)`,
+        [orgId, adaptationId, channelId],
+      );
+      await worker.query("UPDATE content_items SET status = 'published' WHERE id = $1", [itemId]);
+
+      // The adaptation is `publishing`, which `approve` deliberately does NOT
+      // target, so nothing about the adaptation locks makes this request wait:
+      // the item's own lock is the only thing that can serialise the two.
+      const approve = Promise.resolve(agent.post(`/api/content/${itemId}/approve`).send({}));
+      try {
+        await waitForItemLockWaiters(db, 1);
+      } finally {
+        await worker.query("COMMIT");
+        worker.release();
+      }
+
+      expect((await approve).status).toBe(409);
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("published");
+      expect(after.body.adaptations[0].status).toBe("published");
+    } finally {
+      await pool.end();
+    }
+  });
+
+  /**
+   * An edit that lands UNDER an approve, judged by the gate that had already
+   * read the old text.
+   *
+   * `requireHumanInvolvement` read the body without the item lock, so approve
+   * could pass its gate on one body and pin a different one: the editor's
+   * transaction holds the row lock, approve reads the committed (old) body,
+   * decides, enqueues, and only then queues behind that lock — the editor
+   * commits the replacement, approve commits `approved` on top of it, and the
+   * text that goes to the channel is text the gate never saw.
+   *
+   * The replacement here is a REVERT to the model's verbatim draft, because
+   * that makes the damage a fact rather than a matter of taste: the item is now
+   * an unopened, untouched AI draft, precisely the shape the product promises
+   * never to publish, queued for delivery with a 200. Under the lock the gate
+   * reads the body the editor actually left behind and refuses it.
+   */
+  it("409s an approve whose gate would otherwise judge a body the editor is replacing", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+    // The author rewrote the master body — so the gate passes, even though
+    // nobody has OPENED the item (no POST /opened anywhere in this test).
+    await agent.patch(`/api/content/${itemId}`).send({ body: HUMAN_BODY }).expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const holder = await pool.connect();
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
+
+      // The editor first in the lock queue, the approver second: whatever the
+      // two requests do internally, the edit is the write that lands first.
+      const edit = Promise.resolve(agent.patch(`/api/content/${itemId}`).send({ body: AI_BODY }));
+      await waitForItemLockWaiters(db, 1);
+      const approve = Promise.resolve(agent.post(`/api/content/${itemId}/approve`).send({}));
+      try {
+        await waitForItemLockWaiters(db, 2);
+      } finally {
+        await holder.query("COMMIT");
+        holder.release();
+      }
+
+      expect((await edit).status).toBe(200);
+      const refused = await approve;
+      expect(refused.status).toBe(409);
+      expect(refused.body.message).toContain("No one has read this AI-written draft yet");
+
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("draft");
+      expect(after.body.body).toBe(AI_BODY);
+      expect(after.body.adaptations[0].status).toBe("pending");
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  /**
+   * Approving an item with NO adaptations at all: 200 and "approved" while
+   * enqueueing nothing — a post that looks sent and never was.
+   *
+   * The api cannot create this shape (`channelIds` is `min(1)`), but deleting a
+   * channel cascades its adaptations away, and the generation path names the
+   * same shape and refuses it: losing every channel mid-run is a terminal
+   * `every_channel_deleted` rather than an item with zero adaptations, exactly
+   * because "`approve` would happily mark approved while enqueueing nothing at
+   * all" (generate.service.ts). Approve now says the same thing.
+   */
+  it("409s an approve on an item whose channels are all gone: nothing to enqueue is not an approval", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Nowhere to go", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+
+    await agent.delete(`/api/channels/${channelId}`).expect(200);
+    expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.adaptations).toHaveLength(
+      0,
+    );
+
+    const refused = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+    expect(refused.body.message).toContain("channel");
+    expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe("draft");
   });
 
   it("approves immediately: item approved, adaptation queued", async () => {

@@ -749,9 +749,16 @@ export class ContentRepository {
   /**
    * 404s an item that does not exist in this org, WITHOUT taking a row lock on
    * it — the lock on `content_items` must not be acquired before the one on
-   * `adaptations` (see `lockAdaptations`). A concurrent delete between this
-   * check and the later status write is harmless: the write matches no rows and
-   * the reread at the end of the call 404s anyway.
+   * `adaptations` (see `lockAdaptations`), and this check runs BEFORE them. A
+   * concurrent delete between this check and the later status write is
+   * harmless: the write matches no rows and the reread at the end of the call
+   * 404s anyway.
+   *
+   * That is what separates this from `requireNotPublished`, which asks about
+   * the same row a few lines later and DOES lock it: the difference is not the
+   * question, it is which side of `lockAdaptations` the read falls on. Merging
+   * the two into one locked read would put `content_items` first and invert the
+   * order for real.
    */
   private async requireItem(tx: Tx, orgId: string, id: string): Promise<void> {
     const rows = await tx
@@ -760,6 +767,44 @@ export class ContentRepository {
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1);
     if (rows.length === 0) throw new NotFoundException("Content item not found");
+  }
+
+  /**
+   * Refuses to approve an item that has NO adaptations at all.
+   *
+   * Without this, `approve` returned 200 and stored `approved` while enqueueing
+   * nothing whatsoever: a post that reads sent on every screen and was never
+   * sent anywhere, with no failure, no `publications` row and no job to explain
+   * it. The generation path already refuses exactly this shape and says why —
+   * losing every channel mid-run is a terminal `every_channel_deleted` rather
+   * than an item with zero adaptations, because "`approve` would happily mark
+   * approved while enqueueing nothing at all" (generate.service.ts). The api
+   * cannot produce the shape on creation (`contentCreateSchema` requires at
+   * least one channel), but deleting a channel cascades its adaptations away,
+   * so an item that had channels yesterday can have none today.
+   *
+   * A 409 rather than a 400: the request is well formed and it was valid until
+   * the channels went away. The message says what happened rather than offering
+   * a recovery, because there is none to offer — nothing adds an adaptation to
+   * an existing item; the content has to be created again for the new channel.
+   *
+   * An unlocked read, and it does not need to be one: this asks whether the
+   * item has any channels at all, and a channel deleted a moment after the
+   * check leaves a queued job whose delivery fails on its own terms. It is the
+   * "nothing at all" case that has no failure path to fall back on.
+   */
+  private async requireAdaptations(tx: Tx, orgId: string, id: string): Promise<void> {
+    const rows = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)))
+      .limit(1);
+    if (rows.length === 0) {
+      throw new ConflictException(
+        "This content has no channels left to publish to; every channel it was written for has " +
+          "been deleted",
+      );
+    }
   }
 
   /**
@@ -776,17 +821,43 @@ export class ContentRepository {
    * point of it being a separate step from `requireItem`: the worker's
    * `markPublished` locks the adaptations and only then promotes the item, so a
    * status read taken before the lock can still say `approved` about a publish
-   * that commits a moment later. Reading it under the lock means we either see
-   * the promotion or the worker has not made it yet. A plain read, not a
-   * `FOR UPDATE` — locking `content_items` here would invert the lock order the
-   * whole codebase depends on (see `lockAdaptations`).
+   * that commits a moment later.
+   *
+   * **`FOR UPDATE`, because the adaptation locks do not cover `approve`.** The
+   * worker's `markPublished` always runs against a `publishing` adaptation.
+   * `reject` targets that status and therefore waits on the worker's row lock
+   * before it ever gets here; `approve` deliberately does NOT (see its own
+   * comment), so its `lockAdaptations` touches nothing the worker holds and it
+   * arrives at this line with no synchronisation at all. With an unlocked read
+   * it then saw the COMMITTED `approved` while the worker's promotion sat
+   * uncommitted a statement away, passed, and queued its own write behind the
+   * worker's row lock — landing `approved` ON TOP of `published`. Measured, not
+   * theorised: 200 returned, the item stored as `approved` beside a `published`
+   * adaptation and a live post — and an item stored that way can then be
+   * REJECTED, which is how a published item comes to read `rejected` next to a
+   * post nobody can take back. Under the lock this transaction either waits for
+   * the worker and reads `published` (409), or gets there first and the
+   * worker's promotion lands afterwards on a status it has already decided.
+   *
+   * An earlier version of this comment justified the unlocked read by claiming
+   * a `FOR UPDATE` here "would invert the lock order the whole codebase depends
+   * on". **It would not, and that wrong reason is how the bug comes back.**
+   * Both callers have ALREADY taken the adaptation locks by the time they reach
+   * this line (`lockAdaptations`, the step this one is deliberately separate
+   * from), so locking `content_items` after them is precisely the documented
+   * order — `adaptations`, then `content_items` — that the worker's
+   * `markPublished`/`markFailed` also follow. The lock this call takes is then
+   * held for the rest of the transaction, which is what also makes the gate
+   * below it (`requireHumanInvolvement`) read a body nobody can replace before
+   * the status write lands.
    */
   private async requireNotPublished(tx: Tx, orgId: string, id: string): Promise<void> {
     const rows = await tx
       .select({ status: schema.contentItems.status })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (rows[0]?.status === "published") {
       throw new ConflictException(
         "This content has already been published; it can no longer be approved or rejected",
@@ -868,8 +939,28 @@ export class ContentRepository {
    * origin column instead would turn a worker that forgot to set it into an
    * open publish gate.
    *
-   * A plain read, no `FOR UPDATE`: locking `content_items` here would invert
-   * the lock order the whole codebase depends on (see `lockAdaptations`).
+   * **`FOR UPDATE`, because the verdict is about the text that will actually
+   * go out.** This used to be a plain read, excused with the same wrong reason
+   * `requireNotPublished` records: locking `content_items` here does not invert
+   * any order, since `lockAdaptations` has already run and this is the second
+   * half of the pair. What the unlocked read did allow was an edit landing
+   * UNDERNEATH an approval — the editor's transaction holds the item's lock
+   * (`requireEditableItem`), this gate reads the committed OLD body and passes
+   * it, the loop enqueues, and only then does `setItemStatus` queue behind that
+   * lock: the editor commits its replacement, approve commits `approved` on top
+   * of it, and the channel receives text the gate never saw. Measured with a
+   * revert to the model's verbatim draft: 200, the item queued for delivery
+   * carrying an unopened, untouched AI body — the exact shape this method
+   * exists to refuse.
+   *
+   * The lock is already held by `requireNotPublished` a line earlier, so this is
+   * a re-lock of a row this transaction owns and costs nothing — and, said
+   * plainly because a mutation test was run rather than reasoned about:
+   * deleting THIS `.for("update")` alone fails no test, while deleting both
+   * fails "409s an approve whose gate would otherwise judge a body the editor
+   * is replacing". It is kept because the redundancy is the point: this method
+   * decides what text ships, and it should not depend on a caller continuing to
+   * lock the row for it two refactors from now.
    */
   private async requireHumanInvolvement(tx: Tx, orgId: string, id: string): Promise<void> {
     const rows = await tx
@@ -880,7 +971,8 @@ export class ContentRepository {
       })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const item = rows[0];
     // `requireItem` already 404'd a missing row; a delete racing this read is
     // harmless (the writes below it match nothing).
@@ -1049,11 +1141,18 @@ export class ContentRepository {
    * and then finds a status it must not publish from (see the worker's
    * `markPublishing`).
    *
-   * Callers must take this lock BEFORE writing `content_items`. The worker's
-   * `markPublished`/`markFailed` lock adaptations first and only then the
-   * parent item (`recomputeItemStatus`), so writing the item first here would
-   * give the two sides opposite lock orders — a genuine deadlock whenever a
-   * publish finishes at the same moment as an approve or reject.
+   * Callers must take this lock BEFORE LOCKING OR writing `content_items`. The
+   * worker's `markPublished`/`markFailed` lock adaptations first and only then
+   * the parent item (`recomputeItemStatus`), so taking the item first here
+   * would give the two sides opposite lock orders — a genuine deadlock whenever
+   * a publish finishes at the same moment as an approve or reject.
+   *
+   * "Before", not "instead of": everything the caller does to `content_items`
+   * AFTER this — `requireNotPublished`'s `FOR UPDATE`, the gate's read, the
+   * status write — is in the documented order and belongs under a lock. It was
+   * the reading of `content_items` WITHOUT one, excused as protecting this
+   * order, that let an approve overwrite a `published` item and let an edit
+   * land underneath an approval.
    *
    * "Writing `content_items`" includes writing anything that REFERENCES an
    * adaptation: a `content_versions` insert takes `FOR KEY SHARE` on both FK
@@ -1117,6 +1216,10 @@ export class ContentRepository {
    * with a 409 (`requireNotPublished`): there is nothing left to enqueue, and
    * the only lasting effect used to be overwriting `published` with `approved`.
    *
+   * An item with NO adaptations left at all is refused too
+   * (`requireAdaptations`) — same reason from the other end: approving it
+   * enqueued nothing and reported success for a post that was never sent.
+   *
    * And an AI draft that no human has opened or touched is refused too
    * (`requireHumanInvolvement`) — the promise, enforced here rather than in the
    * UI, because this is the only door to `enqueuePublish`.
@@ -1126,6 +1229,9 @@ export class ContentRepository {
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
       await this.requireNotPublished(tx, orgId, id);
+      // After `requireNotPublished` too: an item whose channels are gone AND
+      // which already published from them is a published item first.
+      await this.requireAdaptations(tx, orgId, id);
       // After `requireNotPublished`: an item already live in a channel gets the
       // message about the post that went out, not one about reading it. Before
       // the loop, so a refusal costs no queue work.

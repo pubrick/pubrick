@@ -29,6 +29,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   let orgId: string;
   let brandId: string;
   let channelId: string;
+  let secondChannelId: string;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -74,6 +75,25 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       })
       .returning({ id: schema.channels.id });
     channelId = channel?.id as string;
+    // A second channel, because the races below are about a FAN-OUT: two
+    // adaptations of one item finishing in different transactions at the same
+    // moment. One channel twice would exercise the same SQL, but an item with
+    // two adaptations pointing at one channel is not a shape this product
+    // produces, and a fixture that cannot happen is a fixture nobody trusts.
+    const [second] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name: "Chan 2",
+        credentialsEncrypted: encryptJson(
+          { botToken: "1:b", chatId: "-2" },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    secondChannelId = second?.id as string;
   });
 
   afterAll(async () => {
@@ -93,6 +113,75 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .values({ orgId, contentItemId: itemId, channelId, status })
       .returning({ id: schema.adaptations.id });
     return adaptation?.id as string;
+  }
+
+  /**
+   * An APPROVED item and one adaptation per status given — the shape the worker
+   * finds after the api approved a multi-channel item and the queue got to some
+   * of the channels before others.
+   */
+  async function seedFanOut(statuses: readonly (typeof schema.ADAPTATION_STATUSES)[number][]) {
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Hello world", status: "approved" })
+      .returning({ id: schema.contentItems.id });
+    const itemId = item?.id as string;
+    const adaptationIds: string[] = [];
+    for (const [index, status] of statuses.entries()) {
+      const [adaptation] = await db
+        .insert(schema.adaptations)
+        .values({
+          orgId,
+          contentItemId: itemId,
+          channelId: index === 0 ? channelId : secondChannelId,
+          status,
+        })
+        .returning({ id: schema.adaptations.id });
+      adaptationIds.push(adaptation?.id as string);
+    }
+    return { itemId, adaptationIds };
+  }
+
+  async function itemStatus(itemId: string): Promise<string> {
+    const [row] = await db
+      .select({ status: schema.contentItems.status })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, itemId));
+    return String(row?.status);
+  }
+
+  async function adaptationStatus(adaptationId: string): Promise<string> {
+    const [row] = await db
+      .select({ status: schema.adaptations.status })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    return String(row?.status);
+  }
+
+  /**
+   * Waits until `count` backends are parked on a lock inside the statement
+   * `queryLike` matches — i.e. until the interleaving this test is about is a
+   * FACT rather than a hope about how two promises happened to schedule.
+   *
+   * Scoped to the statement text on purpose: `wait_event_type = 'Lock'` alone
+   * would also count a waiter belonging to whichever other spec file vitest is
+   * running beside this one.
+   */
+  async function waitForLockWaiters(queryLike: string, count: number): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await db.execute(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query ILIKE '${queryLike}'`,
+      );
+      if ((rows[0] as { n: number }).n >= count) return;
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${count} backend(s) blocked on ${queryLike}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
 
   it("markFailed on a fresh (queued) adaptation: attempt_count advances by exactly one and a failed publications row is written", async () => {
@@ -529,5 +618,82 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // could carry this status, so the index is empty at creation and cannot
     // fail on a populated table.
     expect(definition).toContain("'in_flight'");
+  });
+  /**
+   * Two channels of ONE item landing in the same instant.
+   *
+   * The interleaving is pinned rather than hoped for. Every `publications` row
+   * has a foreign key to `organization`, and Postgres takes `FOR KEY SHARE` on
+   * the referenced org row for the INSERT — so a third session holding
+   * `FOR UPDATE` on that row parks BOTH `markPublished` transactions at exactly
+   * the point this race is made of: each has already written its own adaptation
+   * (uncommitted), and neither has read its siblings yet. One COMMIT releases
+   * them together, because two `FOR KEY SHARE` waiters do not conflict with
+   * each other. No trigger, no `pg_sleep`, and nothing left in the schema for
+   * the next test to trip over.
+   *
+   * Without the item lock in `recomputeItemStatus`, each transaction then reads
+   * the other's adaptation as still `publishing` — MVCC, the write is not
+   * committed — decides "not everyone is done", and writes nothing. Both
+   * commit, every channel is published, and the ITEM is left at `approved`
+   * forever: nothing recomputes it afterwards. The item then reads "Approved"
+   * beside two live posts, refuses to be edited, and can still be REJECTED —
+   * flipping a fully published item to `rejected`.
+   *
+   * This test is also the proof that the fix does not deadlock. It is precisely
+   * the shape that WOULD deadlock had `recomputeItemStatus` locked the siblings
+   * instead of (only) the parent: each transaction already holds its own
+   * adaptation row, so each would wait for the other's. Locking the parent —
+   * AFTER the adaptation, the order every writer of this pair uses — makes the
+   * second transaction wait for the first and then see its result.
+   */
+  it("two channels landing at once: the item is promoted, and the two transactions do not deadlock", async () => {
+    const { itemId, adaptationIds } = await seedFanOut(["publishing", "publishing"]);
+    const [first, second] = adaptationIds as [string, string];
+
+    const holder = await pool.connect();
+    await holder.query("BEGIN");
+    await holder.query("SELECT id FROM organization WHERE id = $1 FOR UPDATE", [orgId]);
+
+    const landings = Promise.allSettled([
+      repo.markPublished(orgId, first, { externalId: "1", externalUrl: "https://t.me/c/1" }),
+      repo.markPublished(orgId, second, { externalId: "2", externalUrl: "https://t.me/c/2" }),
+    ]);
+    try {
+      await waitForLockWaiters('insert into "publications"%', 2);
+    } finally {
+      await holder.query("COMMIT");
+      holder.release();
+    }
+
+    // A deadlock (40P01) would surface HERE, as a rejected promise, rather than
+    // as a wrong status below — so both endings are asserted, not just the one.
+    const outcomes = await landings;
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+
+    expect(await adaptationStatus(first)).toBe("published");
+    expect(await adaptationStatus(second)).toBe("published");
+    expect(await itemStatus(itemId)).toBe("published");
+  });
+
+  /**
+   * The other half of the same function, and the one a mutation walked straight
+   * through: `every` → `some` in `recomputeItemStatus` survived the whole suite.
+   *
+   * It marks the item `published` the moment the FIRST channel succeeds, so an
+   * item reads delivered while its other channels are still sitting in the
+   * queue — and, worse, the item is then pinned (`requireNotPublished` refuses
+   * to approve or reject it) while a delivery is still outstanding.
+   */
+  it("a partial fan-out is not a publication: one channel done, one still queued leaves the item approved", async () => {
+    const { itemId, adaptationIds } = await seedFanOut(["publishing", "queued"]);
+
+    await repo.markPublished(orgId, adaptationIds[0] as string, {
+      externalId: "1",
+      externalUrl: "https://t.me/c/1",
+    });
+
+    expect(await adaptationStatus(adaptationIds[0] as string)).toBe("published");
+    expect(await itemStatus(itemId)).toBe("approved");
   });
 });
