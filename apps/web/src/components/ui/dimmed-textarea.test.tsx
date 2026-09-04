@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DimmedTextarea, MIRRORED_METRICS } from "./dimmed-textarea";
 import { Textarea } from "./textarea";
 
@@ -445,5 +445,243 @@ describe("DimmedTextarea", () => {
       />,
     );
     expect(screen.getByLabelText("Body")).toHaveAttribute("aria-describedby", "hint b-count");
+  });
+
+  /**
+   * `onSelectionChange` reports the selection AND the exact string its
+   * offsets index. Every guard below is one an implementation can drop
+   * independently, so each gets its own failing-for-its-own-reason case
+   * rather than one assertion doing several jobs.
+   */
+  describe("onSelectionChange", () => {
+    /**
+     * The regression this whole task exists to catch. A `<textarea>` strips
+     * CR from its API value, so `selectionStart`/`selectionEnd` index the
+     * NORMALISED DOM value — not the raw `value` prop. An implementation that
+     * reports offsets from the element but pairs them with the raw prop
+     * slices the wrong characters the moment a CR sits before the selection:
+     * every offset after it is shifted by one. This is the corpus's `"One.\r\nTwo. Three."`
+     * fixture, and it fails for that reason alone if the two ever come apart.
+     */
+    it("reports the exact normalised string its offsets index, not the raw value with its CRs", () => {
+      const onSelectionChange =
+        vi.fn<(selection: { start: number; end: number; text: string } | null) => void>();
+      const value = "One.\r\nTwo. Three.";
+      render(
+        <DimmedTextarea
+          value={value}
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      // "Three" in the normalised text "One.\nTwo. Three." (the CRLF collapses
+      // to one \n, shifting everything after it back by one from the raw prop).
+      textarea.setSelectionRange(10, 15);
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      const selection = onSelectionChange.mock.calls[0]?.[0];
+      expect(selection?.start).toBe(10);
+      expect(selection?.end).toBe(15);
+      // The assertion a raw-value implementation fails: slicing ITS OWN
+      // reported text at ITS OWN reported offsets must land on what was
+      // actually selected, not on characters shifted by the stripped CR.
+      expect(selection?.text.slice(selection?.start, selection?.end)).toBe("Three");
+    });
+
+    it("reports null when the selection is collapsed to a caret", () => {
+      const onSelectionChange = vi.fn();
+      render(
+        <DimmedTextarea
+          value="Alpha one. Beta two."
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      textarea.setSelectionRange(4, 4);
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledWith(null);
+    });
+
+    /**
+     * `selectionStart`/`selectionEnd` are always reported `start <= end`
+     * regardless of which way the user dragged — the drag direction lives
+     * separately in `selectionDirection`. This pins that the component does
+     * not re-derive or swap the range from direction and get it backwards.
+     */
+    it("reports a backwards-dragged selection the same as a forwards one", () => {
+      const onSelectionChange = vi.fn();
+      const value = "Alpha one. Beta two.";
+      render(
+        <DimmedTextarea
+          value={value}
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      // Dragged from the end of "Beta" back to its start.
+      textarea.setSelectionRange(11, 15, "backward");
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledWith({ start: 11, end: 15, text: value });
+    });
+
+    /**
+     * A selection can end past the last visible character, on a trailing
+     * newline. The reported string must keep it, not trim it — `.slice()`
+     * already does the right thing, and this pins that nothing "cleans up"
+     * the result afterwards.
+     */
+    it("includes a trailing newline the selection extends across, without trimming it", () => {
+      const onSelectionChange = vi.fn();
+      const value = "Alpha one.\n";
+      render(
+        <DimmedTextarea
+          value={value}
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      expect(textarea.value).toBe("Alpha one.\n");
+      textarea.setSelectionRange(6, 11);
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledWith({ start: 6, end: 11, text: value });
+      // ...and the OFFSETS themselves reach the full length rather than being
+      // clamped short of the trailing newline.
+      expect(onSelectionChange.mock.calls.at(-1)?.[0].text.slice(6, 11)).toBe("one.\n");
+    });
+
+    /**
+     * The overlay is a sibling subtree of text nodes painted OVER the
+     * textarea. Reading the selection via `window.getSelection()` instead of
+     * the element's own `selectionStart`/`selectionEnd` would be at the mercy
+     * of whatever that subtree does to a document-level selection range; the
+     * element's own properties are immune to it by construction. This proves
+     * selection reporting still works, unchanged, with the lens on.
+     */
+    it("reports the selection correctly while the lens is on and the overlay is painted over it", () => {
+      const onSelectionChange = vi.fn();
+      const value = "Alpha one. Beta two.";
+      render(
+        <DimmedTextarea
+          value={value}
+          onChange={() => {}}
+          aiVersions={[value]}
+          dimmed
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      expect(screen.getByTestId("dim-overlay")).toBeInTheDocument();
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      textarea.setSelectionRange(11, 20);
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledWith({ start: 11, end: 20, text: value });
+    });
+
+    /**
+     * "A selection is invalidated by typing, not only by re-selecting." A
+     * caller that only wires the selection event would keep reporting a range
+     * that no longer describes anything real the instant a keystroke lands.
+     */
+    it("invalidates the selection when typing changes the text, not only when re-selecting", () => {
+      const onSelectionChange = vi.fn();
+      function Harness3() {
+        const [value, setValue] = useState("Alpha one. Beta two.");
+        return (
+          <DimmedTextarea
+            value={value}
+            onChange={setValue}
+            aiVersions={[]}
+            label="Body"
+            onSelectionChange={onSelectionChange}
+          />
+        );
+      }
+      render(<Harness3 />);
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      textarea.setSelectionRange(0, 5);
+      fireEvent.select(textarea);
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        start: 0,
+        end: 5,
+        text: "Alpha one. Beta two.",
+      });
+
+      onSelectionChange.mockClear();
+      // `fireEvent.change` alone, deliberately WITHOUT an accompanying
+      // `fireEvent.select` — a real keystroke fires both, and a version of
+      // this test that used `userEvent.type` to simulate typing could not
+      // tell them apart: `initialSelectionStart` itself dispatches native
+      // `select` events, so the resulting `null` would prove nothing about
+      // whether `onChange` invalidates anything on its own. Isolating
+      // `change` is the only way to pin that the fix lives in the `onChange`
+      // handler and not only in `onSelect`.
+      fireEvent.change(textarea, { target: { value: "Alpha one. Z Beta two." } });
+      // Typing always leaves a collapsed caret behind — the stale "Alpha"
+      // selection must not survive the edit.
+      expect(onSelectionChange).toHaveBeenCalledWith(null);
+    });
+
+    /**
+     * The overlay steps aside for a composing IME because the pre-edit text
+     * is not yet part of `value`; the selection callback steps aside for the
+     * same reason — there is nothing real yet to report an offset into.
+     */
+    it("does not report a selection change while an IME composition is in progress", () => {
+      const onSelectionChange = vi.fn();
+      render(
+        <DimmedTextarea
+          value="Alpha one."
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      fireEvent.compositionStart(textarea);
+      onSelectionChange.mockClear();
+      textarea.setSelectionRange(0, 5);
+      fireEvent.select(textarea);
+      expect(onSelectionChange).not.toHaveBeenCalled();
+
+      fireEvent.compositionEnd(textarea);
+      // A DIFFERENT range than the one fired above: React's own onSelect
+      // plugin de-dupes a `select` event against the selection it last saw
+      // regardless of whether a consumer acted on it, so re-firing the exact
+      // same (0, 5) here would be swallowed before it ever reaches this
+      // component — an artifact of re-dispatching a synthetic event in a
+      // test, not something a real composition-then-selection sequence hits.
+      textarea.setSelectionRange(2, 10);
+      fireEvent.select(textarea);
+      expect(onSelectionChange).toHaveBeenCalledWith({ start: 2, end: 10, text: "Alpha one." });
+    });
+
+    it("does nothing when no onSelectionChange is given", () => {
+      render(
+        <DimmedTextarea value="Alpha one." onChange={() => {}} aiVersions={[]} label="Body" />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      textarea.setSelectionRange(0, 5);
+      expect(() => fireEvent.select(textarea)).not.toThrow();
+    });
   });
 });

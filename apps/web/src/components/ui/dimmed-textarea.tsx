@@ -1,7 +1,7 @@
 "use client";
 
 import { dimSpans, normalizeNewlines } from "@pubrick/shared";
-import type { TextareaHTMLAttributes, UIEvent } from "react";
+import type { SyntheticEvent, TextareaHTMLAttributes, UIEvent } from "react";
 import { useCallback, useId, useMemo, useRef, useState } from "react";
 
 /**
@@ -76,6 +76,40 @@ export type DimmedTextareaProps = {
   value: string;
   /** Receives the new text, not the event: the mask is a function of the text. */
   onChange: (value: string) => void;
+  /**
+   * The current selection AND the exact string its offsets index — which is the
+   * NORMALISED text this component renders, not the `value` the caller passed.
+   *
+   * `text` is the WHOLE body, not the selected substring: `start`/`end` are
+   * indices INTO it, and a caller who wants the substring takes
+   * `text.slice(start, end)` — the direction that composes. Handing back the
+   * substring alone would strand the caller with offsets and nothing correct
+   * to slice them out of but its own `bodyDraft`, which is wrong by the
+   * number of `\r`s before the selection the moment it carries one (see
+   * `normalizeNewlines`'s own docstring): the element's DOM value has already
+   * dropped them, so its offsets index a shorter string than that prop.
+   *
+   * Fires on every selection change AND on every edit — typing invalidates a
+   * selection as surely as clicking elsewhere does, and a caller that only
+   * wires the selection event would keep reporting a range that no longer
+   * means anything the instant a keystroke lands inside it. `null` is reported
+   * when the selection is collapsed to a caret or the element has none to give
+   * (`selectionStart`/`selectionEnd` are typed `number | null` on the DOM
+   * element, independently of collapse). Never fires while an IME composition
+   * is in progress, for the same reason the lens steps aside then (see
+   * `composing` below): the pre-edit text is not yet part of `value` for this
+   * to index into.
+   *
+   * Read from the element's own `selectionStart`/`selectionEnd`, never from
+   * `window.getSelection()`: the mirrored overlay is a sibling subtree of text
+   * nodes sharing the same characters, which a document-selection API has no
+   * reason to exclude, where the textarea's own selection properties are
+   * immune to it by construction. Both properties are always reported
+   * `start <= end` regardless of which way the user dragged — the direction
+   * lives in `selectionDirection`, untouched here — so a backwards selection
+   * is reported exactly like a forwards one over the same characters.
+   */
+  onSelectionChange?: (selection: { start: number; end: number; text: string } | null) => void;
   /** Every `ai` version body to dim against — all of them, never concatenated. */
   aiVersions: readonly string[];
   /** The lens. Off by default (provenance-lens design §5). */
@@ -101,6 +135,7 @@ export type DimmedTextareaProps = {
 export function DimmedTextarea({
   value,
   onChange,
+  onSelectionChange,
   aiVersions,
   dimmed = false,
   label,
@@ -113,6 +148,7 @@ export function DimmedTextarea({
   dir = "auto",
   "aria-describedby": ariaDescribedBy,
   onScroll,
+  onSelect,
   onCompositionStart,
   onCompositionEnd,
   ...rest
@@ -185,6 +221,39 @@ export function DimmedTextarea({
     onScroll?.(event);
   };
 
+  /**
+   * `text` here is the WHOLE normalised body the offsets index into, not the
+   * selected substring — the parent can always derive that with
+   * `text.slice(start, end)`, but could not go the other way. Reporting the
+   * full string is the fix for the bug this task exists to close: a caller
+   * that received only offsets had nothing to slice them out of but its own
+   * `bodyDraft`, which is off by the number of CRs before the selection the
+   * moment it carries one (`normalizeNewlines`'s docstring has the mechanism).
+   *
+   * `element.value`, not the closed-over `text` variable: the DOM's own value
+   * is always the up-to-date normalised string the element's own offsets
+   * index, including inside the `onChange` handler, where React's `text` is
+   * still one render behind the keystroke that just landed.
+   */
+  const reportSelection = (element: HTMLTextAreaElement) => {
+    if (!onSelectionChange || composing) return;
+    const { selectionStart, selectionEnd } = element;
+    if (selectionStart == null || selectionEnd == null || selectionStart === selectionEnd) {
+      onSelectionChange(null);
+      return;
+    }
+    onSelectionChange({
+      start: selectionStart,
+      end: selectionEnd,
+      text: element.value,
+    });
+  };
+
+  const handleSelect = (event: SyntheticEvent<HTMLTextAreaElement>) => {
+    reportSelection(event.currentTarget);
+    onSelect?.(event);
+  };
+
   // Turning the lens on halfway down a long draft mounts the overlay at the
   // top of a textarea that is not: no scroll event fires for a layer that did
   // not exist yet, so the first sync happens as the overlay attaches. Every
@@ -224,7 +293,11 @@ export function DimmedTextarea({
           value={text}
           maxLength={maxLength}
           aria-describedby={describedBy}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            onChange(event.target.value);
+            reportSelection(event.target);
+          }}
+          onSelect={handleSelect}
           onScroll={syncScroll}
           onCompositionStart={(event) => {
             setComposing(true);
