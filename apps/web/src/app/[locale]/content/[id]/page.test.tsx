@@ -130,10 +130,13 @@ const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel"
  * future` from the round-trip assertion — a suite that turns red on a calendar
  * boundary while the screen it covers is fine.
  *
- * It is the SCHEMA that refuses a past instant, not the field and not the
- * button: the input carries no `min`, and the button's `disabled` is
- * `isPublished || !scheduledAt`, which a past value satisfies like any other.
- * Everything up to the request works with a stale date; only the DTO objects.
+ * The schema is no longer the ONLY thing that refuses a past instant (see
+ * "the schedule field's lower bound" below), but it still MUST be, because
+ * neither the field's `min` nor the button's `disabled` can be trusted to
+ * catch every case — see `approve()`'s own doc comment on why it re-checks
+ * `Date.now()` at click time rather than relying on either. This helper stays
+ * a day ahead specifically so ordinary tests of the request/response cycle
+ * never brush up against that boundary at all.
  */
 function scheduleValue(daysAhead = 1): string {
   const when = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
@@ -447,6 +450,78 @@ describe("approve with a schedule (Step 3)", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeEnabled();
     });
+  });
+});
+
+/**
+ * Local wall-clock formatting, independent of the page's own
+ * `toDatetimeLocalValue`: plain local-time getters rather than the
+ * implementation's `getTimezoneOffset()` subtraction, so a test built from
+ * this would not pass merely because both sides share one bug.
+ */
+function localDatetimeValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+describe("the schedule field's lower bound (past-date guard)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('gives the datetime-local field a min of "now", in the reader\'s own local time', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-04T20:15:00.000Z"));
+
+    installBaseHandlers({ current: makeItem({ status: "draft" }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    // Synchronous, not `findByText`: `renderAsync`'s `act()` has already
+    // flushed the fetch, and `findBy*`/`waitFor` poll on real timers that
+    // fake timers here would otherwise stall against.
+    screen.getByText(en.Content.status.draft);
+
+    const field = screen.getByLabelText(en.Publish.scheduleLabel);
+    expect(field).toHaveAttribute("min", localDatetimeValue(new Date()));
+  });
+
+  /**
+   * The counterpart to "keeps the schedule button disabled until a date is
+   * chosen" above, for the other way a bad request could still be sent: a
+   * date that WAS valid when picked but stopped being valid while the tab
+   * sat open. `min` alone cannot prevent this — it governs the picker UI,
+   * not a value already in state — so `approve()` re-checks `Date.now()` at
+   * click time. See its doc comment for why that check, not a continuously
+   * refreshed `disabled`, is what has to be authoritative: this screen's
+   * poll stops once the draft is no longer in flight, which for `pending`
+   * is immediately.
+   */
+  it("refuses to send an approval whose chosen instant has passed since it was picked, with the same translated message the api would give", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-04T20:15:00.000Z"));
+
+    const calls: Call[] = [];
+    installBaseHandlers({ current: makeItem({ status: "draft" }) }, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    // Synchronous throughout this test, not `findByText`/`waitFor`: both poll
+    // on real timers, which fake timers here would stall against.
+    screen.getByText(en.Content.status.draft);
+
+    // A minute in the future when picked — valid, so nothing about the pick
+    // itself trips the guard.
+    fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+      target: { value: localDatetimeValue(new Date(Date.now() + 60_000)) },
+    });
+    expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeEnabled();
+
+    // Two minutes pass with the tab left open; the picked instant is now behind "now".
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: en.Publish.approveScheduled }));
+
+    expect(calls.some((c) => c.path === "/api/content/c1/approve")).toBe(false);
+    screen.getByText(en.Errors.schedule_in_past);
   });
 });
 

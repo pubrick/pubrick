@@ -105,6 +105,24 @@ const NO_AI_VERSIONS: readonly string[] = [];
  */
 const itemSettled = (item: ContentItem) => !hasAdaptationInFlight(item.adaptations);
 
+/**
+ * Formats an instant as the `value`/`min` a `datetime-local` input expects:
+ * "YYYY-MM-DDTHH:mm" in the BROWSER'S OWN LOCAL TIME, not UTC.
+ *
+ * `datetime-local` never carries a timezone — its value is a wall clock, read
+ * back by `approve()` via `new Date(scheduledAt)`, which browsers parse as
+ * local time. A `min` computed with `toISOString()` (always UTC) would
+ * therefore be wrong by the local offset in either direction: for a reader
+ * ahead of UTC (Moscow, UTC+3) it would still accept times up to 3 hours in
+ * the past, and for a reader behind UTC it would reject times that are
+ * genuinely still in the future. Subtracting the offset before formatting is
+ * what keeps `min` and `value` speaking the same clock.
+ */
+function toDatetimeLocalValue(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Publish");
@@ -293,6 +311,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   async function approve(withSchedule: boolean) {
     setActionError(null);
+    /*
+     * Re-checked HERE, at click time, rather than trusted from the button's
+     * `disabled` prop: this screen's poll (`usePoll`/`itemSettled`) stops
+     * once nothing is in flight, which for a still-`pending` draft is
+     * immediately — so a tab left open past the picked instant renders
+     * nothing new and `disabled` is exactly as stale as the moment polling
+     * stopped. `Date.now()` here is not.
+     *
+     * Same message the api would refuse with (`Errors.schedule_in_past`,
+     * translated) — reused, not duplicated, so approving right after the
+     * clock crosses the picked instant reads identically whether this check
+     * or `ContentRepository.approve`'s catches it.
+     */
+    if (withSchedule && scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) {
+      setActionError(te("schedule_in_past"));
+      return;
+    }
     try {
       await api(`/api/content/${id}/approve`, {
         method: "POST",
@@ -362,6 +397,25 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   const isPublished = item.status === "published";
+  /**
+   * A render-time snapshot of "now", NOT a live clock: neither this nor
+   * `scheduledAtIsPast` below ticks on its own between renders. That is fine
+   * for `min` (the picker reads it fresh each time it opens) but makes
+   * `scheduledAtIsPast` only as current as the last render — this screen's
+   * poll (`usePoll`/`itemSettled`) stops once nothing is in flight, which for
+   * a still-`pending` draft is immediately, so a tab left open past the
+   * picked instant may render nothing new for a long time. `disabled` below
+   * is therefore a best-effort UI hint, current as of the last render a
+   * keystroke or a poll produced — the actual guard against submitting a
+   * stale value is `approve()`'s own `Date.now()` check at click time, which
+   * cannot go stale because it runs at the moment it matters.
+   *
+   * `<=`, matching `ContentRepository.approve`'s own check exactly: this is
+   * an anticipation of the server's `schedule_in_past` refusal, not a
+   * competing rule, so the two must agree on the boundary instant itself.
+   */
+  const nowLocal = toDatetimeLocalValue(new Date());
+  const scheduledAtIsPast = scheduledAt !== "" && new Date(scheduledAt).getTime() <= Date.now();
 
   return (
     <AppShell
@@ -563,11 +617,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             value={scheduledAt}
             onChange={(e) => setScheduledAt(e.target.value)}
             disabled={isPublished}
+            min={nowLocal}
           />
           <Button
             variant="secondary"
             onClick={() => approve(true)}
-            disabled={isPublished || !scheduledAt}
+            disabled={isPublished || !scheduledAt || scheduledAtIsPast}
           >
             {t("approveScheduled")}
           </Button>
