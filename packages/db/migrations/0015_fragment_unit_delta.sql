@@ -1,0 +1,43 @@
+-- 0015 — a refine fragment records how many units it replaced.
+--
+-- WHY A COLUMN AT ALL. The publish gate's deletion clause counts a level's
+-- sentences against its first `full` row. A refine REPLACES sentences rather
+-- than adding them, so an ordinary successful shorten moves the count the
+-- same way a human deletion would, and the gate cannot yet tell the two
+-- apart. `unit_delta` is the number that lets it: `n(merged) − n(pre-merge)`
+-- at the moment a proposal was accepted, summed into the running expectation
+-- instead of subtracted from it.
+--
+-- SIGNED, NOT "UNITS REMOVED". `introduced − removed` and
+-- `n(merged) − n(pre-merge)` are the same number, and storing the difference
+-- is what lets the gate and the badge SUM a column instead of re-splitting
+-- every fragment body on every read. Two things that must agree will stop
+-- agreeing; one stored integer cannot disagree with itself. See the column's
+-- own docstring in `packages/db/src/schema/generation.ts`.
+--
+-- THE CHECK, AND WHY IT IS STRICT RATHER THAN ADVISORY. Non-null exactly when
+-- `scope = 'fragment'`; null on every `full` row, because a whole body
+-- anchors the deletion clause against itself and has nothing to have
+-- "replaced". Nothing in this codebase has ever written `scope = 'fragment'`
+-- — confirmed by grep across every `content_versions` write site before this
+-- migration was written, and separately confirmed the same day against a
+-- running deployment's database, which holds zero `content_versions` rows of
+-- any scope. There is therefore no historical row for the CHECK to be
+-- advisory about, unlike a column landing on data that already disagrees
+-- with it; this one can be strict from the moment it exists.
+--
+-- NO PREFLIGHT, unlike 0009's enum constraints, for `usage_ledger.outcome`
+-- (0012)'s reason, made stronger: the column and its CHECK arrive in the same
+-- statement pair, so every row that predates this migration reads
+-- `unit_delta IS NULL` by construction, and every one of those rows is also
+-- `scope <> 'fragment'` (the fact confirmed above) — `false = false`, which
+-- the CHECK admits. 0012 could lean only on the column being fresh; this one
+-- can also lean on the value that column is compared against never having
+-- been written.
+--
+-- ADDITIVE. One nullable column and one CHECK over it and the existing
+-- `scope` column. No row is rewritten, no existing value can stop being
+-- valid, and every statement in this file is valid against a database that
+-- already holds rows in `content_versions`.
+ALTER TABLE "content_versions" ADD COLUMN "unit_delta" integer;--> statement-breakpoint
+ALTER TABLE "content_versions" ADD CONSTRAINT "content_versions_unit_delta_scope_check" CHECK (("content_versions"."scope" = 'fragment') = ("content_versions"."unit_delta" is not null));

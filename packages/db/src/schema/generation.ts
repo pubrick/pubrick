@@ -10,7 +10,9 @@ import {
   type RunSteps,
   VERSION_SCOPES,
 } from "@pubrick/shared";
+import { sql } from "drizzle-orm";
 import {
+  check,
   foreignKey,
   index,
   integer,
@@ -314,6 +316,33 @@ export const contentVersions = pgTable(
      * would read every refine as a deletion.
      */
     scope: text("scope", { enum: VERSION_SCOPES }).notNull().default("full"),
+    /**
+     * How many sentence-units this row's body replaced, at the moment a
+     * refine proposal was accepted: `n(merged) − n(pre-merge)`, signed.
+     *
+     * NOT "how many units were removed" — the spec's own phrasing — because
+     * `introduced − removed` and `n(merged) − n(pre-merge)` are the same
+     * number, and storing the difference is what lets the publish gate's
+     * deletion clause (`allSentencesAi`) sum a column instead of re-splitting
+     * every fragment body on every read. "Two things that must agree will
+     * stop agreeing" is this repository's own argument against exactly that
+     * shape (see the credential comparator's docstring); one stored integer
+     * cannot disagree with itself.
+     *
+     * NULL on a `full` row: a whole body anchors the deletion clause against
+     * ITSELF, so it has nothing to have "replaced". Non-null on a `fragment`
+     * row, by the CHECK below — the CHECK is what makes that an invariant
+     * rather than a convention, and it is why `allSentencesAi` (Task 2) is
+     * allowed to sum this column without first asking what kind of row it is
+     * reading. A NULL on a `fragment` row is therefore unreachable while the
+     * CHECK stands; reachable only if the CHECK is ever dropped, and the
+     * gate must keep treating that shape as degenerate evidence — MISSING,
+     * not zero — refusing rather than guessing what a silent NULL meant.
+     *
+     * Authored exactly once, by `planRefineAccept` at Accept, and never
+     * recomputed at read time.
+     */
+    unitDelta: integer("unit_delta"),
     runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
     /** Null for AI-written versions. */
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
@@ -334,6 +363,44 @@ export const contentVersions = pgTable(
      */
     enumCheck("content_versions_origin_check", t.origin, CONTENT_ORIGINS),
     enumCheck("content_versions_scope_check", t.scope, VERSION_SCOPES),
+    /**
+     * NON-NULL EXACTLY WHEN THE ROW IS A FRAGMENT. `unit_delta` answers "how
+     * many units did THIS row replace", and that question has an answer only
+     * for a `fragment` row — a `full` row is the deletion clause's anchor,
+     * not a replacement of anything.
+     *
+     * Written as a boolean equality, `(scope = 'fragment') = (unit_delta is
+     * not null)`, rather than the `OR` of two conjunctions it is shorthand
+     * for: `scope` is `NOT NULL` (no third value to worry about — see
+     * `enumCheck`'s constraint above), so the equality is total, and it says
+     * in one expression what Task 2's fail-safe branch says in code — a
+     * `fragment` row missing its delta and a `full` row carrying one are the
+     * SAME shape, "the row's two facts disagree", not two shapes to check
+     * separately.
+     *
+     * NOT `enumCheck`, despite living beside two of its constraints: that
+     * helper pins ONE column into a value SET, and this pins a relationship
+     * BETWEEN two columns — there is no list of legal `unit_delta` values to
+     * name.
+     *
+     * NO PREFLIGHT, unlike 0009's enum constraints, for `usage_ledger
+     * .outcome` (0012)'s reason: this column and its CHECK arrive in the same
+     * migration, so every row that predates it reads `unit_delta IS NULL` by
+     * construction — there is no historical value for a preflight to find.
+     * What 0012 could not also lean on is confirmed rather than assumed
+     * here: nothing in this codebase has ever written `scope = 'fragment'`
+     * (grepped before this migration was written — every `content_versions`
+     * write site sets `scope: "full"` or leaves the column at its default),
+     * and a running deployment's database was read the same day and holds
+     * zero `content_versions` rows of any scope. Every row this migration
+     * will ever meet is therefore `scope <> 'fragment'` paired with
+     * `unit_delta IS NULL` — `false = false` — which the CHECK admits by
+     * construction, not by an accident it happens to share with 0012.
+     */
+    check(
+      "content_versions_unit_delta_scope_check",
+      sql`(${t.scope} = 'fragment') = (${t.unitDelta} is not null)`,
+    ),
     /**
      * A VERSION'S ADAPTATION BELONGS TO THE VERSION'S ITEM. Two independent
      * references — `content_item_id` and `adaptation_id` — that every reader

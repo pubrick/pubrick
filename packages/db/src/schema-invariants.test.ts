@@ -324,4 +324,46 @@ describe("content_versions", () => {
     // what refuses it. A constraint there would delete that test's premise.
     expect(reference?.columns.map((column) => column.name)).not.toContain("org_id");
   });
+
+  /**
+   * `unit_delta` is non-null exactly when the row is a `fragment` — the
+   * database's own copy of the invariant `allSentencesAi` (Task 2) is built
+   * to lean on without re-deriving it from `scope` on every read. This is the
+   * TYPES half, read straight off the drizzle config with no database
+   * connection; `migrate.test.ts`'s "adds the fragment unit delta..." holds
+   * the DATABASE half, by actually inserting both wrong shapes and both right
+   * ones against Postgres.
+   *
+   * Not folded into the `enumCheck` machinery above: that scanner finds a
+   * check by asking each ENUM COLUMN for `<table>_<column>_check`, and this
+   * constraint correlates two columns rather than pinning one into a value
+   * set — there is no list of legal `unit_delta` values to name. It is
+   * fetched by its own name instead, through the same `expressionOf` the enum
+   * tests use to read a check's rendered SQL back out of the config.
+   */
+  it("makes unit_delta non-null exactly when the row is a fragment", () => {
+    const sql = expressionOf("content_versions", "content_versions_unit_delta_scope_check");
+    expect(sql, "the CHECK constraint is gone").not.toBeNull();
+    // Names both columns it correlates, not just one — a check that silently
+    // stopped comparing against `scope`, or started comparing some other
+    // column, would still exist under this name and still look enforced.
+    expect(sql).toContain('"scope"');
+    expect(sql).toContain('"unit_delta"');
+    expect(sql).toContain("'fragment'");
+    // An equality between two booleans, not (only) an `in (...)` list — this
+    // constraint is deliberately outside the "enum columns" property above
+    // rather than a check that scanner failed to find: `unit_delta` has no
+    // value set, only a relationship to `scope`.
+    expect(sql).not.toMatch(/\bin\s*\(/i);
+    // THE DIRECTION, not only the two clauses it relates — the mistake this
+    // file's own enum tests already guard against for `in (...)` (`pins each
+    // column INTO its value set, rather than out of it`). `<>` in place of
+    // `=` here would admit exactly the two shapes the CHECK exists to refuse
+    // and refuse the two it must admit, while still mentioning both columns
+    // and the literal `'fragment'` — every assertion above would stay green.
+    expect(sql, "the two clauses are compared with = somewhere").toMatch(/\)\s*=\s*\(/);
+    expect(sql, "the two clauses are compared with <>, which inverts the rule").not.toMatch(
+      /<>|!=/,
+    );
+  });
 });

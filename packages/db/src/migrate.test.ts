@@ -55,6 +55,9 @@ const CONSTRAINT_MIGRATION = "0009_declared_invariants";
 /** The migration that gives the publishing path's timestamps a zone. */
 const ZONE_MIGRATION = "0014_scheduled_at_carries_its_zone";
 
+/** The migration that gives a refine fragment its `unit_delta`, proved additive below. */
+const UNIT_DELTA_MIGRATION = "0015_fragment_unit_delta";
+
 /**
  * Every column 0014 gives a zone to, in the order `information_schema` sorts
  * them. Written out rather than derived from the schema: the point of the
@@ -127,6 +130,25 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
   // still refusing a misspelling. A value outside the set would read as
   // `completed` to both readers of the ledger: silently free.
   { table: "usage_ledger", column: "outcome", bogus: "unkown" },
+];
+
+/**
+ * Every `%_check`-named constraint that is NOT one of `PINNED_COLUMNS` — a
+ * value pinned into a relationship with another column rather than into a
+ * value set, so it has no single `bogus` scalar the loop above could try. The
+ * "adds the invariants to a database that already holds rows of every table"
+ * test below counts every `_check` constraint as a proxy for "did the enum
+ * constraints reach the database", and that proxy stops being exact the
+ * moment a check exists that ISN'T an enum pin — this is where such a check
+ * declares itself, so the count stays a count of something rather than a
+ * number two lists happen to have summed to once.
+ */
+const NON_ENUM_CHECKS = [
+  // 0015's: non-null exactly when `scope = 'fragment'`. Proved directly by
+  // `migrate.test.ts`'s "adds the fragment unit delta..." (both wrong shapes
+  // refused, both right ones accepted) — counted here only so THIS test's
+  // total stays meaningful rather than one short.
+  "content_versions_unit_delta_scope_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -933,7 +955,9 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expectNoRowRewritten(rows, seeded);
-      expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length);
+      // Every enum pin PLUS every non-enum check — see `NON_ENUM_CHECKS` for
+      // why this is not simply `PINNED_COLUMNS.length` any more.
+      expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length + NON_ENUM_CHECKS.length);
       expect(index.rows[0]?.indexdef).toContain("WHERE (status <> 'published'::text)");
     } finally {
       await fs.rm(before, { recursive: true, force: true });
@@ -1012,6 +1036,106 @@ describe.skipIf(!url)("runMigrations", () => {
       });
       expect(refusedBogus).toBe(CHECK_VIOLATION);
       expect(acceptedReal).toBeNull();
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * 0015 lands a nullable column and a two-column CHECK on the same table
+   * 0012 lands its own on, and the claims are the same shape: rows written
+   * before it keep exactly the meaning they had, and the CHECK holds in BOTH
+   * directions rather than only admitting the row a happy-path test would
+   * think to write.
+   *
+   * NULL IS WHAT EVERY PRE-EXISTING ROW ALREADY MEANT. `seedEveryTable`
+   * writes two `full` rows — a whole body has nothing it "replaced" — and
+   * both must come back with `unit_delta` NULL, which the CHECK below
+   * REQUIRES of a `full` row rather than merely tolerating.
+   *
+   * BOTH WRONG SHAPES ARE REFUSED, NOT ONLY ONE. A `fragment` row with no
+   * delta and a `full` row carrying one are the two shapes `allSentencesAi`
+   * (Task 2) cannot tell apart from honest evidence — see the migration's own
+   * header. A test that only planted one of them would leave the other
+   * direction of the CHECK unproven, exactly the gap `content_versions
+   * .scope`'s own CHECK closed for the value-set case.
+   *
+   * AND BOTH RIGHT SHAPES STILL WRITE. A CHECK of `false` — or a column that
+   * silently failed to reach the database — would also make the two refusals
+   * above pass, for the wrong reason; these two inserts are what rules that
+   * out.
+   */
+  it("adds the fragment unit delta to a populated table, and refuses both wrong shapes", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(UNIT_DELTA_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: { itemId: string; rows: pg.QueryResultRow[] };
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the column were already here, "written before the migration"
+        // would be a lie and everything below would prove nothing.
+        const pre = await pool.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'content_versions' AND column_name = 'unit_delta'",
+        );
+        expect(pre.rows).toHaveLength(0);
+
+        const seed = await seedEveryTable(pool, "org_unit_delta");
+        const rows = (await pool.query("SELECT id, body, scope FROM content_versions ORDER BY id"))
+          .rows;
+        seeded = { itemId: seed.itemId, rows };
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const rows = await after.query(
+          "SELECT id, body, scope, unit_delta FROM content_versions ORDER BY id",
+        );
+        const column = await after.query(
+          "SELECT is_nullable, data_type, column_default FROM information_schema.columns WHERE table_name = 'content_versions' AND column_name = 'unit_delta'",
+        );
+        expect(rows.rows).toEqual(seeded.rows.map((row) => ({ ...row, unit_delta: null })));
+        expect(column.rows[0]).toMatchObject({
+          is_nullable: "YES",
+          data_type: "integer",
+          column_default: null,
+        });
+
+        // Both wrong shapes: a fragment with no delta, a full row with one.
+        const fragmentNoDelta = await refusal(
+          after,
+          "INSERT INTO content_versions (org_id, content_item_id, body, origin, scope, unit_delta) VALUES ('org_unit_delta', $1, 'a fragment', 'ai', 'fragment', NULL)",
+          [seeded.itemId],
+        );
+        const fullWithDelta = await refusal(
+          after,
+          "INSERT INTO content_versions (org_id, content_item_id, body, origin, scope, unit_delta) VALUES ('org_unit_delta', $1, 'a whole body', 'ai', 'full', 3)",
+          [seeded.itemId],
+        );
+        expect(fragmentNoDelta).toBe(CHECK_VIOLATION);
+        expect(fullWithDelta).toBe(CHECK_VIOLATION);
+
+        // And both right shapes still write.
+        const fragmentWithDelta = await refusal(
+          after,
+          "INSERT INTO content_versions (org_id, content_item_id, body, origin, scope, unit_delta) VALUES ('org_unit_delta', $1, 'a fragment', 'ai', 'fragment', -1)",
+          [seeded.itemId],
+        );
+        const fullNoDelta = await refusal(
+          after,
+          "INSERT INTO content_versions (org_id, content_item_id, body, origin, scope, unit_delta) VALUES ('org_unit_delta', $1, 'another whole body', 'ai', 'full', NULL)",
+          [seeded.itemId],
+        );
+        expect(fragmentWithDelta).toBeNull();
+        expect(fullNoDelta).toBeNull();
+      } finally {
+        await after.end();
+      }
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();
