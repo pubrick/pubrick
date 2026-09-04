@@ -430,6 +430,34 @@ describe.skipIf(!url)("runs e2e", () => {
     expect(all.body.map((run: { id: string }) => run.id)).toContain(failed.id);
   });
 
+  /**
+   * The other half of `DISMISSABLE_RUN_STATUSES`, and it was unpinned: the test
+   * above covers `failed`, the one below covers `succeeded` leaving on its own,
+   * and nothing covered `cancelled` — so dropping it from the dismissable set
+   * changed the strip a user actually looks at and no test noticed. A cancelled
+   * run creates no content item either; if its entry vanished the moment it was
+   * cancelled, the only trace of the money already spent would be gone from the
+   * one screen that shows it.
+   *
+   * Cancelled through the real endpoint rather than by writing the status, so
+   * this is the shape the strip meets in production.
+   */
+  it("keeps a cancelled, undismissed run on the open list and drops it once dismissed", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const run = await startRun(agent, brandId, [channelId]);
+    await agent.post(`/api/runs/${run.id}/cancel`).expect(200);
+
+    const open = await agent.get("/api/runs?state=open").expect(200);
+    expect(open.body.map((r: { id: string }) => r.id)).toContain(run.id);
+
+    await agent.post(`/api/runs/${run.id}/dismiss`).expect(200);
+    const after = await agent.get("/api/runs?state=open").expect(200);
+    expect(after.body.map((r: { id: string }) => r.id)).not.toContain(run.id);
+    const all = await agent.get("/api/runs").expect(200);
+    expect(all.body.map((r: { id: string }) => r.id)).toContain(run.id);
+  });
+
   it("hides a succeeded run from the open list without needing a dismiss", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
