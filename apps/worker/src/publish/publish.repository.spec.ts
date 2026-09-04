@@ -223,7 +223,40 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    * would also count a waiter belonging to whichever other spec file vitest is
    * running beside this one.
    */
-  async function waitForLockWaiters(queryLike: string, count: number): Promise<void> {
+  /**
+   * Waits until `count` backends are parked on a row lock inside a query matching
+   * `queryLike` — the interleaving the two tests below are built out of.
+   *
+   * `inFlight` is the operation that is SUPPOSED to be doing that blocking, and passing
+   * it is what keeps a failure legible. An operation that REJECTS instead of blocking
+   * (a missing relation, a renamed column) produces no waiter, ever, so without it this
+   * loop spins until vitest kills the test at its own 5s timeout — and the real error
+   * arrives afterwards, detached, as an "unhandled rejection" attributed to whichever
+   * test happened to be running.
+   *
+   * That is not hypothetical: it is precisely how `relation "pgboss.job" does not exist`
+   * reached CI wearing the words "the deadlock test timed out in 5000ms". A deadlock test
+   * that times out reads like a locking regression or a loaded runner — so the build was
+   * read as flaky rather than as the one-line schema fact it actually was (see
+   * vitest.global-setup.ts). Racing the wait against the operation reports the cause here,
+   * at the line that caused it.
+   */
+  async function waitForLockWaiters(
+    queryLike: string,
+    count: number,
+    inFlight?: Promise<unknown>,
+  ): Promise<void> {
+    let settled: { rejected: true; error: unknown } | { rejected: false } | undefined;
+    // Attaching a rejection handler also means `inFlight` is no longer unhandled while we
+    // wait; the caller still awaits it afterwards for its own assertions.
+    void inFlight?.then(
+      () => {
+        settled = { rejected: false };
+      },
+      (error: unknown) => {
+        settled = { rejected: true, error };
+      },
+    );
     const deadline = Date.now() + 10_000;
     for (;;) {
       const { rows } = await db.execute(
@@ -233,6 +266,12 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
             AND query ILIKE '${queryLike}'`,
       );
       if ((rows[0] as { n: number }).n >= count) return;
+      if (settled) {
+        if (settled.rejected) throw settled.error;
+        throw new Error(
+          `the operation that should have blocked on ${queryLike} finished without ever blocking`,
+        );
+      }
       if (Date.now() > deadline) {
         throw new Error(`timed out waiting for ${count} backend(s) blocked on ${queryLike}`);
       }
@@ -1317,8 +1356,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
       const sweeping = repo.sweepAbandoned();
       // The sweeper is now parked on a row lock — on `high` before the fix, on
-      // `low` after it. Either way the interleaving is a fact, not a hope.
-      await waitForLockWaiters("%make_interval%", 1);
+      // `low` after it. Either way the interleaving is a fact, not a hope. Passing
+      // `sweeping` makes "the sweep rejected instead of blocking" say so, rather
+      // than time out five seconds later as if the lock were merely slow.
+      await waitForLockWaiters("%make_interval%", 1, sweeping);
 
       // ...and now `reject` walks on to the rest of its ordered set.
       rejectError = await rejecting
@@ -1403,7 +1444,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       repo.markPublished(orgId, second, { externalId: "2", externalUrl: "https://t.me/c/2" }),
     ]);
     try {
-      await waitForLockWaiters('insert into "publications"%', 2);
+      await waitForLockWaiters('insert into "publications"%', 2, landings);
     } finally {
       await holder.query("COMMIT");
       holder.release();
