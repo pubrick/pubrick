@@ -52,6 +52,10 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   let repo: InstanceType<GenerateRepositoryCtor>;
   let service: InstanceType<GenerateServiceCtor>;
   let preferredCredential: typeof import("@pubrick/shared").preferredCredential;
+  let PermanentError: typeof import("@pubrick/shared").PermanentError;
+  let UNREADABLE_CREDENTIALS_MESSAGE: string;
+  let MALFORMED_STORED_AI_CREDENTIAL_MESSAGE: string;
+  let runFailureOf: typeof import("@pubrick/ai").runFailureOf;
   let sql: typeof import("drizzle-orm").sql;
   let queueOptions: typeof import("@pubrick/shared").GENERATE_QUEUE_OPTIONS;
   let graceSeconds: number;
@@ -76,8 +80,12 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     ({
       encryptJson,
       preferredCredential,
+      PermanentError,
+      UNREADABLE_CREDENTIALS_MESSAGE,
+      MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
       GENERATE_QUEUE_OPTIONS: queueOptions,
     } = await import("@pubrick/shared"));
+    ({ runFailureOf } = await import("@pubrick/ai"));
 
     const { PgBoss } = await import("pg-boss");
     boss = new (PgBoss as PgBossCtor)(url as string);
@@ -525,6 +533,94 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
 
       expect((await repo.credential(mine))?.apiKey).toBe(keyFor("google"));
       expect((await repo.credential(theirs))?.apiKey).toBe(keyFor("openrouter"));
+    });
+
+    /**
+     * Three ways the stored blob can fail to become a key, and three different
+     * answers. The catch this replaced reported every one of them as
+     * `unreadable_key` with the ring's sentence, and its test only ever fed it
+     * the first — which is why it passed.
+     */
+    describe("tells the three ways a stored key can fail to load apart", () => {
+      async function storeBlob(orgId: string, credentialsEncrypted: string) {
+        await db.insert(schema.aiCredentials).values({
+          orgId,
+          provider: "google",
+          credentialsEncrypted,
+          defaultModel: null,
+          createdAt: new Date("2026-01-01T10:00:00.000Z"),
+        });
+      }
+
+      async function failureOf(orgId: string): Promise<unknown> {
+        try {
+          await repo.credential(orgId);
+        } catch (error) {
+          return error;
+        }
+        throw new Error("credential() resolved; expected it to reject");
+      }
+
+      it("a blob under a key this instance does not have: permanent, unreadable_key, the ring's sentence", async () => {
+        const orgId = await seedOrg();
+        const foreignKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+        await storeBlob(orgId, encryptJson({ apiKey: "unreachable" }, foreignKey));
+
+        const error = await failureOf(orgId);
+
+        expect(error).toBeInstanceOf(PermanentError);
+        expect(runFailureOf(error)).toBe("unreadable_key");
+        expect((error as Error).message).toBe(UNREADABLE_CREDENTIALS_MESSAGE);
+      });
+
+      it("a blob under the right key holding no API key: permanent, unreadable_key, a sentence that clears the ring", async () => {
+        const orgId = await seedOrg();
+        // Opens cleanly — authenticated by THIS instance's key — and is still
+        // not a credential. No save this product makes writes this shape.
+        await storeBlob(
+          orgId,
+          encryptJson({ token: "not-an-api-key" }, process.env.APP_ENCRYPTION_KEY as string),
+        );
+
+        const error = await failureOf(orgId);
+
+        expect(error).toBeInstanceOf(PermanentError);
+        expect(runFailureOf(error)).toBe("unreadable_key");
+        // The sentence is the thing that differs, and it must not be the ring's:
+        // that one tells an operator to add the old key, and here the key is fine.
+        expect((error as Error).message).toBe(MALFORMED_STORED_AI_CREDENTIAL_MESSAGE);
+        expect((error as Error).message).not.toBe(UNREADABLE_CREDENTIALS_MESSAGE);
+      });
+
+      it("a decrypt that throws for any other reason: not permanent, not unreadable_key, untouched", async () => {
+        const orgId = await seedOrg();
+        await storeBlob(
+          orgId,
+          encryptJson({ apiKey: keyFor("google") }, process.env.APP_ENCRYPTION_KEY as string),
+        );
+        // A ring that does not parse is the one plain `Error` the decrypt
+        // itself can throw. It cannot happen past boot — env validates the ring
+        // — so it is the stand-in for "a bug in the decrypt code": a broken
+        // INSTANCE, which is nobody's key.
+        const workerEnv = ((await import("../env")) as { env: { APP_ENCRYPTION_KEY: string } }).env;
+        const ring = workerEnv.APP_ENCRYPTION_KEY;
+        workerEnv.APP_ENCRYPTION_KEY = "not-a-ring";
+        let error: unknown;
+        try {
+          error = await failureOf(orgId);
+        } finally {
+          workerEnv.APP_ENCRYPTION_KEY = ring;
+        }
+
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(PermanentError);
+        expect(runFailureOf(error)).toBeUndefined();
+        expect((error as Error).message).toContain(
+          "Encryption key must decode to exactly 32 bytes",
+        );
+        // And the row itself is fine: with the ring back, the key reads.
+        expect((await repo.credential(orgId))?.apiKey).toBe(keyFor("google"));
+      });
     });
   });
 

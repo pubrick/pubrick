@@ -966,6 +966,72 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(script.calls).toHaveLength(0);
     }, 20_000);
 
+    it("reports a stored blob that opens but holds no API key as unreadable_key too — with the ring cleared, not blamed", async () => {
+      // Same code on the strip, because the reader's sentence ("could not be
+      // read, save it again") is true and the remedy is the same. The log line
+      // is where it differs: it must say the ring is fine, not send an operator
+      // to rotate a key that opened this very blob.
+      const seeded = await seed({ channels: 1 });
+      await db
+        .update(schema.aiCredentials)
+        .set({
+          credentialsEncrypted: encryptJson(
+            { token: "not-an-api-key" },
+            process.env.APP_ENCRYPTION_KEY as string,
+          ),
+        })
+        .where(eq(schema.aiCredentials.orgId, seeded.orgId));
+      const script = scriptedModel();
+      const errorLog = vi.spyOn(Logger.prototype, "error").mockImplementation(() => {});
+
+      await serviceFor(script).handle({
+        id: "job-badshape",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.error).toBe("unreadable_key");
+      expect(script.calls).toHaveLength(0);
+      const logged = errorLog.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("do not hold an API key");
+      expect(logged).toContain("The encryption key is fine");
+      expect(logged).not.toContain("Add the old key to APP_ENCRYPTION_KEY");
+      vi.restoreAllMocks();
+    }, 20_000);
+
+    it("does not call a decrypt that threw for some other reason a verdict about the key", async () => {
+      // The only plain `Error` the decrypt can throw is a ring that does not
+      // parse — impossible past boot, so it stands in for a bug in the decrypt
+      // code. That is a broken instance: `internal`, transient, retried — the
+      // treatment every unclassified throw gets — and NOT a permanent
+      // `unreadable_key` that would tell the user their key is the problem.
+      const seeded = await seed({ channels: 1 });
+      const script = scriptedModel();
+      const workerEnv = ((await import("../env")) as { env: { APP_ENCRYPTION_KEY: string } }).env;
+      const ring = workerEnv.APP_ENCRYPTION_KEY;
+      workerEnv.APP_ENCRYPTION_KEY = "not-a-ring";
+      const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          serviceFor(script).handle({
+            id: "job-badring",
+            data: { runId: seeded.runId, orgId: seeded.orgId },
+          }),
+        ).rejects.toThrow("Encryption key must decode to exactly 32 bytes");
+      } finally {
+        workerEnv.APP_ENCRYPTION_KEY = ring;
+        vi.restoreAllMocks();
+      }
+
+      const run = await runRow(seeded.runId);
+      expect(run?.status).toBe("running");
+      expect(run?.error).toBe("internal");
+      expect(script.calls).toHaveLength(0);
+      const logged = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).not.toContain("unreadable_key");
+    }, 20_000);
+
     it("fails a run whose channels have all been deleted rather than writing a draft nobody can publish", async () => {
       const seeded = await seed({ channels: 1 });
       await db.delete(schema.channels).where(eq(schema.channels.brandId, seeded.brandId));

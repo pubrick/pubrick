@@ -9,10 +9,15 @@ import {
   costTotals,
   decryptJson,
   encryptJson,
+  isMalformedStoredAiCredential,
+  isUnreadableCiphertext,
+  MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
   MAX_TEST_CALLS_PER_HOUR,
+  parseStoredAiCredential,
   preferredCredential,
   summarizeCost,
   toLedgerCostUsd,
+  UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { notFound } from "../api-error";
@@ -243,7 +248,30 @@ export class AiCredentialsRepository {
       // not a 500 carrying a crypto stack trace to a browser. It happens for a
       // real reason (APP_ENCRYPTION_KEY rotated under a stored row).
       if (error instanceof NotFoundException) throw error;
-      return { ok: false, reason: "unreadable_key" };
+      // Two events share the verdict and NOT the log line. The screen's sentence
+      // for `unreadable_key` — "could not be read, save it again" — is true of
+      // both and names the one thing the user can do about either; what differs
+      // is the operator's half, and it goes where the operator reads. A blob no
+      // ring key opens points at the ring. A blob that opened and holds no key
+      // points at the row, and the ring is explicitly NOT the problem: this
+      // used to be reported as the first, sending someone to rotate a key that
+      // was fine.
+      if (isUnreadableCiphertext(error)) {
+        this.logger.warn(
+          `Stored ${provider} key for org ${orgId}: ${UNREADABLE_CREDENTIALS_MESSAGE}`,
+        );
+        return { ok: false, reason: "unreadable_key" };
+      }
+      if (isMalformedStoredAiCredential(error)) {
+        this.logger.error(
+          `Stored ${provider} key for org ${orgId}: ${MALFORMED_STORED_AI_CREDENTIAL_MESSAGE}`,
+        );
+        return { ok: false, reason: "unreadable_key" };
+      }
+      // Anything else — a malformed ring, a bug in this method — is a broken
+      // instance, not a verdict about the user's key, and stays the 500 it is.
+      // Same rule `ChannelsRepository.getDecryptedCredentials` follows.
+      throw error;
     }
 
     const outcome = await this.probe.run(credential);
@@ -366,14 +394,19 @@ export class AiCredentialsRepository {
    * it through here. A `decryptJson` per caller is how one of them ends up
    * reading a different env var, or forgetting that the blob can fail to open
    * at all — which `test` classifies as `unreadable_key` off the throw.
+   *
+   * Throws one of two marked errors, or whatever else the decrypt threw:
+   * `UnreadableCiphertextError` when no ring key opens the blob, and
+   * `MalformedStoredAiCredentialError` when one did and the plaintext is not
+   * `{ apiKey }`. The parse is not optional: without it a row holding some other
+   * JSON handed `apiKey: undefined` to the probe, which made a live call with it.
    */
   private decrypt(
     provider: AiProviderId,
     row: { credentialsEncrypted: string; defaultModel: string | null },
   ): AiCredential {
-    const { apiKey } = decryptJson<{ apiKey: string }>(
-      row.credentialsEncrypted,
-      env.APP_ENCRYPTION_KEY,
+    const { apiKey } = parseStoredAiCredential(
+      decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
     );
     return { provider, apiKey, defaultModel: row.defaultModel };
   }

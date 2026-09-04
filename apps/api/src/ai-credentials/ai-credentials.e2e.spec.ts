@@ -1,4 +1,4 @@
-import type { INestApplication } from "@nestjs/common";
+import { type INestApplication, Logger } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
 import { createDb, schema } from "@pubrick/db";
@@ -8,13 +8,15 @@ import {
   type CostSummary,
   costTotals,
   encryptJson,
+  MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
   MAX_TEST_CALLS_PER_HOUR,
   preferredCredential,
   summarizeCost,
+  UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiCredentialProbe, type ProbeOutcome } from "./ai-credentials.probe";
 
 // Type-only: `ai-credentials.repository` reaches `../db`, which validates env at
@@ -537,6 +539,94 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       expect(result.body).toEqual({ ok: false, reason: "unreadable_key" });
       expect(probeCalls).toHaveLength(0);
+    });
+
+    /**
+     * Three ways the stored blob can fail to become a key. The catch this
+     * replaced answered `unreadable_key` to all of them and logged nothing, so
+     * a hand-edited row and a bug in the decrypt both read as "your encryption
+     * key changed" — and its test only ever fed it the first.
+     */
+    describe("tells the three ways a stored key can fail to load apart", () => {
+      async function storeBlob(orgId: string, credentialsEncrypted: string) {
+        await direct.db
+          .update(schema.aiCredentials)
+          .set({ credentialsEncrypted })
+          .where(eq(schema.aiCredentials.orgId, orgId));
+      }
+
+      function logLines(spy: { mock: { calls: unknown[][] } }) {
+        return spy.mock.calls.map((call) => call.join(" ")).join("\n");
+      }
+
+      it("a blob under a key this instance does not have: unreadable_key, and the log points at the ring", async () => {
+        const { agent, orgId } = await orgAgent();
+        await save(agent).expect(200);
+        const foreignKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+        await storeBlob(orgId, encryptJson({ apiKey: SECRET_KEY }, foreignKey));
+        const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+        const error = vi.spyOn(Logger.prototype, "error").mockImplementation(() => {});
+
+        const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+        expect(result.body).toEqual({ ok: false, reason: "unreadable_key" });
+        expect(probeCalls).toHaveLength(0);
+        expect(logLines(warn)).toContain(UNREADABLE_CREDENTIALS_MESSAGE);
+        expect(logLines(error)).not.toContain(MALFORMED_STORED_AI_CREDENTIAL_MESSAGE);
+        vi.restoreAllMocks();
+      });
+
+      it("a blob under the right key holding no API key: unreadable_key, and the log clears the ring", async () => {
+        const { agent, orgId } = await orgAgent();
+        await save(agent).expect(200);
+        // Opens under THIS instance's key and is still not a credential: no
+        // save this product makes writes this shape. Before the parse this
+        // handed `apiKey: undefined` to the probe, which made a live call.
+        await storeBlob(
+          orgId,
+          encryptJson({ token: "not-an-api-key" }, process.env.APP_ENCRYPTION_KEY as string),
+        );
+        const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+        const error = vi.spyOn(Logger.prototype, "error").mockImplementation(() => {});
+
+        const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+        expect(result.body).toEqual({ ok: false, reason: "unreadable_key" });
+        expect(probeCalls).toHaveLength(0);
+        expect(logLines(error)).toContain(MALFORMED_STORED_AI_CREDENTIAL_MESSAGE);
+        // Not the ring's sentence: that one sends an operator to add the old
+        // key, and the key that opened this blob is the one they have.
+        expect(logLines(warn)).not.toContain(UNREADABLE_CREDENTIALS_MESSAGE);
+        vi.restoreAllMocks();
+      });
+
+      it("a decrypt that throws for any other reason: a 500, never a verdict about the key", async () => {
+        const { agent } = await orgAgent();
+        await save(agent).expect(200);
+        // A ring that does not parse is the one plain `Error` the decrypt can
+        // throw. It cannot happen past boot — env validates the ring — so it is
+        // the stand-in for "a bug in the decrypt code": a broken INSTANCE, and
+        // the same rule `ChannelsRepository.getDecryptedCredentials` follows.
+        const apiEnv = ((await import("../env")) as { env: { APP_ENCRYPTION_KEY: string } }).env;
+        const ring = apiEnv.APP_ENCRYPTION_KEY;
+        apiEnv.APP_ENCRYPTION_KEY = "not-a-ring";
+        let result: request.Response;
+        try {
+          result = await agent.post("/api/ai-credentials/google/test");
+        } finally {
+          apiEnv.APP_ENCRYPTION_KEY = ring;
+        }
+
+        expect(result.status).toBe(500);
+        expect(JSON.stringify(result.body)).not.toContain("unreadable_key");
+        expect(JSON.stringify(result.body)).not.toContain(SECRET_KEY);
+        expect(probeCalls).toHaveLength(0);
+        // And the row was never the problem: with the ring back, the key tests.
+        expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body.ok).toBe(
+          true,
+        );
+        expect(probeCalls[0]?.apiKey).toBe(SECRET_KEY);
+      });
     });
 
     it("still answers when the ledger write fails — the call was already paid for", async () => {

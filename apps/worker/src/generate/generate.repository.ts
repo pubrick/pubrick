@@ -9,9 +9,12 @@ import { schema } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
+  isMalformedStoredAiCredential,
+  isUnreadableCiphertext,
   LIVE_RUN_STATUSES,
   PermanentError,
   type PlatformId,
+  parseStoredAiCredential,
   preferredCredential,
   type RunFailure,
   type RunStepCheckpoint,
@@ -599,22 +602,30 @@ export class GenerateRepository {
 
     let apiKey: string;
     try {
-      ({ apiKey } = decryptJson<{ apiKey: string }>(
-        row.credentialsEncrypted,
-        env.APP_ENCRYPTION_KEY,
+      ({ apiKey } = parseStoredAiCredential(
+        decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
       ));
     } catch (error) {
-      // Deterministic: the same ciphertext and the same key will fail identically
-      // on every retry. Permanent, with a sentence the user can act on, rather
-      // than a crypto stack trace retried three times.
-      this.logger.error(
-        `Stored ${row.provider} key for org ${orgId} could not be decrypted: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw withRunFailure(
-        new PermanentError(`the stored ${row.provider} API key could not be decrypted`),
-        "unreadable_key",
-      );
+      // Two events, one code, two sentences. Both are deterministic — the same
+      // ciphertext under the same ring answers identically on every retry — so
+      // both are permanent, and the code the strip renders ("could not be read,
+      // save it again") is true of both. The sentence is each error's own, and
+      // they differ where it matters: a blob no ring key opens says so and
+      // points at the ring; a blob that opened and holds no API key says the
+      // ring is FINE and points at the row. This used to be one catch-all, so
+      // the second read as the first and sent an operator to rotate a key that
+      // was not the problem.
+      if (isUnreadableCiphertext(error) || isMalformedStoredAiCredential(error)) {
+        const sentence = (error as Error).message;
+        this.logger.error(
+          `Stored ${row.provider} key for org ${orgId} cannot be used: ${sentence}`,
+        );
+        throw withRunFailure(new PermanentError(sentence), "unreadable_key");
+      }
+      // Anything else is a broken instance or a bug, not a verdict about the
+      // key: rethrown untouched, so `handle` records it as `internal` and
+      // pg-boss retries it — the treatment every other unclassified throw gets.
+      throw error;
     }
     return { provider: row.provider, apiKey, defaultModel: row.defaultModel };
   }

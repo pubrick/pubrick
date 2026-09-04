@@ -45,6 +45,79 @@ export const aiCredentialUpsertSchema = z.object({
 export type AiCredentialUpsert = z.infer<typeof aiCredentialUpsertSchema>;
 
 /**
+ * The plaintext `AiCredentialsRepository.upsert` seals — what a decrypted
+ * `ai_credentials.credentials_encrypted` MUST hold before its contents go
+ * anywhere near a provider.
+ *
+ * It was a TypeScript generic on the `decryptJson` call, `<{ apiKey: string }>`,
+ * which checks nothing at runtime: a row holding `{"token": "…"}` decrypted
+ * cleanly and handed `apiKey: undefined` onward, and the Test button then made
+ * a live call with no key at all. The channel store already parses its
+ * plaintext against the adapter's zod schema and refuses a shape it did not
+ * write; this is the same rule for the other credential store, and it is the
+ * half of `crypto.ts`'s domain-separation argument that was asserted there and
+ * not actually true here.
+ *
+ * `min(1)`, not the upsert's `min(8)`: the upsert bounds what a USER may save,
+ * this bounds what THIS PRODUCT may have written, and a stricter check here
+ * would refuse a row saved under an older, looser rule for no reason the reader
+ * could act on.
+ */
+export const storedAiCredentialSchema = z.object({ apiKey: z.string().min(1) });
+export type StoredAiCredential = z.infer<typeof storedAiCredentialSchema>;
+
+/**
+ * The one sentence for a blob that OPENED and still holds no API key.
+ *
+ * Deliberately not `UNREADABLE_CREDENTIALS_MESSAGE`, and the difference is the
+ * whole reason this exists: that sentence sends an operator to the key ring.
+ * Here the ring is fine — the blob was authenticated by a key this instance
+ * has — and the thing that is wrong is the row's contents, which no save this
+ * product makes could have produced. Telling that reader to rotate a key
+ * sends them to fix the one part that is not broken.
+ */
+export const MALFORMED_STORED_AI_CREDENTIAL_MESSAGE =
+  "Stored AI credentials decrypted but do not hold an API key: the row was not written by " +
+  "this product's own save. The encryption key is fine; save the key again.";
+
+/**
+ * A stored AI credential that decrypts to something other than `{ apiKey }`.
+ *
+ * Distinct from `UnreadableCiphertextError` for the reason its message gives,
+ * and matched by `name` rather than `instanceof` for the reason that class
+ * gives: the marker has to survive two copies of `@pubrick/shared` in one pnpm
+ * tree, where `instanceof` silently does not.
+ */
+export class MalformedStoredAiCredentialError extends Error {
+  readonly name = "MalformedStoredAiCredentialError";
+  constructor(message: string = MALFORMED_STORED_AI_CREDENTIAL_MESSAGE) {
+    super(message);
+  }
+}
+
+/** Is this the event — a blob that opened, holding no API key? */
+export function isMalformedStoredAiCredential(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "MalformedStoredAiCredentialError"
+  );
+}
+
+/**
+ * The plaintext of a stored AI credential, or `MalformedStoredAiCredentialError`.
+ *
+ * Both readers of the column — the api's Test and the generate worker — call
+ * this on what `decryptJson` returned, so "what shape is a stored key" is
+ * answered in one place and the two cannot answer it differently.
+ */
+export function parseStoredAiCredential(plaintext: unknown): StoredAiCredential {
+  const parsed = storedAiCredentialSchema.safeParse(plaintext);
+  if (!parsed.success) throw new MalformedStoredAiCredentialError();
+  return parsed.data;
+}
+
+/**
  * What every credential endpoint returns.
  *
  * There is no key field and no `id`: the resource is addressed by provider,
