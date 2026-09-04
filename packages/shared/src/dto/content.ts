@@ -96,6 +96,28 @@ export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
 export const VERSION_SCOPES = ["full", "fragment"] as const;
 export type VersionScope = (typeof VERSION_SCOPES)[number];
 
+/**
+ * The refine verbs the editor may ask the model to apply to a selection.
+ *
+ * Closed, on purpose, and not an oversight: this increment ships no free-text
+ * instruction field. `defineStep`'s own barrel comment (`@pubrick/ai`) says
+ * why — `role` is caller-supplied text that lands verbatim in the system half,
+ * and a user-typed instruction is untrusted text that belongs in `material`,
+ * never there. Getting that boundary right for a real instruction field is a
+ * later increment's work; three fixed verbs, each with role lines fixed at
+ * this end (`apps/api/src/content/refine.step.ts`), sidestep the question
+ * rather than answer it.
+ *
+ * One declaration, three consumers, for the reason every other closed set in
+ * this file gives: `refine_proposals.verb`'s CHECK constraint, the refine
+ * step's `Record<RefineVerb, …>` of role lines, and the editor's verb `Menu`
+ * all read this array rather than restating it. A fourth verb is one member
+ * here, one role-lines entry, and four translated menu labels — not three
+ * lists that have to be kept in step by hand.
+ */
+export const REFINE_VERBS = ["shorten", "warmer", "punchier"] as const;
+export type RefineVerb = (typeof REFINE_VERBS)[number];
+
 export const MAX_BODY_LENGTH = 4096;
 
 /**

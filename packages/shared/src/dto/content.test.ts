@@ -10,6 +10,7 @@ import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
   OUTSTANDING_ADAPTATION_STATUSES,
+  REFINE_VERBS,
 } from "./content.js";
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
@@ -121,6 +122,20 @@ describe("the draft and delivery lifecycles keep every status they had", () => {
       "published",
       "failed",
     ]);
+  });
+});
+
+/**
+ * The verb set is closed by decision, not by omission — see `REFINE_VERBS`'s
+ * own docstring. Pinned the same way `CONTENT_STATUSES` and
+ * `ADAPTATION_STATUSES` are above: a member silently dropped here would not
+ * merely narrow a menu, it would narrow `refine_proposals.verb`'s CHECK
+ * constraint (a later task) at once, and nothing that compares one to the
+ * other could notice — they would still agree, just about a smaller set.
+ */
+describe("the refine verb set", () => {
+  it("is exactly three, and no more, until a later increment decides otherwise", () => {
+    expect(REFINE_VERBS).toEqual(["shorten", "warmer", "punchier"]);
   });
 });
 
