@@ -29,6 +29,20 @@ const LEGACY_UNDER_KEY =
 const LEGACY_PLAINTEXT = { botToken: "12345:abc", chatId: "@channel" };
 
 /**
+ * A `p1.` envelope written by this module and FROZEN, key id and all.
+ *
+ * The key id is a value in the database, and a value in the database is
+ * forever: it is derived as `SHA-256(KEY_ID_DOMAIN || key)` truncated to
+ * `KEY_ID_BYTES`, and every one of those three choices is now load-bearing for
+ * rows that already exist. Re-deriving the id inside the test would let the
+ * derivation and its expectation drift together — the same trap
+ * `LEGACY_UNDER_KEY` exists to avoid — and every stored row would become
+ * unreadable behind a green suite. It is under `KEY`, so its id is `KEY`'s.
+ */
+const V1_UNDER_KEY =
+  "p1.e3135a76.bMt18As7yFMKDoYsDEkdTdsdMhcS+uzgZlFe+6eGqwf96gXPPhiBL0vS8FvzqnFtvqP5heU0ViunUKlBzGD2TytE+u+ktZfx";
+
+/**
  * Opens a `p1.` envelope without going through `decryptJson`, so a test can see
  * the PLAINTEXT BYTES rather than the value they parse to.
  */
@@ -91,6 +105,9 @@ describe("crypto", () => {
         () => decryptJson("bm90LWEtcmVhbC1ibG9i", KEY),
         // Not base64 of anything we wrote, in either format.
         () => decryptJson("p1.deadbeef.@@@@", KEY),
+        // Unreadable because "deadbeef" names no ring entry — NOT because of
+        // "p9". This case cannot pin the version tag, and used to look as
+        // though it did; "the envelope" pins that on its own, below.
         () => decryptJson("p9.deadbeef.AAAA", KEY),
         () => decryptJson("p1.AAAA", KEY),
         // A legacy blob under a key that is not in the ring.
@@ -181,6 +198,41 @@ describe("crypto", () => {
       const payload = encryptJson({ a: 1 }, KEY);
       expect(payload).not.toContain(KEY);
       expect(payload).not.toContain(KEY.replace(/=+$/, ""));
+    });
+
+    it("refuses a version tag it does not write, when that is the ONLY thing wrong", () => {
+      // The version check, isolated. Everything else about this payload is
+      // correct — the key id names a ring entry, the body is that key's own
+      // ciphertext, the tag verifies — so the refusal can have no other cause,
+      // and the control on the line above proves it by decrypting the identical
+      // bytes under the version this module does write.
+      //
+      // Written this way because the assertion it replaces was not: it fed
+      // "p9.deadbeef.AAAA", whose key id is in no ring, and so threw with the
+      // version check present OR absent. A future `p2.` blob would then have
+      // been read as a v1 blob under a still-configured key — silently, which
+      // is the one thing a version tag exists to prevent.
+      const { version, keyId, body } = envelope(encryptJson(LEGACY_PLAINTEXT, KEY));
+      expect(version).toBe("p1");
+      expect(decryptJson(`p1.${keyId}.${body}`, KEY)).toEqual(LEGACY_PLAINTEXT);
+      expect(() => decryptJson(`p2.${keyId}.${body}`, KEY)).toThrow(UnreadableCiphertextError);
+      // Not "some prefix is rejected" — every tag but this module's own is.
+      for (const tag of ["p0", "p11", "P1", "p", "x1"]) {
+        expect(() => decryptJson(`${tag}.${keyId}.${body}`, KEY)).toThrow(
+          UnreadableCiphertextError,
+        );
+      }
+    });
+
+    it("still opens an envelope frozen before today, so the key id derivation cannot move", () => {
+      // Rows carry this id. Change the domain string, the truncation length or
+      // the hash, and every `p1.` row ever written names a key that is in no
+      // ring entry any more — reported, correctly and uselessly, as "the key
+      // that wrote this is not configured".
+      expect(decryptJson(V1_UNDER_KEY, KEY)).toEqual(LEGACY_PLAINTEXT);
+      // And today's writer still lands on the frozen row's id for that key —
+      // asserted against the stored literal, never against a re-derivation.
+      expect(envelope(encryptJson({ a: 1 }, KEY)).keyId).toBe(envelope(V1_UNDER_KEY).keyId);
     });
 
     it("is told apart from a legacy blob by a character base64 cannot contain", () => {

@@ -3,10 +3,17 @@ import { createServer, type Server } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
-import { decryptJson, encryptJson, UNREADABLE_CREDENTIALS_MESSAGE } from "@pubrick/shared";
+import {
+  decryptJson,
+  encryptJson,
+  isUnreadableCiphertext,
+  UNREADABLE_CREDENTIALS_MESSAGE,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { db as ApiDb } from "../db";
+import type { env as ApiEnv } from "../env";
 import type { ChannelsRepository as ChannelsRepositoryCtor } from "./channels.repository";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -62,6 +69,15 @@ describe.skipIf(!url)("credential decryption e2e", () => {
   let channels: InstanceType<typeof ChannelsRepositoryCtor>;
   let telegram: Server;
   let previousKey: string | undefined;
+  /**
+   * The api's OWN `env` and `db` bindings — the module instances the repository
+   * closes over, fetched after `process.env.APP_ENCRYPTION_KEY` is set so they
+   * are the ones booted on the ring. A static import at the top of this file
+   * would evaluate `../env` before `beforeAll` runs and give the whole file a
+   * different key than the app it is driving.
+   */
+  let apiEnv: typeof ApiEnv;
+  let apiDb: typeof ApiDb;
 
   beforeAll(async () => {
     telegram = createServer((req, res) => {
@@ -98,6 +114,8 @@ describe.skipIf(!url)("credential decryption e2e", () => {
       ChannelsRepository: typeof ChannelsRepositoryCtor;
     };
     channels = app.get(ChannelsRepository);
+    ({ env: apiEnv } = await import("../env"));
+    ({ db: apiDb } = await import("../db"));
     direct = createDb(url as string);
   });
 
@@ -328,6 +346,78 @@ describe.skipIf(!url)("credential decryption e2e", () => {
         .expect(201);
 
       expect(decryptJson(await storedBlob(created.body.id), ACTIVE_KEY)).toEqual(CREDENTIALS);
+    });
+  });
+
+  /**
+   * The two things `getDecryptedCredentials` and `rewrapIfStale` promise in
+   * prose and, until now, in prose only. Both mutations — deleting
+   * `if (!isUnreadableCiphertext(error)) throw error`, and letting a failed
+   * rewrap out instead of logging it — survived the whole suite.
+   */
+  describe("what a decrypt failure is NOT allowed to swallow or invent", () => {
+    it("answers a BROKEN INSTANCE with a 500, never with a verdict about this org's row", async () => {
+      // The mirror image of the defect this method replaced: a catch-all here
+      // would take an operator's mistake about the whole install — or a genuine
+      // bug in this method — and tell the org their stored credentials cannot be
+      // read. A key that is not 32 bytes is a plain `Error` from `keyFromBase64`
+      // precisely so it can be told apart, and this is the only place that
+      // distinction is ever made.
+      const { agent, orgId } = await orgAgent();
+      const channel = await channelHolding(agent, encryptJson(CREDENTIALS, ACTIVE_KEY));
+      const ring = apiEnv.APP_ENCRYPTION_KEY;
+
+      let thrown: unknown;
+      apiEnv.APP_ENCRYPTION_KEY = "dG9vLXNob3J0";
+      try {
+        try {
+          await channels.getDecryptedCredentials(orgId, channel.id);
+        } catch (error) {
+          thrown = error;
+        }
+      } finally {
+        apiEnv.APP_ENCRYPTION_KEY = ring;
+      }
+
+      // Rethrown untouched: the instance's sentence, not the row's, and not an
+      // HTTP refusal of any kind.
+      expect((thrown as Error | undefined)?.message).toMatch(/32 bytes/);
+      expect(isUnreadableCiphertext(thrown)).toBe(false);
+      expect((thrown as { getStatus?: () => number } | undefined)?.getStatus).toBeUndefined();
+      expect(JSON.stringify(thrown ?? null)).not.toContain(UNREADABLE_CREDENTIALS_MESSAGE);
+
+      // Control, same channel, ring restored: nothing about this row was ever wrong.
+      await agent.post(`/api/channels/${channel.id}/test`).send({}).expect(200);
+    });
+
+    it("keeps the connection test green when the opportunistic rewrap cannot be written", async () => {
+      // Best effort BY CONSTRUCTION. A rewrap that fails leaves a readable row on
+      // an older key — exactly the state it was already in — so letting the
+      // failure out would turn a working channel into a broken one for a reason
+      // the operator cannot act on and did not ask about.
+      const { agent, orgId } = await orgAgent();
+      const stale = encryptJson(CREDENTIALS, DEMOTED_KEY);
+      const channel = await channelHolding(agent, stale);
+      const verdict = { ok: true, account: "@my_bot", target: "My Channel" };
+
+      const update = vi.spyOn(apiDb, "update").mockImplementation(() => {
+        throw new Error("could not write the rewrap");
+      });
+      try {
+        expect(await channels.verify(orgId, channel.id)).toEqual(verdict);
+        // The rewrap really was attempted — otherwise this test would pass on a
+        // row that never needed one, which is the whole trap it exists to avoid.
+        expect(update).toHaveBeenCalled();
+      } finally {
+        update.mockRestore();
+      }
+
+      // Untouched, and still on the key it was already readable under.
+      expect(await storedBlob(channel.id)).toBe(stale);
+      // And the next read moves it, now that writing works again: the failure
+      // cost the rotation one attempt, not the channel.
+      expect(await channels.verify(orgId, channel.id)).toEqual(verdict);
+      expect(decryptJson(await storedBlob(channel.id), ACTIVE_KEY)).toEqual(CREDENTIALS);
     });
   });
 

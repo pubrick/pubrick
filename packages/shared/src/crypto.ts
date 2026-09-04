@@ -241,10 +241,16 @@ function sealWith(entry: RingEntry, plaintext: Buffer): string {
 
 function openWith(key: Buffer, body: string): Buffer | null {
   const raw = Buffer.from(body, "base64");
-  // A blob shorter than iv+tag cannot be one of ours. `subarray` would happily
-  // hand back empty buffers and `setAuthTag` would then throw a different,
-  // untyped error out of the crypto library — the exact leak this module is
-  // removing.
+  // A blob shorter than iv+tag cannot be one of ours.
+  //
+  // KEPT DELIBERATELY, AND MEASURED: deleting this line is an EQUIVALENT
+  // MUTANT, not an untested one. The throw it was written against —
+  // `setAuthTag` on a short buffer — happens INSIDE the try below, which
+  // already answers `null`, so nothing observable changes. Checked over every
+  // length 0..27: each one throws inside the try. It stays because it states
+  // the precondition where a reader looks for it, and because the equivalence
+  // is a property of node's argument checking rather than of this module
+  // (`docs/mutation-testing.md`, "what a SURVIVED verdict does not license").
   if (raw.length < IV_LENGTH + TAG_LENGTH) return null;
   try {
     const decipher = createDecipheriv(ALGORITHM, key, raw.subarray(0, IV_LENGTH));
