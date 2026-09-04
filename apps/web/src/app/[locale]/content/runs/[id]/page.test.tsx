@@ -1,3 +1,4 @@
+import { runDetailDtoSchema } from "@pubrick/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import type { RunDetail, RunStatus } from "@/lib/runs";
@@ -22,8 +23,16 @@ const ITEM_ID = "22222222-2222-4222-8222-222222222222";
 const CHANNEL_A = "33333333-3333-4333-8333-333333333333";
 const CHANNEL_B = "44444444-4444-4444-8444-444444444444";
 
+/**
+ * A run as the api returns it — PARSED through the wire schema the api's own
+ * e2e parses a real response body with, not merely typed as it. A fixture that
+ * is only typed can carry a field the api never sends (it did: the receipt
+ * was written against a `RunDetail` the allowlist did not fully return), and
+ * a fixture that is only hand-written can omit one. This one fails to build
+ * unless it is a body the api could have produced.
+ */
 function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
-  return {
+  return runDetailDtoSchema.parse({
     id: RUN_ID,
     brandId: "55555555-5555-4555-8555-555555555555",
     input: { kind: "brief", text: "A post about our new pricing", channelIds: [CHANNEL_A] },
@@ -32,11 +41,12 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     contentItemId: null,
     errorCode: null,
     dismissedAt: null,
+    unrecordedCalls: 0,
     steps: {},
     createdAt: "2026-08-28T10:00:00.000Z",
     updatedAt: "2026-08-28T10:00:00.000Z",
     ...overrides,
-  };
+  });
 }
 
 type Call = { path: string; method: string };
@@ -465,4 +475,66 @@ describe("cancelling", () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+/**
+ * `unrecordedCalls` — billed model calls the ledger refused — carries THREE
+ * values, and this receipt is the one place a person is told about a loss on
+ * their run. Zero and NULL must not render alike: NULL is a run from before
+ * the counter existed, and rendering it as "nothing lost" is the product
+ * asserting the one thing it cannot know about exactly those runs.
+ */
+describe("calls the ledger could not record", () => {
+  const lossSentence = (count: number) => new RegExp(`${count} .*could not be recorded`, "i");
+
+  it("says how many, as an alert, and that the spend figure is short by them", async () => {
+    installHandlers({ current: makeRun({ status: "succeeded", unrecordedCalls: 3 }) });
+
+    await renderRun();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(lossSentence(3));
+    expect(alert).toHaveTextContent(/settings/i);
+    expect(screen.queryByText(en.Runs.unrecordedUnknown)).not.toBeInTheDocument();
+  });
+
+  it("says one call in the singular", async () => {
+    installHandlers({ current: makeRun({ status: "succeeded", unrecordedCalls: 1 }) });
+
+    await renderRun();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/1 model call .*could not be/i);
+  });
+
+  it("says nothing at all for zero: every call reached the ledger", async () => {
+    installHandlers({ current: makeRun({ status: "succeeded", unrecordedCalls: 0 }) });
+
+    await renderRun();
+
+    await screen.findByText(en.Runs.status.succeeded);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.unrecordedUnknown)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be recorded/i)).not.toBeInTheDocument();
+  });
+
+  it("says that nothing is known for NULL — never that nothing was lost", async () => {
+    installHandlers({ current: makeRun({ status: "succeeded", unrecordedCalls: null }) });
+
+    await renderRun();
+
+    const note = await screen.findByText(en.Runs.unrecordedUnknown);
+    // Not an alert: a run predating the counter is not a failure of this run,
+    // and the sentence is a statement of ignorance, not of a loss.
+    expect(note).not.toHaveAttribute("role", "alert");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be recorded/i)).not.toBeInTheDocument();
+  });
+
+  it("is a field the api MUST return: a fixture without it cannot be built", () => {
+    // The receipt's fixture is parsed with the api's wire schema. Dropping the
+    // column from the api's allowlist fails the api's e2e on this schema; a
+    // fixture here that quietly leaves it out fails the same way.
+    const { unrecordedCalls: _dropped, ...without } = makeRun();
+    expect(() => runDetailDtoSchema.parse(without)).toThrow();
+  });
 });

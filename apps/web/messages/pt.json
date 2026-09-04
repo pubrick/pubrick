@@ -255,6 +255,8 @@
     },
     "draftReady": "Rascunho pronto",
     "draftDeleted": "O rascunho desta geração foi excluído.",
+    "unrecordedCalls": "{count, plural, one {# chamada ao modelo desta geração foi cobrada mas não pôde ser registrada} other {# chamadas ao modelo desta geração foram cobradas mas não puderam ser registradas}} — o gasto em Configurações inclui {count, plural, one {esta chamada} other {estas chamadas}} entre as chamadas sem preço.",
+    "unrecordedUnknown": "Esta geração é anterior à contagem de chamadas ao modelo que não puderam ser registradas, então não se sabe se todas as suas chamadas foram registradas.",
     "viewRun": "Ver geração",
     "cancel": "Cancelar",
     "stripsTitle": "Gerando",

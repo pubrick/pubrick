@@ -47,6 +47,22 @@ const RUN_COLUMNS = {
    */
   errorCode: schema.pipelineRuns.error,
   dismissedAt: schema.pipelineRuns.dismissedAt,
+  /**
+   * How many of this run's billed model calls the ledger could not record.
+   *
+   * The worker writes it (`GenerateRepository.recordUnrecordedCall`); this is
+   * where it is read. For a day it was not: the column landed with migration
+   * 0013 and three comments describing a receipt that showed it, and nothing
+   * selected it — a counter nobody reads is a log line with a schema. The web's
+   * receipt prints it, and `AiCredentialsRepository.spend` counts it among the
+   * calls the org's figure cannot price.
+   *
+   * Selected RAW, never `coalesce(…, 0)`: NULL is a run that predates the
+   * counter, about which nothing is known, and 0 is a run on which nothing was
+   * lost. The receipt says different things for the two. `runDtoSchema` types
+   * it nullable for the same reason, and the e2e pins the NULL through.
+   */
+  unrecordedCalls: schema.pipelineRuns.unrecordedCalls,
   createdAt: schema.pipelineRuns.createdAt,
   updatedAt: schema.pipelineRuns.updatedAt,
 };

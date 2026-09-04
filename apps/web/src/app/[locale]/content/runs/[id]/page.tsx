@@ -259,6 +259,26 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           */}
           {draftDeleted && <p className="mb-6 text-sm text-fg-tertiary">{t("draftDeleted")}</p>}
 
+          {/*
+            Billed model calls the ledger refused to record. THREE values and
+            three renderings, because collapsing any two of them is a lie
+            about money: a count is a loss and is said as one, with where the
+            org's figure is short; zero says nothing, because nothing was lost
+            and a receipt that announced it on every run would teach readers
+            to skip the line that matters; and NULL — a run from before the
+            counter existed — is a statement of ignorance, not of a loss, so it
+            is neither an alert nor silence. The worker counted this for a day
+            before anything read it; this is where it is read.
+          */}
+          {run.unrecordedCalls !== null && run.unrecordedCalls > 0 && (
+            <p role="alert" className="mb-6 text-sm text-danger">
+              {t("unrecordedCalls", { count: run.unrecordedCalls })}
+            </p>
+          )}
+          {run.unrecordedCalls === null && (
+            <p className="mb-6 text-sm text-fg-tertiary">{t("unrecordedUnknown")}</p>
+          )}
+
           <h2 className="mb-3 text-lg font-semibold text-fg">{t("stepsTitle")}</h2>
           <Card padded={false}>
             <ul className="px-4">

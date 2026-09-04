@@ -1,11 +1,11 @@
 import {
   isLiveRunStatus,
   isRunFailure,
+  type RunDetailDto,
+  type RunDto,
   type RunFailure,
-  type RunInput,
   type RunStatus,
   type RunStepCheckpoint,
-  type RunSteps,
 } from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
@@ -84,27 +84,24 @@ export const OPEN_RUNS_POLL_INTERVAL_MS = 5000;
 /** What a run was asked to produce — the column's own schema, inferred. */
 export type { RunInput } from "@pubrick/shared";
 
-/** `GET /api/runs` — the strip's shape. No `steps`: see `RunDetail`. */
-export type Run = {
-  id: string;
-  brandId: string;
-  input: RunInput;
-  status: RunStatus;
-  currentStep: string | null;
-  contentItemId: string | null;
-  /**
-   * Why it failed, as a code — never a sentence, and never the provider's own
-   * words (those quote the submitted API key back). Typed `string | null`
-   * rather than `RunFailure | null` because it arrives over the wire: rows
-   * written before the codes existed still hold prose, and a type assertion
-   * would only hide that from `runFailureMessage`, which is the thing that
-   * actually decides what a reader sees.
-   */
-  errorCode: string | null;
-  dismissedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
+/**
+ * `GET /api/runs` — the strip's shape. No `steps`: see `RunDetail`.
+ *
+ * THE WIRE SCHEMA'S OWN TYPE, not a hand-written twin of it. This app used to
+ * declare the response shape itself, and the api's allowlist declared it
+ * again, with nothing comparing the two — which is how a column the worker
+ * had started counting (`unrecordedCalls`) could be selected by neither, typed
+ * by neither, and rendered nowhere for a day with every suite green.
+ * `runDtoSchema` is what the api's e2e parses a real response with, and what
+ * this app's receipt tests build their fixtures through, so the api, the wire
+ * and this screen now describe one body.
+ *
+ * `errorCode` is `string | null` there rather than `RunFailure | null`, and on
+ * purpose: rows written before the codes existed still hold prose, and
+ * `runFailureMessage` below is the thing that decides what a reader sees.
+ * `unrecordedCalls` is `number | null`, and NULL is not zero — see the schema.
+ */
+export type Run = RunDto;
 
 /**
  * One finished step, as checkpointed by the worker — the column's own schema.
@@ -118,7 +115,7 @@ export type Run = {
 export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 
 /** `GET /api/runs/:id` — the receipt's shape, which adds the checkpoint map. */
-export type RunDetail = Run & { steps: RunSteps };
+export type RunDetail = RunDetailDto;
 
 /**
  * The five roles, in the order the worker runs them. `adapter` is one row for

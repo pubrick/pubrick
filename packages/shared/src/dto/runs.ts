@@ -331,3 +331,62 @@ export type RunStepCheckpoint = z.infer<typeof runStepCheckpointSchema>;
 /** The checkpoint map exactly as the column holds it. */
 export const runStepsSchema = z.record(z.string(), runStepCheckpointSchema);
 export type RunSteps = z.infer<typeof runStepsSchema>;
+
+/**
+ * A RUN AS THE API HANDS IT TO A BROWSER — `GET /api/runs` (one element) and,
+ * with `steps`, `GET /api/runs/:id`.
+ *
+ * This is the WIRE shape, after JSON: timestamps are strings, and every column
+ * the api's allowlist (`RUN_COLUMNS` in `apps/api`) selects appears here by
+ * the name the allowlist gives it. It exists so that the two ends of the wire
+ * can be held to ONE declaration: the api's e2e parses a real response body
+ * with it, and the web builds its receipt fixtures through it — so a column
+ * that the allowlist stops returning fails a parse on both sides, instead of
+ * arriving in the browser as `undefined` and rendering as nothing.
+ *
+ * That is precisely how `unrecordedCalls` spent a day unread. The worker
+ * counted, on the run row, every billed model call the ledger refused; nothing
+ * selected the column, nothing typed it, and three comments described a receipt
+ * that did not exist. A field on this schema is a field the api MUST return.
+ *
+ * `errorCode` is `string`, not `RunFailure`: rows written before the codes
+ * existed still hold prose, and `runFailureMessage` in the web is the thing
+ * that decides what a reader sees — see `RUN_FAILURES`.
+ */
+export const runDtoSchema = z.object({
+  id: z.string().uuid(),
+  brandId: z.string().uuid(),
+  input: runInputSchema,
+  status: z.enum(RUN_STATUSES),
+  currentStep: z.string().nullable(),
+  contentItemId: z.string().uuid().nullable(),
+  errorCode: z.string().nullable(),
+  dismissedAt: z.string().nullable(),
+  /**
+   * How many of this run's model calls were billed and could NOT be written to
+   * the usage ledger — `pipeline_runs.unrecorded_calls`, as the worker counts
+   * it (`GenerateRepository.recordUnrecordedCall`, `+ 1` in SQL per loss).
+   *
+   * THREE values, and a reader must say a different thing for each:
+   * - `n > 0` — n calls cost money that appears in no total. The receipt says
+   *   so, and the org's spend figure counts them among the calls it cannot
+   *   price (`AiCredentialsRepository.spend`).
+   * - `0` — every call on this run reached the ledger. Nothing to say.
+   * - `null` — NOT zero. The run predates the counter (migration 0013), so a
+   *   loss on it went to a log line and nowhere else; nothing is known, and a
+   *   receipt that rendered this the way it renders 0 would be asserting
+   *   "nothing was lost" about the one kind of run where a loss could not be
+   *   seen. Nullable here for that reason, and NEVER `.default(0)`.
+   */
+  unrecordedCalls: z.number().int().nonnegative().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type RunDto = z.infer<typeof runDtoSchema>;
+
+/**
+ * The receipt's shape: the same run plus its checkpoint map, which the list
+ * deliberately does not carry (each checkpoint holds a step's whole output).
+ */
+export const runDetailDtoSchema = runDtoSchema.extend({ steps: runStepsSchema });
+export type RunDetailDto = z.infer<typeof runDetailDtoSchema>;

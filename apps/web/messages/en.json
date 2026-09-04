@@ -255,6 +255,8 @@
     },
     "draftReady": "Draft ready",
     "draftDeleted": "This run's draft has been deleted.",
+    "unrecordedCalls": "{count, plural, one {# model call on this run was billed but could not be recorded} other {# model calls on this run were billed but could not be recorded}} — the spend figure in Settings counts {count, plural, one {this call} other {these calls}} among the calls it cannot price.",
+    "unrecordedUnknown": "This run predates the counting of model calls the ledger could not record, so whether every call on it was recorded is not known.",
     "viewRun": "View generation",
     "cancel": "Cancel",
     "stripsTitle": "Generating",

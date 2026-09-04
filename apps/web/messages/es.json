@@ -255,6 +255,8 @@
     },
     "draftReady": "Borrador listo",
     "draftDeleted": "El borrador de esta generación fue eliminado.",
+    "unrecordedCalls": "{count, plural, one {# llamada al modelo de esta generación se facturó pero no pudo registrarse} other {# llamadas al modelo de esta generación se facturaron pero no pudieron registrarse}}: la cifra de gasto en Ajustes {count, plural, one {la incluye} other {las incluye}} entre las llamadas sin precio.",
+    "unrecordedUnknown": "Esta generación es anterior al recuento de llamadas al modelo que no pudieron registrarse, así que no se sabe si todas sus llamadas quedaron registradas.",
     "viewRun": "Ver generación",
     "cancel": "Cancelar",
     "stripsTitle": "Generando",

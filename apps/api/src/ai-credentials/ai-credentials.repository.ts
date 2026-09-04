@@ -149,6 +149,35 @@ export class AiCredentialsRepository {
    * A bucket rule pinned in one of the two readers and not the other is exactly
    * the seam the outcome clause came from, so the e2e drives THIS path over the
    * same rows `cost-display.test.ts` folds in memory.
+   *
+   * PLUS THE CALLS THAT NEVER BECAME ROWS. A ledger insert is allowed to fail
+   * without destroying the text the org has already paid for, and when it does
+   * the worker counts the loss on the run instead
+   * (`pipeline_runs.unrecorded_calls`, migration 0013). Those calls are in no
+   * bucket, because the buckets partition rows and there is no row — and they
+   * are exactly what this figure was silently missing: a call the ledger
+   * refused subtracted itself from the total and left the label reading
+   * `exact`. Measured before this read them: one priced call and three lost
+   * ones rendered `$0.007875`, exact, against a bill four calls long.
+   *
+   * They are NOT a fourth bucket and NOT a fourth display rule, on purpose. The
+   * rules decide what a reader may conclude from the figure, and an unrecorded
+   * call licenses the same conclusion as an unpriced row: money left, no total
+   * names the amount, so the figure is a floor and the count says how many
+   * calls stand outside it. "≥ $X (N calls unpriced)" is true of both, and it
+   * is the one sentence the reader can act on. That an unrecorded call is MORE
+   * unknown than an unpriced one — no tokens, no step, no timestamp — is a
+   * fact about the run, and the run's receipt is where it is said, per run and
+   * in those words (`Runs.unrecordedCalls` in the web). A second symbol on the
+   * org's total for it would tell the reader to do nothing different.
+   *
+   * Summed by `org_id` over the runs, like the ledger and for the same reason:
+   * a run's `brand_id` cascades, and a join through the brand would drop the
+   * losses of every brand the org has since deleted. `SUM()` skips NULL, which
+   * is correct here rather than a trap: NULL is a run from before the counter,
+   * and nothing can be counted from a row that holds no count — the org's
+   * total may still be understated by losses on those runs, and there is no
+   * number anywhere that could say by how much.
    */
   async spend(orgId: string): Promise<CostSummary> {
     const priced = sql`${schema.usageLedger.costUsd} is not null and ${schema.usageLedger.costSource} <> 'unknown'`;
@@ -170,6 +199,13 @@ export class AiCredentialsRepository {
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.orgId, orgId));
 
+    const lost = await db
+      .select({
+        unrecordedCalls: sql<string>`coalesce(sum(${schema.pipelineRuns.unrecordedCalls}), 0)`,
+      })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.orgId, orgId));
+
     const row = rows[0];
     // An aggregate over zero rows still returns one row; this guards the type,
     // not a case Postgres produces.
@@ -177,7 +213,7 @@ export class AiCredentialsRepository {
 
     return summarizeCost({
       usd: Number(row.usd),
-      unpricedCalls: Number(row.unpricedCalls),
+      unpricedCalls: Number(row.unpricedCalls) + Number(lost[0]?.unrecordedCalls ?? 0),
       estimatedCalls: Number(row.estimatedCalls),
     });
   }

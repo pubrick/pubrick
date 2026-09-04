@@ -85,6 +85,7 @@ function run(overrides: Partial<Run> = {}): Run {
     contentItemId: null,
     errorCode: null,
     dismissedAt: null,
+    unrecordedCalls: 0,
     createdAt: "2026-08-28T10:00:00.000Z",
     updatedAt: "2026-08-28T10:00:00.000Z",
     ...overrides,

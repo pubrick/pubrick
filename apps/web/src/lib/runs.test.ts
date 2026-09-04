@@ -29,6 +29,7 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     contentItemId: null,
     errorCode: null,
     dismissedAt: null,
+    unrecordedCalls: 0,
     steps: {},
     createdAt: "2026-08-28T10:00:00.000Z",
     updatedAt: "2026-08-28T10:00:00.000Z",

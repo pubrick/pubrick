@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { EDITOR, editSchema, FACTCHECK, factcheckSchema, type RunStepContext } from "@pubrick/ai";
-import { MAX_CONCURRENT_RUNS } from "@pubrick/shared";
+import { MAX_CONCURRENT_RUNS, runDetailDtoSchema, runDtoSchema } from "@pubrick/shared";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import request from "supertest";
@@ -151,6 +151,60 @@ describe.skipIf(!url)("runs e2e", () => {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
     await db.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE id = ${id}`);
+    await pool.end();
+  }
+
+  /**
+   * Loses `n` billed calls on a run, the way the worker does when the ledger
+   * refuses a row: `coalesce(unrecorded_calls, 0) + 1`, evaluated by Postgres,
+   * once per loss (`GenerateRepository.recordUnrecordedCall`). Not `SET … = n`,
+   * because the reader under test must see the value the writer produces, and
+   * the writer only ever adds one.
+   */
+  async function loseCalls(runId: string, n: number) {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    for (let i = 0; i < n; i++) {
+      await db.execute(
+        sql`UPDATE pipeline_runs SET unrecorded_calls = coalesce(unrecorded_calls, 0) + 1
+              WHERE id = ${runId}`,
+      );
+    }
+    await pool.end();
+  }
+
+  /**
+   * Turns a run into one that predates migration 0013: the counter is NULL,
+   * "nothing is known", which is what every historical row was left holding
+   * on purpose. The api has no path that writes NULL, so this is the only way
+   * to put the value in front of the reader.
+   */
+  async function forgetLosses(runId: string) {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.execute(sql`UPDATE pipeline_runs SET unrecorded_calls = NULL WHERE id = ${runId}`);
+    await pool.end();
+  }
+
+  /** One provider-priced ledger row on a run, as the worker's `recordUsage` writes it. */
+  async function pricedCall(runId: string, costUsd: string) {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const orgId = (await db.execute(sql`SELECT org_id FROM pipeline_runs WHERE id = ${runId}`))
+      .rows[0] as { org_id: string };
+    await db.insert(schema.usageLedger).values({
+      orgId: orgId.org_id,
+      runId,
+      step: "writer",
+      provider: "google",
+      modelId: "gemini-3.7-flash",
+      inputTokens: 900,
+      outputTokens: 120,
+      costUsd,
+      costSource: "provider_reported",
+      status: "ok",
+      outcome: "completed",
+    });
     await pool.end();
   }
 
@@ -814,6 +868,120 @@ describe.skipIf(!url)("runs e2e", () => {
    * what happened, and a change that replaced it with the code would pass a
    * code-only assertion.
    */
+  /**
+   * `pipeline_runs.unrecorded_calls` — how many of a run's billed model calls
+   * the ledger refused — was written by the worker for a day before anything
+   * read it: not selected, not typed, not rendered, not counted. These pin the
+   * reader: the number leaves a REAL run row, through the response, in the
+   * shape the web's receipt is built from.
+   */
+  describe("calls the ledger could not record reach the receipt", () => {
+    it("reports 0 on a fresh run, and the body IS the wire contract", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+
+      // Parsed with the shared schema rather than probed for one property: the
+      // web builds its fixtures through the same declaration, so this is the
+      // one assertion that makes "the receipt renders what the api returns"
+      // a fact about both ends of the wire.
+      const detail = runDetailDtoSchema.parse(
+        (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
+      );
+      expect(detail.unrecordedCalls).toBe(0);
+
+      const list = await agent.get("/api/runs").expect(200);
+      const row = runDtoSchema.parse(
+        (list.body as Array<{ id: string }>).find((r) => r.id === run.id),
+      );
+      expect(row.unrecordedCalls).toBe(0);
+    });
+
+    it("carries the count the worker accumulated, one loss at a time", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      await loseCalls(run.id, 3);
+
+      const detail = runDetailDtoSchema.parse(
+        (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
+      );
+      expect(detail.unrecordedCalls).toBe(3);
+    });
+
+    it("hands NULL through as null — a run from before the counter says nothing, not zero", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      await forgetLosses(run.id);
+
+      const detail = runDetailDtoSchema.parse(
+        (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
+      );
+      // `toBeNull`, not `toBeFalsy`: 0 would satisfy the latter, and 0 is the
+      // one value this row must not be flattened to.
+      expect(detail.unrecordedCalls).toBeNull();
+    });
+
+    it("stays scoped to the org: another org's losses are not this org's", async () => {
+      const owner = await orgAgent();
+      const theirs = await brandWithChannel(owner);
+      const run = await startRun(owner, theirs.brandId, [theirs.channelId]);
+      await loseCalls(run.id, 2);
+
+      const stranger = await orgAgent();
+      await stranger.get(`/api/runs/${run.id}`).expect(404);
+    });
+
+    /**
+     * The org's spend figure. Its three display rules partition LEDGER ROWS
+     * (`cost-display.ts`); a call the ledger refused is not a row, so it is
+     * not a fourth bucket of rows — it is a second source of the same count:
+     * money left the org and no total names the amount, which is exactly what
+     * rule 1 ("≥ $X, N calls unpriced") already says. Left out, the figure
+     * reads `exact` over a bill it is missing three calls from.
+     *
+     * The measured case of the 2026-09-02 money review, with the loss moved
+     * one layer down: one priced call at $0.007875, three that never became
+     * rows at all.
+     */
+    it("counts a run's lost calls among the calls the org's spend cannot price", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      await pricedCall(run.id, "0.007875");
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 0.007875,
+      });
+
+      await loseCalls(run.id, 3);
+
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0.007875,
+        unpricedCalls: 3,
+      });
+    });
+
+    it("does not let a NULL counter move the org's spend either way", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const run = await startRun(agent, brandId, [channelId]);
+      await pricedCall(run.id, "0.005000");
+      await forgetLosses(run.id);
+
+      // Unknown is unknown: nothing can be counted from it, and an `atLeast`
+      // with a count of 0 — or a NULL sum poisoning the whole figure — would
+      // both be the api inventing a fact about a row that holds none.
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "exact",
+        usd: 0.005,
+      });
+    });
+  });
+
   describe("coded refusals", () => {
     it("codes the admission cap WITHOUT putting the limit on the wire", async () => {
       const agent = await orgAgent();
