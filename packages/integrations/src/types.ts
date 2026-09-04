@@ -1,10 +1,23 @@
 import type { z } from "zod";
 
-export type TextFormat = "plain" | "html";
-
+/**
+ * Plain text only, deliberately. An earlier revision carried an optional
+ * `format: "html" | "plain"` here, with a matching `parse_mode: "HTML"`
+ * branch and a "can't parse entities" retry fallback in the Telegram
+ * adapter, and an `escapeHtml` helper beside it in this package. Nothing
+ * upstream ever produced HTML-tagged content or set `format` — the only
+ * callers exercising it were that adapter's own tests — so it was dead
+ * capability wearing the appearance of readiness, and it carried a real
+ * latent bug: the adapter never actually called `escapeHtml` on `text`
+ * before sending it with `parse_mode: "HTML"`, so a caller that DID set
+ * `format: "html"` with unescaped user content could have its post rejected
+ * or mangled by Telegram's own entity parser. Removed 2026-09-04 rather than
+ * left live. See `packages/integrations/src/telegram.ts` for what a future
+ * caller needs to bring back if Telegram HTML formatting becomes a real
+ * requirement.
+ */
 export interface PublishInput {
   text: string;
-  format?: TextFormat;
   disableLinkPreview?: boolean;
 }
 

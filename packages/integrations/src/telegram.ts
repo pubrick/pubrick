@@ -170,10 +170,10 @@ class UnrecognizedTelegramResponse extends Error {
  * A permanent error that came from Telegram's OWN envelope (`ok:false` plus an
  * `error_code`) rather than from an unrecognised body classified by HTTP
  * status. Only these are proof that Telegram itself saw the request and
- * refused it — which is what makes the "retry once without parse_mode" path in
- * `publish()` safe: it resends, and it may only ever resend something the
- * platform has told us it did not accept. A 400 from a proxy carrying an
- * unrecognised body is not that proof.
+ * refused it, as opposed to a proxy/gateway in front of api.telegram.org
+ * answering with a body that merely looks like a rejection. `publish()` and
+ * `verify()` both rely on that proof to know "the platform decided, nothing
+ * is in flight" rather than "unknown outcome".
  */
 class TelegramRejection extends PermanentPublishError {}
 
@@ -397,22 +397,9 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       text: input.text,
       link_preview_options: { is_disabled: input.disableLinkPreview !== false },
     };
-    if (input.format === "html") payload.parse_mode = "HTML";
-
-    try {
-      return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
-    } catch (error) {
-      // A post delivered as plain text beats a post that never goes out.
-      const parseFailed =
-        error instanceof TelegramRejection &&
-        error.code === 400 &&
-        /can't parse entities/i.test(error.message) &&
-        payload.parse_mode !== undefined;
-      if (!parseFailed) throw error;
-
-      payload.parse_mode = undefined;
-      return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
-    }
+    // No `parse_mode` — see the doc comment on `PublishInput` in ./types.ts
+    // for why HTML formatting was removed rather than left unreachable.
+    return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
   },
 
   async verify(credentials, options): Promise<VerifyResult> {

@@ -57,14 +57,6 @@ describe("telegramPublisher.publish", () => {
     expect(result).toEqual({ externalId: "4711", externalUrl: "https://t.me/mychannel/4711" });
   });
 
-  it("sends html format with parse_mode HTML", async () => {
-    const fetchImpl = fetchReturning(okMessage());
-    await telegramPublisher.publish(CREDS, { text: "<b>hi</b>", format: "html" }, { fetchImpl });
-    const init = fetchImpl.mock.calls[0]?.[1];
-    const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.parse_mode).toBe("HTML");
-  });
-
   it("derives a private channel link when the chat has no username", async () => {
     const fetchImpl = fetchReturning(
       okMessage({ chat: { id: -1009876543210, type: "channel", title: "Private" } }),
@@ -79,42 +71,16 @@ describe("telegramPublisher.publish", () => {
     expect(result).toEqual({ externalId: null, externalUrl: null });
   });
 
-  it("retries once without parse_mode when entity parsing fails", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            ok: false,
-            error_code: 400,
-            description: "Bad Request: can't parse entities: bad",
-          }),
-          { status: 400 },
-        ),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify(okMessage()), { status: 200 }));
-
-    const result = await telegramPublisher.publish(
-      CREDS,
-      { text: "<b>hi", format: "html" },
-      { fetchImpl },
-    );
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const secondCallInit = fetchImpl.mock.calls[1]?.[1];
-    expect(JSON.parse((secondCallInit as RequestInit).body as string).parse_mode).toBeUndefined();
-    expect(result.externalId).toBe("4711");
-  });
-
-  // The resend is only safe because Telegram's own envelope said it did not
-  // accept the message. A 400 from a gateway, with an unrecognized body that
-  // happens to carry the same words, is not that proof — and resending on it
-  // would be a second post.
-  it("does NOT resend on a 400 whose body is not Telegram's envelope, even if it mentions parse entities", async () => {
+  // A 400 from a gateway, with an unrecognized body that happens to mention
+  // "parse entities", must not be read as Telegram's own rejection — only
+  // Telegram's envelope (`ok:false` plus an `error_code`) is proof the
+  // platform itself saw and refused the request.
+  it("classifies a 400 whose body is not Telegram's envelope as permanent, even if it mentions parse entities", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(new Response("proxy error: can't parse entities", { status: 400 }));
     await expect(
-      telegramPublisher.publish(CREDS, { text: "<b>hi", format: "html" }, { fetchImpl }),
+      telegramPublisher.publish(CREDS, { text: "hi" }, { fetchImpl }),
     ).rejects.toBeInstanceOf(PermanentPublishError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
