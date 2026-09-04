@@ -9,6 +9,7 @@ import {
   costTotals,
   decryptJson,
   encryptJson,
+  MAX_TEST_CALLS_PER_HOUR,
   preferredCredential,
   summarizeCost,
   toLedgerCostUsd,
@@ -33,6 +34,19 @@ const PUBLIC_COLUMNS = {
 
 /** The `step` a ledger row gets when the call belongs to no run. */
 const TEST_STEP = "test";
+
+/**
+ * The window `MAX_TEST_CALLS_PER_HOUR` is counted over.
+ *
+ * A literal interval rather than a computed `Date`: the comparison happens in
+ * Postgres against `usage_ledger.created_at`, which is `timestamp` WITHOUT time
+ * zone and is written by the database's own `now()`. Handing it a JavaScript
+ * `Date` from an api replica running in, say, Europe/Moscow would shift the
+ * window by the offset — the same defect the worker's lease arithmetic
+ * documents at length, and here it would either wave every request through or
+ * refuse every one of them.
+ */
+const TEST_BUDGET_WINDOW = sql`interval '1 hour'`;
 
 @Injectable()
 export class AiCredentialsRepository {
@@ -177,6 +191,12 @@ export class AiCredentialsRepository {
    * cached green tick would be a claim we did not check.
    */
   async test(orgId: string, provider: AiProviderId): Promise<AiCredentialTestResult> {
+    // BEFORE the decrypt and before the provider, because refusing after either
+    // of those would be refusing after the cost. This is the whole of the limit:
+    // the endpoint's own membership guard is the only other thing between a
+    // member and the organisation's key.
+    if (await this.overTestBudget(orgId)) return { ok: false, reason: "too_many_tests" };
+
     let credential: AiCredential;
     try {
       credential = await this.getDecrypted(orgId, provider);
@@ -204,6 +224,48 @@ export class AiCredentialsRepository {
       modelId: outcome.modelId,
       cost: summarizeCost(costTotals(outcome.records)),
     };
+  }
+
+  /**
+   * Has this org used up its hourly allowance of billed test calls?
+   *
+   * COUNTED FROM THE LEDGER the calls themselves wrote, rather than from a
+   * counter of presses. Three things follow, and each is the reason for the
+   * choice:
+   *
+   * - the number is the same for every api replica and survives a restart. An
+   *   in-process bucket is one budget PER REPLICA and a fresh budget after every
+   *   deploy, which is a limit an attacker can wait out;
+   * - a press that cost two physical calls (the structured-output repair retry)
+   *   consumes two, because the ledger wrote two. The thing bounded is money,
+   *   not clicks;
+   * - a Test that spent nothing consumes nothing. An unreadable key never
+   *   reaches a provider and writes no row, so a user whose key blob is broken
+   *   can keep pressing Test while they fix it and never meet this refusal.
+   *
+   * The race is real and bounded: two presses that read the count at the same
+   * instant can both pass. The overshoot is the concurrency, not a multiple of
+   * the limit, and `SELECT … FOR UPDATE` over a rate window would serialise
+   * every press in the deployment behind one lock to save a call worth a tenth
+   * of a cent.
+   *
+   * `>=`, not `>`: the count is of calls ALREADY MADE, so a count that has
+   * reached the limit means the allowance is spent, not that one more is owed.
+   */
+  private async overTestBudget(orgId: string): Promise<boolean> {
+    const rows = await db
+      .select({ calls: sql<string>`count(*)` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, TEST_STEP),
+          sql`${schema.usageLedger.createdAt} > now() - ${TEST_BUDGET_WINDOW}`,
+        ),
+      );
+    // `count(*)` over zero rows still returns one row holding 0; this guards the
+    // type, not a case Postgres produces.
+    return Number(rows[0]?.calls ?? 0) >= MAX_TEST_CALLS_PER_HOUR;
   }
 
   /**

@@ -197,6 +197,7 @@
     "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",
     "aiTestFailRefused": "The provider refused the request. Check the key and the model id.",
     "aiTestFailTimedOut": "The model call ran out of time before the provider answered. Try again, or check the model id.",
+    "aiTestFailTooManyTests": "This workspace has used its {limit} test calls for the past hour. Each Test is a paid call to your provider, so they are capped. Try again later.",
     "aiTestFailUnreadableKey": "The stored key could not be read. Save it again.",
     "aiSpendError": "Spend so far could not be loaded — this is not a total of zero."
   },

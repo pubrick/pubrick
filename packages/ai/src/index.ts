@@ -16,6 +16,7 @@ export {
   type AiCredential,
   type AiProvider,
   DEFAULT_MODELS,
+  probeThinkingOptions,
   resolveModel,
 } from "./provider.js";
 export {

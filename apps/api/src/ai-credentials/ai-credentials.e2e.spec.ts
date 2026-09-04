@@ -8,6 +8,7 @@ import {
   type CostSummary,
   costTotals,
   encryptJson,
+  MAX_TEST_CALLS_PER_HOUR,
   preferredCredential,
   summarizeCost,
 } from "@pubrick/shared";
@@ -554,6 +555,150 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       expect(result.body.ok).toBe(true);
       expect(result.body.modelId).toBe("gemini-3.7-flash");
+    });
+  });
+
+  /**
+   * The only route in this api that spends money on demand, and until now the
+   * only thing above it was membership: no role, no limit, and no throttler
+   * anywhere in the app. Every press is a live model call on the org's own key —
+   * two when the repair retry fires — so a member with a loop could spend on
+   * the order of $140 an hour of somebody else's money.
+   *
+   * What is counted is CALLS, from the ledger the calls themselves wrote: one
+   * number for the whole deployment rather than one per replica, surviving a
+   * restart, and consuming nothing for a Test that spent nothing.
+   */
+  describe("the hourly cap on what Test can spend", () => {
+    /** Rows exactly as the Test button writes them, without spending anything. */
+    async function seedTestCalls(orgId: string, count: number, step = "test") {
+      if (count === 0) return;
+      await direct.db.insert(schema.usageLedger).values(
+        Array.from({ length: count }, () => ({
+          orgId,
+          step,
+          provider: "google" as const,
+          modelId: "gemini-3.7-flash",
+          costUsd: "0.000400",
+          costSource: "price_table" as const,
+          status: "ok" as const,
+          outcome: "completed" as const,
+        })),
+      );
+    }
+
+    it("refuses once the org has used its allowance, without reaching a provider", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      await seedTestCalls(orgId, MAX_TEST_CALLS_PER_HOUR);
+
+      const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      expect(result.body).toEqual({ ok: false, reason: "too_many_tests" });
+      // The refusal is worth nothing if the call still happened. It is made
+      // before the decrypt and before the probe, so nothing is spent and the
+      // key is not even read.
+      expect(probeCalls).toHaveLength(0);
+    });
+
+    it("refuses ON the limit and not one call before it", async () => {
+      // The count is of calls ALREADY MADE, so a count that has reached the
+      // limit means the allowance is spent. Off by one here is either a member
+      // refused while they still had a call left, or a limit that is not the
+      // number the screen tells them.
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      await seedTestCalls(orgId, MAX_TEST_CALLS_PER_HOUR - 1);
+      // A press that really writes its row, because the row is what closes the
+      // budget: the ledger is the counter.
+      probeOutcome = { ok: true, modelId: "gemini-3.7-flash", records: [usage()] };
+
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body.ok).toBe(true);
+      expect(probeCalls).toHaveLength(1);
+
+      // That press wrote its own row, which is the one that closes the budget.
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body).toEqual({
+        ok: false,
+        reason: "too_many_tests",
+      });
+    });
+
+    it("does not make an honest user wait: a second press goes straight through", async () => {
+      // A limit that bites a person who pressed Test twice is worse than the
+      // problem it solves. Two presses in a row, both real, both answered.
+      const { agent } = await orgAgent();
+      await save(agent).expect(200);
+      probeOutcome = { ok: true, modelId: "gemini-3.7-flash", records: [usage()] };
+
+      const first = await agent.post("/api/ai-credentials/google/test").expect(200);
+      const second = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      expect(first.body.ok).toBe(true);
+      expect(second.body.ok).toBe(true);
+      expect(probeCalls).toHaveLength(2);
+    });
+
+    it("counts only this org's calls", async () => {
+      // The limit is per organisation and the ledger is global. A count that
+      // forgot to scope would let any busy tenant lock out every other one.
+      const { orgId: neighbour } = await orgAgent();
+      await seedTestCalls(neighbour, MAX_TEST_CALLS_PER_HOUR * 2);
+      const { agent } = await orgAgent();
+      await save(agent).expect(200);
+
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body.ok).toBe(true);
+    });
+
+    it("counts only test calls — a run's spend does not lock the button", async () => {
+      // A generation run writes far more rows than this button ever will. If
+      // they counted, an org that generated anything could no longer check
+      // whether its key still works — which is when it most needs to.
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      await seedTestCalls(orgId, MAX_TEST_CALLS_PER_HOUR * 2, "writer");
+
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body.ok).toBe(true);
+    });
+
+    it("forgets calls older than the window", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      await seedTestCalls(orgId, MAX_TEST_CALLS_PER_HOUR);
+      // Backdated by the DATABASE's clock, never a JavaScript `Date`:
+      // `created_at` is `timestamp` without time zone and is compared against
+      // `now()`, so a value serialised with the test process's own offset would
+      // move the window by that offset instead of by two hours.
+      await direct.db.execute(
+        sql`update usage_ledger set created_at = now() - interval '2 hours' where org_id = ${orgId}`,
+      );
+
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body.ok).toBe(true);
+    });
+
+    it("still counts a refused call, which cost a round trip even at zero tokens", async () => {
+      // A 429 the provider refused writes a zero-token, unpriced row. It is
+      // still a request made on the org's key, and a limit that skipped it
+      // would be no limit at all against a key the provider is already
+      // throttling.
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      await direct.db.insert(schema.usageLedger).values(
+        Array.from({ length: MAX_TEST_CALLS_PER_HOUR }, () => ({
+          orgId,
+          step: "test",
+          provider: "google" as const,
+          modelId: "gemini-3.7-flash",
+          costUsd: null,
+          costSource: "unknown" as const,
+          status: "errored" as const,
+          outcome: "refused" as const,
+        })),
+      );
+
+      expect((await agent.post("/api/ai-credentials/google/test").expect(200)).body).toEqual({
+        ok: false,
+        reason: "too_many_tests",
+      });
     });
   });
 

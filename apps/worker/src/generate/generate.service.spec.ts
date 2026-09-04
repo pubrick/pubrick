@@ -1,6 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { channelOf, scriptedModel } from "../test/scripted-model";
+import { channelOf, type ScriptedUsage, scriptedModel } from "../test/scripted-model";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -1560,5 +1560,125 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         seeded.channelNames[0],
       );
     }, 25_000);
+  });
+
+  /**
+   * A billed call whose ledger row cannot be written.
+   *
+   * The policy — keep the text, lose the row — is right and stays. What was
+   * missing is anywhere for the loss to LAND. The package reports it to a
+   * caller-supplied handler and, with none, to a bare `console.error`; the
+   * worker set none, so the loss left the framework's logger entirely while the
+   * SAME method's foreign-key narrowing wrote through it two lines away. Nothing
+   * counted it, nothing marked the run, and an org whose spend is understated
+   * had no way to find out.
+   *
+   * The failure below is REAL — a token count past int4, refused by Postgres on
+   * the real table — and not a stubbed repository, because the thing being
+   * proved is that the loss survives in the database.
+   */
+  describe("a ledger row that could not be written", () => {
+    /** Past int4: `usage_ledger.input_tokens` is an `integer` column. */
+    const OVERFLOWING: ScriptedUsage = {
+      inputTokens: { total: 3_000_000_000, noCache: 3_000_000_000, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 60, text: 60, reasoning: 0 },
+    };
+
+    it("counts the loss on the run, which outlives the step", async () => {
+      const seeded = await seed({ channels: 1 });
+      const script = scriptedModel({}, OVERFLOWING);
+
+      await serviceFor(script).handle({
+        id: "job-lost-ledger",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      // Every call this run made was billed and none of them could be recorded.
+      // Five steps for one channel: researcher, writer, editor, factcheck, one
+      // adapter.
+      expect(script.calls).toHaveLength(5);
+      expect(await ledgerOf(seeded.orgId)).toHaveLength(0);
+
+      const run = await runRow(seeded.runId);
+      // The number a receipt can print. Without it the org sees $0.00 for a run
+      // that cost five calls and is given no reason to doubt it.
+      expect(run?.unrecordedCalls).toBe(5);
+      // And the run still succeeded: the text was paid for, so throwing it away
+      // as well would be strictly worse than losing its record.
+      expect(run?.status).toBe("succeeded");
+      expect(await itemsOf(seeded.orgId)).toHaveLength(1);
+    }, 30_000);
+
+    it("leaves the counter at zero when every row lands", async () => {
+      // The other half of the claim: this counter means "money we cannot
+      // account for", so a run that recorded everything must read zero. A
+      // counter that ticked on a healthy run would make every receipt hedge.
+      const seeded = await seed({ channels: 1 });
+
+      await serviceFor(scriptedModel()).handle({
+        id: "job-ledger-fine",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+      expect((await runRow(seeded.runId))?.unrecordedCalls).toBe(0);
+    }, 30_000);
+
+    it("records the loss even for a handler that has lost the fence", async () => {
+      // The write is deliberately UNFENCED. A handler whose ledger writes are
+      // failing is exactly the one likely to have lost its lease as well, and a
+      // fenced counter would drop precisely those losses — the money still left
+      // the org. The run is handed to somebody else DURING the researcher's
+      // call, so the loss is reported by a handler that no longer owns the run.
+      const seeded = await seed({ channels: 1 });
+      const script = scriptedModel(
+        {
+          researcher: async () => {
+            await claimedByAnother(seeded.runId, "someone-else#9999");
+            return { angle: "An angle", keyPoints: ["A key point"], avoid: [] };
+          },
+        },
+        OVERFLOWING,
+      );
+
+      await serviceFor(script).handle({
+        id: "job-lost-fence-and-row",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      // It stopped at the next step boundary, as it must — one call made, one
+      // call lost, and the loss recorded anyway.
+      expect(script.calls).toHaveLength(1);
+      const run = await runRow(seeded.runId);
+      expect(run?.unrecordedCalls).toBe(1);
+      expect(run?.activeJobId).toBe("someone-else#9999");
+    }, 30_000);
+
+    it("counts the loss against the run it happened on and no other", async () => {
+      const other = await seed({ channels: 1 });
+      const seeded = await seed({ channels: 1 });
+      // A SECOND run of the same org, which is what makes this test able to
+      // fail. With one run per org, an update scoped by `org_id` alone still
+      // touches exactly the intended row and every scoping mutation reads as
+      // survived — the shape of test that reports a line as pinned while
+      // pinning nothing. This sibling is the row a lost `id` predicate hits.
+      const [sibling] = await db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: seeded.orgId,
+          brandId: seeded.brandId,
+          input: { kind: "brief", text: BRIEF, channelIds: seeded.channelIds },
+        })
+        .returning({ id: schema.pipelineRuns.id });
+
+      await serviceFor(scriptedModel({}, OVERFLOWING)).handle({
+        id: "job-lost-scoped",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      expect((await runRow(seeded.runId))?.unrecordedCalls).toBe(5);
+      expect((await runRow(sibling?.id as string))?.unrecordedCalls).toBe(0);
+      expect((await runRow(other.runId))?.unrecordedCalls).toBe(0);
+    }, 30_000);
   });
 });

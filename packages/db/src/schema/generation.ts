@@ -177,6 +177,35 @@ export const pipelineRuns = pgTable(
     /** A failed or cancelled run stays on the queue strip until a human dismisses it. */
     dismissedAt: timestamp("dismissed_at"),
     /**
+     * How many of this run's model calls were billed and could NOT be written
+     * to `usage_ledger`.
+     *
+     * The ledger insert is deliberately allowed to fail without destroying the
+     * text the org has already paid for (`GenerateRepository.recordUsage`, and
+     * `generateStructured`'s `onUsageError` before it). What was missing was
+     * anywhere for that loss to LAND: the worker reported it down a channel
+     * that ended in a bare `console.error`, so an org whose spend is understated
+     * had no way to learn it. A log line is not a record.
+     *
+     * The run row is the one row that outlives the step. `run_id` on the ledger
+     * is `ON DELETE SET NULL` and the money is summed by `org_id`, so a lost row
+     * is lost from BOTH totals — this counter is the only thing left that can
+     * say "and there were N more". Incremented in place (`+ 1` in SQL, never a
+     * read-modify-write) and deliberately NOT fenced: the loss is an accounting
+     * fact about this run's money, not a state transition, and a handler that
+     * has just lost the fence is exactly the one whose loss would otherwise
+     * vanish.
+     *
+     * NULLABLE, and NULL is a different claim from 0 — the same distinction
+     * `usage_ledger.outcome` draws, for the same reason. A run that predates
+     * this column carries NULL: losses on it went to a `console.error` and
+     * nothing else, so nothing is known about it and a back-filled 0 would be
+     * the product asserting "nothing was lost here" about the very runs where a
+     * loss could not be seen. A run that has executed since carries 0 or more,
+     * because the DEFAULT applies to inserts.
+     */
+    unrecordedCalls: integer("unrecorded_calls").default(0),
+    /**
      * Fencing. A pg-boss heartbeat does not extend `expireInSeconds`, so a run
      * that outlives its expiry can be handed to a second handler while the
      * first is still working. The handler claims the run by writing its job id

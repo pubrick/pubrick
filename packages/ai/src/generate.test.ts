@@ -588,6 +588,121 @@ describe("generateStructured", () => {
       expect(runFailureOf(error)).toBe("no_structured_output");
       expect(onUsageError).toHaveBeenCalledTimes(2);
     });
+
+    /**
+     * The handler is where the loss comes to rest, and putting it somewhere
+     * durable means doing I/O. A promise nobody awaited would race the step it
+     * belongs to and, on a run's last call, the process exit — so the row would
+     * be "recorded" by a write that never landed.
+     */
+    it("waits for a handler that has to write the loss down somewhere", async () => {
+      const order: string[] = [];
+      let landed = false;
+      const result = await generateStructured({
+        ...base,
+        model: textModel('{"headline":"Survived"}'),
+        onUsage: () => {
+          throw new Error("db down");
+        },
+        onUsageError: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          landed = true;
+          order.push("handler");
+        },
+      });
+      order.push("returned");
+
+      expect(result).toEqual({ headline: "Survived" });
+      expect(landed).toBe(true);
+      expect(order).toEqual(["handler", "returned"]);
+    });
+
+    /**
+     * The last thing standing between a billed call and no record of it at all
+     * is this handler, and it can fail too. It must not take the text with it:
+     * we are on the SUCCESS path of a call the provider has already charged
+     * for, which is the whole reason a ledger failure does not raise.
+     */
+    it("survives a handler that throws, and keeps the text anyway", async () => {
+      const result = await generateStructured({
+        ...base,
+        model: textModel('{"headline":"Survived"}'),
+        onUsage: () => {
+          throw new Error("db down");
+        },
+        onUsageError: () => {
+          throw new Error("and the counter failed too");
+        },
+      });
+
+      expect(result).toEqual({ headline: "Survived" });
+    });
+
+    it("survives a handler whose promise rejects", async () => {
+      const result = await generateStructured({
+        ...base,
+        model: textModel('{"headline":"Survived"}'),
+        onUsage: () => {
+          throw new Error("db down");
+        },
+        onUsageError: async () => {
+          await Promise.resolve();
+          throw new Error("and the counter failed too");
+        },
+      });
+
+      expect(result).toEqual({ headline: "Survived" });
+    });
+  });
+
+  /**
+   * The knob the credential probe uses to stop paying for reasoning on a
+   * two-word connectivity check. It is only worth having if it reaches the
+   * provider, and nothing else in this package would notice if it stopped.
+   */
+  describe("provider options", () => {
+    it("forwards them to the model, unchanged", async () => {
+      const seen: Array<Record<string, unknown> | undefined> = [];
+      const model = new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          seen.push(options.providerOptions as Record<string, unknown> | undefined);
+          return {
+            content: [{ type: "text" as const, text: '{"headline":"x"}' }],
+            finishReason: stop,
+            usage,
+            warnings: [],
+          };
+        },
+      });
+
+      await generateStructured({
+        ...base,
+        model,
+        onUsage: () => {},
+        providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
+      });
+
+      expect(seen).toEqual([{ google: { thinkingConfig: { thinkingLevel: "low" } } }]);
+    });
+
+    it("sends none when the caller names none, rather than an empty object", async () => {
+      const seen: Array<Record<string, unknown> | undefined> = [];
+      const model = new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          seen.push(options.providerOptions as Record<string, unknown> | undefined);
+          return {
+            content: [{ type: "text" as const, text: '{"headline":"x"}' }],
+            finishReason: stop,
+            usage,
+            warnings: [],
+          };
+        },
+      });
+
+      await generateStructured({ ...base, model, onUsage: () => {} });
+
+      expect(seen).toEqual([undefined]);
+    });
   });
 
   it("takes OpenRouter's reported cost when it is present", async () => {

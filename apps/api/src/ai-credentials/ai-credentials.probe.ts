@@ -3,6 +3,7 @@ import {
   type AiCredential,
   classifyAiError,
   generateStructured,
+  probeThinkingOptions,
   resolveModel,
   runFailureOf,
   type UsageRecord,
@@ -46,6 +47,38 @@ const PROBE_INSTRUCTIONS =
  * calling Google or OpenRouter, which §8 of the design forbids outright. The
  * repository keeps every database line; this keeps every network line.
  */
+/**
+ * Everything the probe's one model call is made of except the sink.
+ *
+ * A pure function, exported, because these are the two things about that call
+ * worth a test and neither can be observed through `run`: `maxRetries: 0` (a
+ * press must not be billed three times, nor sit through real exponential
+ * backoff to be told about a rate limit) and the thinking level. Building the
+ * model contacts nobody, so this is free to call in a test.
+ *
+ * `providerOptions` asks for the least reasoning the model will accept. The
+ * prompt is two words and the answer is two words; everything between them is
+ * thinking the model does by default and bills at the OUTPUT rate, which is
+ * most of what a press of this button costs — a connectivity check, not a
+ * reasoning task. `probeThinkingOptions` returns `undefined` for any model id
+ * the org typed itself, and then the key is ABSENT rather than undefined: a
+ * thinking knob a model does not support is a 400, and a 400 on this button
+ * reads to the user as "your key was rejected". See its own doc.
+ */
+export function probeCallArgs(credential: AiCredential) {
+  const model = resolveModel(credential);
+  const thinking = probeThinkingOptions(credential.provider, model.modelId);
+  return {
+    model,
+    provider: credential.provider,
+    schema: PROBE_SCHEMA,
+    instructions: PROBE_INSTRUCTIONS,
+    prompt: PROBE_PROMPT,
+    maxRetries: 0,
+    ...(thinking === undefined ? {} : { providerOptions: thinking }),
+  };
+}
+
 @Injectable()
 export class AiCredentialProbe {
   async run(credential: AiCredential): Promise<ProbeOutcome> {
@@ -86,19 +119,15 @@ export class AiCredentialProbe {
    * rate limit. It does NOT switch off `generateStructured`'s repair retry,
    * which fires on exactly the schema violation this button exists to provoke:
    * a Test that meets one costs two physical calls, both metered, both charged.
+   *
+   * What it asks for, apart from the sink, is `probeCallArgs` — a pure function
+   * so that the two decisions worth pinning (no transport retries, and the
+   * cheapest thinking the model will accept) can be asserted without a network.
    */
   protected async call(credential: AiCredential, onUsage: UsageSink): Promise<string> {
-    const model = resolveModel(credential);
-    await generateStructured({
-      model,
-      provider: credential.provider,
-      schema: PROBE_SCHEMA,
-      instructions: PROBE_INSTRUCTIONS,
-      prompt: PROBE_PROMPT,
-      onUsage,
-      maxRetries: 0,
-    });
-    return model.modelId;
+    const args = probeCallArgs(credential);
+    await generateStructured({ ...args, onUsage });
+    return args.model.modelId;
   }
 }
 

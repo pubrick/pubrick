@@ -37,7 +37,13 @@ export type ScriptedModel = {
   adaptedChannels(): string[];
 };
 
-const usage = {
+/** The nested provider-level usage shape the recorder reads. */
+export type ScriptedUsage = {
+  inputTokens: { total: number; noCache: number; cacheRead: number; cacheWrite: number };
+  outputTokens: { total: number; text: number; reasoning: number };
+};
+
+const DEFAULT_USAGE: ScriptedUsage = {
   inputTokens: { total: 120, noCache: 120, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 60, text: 60, reasoning: 0 },
 };
@@ -93,9 +99,22 @@ const DEFAULT_REPLIES: Record<StepRole, RoleReply> = {
   adapter: (system) => ({ body: `An adaptation for ${channelOf(system)}.` }),
 };
 
-export function scriptedModel(replies: Partial<Record<StepRole, RoleReply>> = {}): ScriptedModel {
+/**
+ * `usage` is overridable so a test can make the LEDGER WRITE fail for real
+ * rather than by stubbing the repository: token counts land in `integer`
+ * columns, so a count past int4 is a genuine, reproducible insert failure on
+ * the real database — the same trick `ai-credentials.e2e.spec.ts` uses on the
+ * other writer of that table. It is not a foreign-key violation, so it lands
+ * past `recordUsage`'s narrowing and reaches the sink-failure path, which is
+ * the one being tested.
+ */
+export function scriptedModel(
+  replies: Partial<Record<StepRole, RoleReply>> = {},
+  usageOverride?: ScriptedUsage,
+): ScriptedModel {
   const calls: ScriptedModel["calls"] = [];
   const answer = { ...DEFAULT_REPLIES, ...replies };
+  const usage = usageOverride ?? DEFAULT_USAGE;
 
   const model = new MockLanguageModelV4({
     // The id the price table knows, so ledger rows come out priced rather than

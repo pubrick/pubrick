@@ -8,6 +8,7 @@ import {
   type AiTestFailure,
   type CostSummary,
   formatUsd,
+  MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
@@ -43,7 +44,22 @@ const TEST_FAILURE_KEYS: Record<AiTestFailure, string> = {
   rate_limited: "aiTestFailRateLimited",
   refused: "aiTestFailRefused",
   timed_out: "aiTestFailTimedOut",
+  too_many_tests: "aiTestFailTooManyTests",
   unreadable_key: "aiTestFailUnreadableKey",
+};
+
+/**
+ * The one argument any of those sentences needs, and it does not travel on the
+ * wire — exactly as `run_limit_reached`'s does not (`ERROR_MESSAGE_VALUES`,
+ * lib/api.ts).
+ *
+ * `MAX_TEST_CALLS_PER_HOUR` is exported from `@pubrick/shared` so that the api
+ * enforcing the limit and the screen explaining it cannot promise different
+ * numbers. Reading it here rather than having the server send a sentence with
+ * the number already in it is what keeps that true in Russian.
+ */
+const TEST_FAILURE_VALUES: Partial<Record<AiTestFailure, Record<string, string | number>>> = {
+  too_many_tests: { limit: MAX_TEST_CALLS_PER_HOUR },
 };
 
 /**
@@ -255,7 +271,7 @@ export default function SettingsPage() {
     if (!result.ok) {
       return (
         <span role="alert" className="text-danger">
-          {t(TEST_FAILURE_KEYS[result.reason])}
+          {t(TEST_FAILURE_KEYS[result.reason], TEST_FAILURE_VALUES[result.reason])}
         </span>
       );
     }

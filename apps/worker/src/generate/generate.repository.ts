@@ -441,6 +441,47 @@ export class GenerateRepository {
     }
   }
 
+  /**
+   * Record, on the run itself, that one billed call could not be written to the
+   * ledger.
+   *
+   * WHY THE RUN ROW. It is the only row that outlives the step and cannot be
+   * derived from the money. The ledger's totals are summed over the rows that
+   * exist, so a row that was never written subtracts itself in silence: the org
+   * sees a smaller number and has no way to learn that it is smaller. This
+   * counter is what lets a receipt say "and N calls could not be recorded"
+   * instead of quietly showing less than was spent.
+   *
+   * `+ 1` EVALUATED BY POSTGRES, never a read-modify-write. Two steps of one run
+   * do not overlap, but a fenced-out handler still finishing an in-flight call
+   * and its successor do, and two losses that read the same value would record
+   * one.
+   *
+   * DELIBERATELY UNFENCED, and that is the difference between this and every
+   * other write in this file. The others move the run's STATE, so they must
+   * belong to whoever owns it. This one states a fact about money that has
+   * already left: it happened on this run, whoever holds the fence now. Guarding
+   * it with `active_job_id = $fence` would drop exactly the losses of a handler
+   * that had just lost the race — the handler whose ledger writes are most
+   * likely to be failing in the first place.
+   *
+   * Best effort by contract: the caller has generated text it has already paid
+   * for, so a throw from here must not be allowed to destroy it. It is the
+   * caller's job to catch, and `GenerateService`'s handler does.
+   */
+  async recordUnrecordedCall(orgId: string, runId: string): Promise<void> {
+    await db
+      .update(schema.pipelineRuns)
+      .set({
+        // `coalesce`, because the column is NULL on every run that predates it
+        // — NULL means "nothing is known", not zero — and `NULL + 1` is NULL,
+        // which would swallow the very first loss recorded on such a run.
+        unrecordedCalls: sql`coalesce(${schema.pipelineRuns.unrecordedCalls}, 0) + 1`,
+        updatedAt: nowSql(),
+      })
+      .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)));
+  }
+
   /** Which of a ledger row's two nullable references still exist. */
   private async survivingReferences(
     runId: string,

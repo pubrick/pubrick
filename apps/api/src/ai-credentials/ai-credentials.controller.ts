@@ -83,6 +83,14 @@ export class AiCredentialsController {
    * 200 on both arms: a key the provider rejected is a *result* the user needs
    * to read, not a server error. The same rule the channel verify endpoint
    * follows.
+   *
+   * THE ONLY ROUTE IN THIS API THAT SPENDS MONEY ON DEMAND, and the only guard
+   * above it is `ActiveOrgGuard` — membership, no role. The bound on what a
+   * member can spend through it therefore lives in
+   * `AiCredentialsRepository.test`, which refuses with `too_many_tests` once
+   * the org's `MAX_TEST_CALLS_PER_HOUR` billed test calls are gone. It is a
+   * verdict in the 200 body and not a 429 for the same reason every other arm
+   * of this endpoint is: the settings screen has to say it in four languages.
    */
   @Post(":provider/test")
   @HttpCode(200)

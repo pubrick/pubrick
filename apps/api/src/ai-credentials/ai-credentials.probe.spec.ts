@@ -10,7 +10,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { AiCredentialProbe } from "./ai-credentials.probe";
+import { AiCredentialProbe, probeCallArgs } from "./ai-credentials.probe";
 
 /**
  * The key a provider is about to echo back at us.
@@ -324,5 +324,52 @@ describe("AiCredentialProbe — the verdict is read from the classifier's tag", 
     const outcome = await probeThatThrows(apiError(status)).run(credential);
 
     expect(outcome).toMatchObject({ ok: false, reason });
+  });
+});
+
+/**
+ * What the button actually asks the provider for. Neither of these can be seen
+ * through `run` — the tests above replace the very method that makes the call —
+ * and both are decisions about the org's money.
+ */
+describe("what one press of Test buys", () => {
+  it("switches off the SDK's transport retries", () => {
+    // Three billed round trips for one click, and real exponential backoff
+    // before the user is told about a rate limit.
+    expect(probeCallArgs(credential).maxRetries).toBe(0);
+  });
+
+  it("asks for the cheapest thinking the house model accepts", () => {
+    // The prompt is two words and the answer is two words. Everything else the
+    // press is billed for is reasoning the model does by default, at the output
+    // rate — most of the cost of a connectivity check.
+    expect(probeCallArgs({ provider: "google", apiKey: SECRET_KEY }).providerOptions).toEqual({
+      google: { thinkingConfig: { thinkingLevel: "low" } },
+    });
+    expect(probeCallArgs({ provider: "openrouter", apiKey: SECRET_KEY }).providerOptions).toEqual({
+      openrouter: { reasoning: { effort: "low" } },
+    });
+  });
+
+  it("sends the org's own model nothing it did not ask for", () => {
+    // A thinking knob is a 400 on a model that does not think, and a 400 here
+    // is reported as a verdict about the KEY. The key must never be called
+    // rejected to save a fraction of a cent.
+    const args = probeCallArgs({
+      provider: "google",
+      apiKey: SECRET_KEY,
+      defaultModel: "gemini-2.0-flash",
+    });
+    expect(args.providerOptions).toBeUndefined();
+    // ABSENT, not present-and-undefined: the SDK forwards what it is given.
+    expect(Object.keys(args)).not.toContain("providerOptions");
+  });
+
+  it("keeps the probe prompt free of anything but the probe", () => {
+    // Nothing brand-shaped, nothing a user typed. The cheapest a real call can
+    // be is the point, and it is also why there is nothing here to inject into.
+    const args = probeCallArgs(credential);
+    expect(args.prompt).toBe("Say ok");
+    expect(args.provider).toBe("google");
   });
 });

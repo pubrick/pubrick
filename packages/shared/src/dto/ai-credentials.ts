@@ -76,6 +76,21 @@ export type AiCredentialPublic = {
  * model or a network that is not answering. It mirrors `RUN_FAILURES`'
  * `timed_out` one-for-one, which is what `TEST_FAILURE_FOR_RUN_FAILURE` in
  * `ai-credentials.probe.ts` now makes structural rather than remembered.
+ *
+ * `too_many_tests` is OURS and not the provider's — the org has spent its hourly
+ * budget of test calls (`MAX_TEST_CALLS_PER_HOUR`). It is a separate member from
+ * `rate_limited` deliberately: that one means the vendor said no and the advice
+ * is to try again shortly, this one means WE said no and the advice is different.
+ * Collapsing them would put a sentence about the provider on a refusal the
+ * provider never made — the same lie `timed_out` was carved out of.
+ *
+ * It is a 200 with a verdict rather than a 429, for the reason the endpoint
+ * returns 200 on both arms at all: "your key was not exercised, and here is
+ * why" is a RESULT the settings screen renders in the reader's language, and a
+ * status code is not a thing four locales can translate. `refusalBody`'s status
+ * set is closed at 400/403/404/409 for its own documented reasons, and widening
+ * it for one caller would buy this refusal an English sentence on a Spanish
+ * screen — precisely what the closed code sets exist to prevent.
  */
 export const AI_TEST_FAILURES = [
   "invalid_key",
@@ -84,9 +99,48 @@ export const AI_TEST_FAILURES = [
   "rate_limited",
   "refused",
   "timed_out",
+  "too_many_tests",
   "unreadable_key",
 ] as const;
 export type AiTestFailure = (typeof AI_TEST_FAILURES)[number];
+
+/**
+ * How many BILLED model calls one organisation's Test button may make in a
+ * rolling hour.
+ *
+ * WHY THERE IS A NUMBER HERE AT ALL. `POST /api/ai-credentials/:provider/test`
+ * was guarded by membership and nothing else: no role, no limit, and the api
+ * has no throttler of any kind. Every press is one live model call — two when
+ * the model violates the schema and the repair retry fires — against the
+ * organisation's own key. At an estimated $0.0004–$0.004 a press, a member with
+ * a `for` loop at ten presses a second could spend on the order of $140 an hour
+ * of somebody else's money, bounded only by the vendor's own limit.
+ *
+ * WHY SIXTY, AND WHY COUNTED IN CALLS. The unit is the thing being protected:
+ * the ledger already writes one row per PHYSICAL call, so a press that costs two
+ * calls consumes two, and the limit is a bound on money rather than on clicks.
+ * Sixty an hour is at worst about $0.24 an hour — roughly six hundred times
+ * smaller than the hole, and small enough to be noise on any real bill.
+ *
+ * The other half of the judgement is the one that decides the number: a limit
+ * that makes an honest user wait is worse than the problem it solves. Honest use
+ * is a person on the Settings screen who has just pasted a key — press, read,
+ * maybe fix the model id and press again. There is one Test button per stored
+ * provider and there are two providers, so a thorough session is a handful of
+ * presses; sixty calls is between thirty and sixty of them, which no
+ * configuration session approaches and no support call reaches either. The
+ * number is deliberately far above honest use and far below abuse, because the
+ * gap between those two is four orders of magnitude wide and there is no reason
+ * to shave it.
+ *
+ * ROLLING HOUR, NOT A BUCKET IN MEMORY. Counted from `usage_ledger` rows the
+ * calls themselves wrote, which makes the limit one number for the whole
+ * deployment rather than one per api replica, and survives a restart — an
+ * in-process counter would hand a fresh budget to anyone who waited for a
+ * deploy. It also means a Test that spent nothing (an unreadable key, refused
+ * before any call) consumes nothing: what is limited is exactly what costs.
+ */
+export const MAX_TEST_CALLS_PER_HOUR = 60;
 
 /**
  * The result of one Test call.

@@ -197,6 +197,7 @@
     "aiTestFailRateLimited": "O provedor está limitando as requisições ou está indisponível. Tente novamente em instantes.",
     "aiTestFailRefused": "O provedor recusou a requisição. Verifique a chave e o identificador de modelo.",
     "aiTestFailTimedOut": "A chamada ao modelo esgotou o tempo antes de o provedor responder. Tente novamente ou verifique o identificador de modelo.",
+    "aiTestFailTooManyTests": "Este espaço de trabalho já usou suas {limit} chamadas de teste da última hora. Cada teste é uma chamada paga ao seu provedor, por isso elas são limitadas. Tente novamente mais tarde.",
     "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente.",
     "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero."
   },

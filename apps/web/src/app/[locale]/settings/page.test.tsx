@@ -4,6 +4,7 @@ import {
   type AiCredentialTestResult,
   aiCredentialUpsertSchema,
   type CostSummary,
+  MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -340,6 +341,24 @@ describe("Settings — AI provider: Test", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       en.SettingsPage.aiTestFailInvalidKey,
     );
+  });
+
+  it("names the real limit when the workspace has spent its hourly test budget", async () => {
+    // The number is not on the wire: both sides import
+    // `MAX_TEST_CALLS_PER_HOUR`, exactly as `run_limit_reached` does, so the
+    // screen cannot promise a different rule than the api enforces — and the
+    // sentence still names a number in Russian.
+    installApi([], { credentials: [googleKey], test: { ok: false, reason: "too_many_tests" } });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(String(MAX_TEST_CALLS_PER_HOUR));
+    // Not the raw ICU placeholder, and not a rendered key path.
+    expect(alert.textContent).not.toContain("{limit}");
+    expect(alert.textContent).not.toContain("aiTestFail");
   });
 
   it("has a sentence for every failure code the API can send", async () => {

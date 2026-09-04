@@ -342,6 +342,14 @@ export class GenerateService {
           else usage.set(attribution.step, [record]);
           await this.repo.recordUsage(run.orgId, run.id, attribution, record);
         },
+        // What happens when the line above fails. Without a handler here the
+        // package falls back to a bare `console.error` — outside this logger,
+        // outside anything an operator greps, and outside the database
+        // entirely — while the SAME method's foreign-key narrowing writes
+        // through `this.logger` two lines away. Two channels for one loss, and
+        // the durable one was the one that carried nothing.
+        onUsageError: (error: unknown, record: UsageRecord) =>
+          this.recordUnrecordedCall(run.orgId, run.id, error, record),
       },
     };
 
@@ -468,6 +476,46 @@ export class GenerateService {
         : await this.repo.explain(state.orgId, state.runId, state.fence);
     this.logger.log(`Run ${state.runId} stopped at step ${step} (${why})`);
     return STOPPED;
+  }
+
+  /**
+   * A billed call whose ledger row could not be written: say so where an
+   * operator will see it, and record it where a RECEIPT can.
+   *
+   * Both, not either. The log line is what a person debugging reads; it is not
+   * a record, because nobody reads a log to find out what their month cost.
+   * `pipeline_runs.unrecorded_calls` is the record — the run row outlives the
+   * step, and it is the one place a loss can be counted after the ledger has
+   * refused it. `spend()` sums the rows that exist, so without this an
+   * understated total is indistinguishable from a correct one.
+   *
+   * Never throws. It is called from `generateStructured`'s failure path, which
+   * is on the success path of a call the provider has ALREADY charged for: the
+   * text is in hand, and the whole reason a ledger failure does not raise is
+   * that losing the text as well would be strictly worse. If even the counter
+   * cannot be written, that is the end of the road and it is logged as such.
+   */
+  private async recordUnrecordedCall(
+    orgId: string,
+    runId: string,
+    error: unknown,
+    record: UsageRecord,
+  ): Promise<void> {
+    this.logger.error(
+      `USAGE RECORDING FAILED: a billed ${record.provider}/${record.modelId} call on run ${runId} ` +
+        "could not be written to the ledger — this org's spend is understated by it. " +
+        `orgId=${orgId} inputTokens=${record.inputTokens} outputTokens=${record.outputTokens} ` +
+        `costUsd=${record.costUsd} error=${messageOf(error)}`,
+    );
+    try {
+      await this.repo.recordUnrecordedCall(orgId, runId);
+    } catch (writeError) {
+      this.logger.error(
+        `UNRECORDED-CALL COUNTER FAILED: run ${runId} was billed for a call that is now recorded ` +
+          `NOWHERE — neither in the ledger nor on the run. orgId=${orgId} ` +
+          `error=${messageOf(writeError)}`,
+      );
+    }
   }
 
   private parseInput(input: unknown): z.infer<typeof briefInputSchema> {

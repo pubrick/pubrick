@@ -1,0 +1,43 @@
+-- 0013 — a billed call the ledger could not accept becomes a number the run holds.
+--
+-- WHAT WAS LOST. `usage_ledger` inserts are allowed to fail without taking the
+-- generation down with them, and that policy is right: the provider has already
+-- charged for the text, and throwing the text away as well would be strictly
+-- worse than losing the record of paying for it. `generateStructured` therefore
+-- routes a failed sink to `onUsageError` instead of raising, and the worker's
+-- own `recordUsage` rethrows anything its foreign-key narrowing cannot repair.
+--
+-- Nothing caught what fell through. The worker set no `onUsageError`, so the
+-- package's default fired — a bare `console.error`, outside the framework
+-- logger that the very same method's FK narrowing writes through — and no
+-- counter, no column and no mark on the run recorded it anywhere durable. An
+-- organisation whose spend is understated had no way to find out: the money is
+-- summed from the rows that exist, and the row that does not exist subtracts
+-- itself in silence.
+--
+-- WHY THE RUN ROW. It is the one row that outlives the step. The ledger's own
+-- `run_id` is `ON DELETE SET NULL` and its totals are summed by `org_id`, so a
+-- row that was never written is missing from every reader at once; a count
+-- beside the run is what lets a receipt say "and N calls could not be recorded"
+-- rather than quietly showing less than was spent. The counter is incremented
+-- with `+ 1` evaluated by Postgres, never read-modify-write, so two concurrent
+-- losses cannot overwrite each other.
+--
+-- TWO STATEMENTS, AND THE ORDER IS THE POINT. `ADD COLUMN … DEFAULT 0` in one
+-- statement fills every existing row with 0, and 0 is a CLAIM: "no call was
+-- lost on this run". It is exactly the claim that cannot be made about the runs
+-- that predate this column, because a loss on one of them went to a
+-- `console.error` and nowhere else. So the column arrives with no default and
+-- every historical row keeps NULL — "nothing is known here" — and the default is
+-- attached afterwards, where it governs INSERTs only. A run executed since
+-- carries 0 or more; a run from before carries NULL, and a reader must not
+-- flatten the two. This is `usage_ledger.outcome`'s rule (migration 0012)
+-- applied to a counter: history cannot be re-derived, and back-filling a
+-- reassuring value over it is how a product starts asserting things nobody
+-- checked.
+--
+-- ADDITIVE. One nullable column and a default. No row is rewritten, no existing
+-- value can stop being valid, and every reader that has never heard of the
+-- column keeps working unchanged.
+ALTER TABLE "pipeline_runs" ADD COLUMN "unrecorded_calls" integer;--> statement-breakpoint
+ALTER TABLE "pipeline_runs" ALTER COLUMN "unrecorded_calls" SET DEFAULT 0;

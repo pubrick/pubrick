@@ -1,3 +1,4 @@
+import type { SharedV4ProviderOptions } from "@ai-sdk/provider";
 import { PermanentError } from "@pubrick/shared";
 import {
   type FlexibleSchema,
@@ -51,8 +52,17 @@ export type ModelCallOptions = {
    * destroy generated text we have already paid for, so the failure is routed
    * here instead of being thrown; it defaults to a loud log, matching how the
    * publisher reports a delivered post it could not record.
+   *
+   * MAY RETURN A PROMISE, and it is awaited. The default — a `console.error` —
+   * is the whole of what a caller that sets nothing gets, and a bare log line
+   * is not a record: the org whose spend is now understated cannot read it. A
+   * handler that puts the loss somewhere durable has to do I/O, and a handler
+   * whose promise nobody awaited would race the step it belongs to and, on the
+   * last call of a run, the process exit. Its own failure is caught and logged
+   * rather than raised (see `reportSinkFailure`): this path exists precisely
+   * because losing paid-for text is worse than losing the record of paying.
    */
-  onUsageError?: (error: unknown, record: UsageRecord) => void;
+  onUsageError?: (error: unknown, record: UsageRecord) => void | Promise<void>;
   /**
    * Transport retries inside a single attempt. The SDK's default (2) is right
    * in production; tests set 0 so a retryable status fails immediately instead
@@ -112,6 +122,20 @@ export type GenerateStructuredArgs<T> = ModelCallOptions & {
   instructions: string;
   prompt: string;
   onUsage: UsageSink;
+  /**
+   * Vendor-specific knobs for THIS call, forwarded to the SDK verbatim.
+   *
+   * Deliberately NOT a member of `ModelCallOptions`, which is the set
+   * `StepContext` carries and `callStep` forwards. Those five are the caller's
+   * questions about a call — how hard to try, how long to wait, how to cancel —
+   * and every one of them is meaningful for every model. This is the opposite:
+   * its contents are only valid for one vendor and, in the case that motivated
+   * it, only for one model id (see `probeThinkingOptions`). Widening the step
+   * context with it would hand every step a knob whose wrong value is a 400
+   * from the provider, to save one caller — the credential probe — from naming
+   * it here.
+   */
+  providerOptions?: SharedV4ProviderOptions;
 };
 
 /**
@@ -239,6 +263,7 @@ async function attempt<T>(
       instructions: args.instructions,
       prompt,
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
+      ...(args.providerOptions === undefined ? {} : { providerOptions: args.providerOptions }),
       // The in-flight half of the same rule: a signal that fires after dispatch
       // has to reach the provider, and this attempt may be either of the two.
       // This is also the ONLY thing that makes the budget a bound on a call
@@ -291,24 +316,40 @@ async function report<T>(
     try {
       await args.onUsage(record);
     } catch (sinkError) {
-      reportSinkFailure(args, sinkError, record);
+      await reportSinkFailure(args, sinkError, record);
     }
   }
 }
 
-function reportSinkFailure<T>(
+async function reportSinkFailure<T>(
   args: GenerateStructuredArgs<T>,
   error: unknown,
   record: UsageRecord,
-): void {
+): Promise<void> {
   if (args.onUsageError !== undefined) {
-    args.onUsageError(error, record);
+    try {
+      await args.onUsageError(error, record);
+    } catch (handlerError) {
+      // The handler is where the loss was supposed to come to rest, so its own
+      // failure is the last thing anyone will hear about this row. It is logged
+      // and swallowed for the same reason the sink failure was: we are on the
+      // success path of a call the provider has already charged for, and a
+      // throw here would destroy the text as well as its record.
+      console.error(
+        `USAGE RECORDING FAILED, AND SO DID ITS HANDLER: a ${record.provider}/${record.modelId} call was billed, could not be written to the ledger, and the loss could not be recorded either. ` +
+          `sinkError=${messageOf(error)} handlerError=${messageOf(handlerError)}`,
+      );
+    }
     return;
   }
   console.error(
     `USAGE RECORDING FAILED: a ${record.provider}/${record.modelId} call was billed but could not be written to the ledger — the org's spend is understated by this row. ` +
-      `inputTokens=${record.inputTokens} outputTokens=${record.outputTokens} costUsd=${record.costUsd} error=${error instanceof Error ? error.message : String(error)}`,
+      `inputTokens=${record.inputTokens} outputTokens=${record.outputTokens} costUsd=${record.costUsd} error=${messageOf(error)}`,
   );
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** The id to attribute a round trip to when the telemetry event omits it. */
