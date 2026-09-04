@@ -1,3 +1,4 @@
+import { schema } from "@pubrick/db";
 import {
   PermanentPublishError,
   TELEGRAM_REQUEST_TIMEOUT_MS,
@@ -471,6 +472,30 @@ describe("PublishService.handle", () => {
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
     expect(repo.markPublished).toHaveBeenCalledTimes(1); // not 3 — no point retrying
+    expect(repo.markAlreadyPublished).toHaveBeenCalledWith("o1", "a1");
+  });
+
+  // The constraint name below comes from the db package's own export, not a
+  // retyped copy — this is what makes it impossible for the worker's guard
+  // and the schema's index to name two different things. A hardcoded literal
+  // here would still pass even after the two definitions drifted apart.
+  it("recognises the duplicate-publication index by the name the db schema exports", async () => {
+    const { repo } = fixture();
+    repo.markPublished = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Failed query"), {
+        cause: { code: "23505", constraint: schema.PUBLISHED_PUBLICATION_INDEX_NAME },
+      }),
+    );
+    repo.markAlreadyPublished = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn().mockResolvedValue({ externalId: "77", externalUrl: null });
+    const service = new PublishService(
+      repo as never,
+      () => publisherStub(publish),
+      "https://api",
+      0,
+    );
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
     expect(repo.markAlreadyPublished).toHaveBeenCalledWith("o1", "a1");
   });
 

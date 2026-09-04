@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
+import { schema } from "@pubrick/db";
 import {
   getPublisher,
   PermanentPublishError,
@@ -96,7 +97,7 @@ function sleep(ms: number): Promise<void> {
 
 /** Postgres unique_violation. */
 const UNIQUE_VIOLATION = "23505";
-const PUBLISHED_PUBLICATION_INDEX = "publications_one_published_per_adaptation";
+const PUBLISHED_PUBLICATION_INDEX = schema.PUBLISHED_PUBLICATION_INDEX_NAME;
 
 /**
  * Is this the "a published publications row for this adaptation already

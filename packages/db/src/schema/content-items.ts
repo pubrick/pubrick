@@ -19,6 +19,17 @@ import { organization } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { enumCheck } from "./enum-check.js";
 
+/**
+ * Name of the "at most one PUBLISHED RECORD per adaptation" unique index
+ * defined below. Exported so callers that need to recognize a write
+ * conflicting with it — the worker's duplicate-publication guard matches
+ * this exact name against a 23505 unique_violation's `constraint` field —
+ * import the name instead of restating the string as a second, driftable
+ * definition of the same constant. See the index's own doc comment for why
+ * it exists.
+ */
+export const PUBLISHED_PUBLICATION_INDEX_NAME = "publications_one_published_per_adaptation";
+
 export const contentItems = pgTable(
   "content_items",
   {
@@ -353,7 +364,7 @@ export const publications = pgTable(
      * Partial, so the many `failed` rows one adaptation may accumulate across
      * retries are unaffected.
      */
-    uniqueIndex("publications_one_published_per_adaptation")
+    uniqueIndex(PUBLISHED_PUBLICATION_INDEX_NAME)
       .on(t.adaptationId)
       .where(sql`${t.status} = 'published'`),
     /**
