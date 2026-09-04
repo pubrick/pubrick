@@ -75,8 +75,10 @@ real, rather than booting with a key that is public in this repository.
 Web: http://localhost:3000 · API health: http://localhost:3001/api/health
 
 `APP_ENCRYPTION_KEY` encrypts channel credentials at rest — back it up, because
-losing or rotating it makes every stored credential unreadable. Full notes,
-including TLS and `PUBLIC_ORIGIN`, in [docs/self-hosting.md](docs/self-hosting.md).
+losing it makes every stored credential unreadable. To rotate it, put the new
+key first and keep the old one behind it (`new,old`); nothing has to be
+rewritten first. Full notes, including TLS and `PUBLIC_ORIGIN`, in
+[docs/self-hosting.md](docs/self-hosting.md).
 
 ## Development
 

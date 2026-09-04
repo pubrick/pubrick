@@ -7,7 +7,12 @@ import {
   TELEGRAM_REQUEST_TIMEOUT_MS,
   UnknownOutcomePublishError,
 } from "@pubrick/integrations";
-import { PUBLISH_QUEUE_OPTIONS, type PublishJob } from "@pubrick/shared";
+import {
+  isUnreadableCiphertext,
+  PUBLISH_QUEUE_OPTIONS,
+  type PublishJob,
+  UNREADABLE_CREDENTIALS_MESSAGE,
+} from "@pubrick/shared";
 import { env } from "../env";
 import { type AttemptFence, PublishRepository, type SendClaim } from "./publish.repository";
 
@@ -251,6 +256,23 @@ export class PublishService {
         // before this, so the DB was reachable moments ago — and even in
         // that rare case, the adaptation can still be re-approved by hand,
         // which beats risking a duplicate send by guessing the other way.)
+        //
+        // The SECOND of those two failures is now told apart from the first,
+        // and that is the whole point. `last_error` is printed verbatim on the
+        // content screens, so this line used to put node's own sentence — "Could
+        // not load credentials: Unsupported state or unable to authenticate
+        // data" — in front of a user, for an event the AI-credential path
+        // answers with a clean verdict and the generate worker answers with a
+        // sentence written for a human. It is one event; it gets one answer,
+        // written once in `@pubrick/shared` and used by every reader of an
+        // encrypted blob.
+        //
+        // Everything else keeps its prefixed message: "the channel is gone" and
+        // "the key is gone" are different things to do about it, and a shared
+        // sentence for both would be the same mistake in the other direction.
+        if (isUnreadableCiphertext(credentialsError)) {
+          throw new PermanentPublishError(UNREADABLE_CREDENTIALS_MESSAGE);
+        }
         const message =
           credentialsError instanceof Error ? credentialsError.message : String(credentialsError);
         throw new PermanentPublishError(`Could not load credentials: ${message}`);

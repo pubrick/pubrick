@@ -357,6 +357,68 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     );
   });
 
+  it("credentials open a blob written before the versioned envelope existed", async () => {
+    // The worker reads rows the api wrote, and every install that has ever run
+    // Pubrick has rows in the pre-envelope shape: `base64(iv || tag ||
+    // ciphertext)`, no version, no key id. Written out by hand rather than
+    // through a shared helper, because the question is whether TODAY'S reader
+    // opens YESTERDAY'S bytes.
+    const { createCipheriv, randomBytes } = await import("node:crypto");
+    const iv = randomBytes(12);
+    const cipher = createCipheriv(
+      "aes-256-gcm",
+      Buffer.from(process.env.APP_ENCRYPTION_KEY as string, "base64"),
+      iv,
+    );
+    const legacy = { botToken: "legacy:token", chatId: "-1" };
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(legacy), "utf8"),
+      cipher.final(),
+    ]);
+    const blob = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString("base64");
+    expect(blob).not.toContain(".");
+
+    const [row] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name: "Legacy",
+        credentialsEncrypted: blob,
+      })
+      .returning({ id: schema.channels.id });
+
+    expect(await repo.credentials(orgId, row?.id as string)).toEqual(legacy);
+  });
+
+  it("credentials raise the one marker — not a bare Error — for a blob no configured key opens", async () => {
+    // What a rotated APP_ENCRYPTION_KEY leaves behind. `PublishService` routes
+    // on this marker to write ONE answer onto `last_error`, so the marker has to
+    // survive the repository rather than be reworded here.
+    const { encryptJson, isUnreadableCiphertext } = await import("@pubrick/shared");
+    const foreign = Buffer.from(new Uint8Array(32).fill(11)).toString("base64");
+    const [row] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name: "Foreign",
+        credentialsEncrypted: encryptJson({ botToken: "1:a", chatId: "-1" }, foreign),
+      })
+      .returning({ id: schema.channels.id });
+
+    let thrown: unknown;
+    try {
+      await repo.credentials(orgId, row?.id as string);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(isUnreadableCiphertext(thrown)).toBe(true);
+    expect((thrown as Error).message).not.toMatch(/unable to authenticate data/i);
+  });
+
   it("markFailed on a fresh (queued) adaptation: attempt_count advances by exactly one and a failed publications row is written", async () => {
     const adaptationId = await seedAdaptation("queued");
 

@@ -207,6 +207,13 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   async function seedQueuedAdaptation(
     chatId: string,
     itemStatus: "approved" | "rejected" = "approved",
+    /**
+     * The key the channel's credentials are encrypted under. Defaults to the
+     * worker's own; a different value is what a rotated `APP_ENCRYPTION_KEY`
+     * leaves behind, and the only way to drive this path with a blob that
+     * genuinely will not open.
+     */
+    credentialKey: string = process.env.APP_ENCRYPTION_KEY as string,
   ): Promise<{ channelId: string; adaptationId: string }> {
     const { encryptJson } = await import("@pubrick/shared");
     const [channel] = await db
@@ -216,10 +223,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
         brandId,
         platform: "telegram",
         name: "Chan",
-        credentialsEncrypted: encryptJson(
-          { botToken: "123:abc", chatId },
-          process.env.APP_ENCRYPTION_KEY as string,
-        ),
+        credentialsEncrypted: encryptJson({ botToken: "123:abc", chatId }, credentialKey),
       })
       .returning({ id: schema.channels.id });
     const channelId = channel?.id as string;
@@ -392,6 +396,51 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
    * second send impossible rather than merely unlikely: a completed job is
    * never redelivered.
    */
+  it("fails a post whose stored credentials will not decrypt with one answer, not the crypto library's", async () => {
+    /**
+     * The third of the four places one event used to be answered four ways.
+     * `last_error` is printed verbatim on the content screens, so this line used
+     * to put node's own "Unsupported state or unable to authenticate data" in
+     * front of a reader — for the same event the AI credential Test answers with
+     * a named verdict and the generate pipeline answers with a code.
+     *
+     * Driven with real ciphertext under a key this worker does not have, not by
+     * stubbing the repository: the assertion is about what the whole path
+     * produces, and a stub could agree with a helper that the path never
+     * reaches.
+     */
+    const { UNREADABLE_CREDENTIALS_MESSAGE } = await import("@pubrick/shared");
+    const foreignKey = Buffer.from(new Uint8Array(32).fill(11)).toString("base64");
+    const chatId = `-100${Date.now()}9`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: { ok: true, result: { message_id: 1, chat: { id: Number(chatId) } } },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId, "approved", foreignKey);
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+    // Permanent, so the job completes rather than retrying a decrypt that will
+    // fail identically every time.
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+    // Nothing reached the platform: the credentials are read before the send.
+    expect(sendCounts.get(chatId)).toBeUndefined();
+
+    const row = await waitUntilLeftQueued(adaptationId);
+    expect(row.status).toBe("failed");
+    expect(row.lastError).toBe(UNREADABLE_CREDENTIALS_MESSAGE);
+    expect(row.lastError).not.toMatch(/unable to authenticate data/i);
+    expect(row.lastError).not.toMatch(/Could not load credentials/);
+    // The receipt says failed, not `unknown`: the credentials are read before
+    // anything leaves this process, so there is no doubt about whether a post is
+    // live in someone's channel.
+    const publication = await publicationFor(adaptationId);
+    expect(publication?.status).toBe("failed");
+    expect(publication?.externalId).toBeNull();
+  }, 25_000);
+
   it("does not retry — and so cannot post twice — when the reply is lost after the send", async () => {
     const chatId = `-100${Date.now()}4`;
     // A second call would be answered with a perfectly good success. If the

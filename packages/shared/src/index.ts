@@ -16,7 +16,15 @@ export {
   summarizeCost,
   toLedgerCostUsd,
 } from "./cost-display.js";
-export { decryptJson, encryptJson } from "./crypto.js";
+export {
+  decryptJson,
+  encryptJson,
+  isUnreadableCiphertext,
+  parseKeyRing,
+  rewrapJson,
+  UNREADABLE_CREDENTIALS_MESSAGE,
+  UnreadableCiphertextError,
+} from "./crypto.js";
 export * from "./dto/ai-credentials.js";
 export * from "./dto/brands.js";
 export * from "./dto/channels.js";

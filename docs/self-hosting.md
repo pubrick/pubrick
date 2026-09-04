@@ -25,9 +25,11 @@ Three variables are required and have no defaults; `docker compose up` stops
 immediately with `required variable X is missing a value: …` if any is unset.
 
 - `BETTER_AUTH_SECRET` signs session cookies.
-- `APP_ENCRYPTION_KEY` must base64-decode to exactly 32 bytes — the api refuses
-  to boot otherwise. It encrypts channel credentials at rest, so back it up:
-  losing or changing it makes every stored credential unreadable.
+- `APP_ENCRYPTION_KEY` encrypts channel and AI credentials at rest, so back it
+  up: losing it makes every stored credential unreadable. It is a comma-separated
+  ring of one or more keys, newest first, and each must base64-decode to exactly
+  32 bytes — the api refuses to boot otherwise. See
+  [Rotating `APP_ENCRYPTION_KEY`](#rotating-app_encryption_key).
 - `PUBLIC_ORIGIN` is the origin a browser types, scheme included
   (`https://your-domain.example`). Auth cookies, redirects and the trusted-origin
   list all come from it: an install that leaves it wrong signs people out with a
@@ -42,6 +44,43 @@ Only the web app publishes a port (`3000`); the api is bound to `127.0.0.1:3001`
 and reached through the web proxy. Put your TLS terminator in front of port 3000.
 
 Database migrations run automatically when the api container starts.
+
+## Rotating `APP_ENCRYPTION_KEY`
+
+`APP_ENCRYPTION_KEY` is a **ring**: one or more base64 keys separated by commas,
+the active one first. A single key is a ring of one and is what almost every
+install runs.
+
+To rotate, put the new key in front of the old one and restart both the api and
+the worker:
+
+```env
+APP_ENCRYPTION_KEY=<new key>,<old key>
+```
+
+From that moment every credential is written under the new key, and every
+credential written before it is still read with the old one. There is no
+migration to run before the new key works and no window where the product cannot
+read its own data — which is the point of doing it this way rather than
+re-encrypting everything on deploy.
+
+Stored credentials move onto the new key as they are used: pressing **Test
+connection** on a channel re-encrypts it, and saving credentials through
+**Edit** writes them under the new key outright. Keep the old key in the ring
+until nothing is left on it; there is no harm in leaving it there, and removing
+it early makes whatever is still on it unreadable.
+
+Each key is validated at boot, so a typo in the second one is a refusal to start
+rather than a credential that silently cannot be read months later. Every key in
+the ring is also checked against the values published in this repository — a
+rotation cannot smuggle the example key into second place.
+
+If a credential does become unreadable — the key was dropped, or a row was
+tampered with — the product says so in one sentence everywhere it is noticed:
+the channel's connection test, the AI key's Test button, a failed post's error,
+and a failed generation all report that the stored credentials were encrypted
+with a key this instance no longer has. Restore the old key, or save the
+credentials again.
 
 ## Who can register
 

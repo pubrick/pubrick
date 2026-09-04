@@ -246,6 +246,28 @@ describe.skipIf(!url)("brands e2e", () => {
     await b.delete(`/api/brands/${created.body.id}`).expect(404);
   });
 
+  it("names the brand 404 with a code, on every route that can raise it", async () => {
+    // These four were the last refusals in this repository still throwing a bare
+    // English sentence with no code — so "This brand no longer exists" stayed
+    // English on a Spanish screen while every other refusal had four languages.
+    const a = await orgAgent();
+    const b = await orgAgent();
+    const created = await a.post("/api/brands").send({ name: "Only A" }).expect(201);
+
+    for (const result of [
+      await b.get(`/api/brands/${created.body.id}`).expect(404),
+      await b.patch(`/api/brands/${created.body.id}`).send({ name: "x" }).expect(404),
+      await b.delete(`/api/brands/${created.body.id}`).expect(404),
+    ]) {
+      expect(result.body.code).toBe("brand_not_found");
+      // Additive: the three fields a client that has never heard of `code` reads
+      // are unchanged.
+      expect(result.body.statusCode).toBe(404);
+      expect(result.body.error).toBe("Not Found");
+      expect(result.body.message).toBe("Brand not found");
+    }
+  });
+
   it("blocks cross-org PATCH and leaves the brand untouched", async () => {
     const a = await orgAgent();
     const b = await orgAgent();

@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { BrandCreate, BrandUpdate } from "@pubrick/shared";
 import { and, eq, inArray, or } from "drizzle-orm";
+import { notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 
@@ -50,7 +51,7 @@ export class BrandsRepository {
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
       .limit(1);
-    if (rows.length === 0) throw new NotFoundException("Brand not found");
+    if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
     return rows[0];
   }
 
@@ -68,7 +69,7 @@ export class BrandsRepository {
       .set(data)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
       .returning(PUBLIC_COLUMNS);
-    if (rows.length === 0) throw new NotFoundException("Brand not found");
+    if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
     return rows[0];
   }
 
@@ -134,7 +135,7 @@ export class BrandsRepository {
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
         .limit(1)
         .for("update");
-      if (brand.length === 0) throw new NotFoundException("Brand not found");
+      if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
 
       const brandChannels = tx
         .select({ id: schema.channels.id })

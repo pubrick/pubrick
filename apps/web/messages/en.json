@@ -277,6 +277,8 @@
     "unread_ai_draft_open_only": "No one has read the AI-written text in this post yet. Open it before approving — editing the text cannot clear this, because no complete AI version of it was ever recorded.",
     "schedule_in_past": "Pick a time in the future to schedule this post.",
     "channels_not_in_brand": "One or more of the chosen channels do not belong to this brand. Reload the page and pick them again.",
+    "channel_not_found": "This channel no longer exists — it may have been deleted.",
+    "unreadable_credentials": "Pubrick can no longer read this channel's stored credentials — this instance's encryption key has changed. Use Edit to save them again.",
     "run_not_found": "This generation no longer exists.",
     "brand_not_found": "This brand no longer exists — it may have been deleted.",
     "brand_has_no_channels": "This brand has no channels yet. Add one before generating.",

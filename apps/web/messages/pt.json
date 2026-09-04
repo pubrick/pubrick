@@ -277,6 +277,8 @@
     "unread_ai_draft_open_only": "Ninguém leu ainda o texto que a IA escreveu nesta publicação. Abra-a antes de aprovar: editar o texto não resolve, porque nenhuma versão completa da IA chegou a ser registrada.",
     "schedule_in_past": "Escolha um horário no futuro para agendar esta publicação.",
     "channels_not_in_brand": "Um ou mais dos canais escolhidos não pertencem a esta marca. Recarregue a página e escolha-os de novo.",
+    "channel_not_found": "Este canal não existe mais — pode ter sido excluído.",
+    "unreadable_credentials": "O Pubrick não consegue mais ler as credenciais salvas deste canal — a chave de criptografia desta instância mudou. Use Editar para salvá-las novamente.",
     "run_not_found": "Esta geração não existe mais.",
     "brand_not_found": "Esta marca não existe mais — pode ter sido excluída.",
     "brand_has_no_channels": "Esta marca ainda não tem canais. Adicione um antes de gerar.",

@@ -1,8 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { getPublisher, type VerifyResult } from "@pubrick/integrations";
-import { type ChannelCreate, type ChannelUpdate, decryptJson, encryptJson } from "@pubrick/shared";
-import { and, eq } from "drizzle-orm";
+import {
+  type ChannelCreate,
+  type ChannelUpdate,
+  decryptJson,
+  encryptJson,
+  isUnreadableCiphertext,
+  rewrapJson,
+  UNREADABLE_CREDENTIALS_MESSAGE,
+} from "@pubrick/shared";
+import { and, eq, sql } from "drizzle-orm";
+import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
@@ -48,6 +57,8 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 @Injectable()
 export class ChannelsRepository {
+  private readonly logger = new Logger(ChannelsRepository.name);
+
   constructor(private readonly queue: QueueService) {}
 
   list(orgId: string, brandId?: string) {
@@ -92,7 +103,7 @@ export class ChannelsRepository {
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
       .limit(1);
-    if (brand.length === 0) throw new NotFoundException("Brand not found");
+    if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
     const rows = await db
       .insert(schema.channels)
       .values({
@@ -147,7 +158,7 @@ export class ChannelsRepository {
       })
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .returning(PUBLIC_COLUMNS);
-    if (rows.length === 0) throw new NotFoundException("Channel not found");
+    if (rows.length === 0) throw notFound("channel_not_found", "Channel not found");
     return rows[0];
   }
 
@@ -239,7 +250,7 @@ export class ChannelsRepository {
         .delete(schema.channels)
         .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
         .returning({ id: schema.channels.id });
-      if (deleted.length === 0) throw new NotFoundException("Channel not found");
+      if (deleted.length === 0) throw notFound("channel_not_found", "Channel not found");
     });
     return { deleted: true };
   }
@@ -258,21 +269,124 @@ export class ChannelsRepository {
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .limit(1);
-    if (rows.length === 0) throw new NotFoundException("Channel not found");
+    if (rows.length === 0) throw notFound("channel_not_found", "Channel not found");
   }
 
-  /** Internal use only (publishers). Never expose through a controller. */
+  /**
+   * Internal use only (publishers). Never expose through a controller.
+   *
+   * The decrypt is the api's one reader of this column, so it is also where the
+   * one event — a blob no configured key can open — becomes an answer. It used
+   * to become nothing at all: `decryptJson` threw out of here, `verify` called
+   * it OUTSIDE its own try, and Nest turned node's
+   * "Unsupported state or unable to authenticate data" into a 500 with a crypto
+   * stack trace in the server log, on a screen that went on listing the channel
+   * as if it were fine.
+   *
+   * `isUnreadableCiphertext`, not a bare `catch`: a catch-all here would report
+   * a genuine bug in this method as a verdict about the user's credentials,
+   * which is the mirror image of the defect it replaces. Anything that is not
+   * the one event is rethrown untouched and is still a 500, because it still is
+   * one.
+   */
   async getDecryptedCredentials(orgId: string, id: string): Promise<Record<string, string>> {
     const rows = await db
       .select({ credentialsEncrypted: schema.channels.credentialsEncrypted })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .limit(1);
-    if (rows.length === 0) throw new NotFoundException("Channel not found");
-    return decryptJson(rows[0]?.credentialsEncrypted as string, env.APP_ENCRYPTION_KEY);
+    const row = rows[0];
+    if (!row) throw notFound("channel_not_found", "Channel not found");
+
+    let credentials: Record<string, string>;
+    try {
+      credentials = decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
+    } catch (error) {
+      if (!isUnreadableCiphertext(error)) throw error;
+      // The org owns this row and may be told the truth about it. The sentence
+      // is `@pubrick/shared`'s, so the api's body, the worker's `last_error`
+      // and the generate pipeline's run failure are one answer rather than
+      // three; the CODE is what the web renders in four languages.
+      throw conflict("unreadable_credentials", UNREADABLE_CREDENTIALS_MESSAGE);
+    }
+
+    await this.rewrapIfStale(orgId, id, row.credentialsEncrypted);
+    return credentials;
   }
 
-  /** Verifies stored credentials against the platform. Never returns them. */
+  /**
+   * Move one channel's credentials onto the ring's ACTIVE key, if they are not
+   * already on it.
+   *
+   * This is the rotation story's second half, and it is deliberately here — on
+   * the read a person triggers when they are already asking about this
+   * channel's credentials — rather than in a migration that must run before the
+   * new key works. Nothing has to be rewritten for a rotation to be safe: the
+   * old key stays in the ring and every row is readable throughout. This just
+   * empties the old key out over time, so "can I drop the previous key yet?"
+   * eventually becomes yes.
+   *
+   * `rewrapJson` answers `null` — no write at all — by comparing the envelope's
+   * key id to the active key's, without decrypting. So the ordinary case, every
+   * row already on the active key, costs one string comparison. A stale row
+   * costs a second decrypt, once, ever.
+   *
+   * TWO THINGS THIS GUARDS.
+   *
+   * The `credentials_encrypted = <the blob we read>` predicate is not
+   * decoration: `update()` can install a NEW token between the SELECT above and
+   * this statement, and a rewrap of the OLD blob written over it would silently
+   * restore a revoked token — losing a rotation the user performed, in the name
+   * of a rotation they did not. Matching on the value we actually decrypted
+   * makes that write a no-op instead.
+   *
+   * `updated_at` is pinned to its own value rather than left to drizzle's
+   * `$onUpdate`. The column is documented on `PUBLIC_COLUMNS` as the answer to
+   * "when was this channel's token last rotated?", and re-encrypting the SAME
+   * token under a new key is not that. An explicit value in `set()` wins over
+   * `$onUpdateFn` in drizzle's `buildUpdateSet` (pg-core/dialect.js:100-109),
+   * which is what makes this possible at all.
+   *
+   * Best effort by construction. A failed rewrap leaves a readable row on an
+   * older key — exactly the state it was already in — so it must never turn a
+   * successful connection test into an error.
+   */
+  private async rewrapIfStale(orgId: string, id: string, stored: string): Promise<void> {
+    try {
+      const rewrapped = rewrapJson(stored, env.APP_ENCRYPTION_KEY);
+      if (rewrapped === null) return;
+      await db
+        .update(schema.channels)
+        .set({ credentialsEncrypted: rewrapped, updatedAt: sql`updated_at` })
+        .where(
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.id, id),
+            eq(schema.channels.credentialsEncrypted, stored),
+          ),
+        );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Could not move channel ${id} onto the active encryption key; it stays readable on an ` +
+          `older one. orgId=${orgId} error=${message}`,
+      );
+    }
+  }
+
+  /**
+   * Verifies stored credentials against the platform. Never returns them.
+   *
+   * Two kinds of "no" leave this method, and they are different kinds on
+   * purpose. A `VerifyResult` with `ok: false` is a verdict ABOUT THE PLATFORM
+   * — the token is wrong, the bot is not an admin, the adapter misbehaved —
+   * and its `reason` is free English prose, which is all a platform's answer
+   * can ever be. A blob that will not decrypt is not that: no publisher is
+   * consulted, nothing is asked of Telegram, and the answer is the same
+   * whatever the platform would have said. It leaves as a coded 409 through
+   * `getDecryptedCredentials`, which is the shape the web can render in four
+   * languages.
+   */
   async verify(orgId: string, id: string): Promise<VerifyResult> {
     const rows = await db
       .select({ platform: schema.channels.platform })
@@ -280,7 +394,7 @@ export class ChannelsRepository {
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .limit(1);
     const channel = rows[0];
-    if (!channel) throw new NotFoundException("Channel not found");
+    if (!channel) throw notFound("channel_not_found", "Channel not found");
 
     const publisher = getPublisher(channel.platform);
     if (!publisher) return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };

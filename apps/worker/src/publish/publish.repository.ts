@@ -351,7 +351,24 @@ export class PublishRepository {
     return rows[0];
   }
 
-  /** Never exposed outside the worker's publish path; decrypted only for the send itself. */
+  /**
+   * Never exposed outside the worker's publish path; decrypted only for the send
+   * itself.
+   *
+   * `decryptJson`'s `UnreadableCiphertextError` is deliberately left to escape
+   * rather than caught and reworded here. It is the one event, and the caller
+   * that has to name it is `PublishService.handle`, which is where the
+   * adaptation's `last_error` — the string a content screen prints verbatim —
+   * is composed. Wrapping it here would only hide the marker that call site
+   * routes on.
+   *
+   * NOTHING IS REWRITTEN HERE. A blob still on a previous ring key is read with
+   * that key and left where it is: this method runs inside a delivery, under a
+   * claim, moments before a post goes out, and re-encrypting a credential is
+   * not work that belongs in that window. The api's connection test is the
+   * reader that moves rows onto the active key
+   * (`ChannelsRepository.rewrapIfStale`).
+   */
   async credentials(orgId: string, channelId: string): Promise<Record<string, string>> {
     const rows = await db
       .select({ credentialsEncrypted: schema.channels.credentialsEncrypted })

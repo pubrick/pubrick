@@ -53,6 +53,12 @@
  * - `ParseAiProviderPipe`'s "Unknown provider" — same: the settings screen's
  *   provider list IS `AI_PROVIDERS`, so reaching it means building the URL by
  *   hand.
+ * - `ChannelsRepository.create`'s "Pubrick cannot publish to X yet" — the
+ *   channel form's platform list is `PLATFORM_IDS` with everything outside
+ *   `PUBLISHABLE_PLATFORM_IDS` disabled and labelled `platformUnsupported`, so
+ *   the picker cannot submit one. A request that names an unpublishable
+ *   platform was hand-built, and the sentence already names the platform, which
+ *   a nullary code could not.
  *
  * Adding one later is additive on the wire and a compile error in the web's
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
@@ -99,6 +105,25 @@ export const API_ERROR_CODES = [
   // ── channels named by a request ───────────────────────────────────────────
   /** One of the channel ids is not this brand's. Shared by content and runs. */
   "channels_not_in_brand",
+  /** The channel does not exist in this org (or no longer does). */
+  "channel_not_found",
+  /**
+   * The channel's stored credentials will not decrypt under any key this
+   * instance has — `APP_ENCRYPTION_KEY` was changed under a stored row, or the
+   * ciphertext was tampered with.
+   *
+   * A 409, not a 500 and not a `VerifyResult`. Not a 500 because nothing is
+   * broken about the request: the row exists, the caller may read it, and there
+   * is a specific, actionable thing to do about it. Not a `{ok: false, reason}`
+   * like the platform's own verdicts, because it is not a verdict ABOUT THE
+   * PLATFORM at all — it is raised before any publisher is consulted, and
+   * `VerifyResult.reason` is free English prose that no screen can translate.
+   *
+   * This is `AiTestFailure`'s `unreadable_key` for the other credential store:
+   * one event, one cause, one thing to do, said in the closed set each surface
+   * already reads.
+   */
+  "unreadable_credentials",
 
   // ── runs ──────────────────────────────────────────────────────────────────
   "run_not_found",

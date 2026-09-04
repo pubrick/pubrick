@@ -4,7 +4,11 @@ import {
   TransientPublishError,
   UnknownOutcomePublishError,
 } from "@pubrick/integrations";
-import { PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
+import {
+  PUBLISH_QUEUE_OPTIONS,
+  UNREADABLE_CREDENTIALS_MESSAGE,
+  UnreadableCiphertextError,
+} from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -354,6 +358,47 @@ describe("PublishService.handle", () => {
       CLAIM,
     );
     expect(repo.recordTransient).not.toHaveBeenCalled();
+  });
+
+  it("records ONE answer for a blob that will not decrypt, not the crypto library's sentence", async () => {
+    /**
+     * `last_error` is printed verbatim on the content screens, so this string is
+     * user-facing. It used to be "Could not load credentials: Unsupported state
+     * or unable to authenticate data" — node's own words about AES, for an event
+     * the AI credential Test answers with a named verdict.
+     *
+     * The e2e drives the same path with real ciphertext under a key the worker
+     * does not have; this pins the classification itself, including that the
+     * OTHER failure of `repo.credentials()` keeps its own sentence.
+     */
+    const { repo } = fixture();
+    repo.credentials = vi.fn().mockRejectedValue(new UnreadableCiphertextError());
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      UNREADABLE_CREDENTIALS_MESSAGE,
+      { status: "publishing", attemptCount: 1 },
+      "failed",
+      CLAIM,
+    );
+  });
+
+  it("keeps the marker's own sentence rather than prefixing it with a second explanation", async () => {
+    // A prefix would be the same defect in miniature: two sentences about one
+    // event, one of them written here and one written in @pubrick/shared.
+    const { repo } = fixture();
+    repo.credentials = vi.fn().mockRejectedValue(new UnreadableCiphertextError());
+    const service = new PublishService(repo as never, () => publisherStub(vi.fn()), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    const message = (repo.markFailed as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as string;
+    expect(message).toBe(UNREADABLE_CREDENTIALS_MESSAGE);
+    expect(message).not.toContain("Could not load credentials");
   });
 
   it("does not rethrow when markFailed itself fails while recording a permanent error", async () => {

@@ -88,6 +88,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   unread_ai_draft_open_only: "unread_ai_draft_open_only",
   schedule_in_past: "schedule_in_past",
   channels_not_in_brand: "channels_not_in_brand",
+  channel_not_found: "channel_not_found",
+  unreadable_credentials: "unreadable_credentials",
   run_not_found: "run_not_found",
   brand_not_found: "brand_not_found",
   brand_has_no_channels: "brand_has_no_channels",
