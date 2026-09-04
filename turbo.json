@@ -23,12 +23,29 @@
       // two environments hash differently, so neither can stand in for the other.
       // The guard fails if any name here goes missing, so this list is tested, not merely
       // documented in CLAUDE.md as it was before.
+      //
+      // DATABASE_URL, HOME, PATH and SIGNUP_MODE are declared for the same reason as CI
+      // above, not because leaving them out breaks anything measured today:
+      //  - DATABASE_URL is only ever read via `??=` (apps/worker/vitest.setup.ts), which
+      //    supplies its own fallback the instant it is unset, stripped or not;
+      //  - HOME/PATH are OS plumbing auth.compiled.e2e.spec.ts relays into a child process,
+      //    already defended with `?? ""`;
+      //  - SIGNUP_MODE is forced to "open" by apps/api/vitest.config.ts's own `test.env`,
+      //    independent of what turbo passes through.
+      // env-declaration.guard.spec.ts finds every process.env read outside the env module
+      // and requires it declared here regardless — the point being that this list is the
+      // honest, tested record of what a test process can rely on turbo for, not a guess
+      // about which reads happen to be safe without it.
       "env": [
         "CI",
         "TEST_DATABASE_URL",
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",
-        "TELEGRAM_API_BASE_URL"
+        "TELEGRAM_API_BASE_URL",
+        "DATABASE_URL",
+        "HOME",
+        "PATH",
+        "SIGNUP_MODE"
       ]
     }
   }
