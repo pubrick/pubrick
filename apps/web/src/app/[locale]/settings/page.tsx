@@ -13,6 +13,7 @@ import {
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { LanguageCard } from "@/components/language-card";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -298,6 +299,14 @@ export default function SettingsPage() {
           <h2 className="mb-3 text-base font-semibold text-fg">{t("appearanceTitle")}</h2>
           <Segmented options={themeOptions} value={pref} onChange={changeTheme} />
         </Card>
+
+        {/* Language sits beside the theme because both are preferences of the
+            same kind — a small mutually-exclusive choice this person makes for
+            themselves, at the constitution's one fixed location for a setting.
+            It is handed the unsaved-key state because switching locale is a
+            navigation, and the API key above is the one field on this screen
+            no endpoint can give back. */}
+        <LanguageCard hasUnsavedText={apiKey !== "" || defaultModel.trim() !== ""} />
 
         <Card>
           <h2 className="mb-1 text-base font-semibold text-fg">{t("aiTitle")}</h2>
