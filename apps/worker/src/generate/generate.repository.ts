@@ -651,13 +651,49 @@ export class GenerateRepository {
    * insert. It is the same lock class the FK insert takes anyway, one statement
    * earlier.
    *
-   * On the documented lock order (`adaptations` before `content_items`,
-   * `ORDER BY id`): it governs `FOR UPDATE` on rows that already exist, and this
-   * transaction locks none of those — it only INSERTs rows nothing else can yet
-   * name. The insert order is forced the other way by the foreign key, and the
-   * only lock it takes on `content_items` is the FK's `FOR KEY SHARE` on the row
-   * this same transaction just created. So there is nothing here for
-   * `lockAdaptations` to deadlock against.
+   * WHAT THIS TRANSACTION ACTUALLY LOCKS, in statement order:
+   *
+   *   1. `pipeline_runs` — `FOR UPDATE` on the run.
+   *   2. `channels` — `FOR KEY SHARE` on every surviving channel of the set
+   *      (the re-read above; no `ORDER BY`).
+   *   3. `brands` — `FOR KEY SHARE`, taken by the `content_items` INSERT for
+   *      `content_items.brand_id`. A foreign key locks the PARENT row, and
+   *      that row already exists and is named by other transactions.
+   *   4. its own new `content_items` / `adaptations` rows, for the
+   *      `adaptations` and `content_versions` FKs.
+   *
+   * Against `lockAdaptations` (`adaptations` then `content_items`) that is
+   * safe, and for the reason the previous version of this paragraph gave: both
+   * of those tables are reached here only as rows this transaction just
+   * created, which no other transaction can yet name. Measured: `approve` and
+   * `reject` against this transaction do not deadlock.
+   *
+   * IT IS NOT SAFE AGAINST `BrandsRepository.delete`, AND STEPS 1-3 ARE WHY.
+   * That transaction takes `brands FOR UPDATE` and then, in its final
+   * `DELETE FROM brands`, cascades into `channels`, `content_items` AND
+   * `pipeline_runs`. So it holds the brand and wants the run and the channel;
+   * this one holds the run and the channel and then wants the brand. Two
+   * cycles, both reproduced against a real database as `40P01`:
+   *
+   *   - `pipeline_runs` (step 1) — `CONTEXT: while deleting tuple in relation
+   *     "pipeline_runs"`.
+   *   - `channels` (step 2) — `CONTEXT: while locking tuple in relation
+   *     "channels"`.
+   *
+   * Either side can be the victim: with the brand delete arriving second it
+   * dies (a 500 on `DELETE /api/brands/:id`), and with it arriving first THIS
+   * transaction dies inside the FK check — `SELECT 1 FROM ONLY "brands" …
+   * FOR KEY SHARE OF x` — losing the fully paid run the re-read above exists
+   * to save.
+   *
+   * The FK pair ALONE is not the problem, and a reading that stops at the two
+   * inserts will miss this: `content_items.brand_id` → `brands` runs BEFORE
+   * `adaptations.channel_id` → `channels`, which is the canonical direction.
+   * Reproduced without steps 1 and 2, this transaction merely waits for the
+   * delete and then fails cleanly on `content_items_brand_id_brands_id_fk` —
+   * no deadlock. It is the two rows locked BEFORE the insert that turn a wait
+   * into a cycle. See `docs/lock-order.md`, "The cycle this order does not
+   * close yet".
    */
   async finish(
     orgId: string,

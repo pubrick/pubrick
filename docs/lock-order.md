@@ -12,8 +12,10 @@ it never goes backwards.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
-`apps/worker/src/publish/publish.repository.ts` and
-`apps/api/src/content/content.repository.ts`. If you add a lock, add it here.
+`apps/worker/src/publish/publish.repository.ts`,
+`apps/api/src/content/content.repository.ts` and
+`apps/worker/src/generate/generate.repository.ts`. If you add a lock, add it
+here.
 
 ## Why this file exists rather than a comment at each site
 
@@ -54,7 +56,7 @@ of them has been overlooked in this codebase at least once:
   whatever that statement has already locked. `publications_stamp_deleted_channel`
   writes `publications` rows while holding the `channels` row.
 
-## Two tables the order does not name, and why
+## Three tables the order does not name, and why
 
 **`publications`** is not in the list because it is never taken on its own: a
 claim or a receipt is only ever written under the lock of the adaptation it
@@ -64,6 +66,14 @@ channel — and the canonical order already puts every adaptation of a channel
 
 **`organization`** sits above everything (a tenant delete cascades into all of
 it) and is never taken together with anything else by application code.
+
+**`pipeline_runs`** is not in the list, and unlike the other two that is not
+because nothing takes it together with the rest. `GenerateRepository.finish`
+takes it `FOR UPDATE` as its FIRST statement and then goes on to lock `channels`
+and `brands`; `DELETE FROM brands` cascades into it. It is named here because it
+is one of the two tables in the open cycle below, and adding it to the canonical
+order is one of the things that would close that cycle. Until somebody decides
+which, this paragraph is the whole of what is true about it.
 
 ## Same table, two transactions: `ORDER BY id`
 
@@ -104,6 +114,57 @@ adaptation its outstanding-only lock set had not covered.
 `POST /api/content/:id/reject`, on an item with two adaptations whose heap order
 happened to reverse their id order, raced the sweeper into a deadlock and one of
 the two died.
+
+## The cycle this order does not close yet
+
+`GenerateRepository.finish` against `BrandsRepository.delete`. Open as of
+2026-09-05, reproduced as `40P01` on a real database, not yet fixed — the fix is
+a choice between three orders and belongs to whoever makes it.
+
+The two acquisition sequences, from the statements:
+
+```
+finish          pipeline_runs FOR UPDATE  →  channels FOR KEY SHARE
+                →  brands FOR KEY SHARE (the content_items INSERT's FK)
+
+brands.delete   brands FOR UPDATE  →  adaptations FOR UPDATE
+                →  DELETE FROM brands, whose cascade reaches
+                   channels, content_items AND pipeline_runs
+```
+
+`finish` holds the run and the channel and then asks for the brand;
+`brands.delete` holds the brand and then asks for the run and the channel. Two
+independent cycles, each reproduced on its own with the other's lock removed:
+
+- **`pipeline_runs`** — `CONTEXT: while deleting tuple (0,1) in relation
+  "pipeline_runs"`, inside `DELETE FROM ONLY "public"."pipeline_runs" WHERE
+  $1 = "brand_id"`.
+- **`channels`** — `CONTEXT: while locking tuple (0,1) in relation "channels"`,
+  inside `DELETE FROM ONLY "public"."channels" WHERE $1 = "brand_id"`.
+
+Either side can be the victim. With the delete arriving second, the delete dies
+and `DELETE /api/brands/:id` is a 500. With the delete arriving first, `finish`
+dies inside the foreign-key check — `SELECT 1 FROM ONLY "public"."brands" x
+WHERE "id" = $1 FOR KEY SHARE OF x` — and a fully paid run is thrown away, which
+is the exact loss the channel re-read in `finish` was added to prevent.
+
+**The two FK locks alone are not it**, and this is the part a derivation from
+the inserts gets wrong. `content_items.brand_id` → `brands` runs BEFORE
+`adaptations.channel_id` → `channels`, which is the canonical direction. Run
+without the `pipeline_runs` and `channels` pre-locks, the same interleaving
+produces no deadlock at all: `finish` waits for the delete to commit and then
+fails cleanly on `content_items_brand_id_brands_id_fk`. It is the two rows
+locked *before* the insert — both of them rows the brand's cascade destroys —
+that turn a wait into a cycle. The lock that closes the loop is the one nobody
+wrote: a foreign key's `FOR KEY SHARE` on the parent, four statements after the
+statement that made the transaction vulnerable.
+
+Every other pair among these five transactions was run and does not deadlock:
+`finish`×`ChannelsRepository.delete`, `finish`×`ContentRepository.create`
+(`FOR KEY SHARE` against `FOR KEY SHARE` — taken in opposite orders and never in
+conflict), `finish`×`approve`, `finish`×`reject`, `brands.delete`×`channels.delete`,
+`brands.delete`×`approve`, `brands.delete`×`reject`, `channels.delete`×`approve`,
+`channels.delete`×`reject`, and `approve`×`reject`.
 
 ## The price of the order, stated rather than hidden
 

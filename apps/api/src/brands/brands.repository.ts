@@ -103,7 +103,9 @@ export class BrandsRepository {
    *
    * LOCK ORDER: the brand row, then EVERY adaptation the cascade will destroy,
    * by ascending id — `brands` → `adaptations` → `channels`, the product's one
-   * order, written down in `docs/lock-order.md`.
+   * order, written down in `docs/lock-order.md`. The cascade reaches
+   * `content_items` and `pipeline_runs` as well, which that order does not
+   * name; see the note on runs at the end of this comment.
    *
    * `channels` is not named in the code because this transaction never locks it
    * explicitly: `DELETE FROM brands` cascades into it, and a cascade takes its
@@ -121,10 +123,33 @@ export class BrandsRepository {
    * ones; the extra rows are there to be HELD, in the canonical order, before
    * the cascade can reach them out of it.
    *
-   * Runs are not locked — `cancelGenerate` acts on the queue, and the run rows
-   * are about to be deleted by the cascade; a run whose handler is mid-step
-   * finds its row gone on the next fenced write and returns, which is the
-   * documented ending for a deleted brand.
+   * Runs are not locked EXPLICITLY, and the sentence that used to stand here —
+   * "a run whose handler is mid-step finds its row gone on the next fenced
+   * write and returns" — was written against the wrong counterparty. It is true
+   * of a mid-STEP handler. It is false of the TERMINAL write: `finish` takes
+   * `pipeline_runs FOR UPDATE` on the run as its first statement and holds it
+   * for the whole transaction, so there is no "next write" at which to find the
+   * row gone. The cascade below does lock that row — `DELETE FROM ONLY
+   * "public"."pipeline_runs" WHERE $1 = "brand_id"` — and waits behind it.
+   *
+   * WHICH LEAVES THIS METHOD IN AN OPEN CYCLE, reproduced as `40P01`. `finish`
+   * holds the run (above) and the channels of the set (`FOR KEY SHARE`, its
+   * second statement), and THEN asks for `brands FOR KEY SHARE` — the foreign
+   * key of its `content_items` insert, four statements later. This transaction
+   * holds the brand `FOR UPDATE` from its first statement and asks for the run
+   * and the channels in its last. Two edges, each reproduced on its own:
+   * `pipeline_runs` and `channels`.
+   *
+   * The lock set below does not help: it covers `adaptations`, and neither edge
+   * runs through `adaptations`. Nor is it the "narrow window" documented in
+   * `docs/lock-order.md` — the rows on both edges exist before either
+   * transaction starts. And the loop above is the proof that this race is
+   * ordinary rather than exotic: `cancelGenerate` exists precisely because this
+   * method expects LIVE RUNS for the brand it is deleting.
+   *
+   * Not fixed here, because the fix is a choice of order rather than a patch,
+   * and it belongs to whoever makes it. See `docs/lock-order.md`, "The cycle
+   * this order does not close yet".
    */
   async delete(orgId: string, id: string) {
     await db.transaction(async (tx) => {
