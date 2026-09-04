@@ -250,4 +250,152 @@ describe.skipIf(!url)("org scoping e2e", () => {
 
     await agent.get("/api/org-probe").expect(403);
   });
+
+  /**
+   * `GET /api/org/invitations` — the read the onboarding screen makes for a
+   * brand-new account, and the only way an invited person can find out which
+   * organization is expecting them.
+   *
+   * It exists because the plugin's own `/organization/list-user-invitations`
+   * refuses every account whose address is unverified, and Pubrick verifies no
+   * addresses — there is no mailer to verify them with. On a stock install that
+   * endpoint answers 403 to everybody, which is why this one is not a wrapper.
+   */
+  describe("pending invitations for the signed-in account", () => {
+    /** An organization with a live invitation for `email`, created through the plugin. */
+    async function inviteTo(email: string, orgName: string) {
+      const owner = await signUpAgent();
+      const created = await owner
+        .post("/api/auth/organization/create")
+        .send({
+          name: orgName,
+          slug: `inv-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+        })
+        .expect(200);
+      const invitation = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: created.body.id })
+        .expect(200);
+      const ownerSession = await owner.get("/api/auth/get-session").expect(200);
+      return {
+        owner,
+        orgId: created.body.id as string,
+        invitationId: invitation.body.id as string,
+        inviterEmail: ownerSession.body.user.email as string,
+      };
+    }
+
+    /** A signed-up agent for one specific address (`signUpAgent` picks its own). */
+    async function signUpAs(email: string) {
+      const agent = request.agent(app.getHttpServer());
+      await agent
+        .post("/api/auth/sign-up/email")
+        .send({ email, password: "password1234", name: "Invitee" })
+        .expect(200);
+      return agent;
+    }
+
+    it("401s without a session", async () => {
+      await request(app.getHttpServer()).get("/api/org/invitations").expect(401);
+    });
+
+    it("names the organization and the person who invited them", async () => {
+      const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+      const { orgId, invitationId, inviterEmail } = await inviteTo(email, "Named Co");
+      const invitee = await signUpAs(email);
+
+      const offered = await invitee.get("/api/org/invitations").expect(200);
+      expect(offered.body).toEqual([
+        {
+          id: invitationId,
+          organizationId: orgId,
+          organizationName: "Named Co",
+          inviterEmail,
+          expiresAt: expect.any(String),
+        },
+      ]);
+    });
+
+    it("offers only the invitations addressed to the caller", async () => {
+      const mine = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+      const theirs = `u${Date.now()}${Math.floor(Math.random() * 1e6)}b@example.com`;
+      const { invitationId } = await inviteTo(mine, "Mine Co");
+      await inviteTo(theirs, "Theirs Co");
+
+      const invitee = await signUpAs(mine);
+      const offered = await invitee.get("/api/org/invitations").expect(200);
+      expect(offered.body.map((row: { id: string }) => row.id)).toEqual([invitationId]);
+    });
+
+    // The plugin lowercases the address it stores; a person who typed theirs in
+    // caps must still be shown their own invitation, or the signup gate lets
+    // them register and this screen then tells them nobody invited them.
+    it("matches the address case-insensitively, as the signup gate does", async () => {
+      const email = `U${Date.now()}${Math.floor(Math.random() * 1e6)}@Example.com`;
+      const { invitationId } = await inviteTo(email, "Caps Co");
+      const invitee = await signUpAs(email);
+
+      const offered = await invitee.get("/api/org/invitations").expect(200);
+      expect(offered.body.map((row: { id: string }) => row.id)).toEqual([invitationId]);
+    });
+
+    /**
+     * MUTATION PIN for the status half. Revoking is how an invitation is taken
+     * back; the expiry is untouched and still in the future, so only the
+     * `status = 'pending'` clause can drop this row.
+     */
+    it("does not offer a revoked invitation", async () => {
+      const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+      const { owner, invitationId } = await inviteTo(email, "Revoked Co");
+      const invitee = await signUpAs(email);
+      expect((await invitee.get("/api/org/invitations").expect(200)).body).toHaveLength(1);
+
+      // Through the plugin, which is how an operator actually takes one back.
+      await owner
+        .post("/api/auth/organization/cancel-invitation")
+        .send({ invitationId })
+        .expect(200);
+      const { db, pool } = createDb(url as string);
+      const [row] = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.id, invitationId))
+        .limit(1);
+      await pool.end();
+      // Read back rather than assumed: the expiry is untouched, so the status
+      // clause is the only thing that can drop this row.
+      expect(row?.status).not.toBe("pending");
+      expect(row?.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+      expect((await invitee.get("/api/org/invitations").expect(200)).body).toEqual([]);
+    });
+
+    /**
+     * MUTATION PIN for the expiry half. The row stays `pending` — the plugin
+     * never sweeps it — so only `expires_at > now()` can drop it. Offering it
+     * would put a Join button in front of somebody that `accept-invitation` is
+     * certain to refuse.
+     */
+    it("does not offer an expired invitation, though it is still pending", async () => {
+      const email = `u${Date.now()}${Math.floor(Math.random() * 1e6)}@example.com`;
+      const { invitationId } = await inviteTo(email, "Stale Co");
+      const invitee = await signUpAs(email);
+      expect((await invitee.get("/api/org/invitations").expect(200)).body).toHaveLength(1);
+
+      const { db, pool } = createDb(url as string);
+      await db
+        .update(schema.invitation)
+        .set({ expiresAt: new Date(Date.now() - 60_000) })
+        .where(eq(schema.invitation.id, invitationId));
+      const [row] = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.id, invitationId))
+        .limit(1);
+      await pool.end();
+      expect(row?.status).toBe("pending");
+
+      expect((await invitee.get("/api/org/invitations").expect(200)).body).toEqual([]);
+    });
+  });
 });

@@ -14,7 +14,16 @@
     "subtitle": "Brands and channels live inside an organization. You can invite teammates later.",
     "orgName": "Organization name",
     "create": "Create organization",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "signedOutTitle": "Create your account first",
+    "signedOutBody": "This screen sets up your workspace once you are signed in. If someone invited you, register with exactly the address the invitation was sent to — any other address is refused.",
+    "signedOutAction": "Create account",
+    "invitedTitle": "Join {organization}",
+    "invitedSubtitle": "{inviter} invited you. Joining puts you in this organization's brands, channels and queue.",
+    "invitedJoin": "Join",
+    "invitedCreateInstead": "Create your own organization instead",
+    "joinFailed": "This invitation no longer works — it may already have been used, taken back, or expired. Ask whoever invited you for a new one.",
+    "invitationsUnchecked": "Pubrick could not check whether anyone invited you: {reason}"
   },
   "Landing": {
     "title": "Pubrick",
@@ -199,7 +208,24 @@
     "aiTestFailTimedOut": "The model call ran out of time before the provider answered. Try again, or check the model id.",
     "aiTestFailTooManyTests": "This workspace has used its {limit} test calls for the past hour. Each Test is a paid call to your provider, so they are capped. Try again later.",
     "aiTestFailUnreadableKey": "The stored key could not be read. Save it again.",
-    "aiSpendError": "Spend so far could not be loaded — this is not a total of zero."
+    "aiSpendError": "Spend so far could not be loaded — this is not a total of zero.",
+    "peopleYou": "You",
+    "peoplePending": "Invited — expires {expires}",
+    "peopleInvite": "Invite",
+    "peopleInviteTitle": "Invite someone",
+    "peopleInviteBody": "Pubrick sends no email. You get a link to pass on yourself, and the person has to register with exactly this address — the sign-up gate lets through no other.",
+    "peopleEmailLabel": "Email",
+    "peopleInviteCancel": "Cancel",
+    "peopleInviteDone": "Done",
+    "peopleInvitedTitle": "Invitation created",
+    "peopleInviteLinkHint": "Send this link to {email}. It works once, only for that address, and expires {expires}. Pubrick cannot show it again — inviting the same address later replaces this invitation with a new link.",
+    "peopleCopy": "Copy",
+    "peopleCopied": "Copied",
+    "peopleRevokeTitle": "Remove this invitation?",
+    "peopleRevokeBody": "The link sent to {email} stops working and that address can no longer register here. You can invite them again afterwards.",
+    "peopleInviteFailMember": "That address is already a member of this organization.",
+    "peopleInviteFailEmail": "That is not a valid email address.",
+    "peopleInviteFailLimit": "This organization has too many invitations waiting. Remove one before sending another."
   },
   "Language": {
     "title": "Language",

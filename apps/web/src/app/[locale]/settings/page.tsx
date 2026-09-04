@@ -10,7 +10,7 @@ import {
   formatUsd,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
@@ -94,6 +94,62 @@ const PROVIDER_NAMES: Record<AiProviderId, string> = {
 // lives in AppShell's header and is wired back here via `form={AI_FORM_ID}`.
 const AI_FORM_ID = "ai-credential-form";
 
+// Same mechanism for the invite dialog: the submit lives in the modal footer.
+const INVITE_FORM_ID = "invite-member-form";
+
+/**
+ * What the invited person is sent, and why it is not a secret.
+ *
+ * There is no mailer — adding one would put SMTP configuration in front of
+ * every self-hoster on their first day — so the invitation travels by hand.
+ * What travels is a plain URL to this instance's onboarding screen carrying the
+ * invitation's id; it is NOT a bearer credential, and the distinction is the
+ * whole security argument of this flow. The id opens nothing on its own:
+ * `accept-invitation` only accepts a session whose address matches the
+ * invitation, and the signup gate only admits an address that has a live
+ * invitation. Whoever else obtains this link learns that an instance exists.
+ *
+ * The credential is therefore the ADDRESS, which has a cost of its own and it
+ * is stated in docs/self-hosting.md: Pubrick does not verify email, so anyone
+ * who knows an invited address can register it first. Invite an address only
+ * the invitee controls, and revoke the invitation if it goes astray.
+ *
+ * `window.location.origin` rather than a configured base URL: a self-hosted
+ * instance is reached at whatever address its operator put it on, and the
+ * person copying the link is looking at that address right now.
+ */
+function invitationLink(locale: string, invitationId: string): string {
+  return `${window.location.origin}/${locale}/onboarding?invitation=${encodeURIComponent(invitationId)}`;
+}
+
+/**
+ * The refusals `organization/invite-member` can hand a member, translated.
+ *
+ * Better Auth answers with a code and an English sentence; the sentence is what
+ * every other auth screen in this app still renders, and it is English to a
+ * Russian reader. These three are the ones a member can actually provoke by
+ * typing; anything else falls back to this screen's own generic sentence rather
+ * than to the library's prose.
+ */
+const INVITE_FAILURE_KEYS: Record<string, string> = {
+  USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION: "peopleInviteFailMember",
+  INVALID_EMAIL: "peopleInviteFailEmail",
+  INVITATION_LIMIT_REACHED: "peopleInviteFailLimit",
+};
+
+/** A pending invitation as `get-full-organization` returns it. */
+type OrganizationInvitation = {
+  id: string;
+  email: string;
+  status: string;
+  expiresAt: string | Date;
+};
+
+/** Live means BOTH facts, exactly as the api's gate reads them. */
+function isLiveInvitation(invitation: OrganizationInvitation): boolean {
+  return invitation.status === "pending" && new Date(invitation.expiresAt).getTime() > Date.now();
+}
+
 export default function SettingsPage() {
   const t = useTranslations("SettingsPage");
   // The refusals' own namespace — see the queue screen. It is what puts "no API
@@ -102,7 +158,12 @@ export default function SettingsPage() {
   const te = useTranslations("Errors");
   const tLanding = useTranslations("Landing");
   const { data: session } = authClient.useSession();
-  const { data: organization, isPending: organizationPending } = authClient.useActiveOrganization();
+  const {
+    data: organization,
+    isPending: organizationPending,
+    refetch: refetchOrganization,
+  } = authClient.useActiveOrganization();
+  const locale = useLocale();
   const signOut = useSignOut();
 
   const [pref, setPref] = useState<ThemePref>("system");
@@ -218,6 +279,110 @@ export default function SettingsPage() {
     }
   }
 
+  /**
+   * Inviting someone.
+   *
+   * `created` is the second phase of the one modal, not a second modal: the
+   * link is the only thing the product will ever show for this invitation, so
+   * the screen that made it is the screen that has to hand it over. Reopening
+   * Invite later cannot show it again — but re-inviting the same address
+   * supersedes the old invitation and mints a fresh link, which is why nothing
+   * here is stored.
+   */
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ email: string; link: string; expiresAt: string } | null>(
+    null,
+  );
+  const [copied, setCopied] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<OrganizationInvitation | null>(null);
+
+  /**
+   * `useCallback`, and it is load-bearing rather than tidy.
+   *
+   * `Modal` keeps `onClose` in the dependency list of the effect that installs
+   * its focus trap, and that effect's CLEANUP restores focus to whatever was
+   * focused before the dialog opened. A fresh closure on every render therefore
+   * re-runs the whole effect on every keystroke and yanks focus out of the email
+   * field: typing "carol@example.com" into this dialog stored the letter "c".
+   * Measured, not theorised — the test below reads the value back. Every other
+   * modal in the app passes an inline arrow and gets away with it because none
+   * of them contains a text field.
+   */
+  const closeInvite = useCallback(() => {
+    setInviteOpen(false);
+    setCreated(null);
+    setInviteEmail("");
+    setInviteError(null);
+    setCopied(false);
+  }, []);
+
+  async function invite(e: React.FormEvent) {
+    e.preventDefault();
+    setInviteError(null);
+    // Same guard as the key form and onboarding's: an invitation is not
+    // idempotent, and a double submit would mint two and leave the first one
+    // superseded and confusing.
+    setInviting(true);
+    try {
+      const result = await authClient.organization.inviteMember({
+        email: inviteEmail.trim(),
+        // Every member is equal in this product and every member may invite —
+        // see the access control in apps/api/src/auth.ts. Sending anything else
+        // here would create a role the product has no screen to see or change.
+        role: "member",
+      });
+      if (result.error) {
+        const key = result.error.code ? INVITE_FAILURE_KEYS[result.error.code] : undefined;
+        setInviteError(key ? t(key) : t("genericError"));
+        return;
+      }
+      setCreated({
+        email: result.data.email,
+        link: invitationLink(locale, result.data.id),
+        expiresAt: String(result.data.expiresAt),
+      });
+      // The pending list on this card is part of the organization query.
+      void refetchOrganization?.();
+    } catch {
+      setInviteError(t("genericError"));
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function copyLink(link: string) {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      // No clipboard permission, or an insecure origin — a self-hosted instance
+      // on plain http is exactly that. The link is rendered as selectable text
+      // beside this button for that reason, so the failure costs a manual
+      // selection rather than the invitation.
+      setCopied(false);
+    }
+  }
+
+  async function revokeInvitation(invitation: OrganizationInvitation) {
+    setPendingRevoke(null);
+    setInviteError(null);
+    try {
+      const result = await authClient.organization.cancelInvitation({
+        invitationId: invitation.id,
+      });
+      if (result.error) {
+        setInviteError(t("genericError"));
+        return;
+      }
+      void refetchOrganization?.();
+    } catch {
+      setInviteError(t("genericError"));
+    }
+  }
+
   // Removing a key is one click away from unrecoverable — the secret is
   // encrypted at rest and never returned by any endpoint, so nothing on this
   // screen or in the database can put it back; the person has to go to the
@@ -278,6 +443,13 @@ export default function SettingsPage() {
     }
     return t("aiTestOk", { model: result.modelId, cost: costText(result.cost) });
   }
+
+  // Both lists ride on the organization query this card already makes
+  // (`get-full-organization` returns members and invitations together), so
+  // there is no second round trip and no way for the two to disagree about
+  // which organization they describe.
+  const members = organization?.members ?? [];
+  const invitations = (organization?.invitations ?? []).filter(isLiveInvitation);
 
   const themeOptions = [
     { value: "system", label: t("themeSystem") },
@@ -424,6 +596,12 @@ export default function SettingsPage() {
           </Button>
         </Card>
 
+        {/* The workspace and its people, in one card because they are one
+            subject: the constitution's one-place rule puts "who is in this
+            organization" at exactly one address, and this is the address that
+            already names the organization. There is no separate Members screen
+            and no nav entry for one — a second location for the same setting is
+            the thing the rule forbids. */}
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("workspaceTitle")}</h2>
           {/* Same rule as the credential list: "No organization" is a verdict,
@@ -435,8 +613,153 @@ export default function SettingsPage() {
           ) : (
             <p className="text-sm text-fg-secondary">{organization?.name ?? t("workspaceNoOrg")}</p>
           )}
+
+          {organization && (
+            <>
+              <div className="mt-4 overflow-hidden rounded-card border border-border">
+                {members.map((member) => (
+                  <ListRow
+                    key={member.id}
+                    title={member.user.email}
+                    meta={
+                      member.user.email === session?.user?.email ? t("peopleYou") : member.user.name
+                    }
+                  />
+                ))}
+                {invitations.map((invitation) => (
+                  <ListRow
+                    key={invitation.id}
+                    title={invitation.email}
+                    meta={t("peoplePending", {
+                      expires: new Date(invitation.expiresAt).toLocaleString(locale),
+                    })}
+                    trailing={
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => setPendingRevoke(invitation)}
+                      >
+                        {t("remove")}
+                      </Button>
+                    }
+                  />
+                ))}
+              </div>
+
+              {inviteError && !inviteOpen && (
+                <p role="alert" className="mt-3 text-sm text-danger">
+                  {inviteError}
+                </p>
+              )}
+
+              {/* Secondary: this screen's one primary action is the key form's
+                  Save, up in the header. Two primaries on one screen is the
+                  other half of the same rule. */}
+              <Button
+                variant="secondary"
+                className="mt-3"
+                onClick={() => {
+                  setInviteError(null);
+                  setInviteOpen(true);
+                }}
+              >
+                {t("peopleInvite")}
+              </Button>
+            </>
+          )}
         </Card>
       </div>
+
+      {/* One modal, two phases: ask for the address, then hand over the link.
+          A second modal for the link would let the first one close with the
+          link never shown, and the link is not recoverable afterwards. */}
+      <Modal
+        open={inviteOpen}
+        onClose={closeInvite}
+        title={created === null ? t("peopleInviteTitle") : t("peopleInvitedTitle")}
+        footer={
+          created === null ? (
+            <>
+              <Button variant="secondary" onClick={closeInvite}>
+                {t("peopleInviteCancel")}
+              </Button>
+              <Button type="submit" form={INVITE_FORM_ID} disabled={inviting}>
+                {t("peopleInvite")}
+              </Button>
+            </>
+          ) : (
+            <Button variant="secondary" onClick={closeInvite}>
+              {t("peopleInviteDone")}
+            </Button>
+          )
+        }
+      >
+        {created === null ? (
+          <form id={INVITE_FORM_ID} onSubmit={invite} className="flex flex-col gap-3">
+            <p className="text-sm text-fg-secondary">{t("peopleInviteBody")}</p>
+            <Input
+              type="email"
+              label={t("peopleEmailLabel")}
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              required
+              className="w-full"
+            />
+            {inviteError && (
+              <p role="alert" className="text-sm text-danger">
+                {inviteError}
+              </p>
+            )}
+          </form>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-fg-secondary">
+              {t("peopleInviteLinkHint", {
+                email: created.email,
+                expires: new Date(created.expiresAt).toLocaleString(locale),
+              })}
+            </p>
+            {/* Readable and selectable, not just copyable: `navigator.clipboard`
+                is unavailable on an insecure origin, which a self-hosted
+                instance on plain http is. */}
+            <code className="block overflow-x-auto rounded-control border border-border bg-bg-sunken px-3 py-2 text-[13px] text-fg">
+              {created.link}
+            </code>
+            <div>
+              <Button variant="secondary" onClick={() => void copyLink(created.link)}>
+                {copied ? t("peopleCopied") : t("peopleCopy")}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Revoking is destructive in the way the constitution means: the link
+          already in someone's hands stops working, and nothing on this screen
+          can put that link back. */}
+      <Modal
+        open={pendingRevoke !== null}
+        onClose={() => setPendingRevoke(null)}
+        title={t("peopleRevokeTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPendingRevoke(null)}>
+              {t("peopleInviteCancel")}
+            </Button>
+            {/* Same one word as the row's button: the act has one verb. */}
+            <Button
+              variant="danger"
+              onClick={() => pendingRevoke && void revokeInvitation(pendingRevoke)}
+            >
+              {t("remove")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">
+          {t("peopleRevokeBody", { email: pendingRevoke?.email ?? "" })}
+        </p>
+      </Modal>
 
       <Modal
         open={pendingRemoval !== null}

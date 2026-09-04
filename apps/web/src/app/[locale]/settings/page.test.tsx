@@ -19,6 +19,7 @@ vi.mock("@/lib/auth-client", () => ({
     useSession: vi.fn(),
     useActiveOrganization: vi.fn(),
     signOut: vi.fn(),
+    organization: { inviteMember: vi.fn(), cancelInvitation: vi.fn() },
   },
 }));
 
@@ -36,6 +37,10 @@ type MockAuthClient = {
   useSession: ReturnType<typeof vi.fn>;
   useActiveOrganization: ReturnType<typeof vi.fn>;
   signOut: ReturnType<typeof vi.fn>;
+  organization: {
+    inviteMember: ReturnType<typeof vi.fn>;
+    cancelInvitation: ReturnType<typeof vi.fn>;
+  };
 };
 const mockAuthClient = authClient as unknown as MockAuthClient;
 
@@ -113,16 +118,64 @@ beforeEach(() => {
   mockAuthClient.useSession.mockReset();
   mockAuthClient.useActiveOrganization.mockReset();
   mockAuthClient.signOut.mockReset();
+  mockAuthClient.organization.inviteMember.mockReset();
+  mockAuthClient.organization.cancelInvitation.mockReset();
+  refetchOrganization.mockReset();
 
   mockAuthClient.useSession.mockReturnValue({
     data: { user: { id: "u1", email: "ann@example.com" } },
     isPending: false,
   });
-  mockAuthClient.useActiveOrganization.mockReturnValue({
-    data: { id: "org1", name: "Acme Media" },
-    isPending: false,
-  });
+  organizationIs();
 });
+
+/**
+ * The organization query this card reads. `get-full-organization` answers with
+ * the members and the invitations in one payload, which is why the People list
+ * costs no second round trip and cannot describe a different organization from
+ * the name above it.
+ */
+const refetchOrganization = vi.fn();
+
+function organizationIs(extra: { members?: unknown[]; invitations?: unknown[] } = {}): void {
+  mockAuthClient.useActiveOrganization.mockReturnValue({
+    data: {
+      id: "org1",
+      name: "Acme Media",
+      members: extra.members ?? [
+        { id: "m1", role: "owner", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+      ],
+      invitations: extra.invitations ?? [],
+    },
+    isPending: false,
+    refetch: refetchOrganization,
+  });
+}
+
+/** A live invitation: pending AND not yet expired — the api reads both facts too. */
+function liveInvitation(email: string, id = "inv-1") {
+  return {
+    id,
+    email,
+    status: "pending",
+    expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+/**
+ * One Card's contents, found by its heading.
+ *
+ * The Account card and the Workspace card's people list both show the reader's
+ * own address, and honestly so — "who am I signed in as" and "who is in this
+ * organization" are different questions with the same answer here. An assertion
+ * about either therefore has to say which card it means, rather than being
+ * satisfied by whichever copy the query happened to reach first.
+ */
+function card(heading: string) {
+  const element = screen.getByRole("heading", { name: heading }).parentElement;
+  if (!element) throw new Error(`no card around the "${heading}" heading`);
+  return within(element);
+}
 
 describe("Settings — Appearance", () => {
   it('calls applyTheme("dark") and the choice persists via readThemePref', async () => {
@@ -202,14 +255,15 @@ describe("Settings — Language", () => {
 describe("Settings — Account", () => {
   it("shows the signed-in email and signs out via the shared Landing.signOut button", async () => {
     await renderSettings();
-    // AppShell's own sidebar user block also shows the email — scope to the
-    // page content so this only asserts on the Account card's copy.
-    const main = within(screen.getByRole("main"));
+    // AppShell's own sidebar user block shows the email, and so does the
+    // Workspace card's member list — scope to the Account card so this only
+    // asserts on its own copy.
+    const account = card(en.SettingsPage.accountTitle);
 
-    expect(main.getByText("ann@example.com")).toBeInTheDocument();
+    expect(account.getByText("ann@example.com")).toBeInTheDocument();
 
     const user = userEvent.setup();
-    await user.click(main.getByRole("button", { name: en.Landing.signOut }));
+    await user.click(account.getByRole("button", { name: en.Landing.signOut }));
 
     expect(mockAuthClient.signOut).toHaveBeenCalledTimes(1);
   });
@@ -763,5 +817,205 @@ describe("Settings — a refused credential action speaks the product's language
 
     expect(await screen.findByText(en.Errors.ai_credential_not_found)).toBeInTheDocument();
     expect(screen.queryByText(gone.message)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Adding a person, which until now the product could not do at all: the
+ * self-hosting document told operators to use "organization → invite member"
+ * and no such screen existed, so a fresh install was permanently one account
+ * wide the moment the signup gate closed behind it.
+ */
+describe("Settings — People", () => {
+  it("lists the members and marks the reader's own row", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "owner", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+        { id: "m2", role: "member", user: { id: "u2", email: "bob@example.com", name: "Bob" } },
+      ],
+    });
+    await renderSettings();
+
+    const workspace = card(en.SettingsPage.workspaceTitle);
+    expect(workspace.getByText("ann@example.com")).toBeInTheDocument();
+    expect(workspace.getByText(en.SettingsPage.peopleYou)).toBeInTheDocument();
+    expect(workspace.getByText("bob@example.com")).toBeInTheDocument();
+    expect(workspace.getByText("Bob")).toBeInTheDocument();
+  });
+
+  it("creates the invitation as a plain member and hands over a link to this instance", async () => {
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: {
+        id: "inv-9",
+        email: "carol@example.com",
+        expiresAt: "2026-09-06T10:00:00.000Z",
+      },
+      error: null,
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.SettingsPage.peopleInvite,
+      }),
+    );
+
+    // `role: "member"` is the decision, not a default: every member of a Pubrick
+    // organization is equal, and the api's access control gives that role the
+    // invitation verbs precisely so this screen never has to offer a role
+    // nothing in the product can see or change.
+    await waitFor(() =>
+      expect(mockAuthClient.organization.inviteMember).toHaveBeenCalledWith({
+        email: "carol@example.com",
+        role: "member",
+      }),
+    );
+    // The link is this instance's own address — a self-hosted install is reached
+    // wherever its operator put it — and it carries the invitation id, which is
+    // NOT a credential: accepting still requires a session whose address matches.
+    expect(
+      await screen.findByText(`${window.location.origin}/en/onboarding?invitation=inv-9`),
+    ).toBeInTheDocument();
+    expect(refetchOrganization).toHaveBeenCalled();
+  });
+
+  it("copies the link to the clipboard", async () => {
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: { id: "inv-9", email: "carol@example.com", expiresAt: "2026-09-06T10:00:00.000Z" },
+      error: null,
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.SettingsPage.peopleInvite,
+      }),
+    );
+    await screen.findByText(`${window.location.origin}/en/onboarding?invitation=inv-9`);
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleCopy }));
+
+    expect(await navigator.clipboard.readText()).toBe(
+      `${window.location.origin}/en/onboarding?invitation=inv-9`,
+    );
+    expect(
+      await screen.findByRole("button", { name: en.SettingsPage.peopleCopied }),
+    ).toBeInTheDocument();
+  });
+
+  it("translates the api's refusal rather than rendering the library's English", async () => {
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: null,
+      error: {
+        message: "User is already a member of this organization",
+        code: "USER_IS_ALREADY_A_MEMBER_OF_THIS_ORGANIZATION",
+      },
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "ann@example.com");
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.SettingsPage.peopleInvite,
+      }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.SettingsPage.peopleInviteFailMember);
+    expect(alert).not.toHaveTextContent("User is already a member");
+  });
+
+  it("falls back to its own sentence for a code it does not know", async () => {
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: null,
+      error: { message: "Something upstream", code: "SOME_FUTURE_CODE" },
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.SettingsPage.peopleInvite,
+      }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.SettingsPage.genericError);
+    expect(alert).not.toHaveTextContent("Something upstream");
+  });
+
+  it("lists a live invitation and hides one that is expired or revoked", async () => {
+    organizationIs({
+      invitations: [
+        liveInvitation("carol@example.com", "inv-live"),
+        // Pending, but past its date — the pair of facts the api's gate reads.
+        {
+          id: "inv-stale",
+          email: "dave@example.com",
+          status: "pending",
+          expiresAt: new Date(Date.now() - 1000).toISOString(),
+        },
+        // In date, but taken back.
+        {
+          id: "inv-gone",
+          email: "erin@example.com",
+          status: "canceled",
+          expiresAt: new Date(Date.now() + 1000).toISOString(),
+        },
+      ],
+    });
+    await renderSettings();
+
+    expect(screen.getByText("carol@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("dave@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByText("erin@example.com")).not.toBeInTheDocument();
+  });
+
+  it("asks before revoking, and only revokes on confirmation", async () => {
+    organizationIs({ invitations: [liveInvitation("carol@example.com", "inv-live")] });
+    mockAuthClient.organization.cancelInvitation.mockResolvedValue({ data: {}, error: null });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.remove }));
+    // Nothing has happened yet: the link in someone's hands is about to stop
+    // working and nothing here can put it back.
+    expect(mockAuthClient.organization.cancelInvitation).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(
+      en.SettingsPage.peopleRevokeBody.replace("{email}", "carol@example.com"),
+    );
+    await user.click(within(dialog).getByRole("button", { name: en.SettingsPage.remove }));
+
+    await waitFor(() =>
+      expect(mockAuthClient.organization.cancelInvitation).toHaveBeenCalledWith({
+        invitationId: "inv-live",
+      }),
+    );
+    expect(refetchOrganization).toHaveBeenCalled();
+  });
+
+  it("leaves the invitation alone when the confirmation is dismissed", async () => {
+    organizationIs({ invitations: [liveInvitation("carol@example.com", "inv-live")] });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.remove }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: en.SettingsPage.peopleInviteCancel }),
+    );
+
+    expect(mockAuthClient.organization.cancelInvitation).not.toHaveBeenCalled();
   });
 });

@@ -365,6 +365,170 @@ describe.skipIf(!url)("auth e2e", () => {
       expect(refused.body).toEqual(stranger.body);
     });
 
+    /**
+     * THE JOURNEY, end to end, with nothing fabricated: a member creates an
+     * invitation, the stranger it names registers on it and ends up inside the
+     * organization, and a stranger without one is still refused.
+     *
+     * The inviter is deliberately NOT the founder. The organization plugin gives
+     * `invitation: ["create"]` to `owner` and `admin` only, so on its stock
+     * configuration this test's second half is a 403 and a self-hosted instance
+     * is single-inviter forever: the one account that ran `docker compose up`
+     * can add people, and nobody it adds can add anybody. `auth.ts` grants the
+     * verb to `member`; this is the test that says so.
+     */
+    it("a member — not the founder — invites a stranger, who registers on it and lands inside the organization", async () => {
+      process.env.SIGNUP_MODE = "open";
+      const founder = request.agent(app.getHttpServer());
+      await founder
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Founder" })
+        .expect(200);
+      const org = await founder
+        .post("/api/auth/organization/create")
+        .send({
+          name: "Journey Co",
+          slug: `journey-${Date.now()}${Math.floor(Math.random() * 1e6)}`,
+        })
+        .expect(200);
+      const orgId = org.body.id as string;
+
+      // A plain member: invited by the founder, registered on that invitation,
+      // and holding whatever role the invitation carried — `member`.
+      const memberEmail = fresh();
+      await founder
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+
+      process.env.SIGNUP_MODE = "invite";
+      const member = request.agent(app.getHttpServer());
+      await member
+        .post("/api/auth/sign-up/email")
+        .send({ email: memberEmail, password: "password1234", name: "Member" })
+        .expect(200);
+
+      // They discover the invitation through the product's own read, which is the
+      // one the onboarding screen makes: the plugin's list-user-invitations
+      // refuses every unverified address, and this install verifies none.
+      const offered = await member.get("/api/org/invitations").expect(200);
+      expect(offered.body).toHaveLength(1);
+      expect(offered.body[0].organizationId).toBe(orgId);
+      expect(offered.body[0].organizationName).toBe("Journey Co");
+
+      await member
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId: offered.body[0].id })
+        .expect(200);
+
+      // Inside, read from the membership rather than from the cookie that just
+      // wrote itself: a FRESH sign-in mints a session whose active organization
+      // comes from `findInitialOrganizationId`, i.e. from a `member` row.
+      const returning = request.agent(app.getHttpServer());
+      await returning
+        .post("/api/auth/sign-in/email")
+        .send({ email: memberEmail, password: "password1234" })
+        .expect(200);
+      const memberSession = await returning.get("/api/auth/get-session").expect(200);
+      expect(memberSession.body.session.activeOrganizationId).toBe(orgId);
+      // ...and nothing is waiting for them any more.
+      expect((await returning.get("/api/org/invitations").expect(200)).body).toEqual([]);
+
+      // Now the half the plugin's defaults refuse: a `member` invites. No
+      // organizationId in the body — the session carries it, which is the call
+      // the Settings screen makes.
+      const strangerEmail = fresh();
+      const created = await returning
+        .post("/api/auth/organization/invite-member")
+        .send({ email: strangerEmail, role: "member" })
+        .expect(200);
+      expect(created.body.organizationId).toBe(orgId);
+
+      // The stranger they named gets in...
+      const stranger = request.agent(app.getHttpServer());
+      await stranger
+        .post("/api/auth/sign-up/email")
+        .send({ email: strangerEmail, password: "password1234", name: "Stranger" })
+        .expect(200);
+      const strangerOffer = await stranger.get("/api/org/invitations").expect(200);
+      expect(strangerOffer.body).toHaveLength(1);
+      await stranger
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId: strangerOffer.body[0].id })
+        .expect(200);
+
+      const strangerReturning = request.agent(app.getHttpServer());
+      await strangerReturning
+        .post("/api/auth/sign-in/email")
+        .send({ email: strangerEmail, password: "password1234" })
+        .expect(200);
+      expect(
+        (await strangerReturning.get("/api/auth/get-session").expect(200)).body.session
+          .activeOrganizationId,
+      ).toBe(orgId);
+
+      // ...and a stranger nobody named still does not. This is the assertion the
+      // whole gate exists for, and it runs at the END of the journey on purpose:
+      // everything above widened the instance by two accounts, and none of it may
+      // have widened it by a third.
+      await signUp(fresh()).expect(403);
+    });
+
+    /**
+     * Single use, proved through the endpoints rather than by writing `accepted`
+     * into the row (which "invite refuses an already-accepted invitation" above
+     * does, and which cannot see a plugin that stops writing that status).
+     *
+     * Two replays, because they are different attacks: presenting the same
+     * invitation id a second time, and registering the invited address a second
+     * time. The first is the person who reloads the Join screen; the second is
+     * whoever else has the link.
+     */
+    it("an accepted invitation cannot be replayed, by its id or by its address", async () => {
+      process.env.SIGNUP_MODE = "open";
+      const owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({ name: "Replay Co", slug: `replay-${Date.now()}${Math.floor(Math.random() * 1e6)}` })
+        .expect(200);
+      const invitedEmail = fresh();
+      const invitation = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: invitedEmail, role: "member", organizationId: org.body.id })
+        .expect(200);
+      const invitationId = invitation.body.id as string;
+
+      process.env.SIGNUP_MODE = "invite";
+      const invitee = request.agent(app.getHttpServer());
+      await invitee
+        .post("/api/auth/sign-up/email")
+        .send({ email: invitedEmail, password: "password1234", name: "Invitee" })
+        .expect(200);
+      await invitee
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId })
+        .expect(200);
+
+      // Replay one: the same id again, by the same person who legitimately used it.
+      const replayed = await invitee
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId });
+      expect(replayed.status).toBeGreaterThanOrEqual(400);
+
+      // Replay two: whoever else holds the link tries the address. The gate
+      // refuses BEFORE better-auth's sign-up can answer USER_ALREADY_EXISTS, so
+      // the answer is byte-identical to a stranger's — a spent invitation must
+      // not become an oracle for "this address has an account here".
+      const reused = await signUp(invitedEmail);
+      const strangerAnswer = await signUp(fresh());
+      expect(reused.status).toBe(403);
+      expect(reused.body).toEqual(strangerAnswer.body);
+    });
+
     // The unset default. By the time this runs the instance certainly has accounts —
     // this file created several — so `auto` must have closed itself.
     it("unset means invite-only once the instance has an account", async () => {

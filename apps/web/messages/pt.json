@@ -14,7 +14,16 @@
     "subtitle": "Marcas e canais vivem dentro de uma organização. Você pode convidar colegas mais tarde.",
     "orgName": "Nome da organização",
     "create": "Criar organização",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "signedOutTitle": "Primeiro crie a sua conta",
+    "signedOutBody": "Esta tela configura o seu espaço de trabalho depois que você entra. Se alguém convidou você, cadastre-se exatamente com o endereço para o qual o convite foi enviado — qualquer outro endereço é recusado.",
+    "signedOutAction": "Criar conta",
+    "invitedTitle": "Entrar em {organization}",
+    "invitedSubtitle": "{inviter} convidou você. Ao entrar, você passa a ver as marcas, os canais e a fila desta organização.",
+    "invitedJoin": "Entrar",
+    "invitedCreateInstead": "Criar a sua própria organização",
+    "joinFailed": "Este convite não funciona mais — ele pode já ter sido usado, retirado ou expirado. Peça um novo a quem convidou você.",
+    "invitationsUnchecked": "O Pubrick não conseguiu verificar se alguém convidou você: {reason}"
   },
   "Landing": {
     "title": "Pubrick",
@@ -199,7 +208,24 @@
     "aiTestFailTimedOut": "A chamada ao modelo esgotou o tempo antes de o provedor responder. Tente novamente ou verifique o identificador de modelo.",
     "aiTestFailTooManyTests": "Este espaço de trabalho já usou suas {limit} chamadas de teste da última hora. Cada teste é uma chamada paga ao seu provedor, por isso elas são limitadas. Tente novamente mais tarde.",
     "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente.",
-    "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero."
+    "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero.",
+    "peopleYou": "Você",
+    "peoplePending": "Convidado — expira em {expires}",
+    "peopleInvite": "Convidar",
+    "peopleInviteTitle": "Convidar alguém",
+    "peopleInviteBody": "O Pubrick não envia e-mails. Você recebe um link para repassar você mesmo, e a pessoa precisa se cadastrar exatamente com este endereço: o controle de cadastro não aceita nenhum outro.",
+    "peopleEmailLabel": "E-mail",
+    "peopleInviteCancel": "Cancelar",
+    "peopleInviteDone": "Concluir",
+    "peopleInvitedTitle": "Convite criado",
+    "peopleInviteLinkHint": "Envie este link para {email}. Ele funciona uma única vez, só para esse endereço, e expira em {expires}. O Pubrick não consegue mostrá-lo de novo — convidar o mesmo endereço mais tarde substitui este convite por um link novo.",
+    "peopleCopy": "Copiar",
+    "peopleCopied": "Copiado",
+    "peopleRevokeTitle": "Remover este convite?",
+    "peopleRevokeBody": "O link enviado para {email} deixa de funcionar e esse endereço não pode mais se cadastrar aqui. Você pode convidá-lo novamente depois.",
+    "peopleInviteFailMember": "Esse endereço já é membro desta organização.",
+    "peopleInviteFailEmail": "Esse não é um endereço de e-mail válido.",
+    "peopleInviteFailLimit": "Esta organização tem convites pendentes demais. Remova um antes de enviar outro."
   },
   "Language": {
     "title": "Idioma",

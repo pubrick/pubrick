@@ -14,7 +14,16 @@
     "subtitle": "Las marcas y los canales viven dentro de una organización. Podrás invitar a tu equipo más adelante.",
     "orgName": "Nombre de la organización",
     "create": "Crear organización",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "signedOutTitle": "Primero crea tu cuenta",
+    "signedOutBody": "Esta pantalla configura tu espacio de trabajo una vez que has iniciado sesión. Si alguien te invitó, regístrate exactamente con la dirección a la que se envió la invitación: cualquier otra queda rechazada.",
+    "signedOutAction": "Crear cuenta",
+    "invitedTitle": "Unirse a {organization}",
+    "invitedSubtitle": "{inviter} te invitó. Al unirte entras en las marcas, los canales y la cola de esta organización.",
+    "invitedJoin": "Unirse",
+    "invitedCreateInstead": "Crear tu propia organización en su lugar",
+    "joinFailed": "Esta invitación ya no funciona: puede que se haya usado, se haya retirado o haya caducado. Pide una nueva a quien te invitó.",
+    "invitationsUnchecked": "Pubrick no pudo comprobar si alguien te ha invitado: {reason}"
   },
   "Landing": {
     "title": "Pubrick",
@@ -199,7 +208,24 @@
     "aiTestFailTimedOut": "La llamada al modelo se quedó sin tiempo antes de que el proveedor respondiera. Inténtalo de nuevo o revisa el identificador de modelo.",
     "aiTestFailTooManyTests": "Este espacio de trabajo ha agotado sus {limit} llamadas de prueba de la última hora. Cada prueba es una llamada de pago a tu proveedor, por eso están limitadas. Inténtalo de nuevo más tarde.",
     "aiTestFailUnreadableKey": "No se pudo leer la clave guardada. Vuelve a guardarla.",
-    "aiSpendError": "No se pudo cargar el gasto hasta ahora: esto no es un total de cero."
+    "aiSpendError": "No se pudo cargar el gasto hasta ahora: esto no es un total de cero.",
+    "peopleYou": "Tú",
+    "peoplePending": "Invitado — caduca el {expires}",
+    "peopleInvite": "Invitar",
+    "peopleInviteTitle": "Invitar a alguien",
+    "peopleInviteBody": "Pubrick no envía correos. Recibirás un enlace para pasarlo tú mismo, y la persona tiene que registrarse exactamente con esta dirección: el control de registro no admite ninguna otra.",
+    "peopleEmailLabel": "Correo electrónico",
+    "peopleInviteCancel": "Cancelar",
+    "peopleInviteDone": "Listo",
+    "peopleInvitedTitle": "Invitación creada",
+    "peopleInviteLinkHint": "Envía este enlace a {email}. Funciona una sola vez, solo para esa dirección, y caduca el {expires}. Pubrick no puede volver a mostrarlo: si invitas más adelante a la misma dirección, esta invitación se sustituye por un enlace nuevo.",
+    "peopleCopy": "Copiar",
+    "peopleCopied": "Copiado",
+    "peopleRevokeTitle": "¿Eliminar esta invitación?",
+    "peopleRevokeBody": "El enlace enviado a {email} deja de funcionar y esa dirección ya no puede registrarse aquí. Puedes volver a invitarla después.",
+    "peopleInviteFailMember": "Esa dirección ya es miembro de esta organización.",
+    "peopleInviteFailEmail": "Esa no es una dirección de correo válida.",
+    "peopleInviteFailLimit": "Esta organización tiene demasiadas invitaciones pendientes. Elimina una antes de enviar otra."
   },
   "Language": {
     "title": "Idioma",
