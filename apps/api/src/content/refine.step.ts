@@ -1,5 +1,5 @@
 import { defineStep, type Step, type StepContext } from "@pubrick/ai";
-import { MAX_BODY_LENGTH, type RefineVerb } from "@pubrick/shared";
+import { MAX_BODY_LENGTH, type RefineVerb, refineVerbSchema } from "@pubrick/shared";
 import { z } from "zod";
 
 /**
@@ -21,12 +21,32 @@ import { z } from "zod";
  * the honest arrangement; translating the reason itself is a later
  * increment's problem, not this one's to solve by accident.
  *
- * `text` is bounded by `MAX_BODY_LENGTH` for the same reason the writer's and
- * editor's bodies are: it replaces a slice of `content_items.body`, which
- * `contentUpdateSchema` bounds by the same constant, and a merged body over
- * that limit would be un-storable — closed at *propose* time here, and
- * re-checked at *accept* time by `planRefineAccept` because the body can grow
- * between the two.
+ * `text` is bounded by `MAX_BODY_LENGTH` because it replaces a slice of
+ * `content_items.body`, which `contentUpdateSchema` bounds by the same
+ * constant: a reply longer than the whole column cannot be part of a storable
+ * body, whatever it is spliced into.
+ *
+ * THAT IS ALL THIS BOUND DOES, and it is not the merged body's. The merged
+ * body is `before + text + after`, a quantity this schema never sees, so a
+ * near-full body and a full-length reply both pass here and the merge is
+ * refused only at Accept, by `planRefineAccept`'s `too_long` — after the call
+ * has been paid for. Closing that gap is the CALLER's and has not been done
+ * yet: the route that stages a proposal must measure
+ * `body.slice(0, start) + text + body.slice(end)` against `MAX_BODY_LENGTH`
+ * itself, before it stages the row, because this step holds neither the body
+ * nor the offsets to do it with. Accept's check stays regardless — the body
+ * can grow between propose and accept — but it is the second line of defence,
+ * not the first, and until the caller has a first one there is no propose-time
+ * bound on a merged body at all.
+ *
+ * `text` is NOT piped through `normalizeNewlines`, unlike every body-bearing
+ * request DTO (CLAUDE.md: normalise first, bound second). This is a model
+ * output schema, not a writer's input: it is converted to JSON schema and sent
+ * to the provider, and a transform is not a thing a JSON schema can carry.
+ * `planRefineAccept` normalises the proposal itself before merging, so nothing
+ * un-normalised is ever stored as a *body* — but the staged proposal a caller
+ * writes and renders beside the draft is this raw string, so that caller
+ * normalises before it stores.
  */
 export const refineOutputSchema = z.object({
   text: z.string().min(1).max(MAX_BODY_LENGTH),
@@ -37,13 +57,15 @@ export type RefineOutput = z.infer<typeof refineOutputSchema>;
 /**
  * What the model needs to propose a replacement for one selection.
  *
- * `before`/`after` are the body's own text immediately surrounding the
- * selection — not the whole body it was cut from — so the model can match
- * voice and avoid repeating a neighbouring line without being handed a second
- * copy of `selection` sitting inside a fourth block it would have to find for
- * itself. Splitting the surrounding text this way is also what keeps "reply
- * with a replacement for SELECTION only" unambiguous: the selected text
- * appears in the material exactly once, under exactly one label.
+ * `before`/`after` are the body's own text on either side of the selection.
+ * Together with `selection` they are the whole body, cut at the splice offsets
+ * and never overlapping — the model is shown every surrounding word, so it can
+ * match voice and avoid repeating a neighbouring line. What it is not shown is
+ * a SECOND copy of the selected text: sending the body whole beside the
+ * selection would put the selected characters in the material twice, and
+ * "reply with a replacement for SELECTION only" would stop being unambiguous.
+ * Split this way the selected text appears exactly once, under exactly one
+ * label.
  *
  * The caller slices `content_items.body` at the splice offsets it already
  * holds to build these three strings; this step does no offset arithmetic of
@@ -107,6 +129,46 @@ const ROLE_LINES: Record<RefineVerb, readonly string[]> = {
 };
 
 /**
+ * A refine's context: the base `StepContext`, with `maxRetries` made
+ * MANDATORY.
+ *
+ * Every other step in this product leaves it to the SDK's own default of 2,
+ * and for a pipeline run that is right — a run is machine-triggered, its
+ * retries are what get it past a blip, and nobody is watching. A refine is the
+ * opposite on both counts, and the default is wrong for it in two separate
+ * ways. A person is watching a spinner, so real exponential backoff is spent
+ * in front of them before they are told a rate limit exists. And a press must
+ * not be billed three times: `maxRetries` covers TRANSPORT retries, which are
+ * physical round trips, each one metered and charged, on top of the repair
+ * retry `generateStructured` runs for a schema violation — so one press at the
+ * SDK default can buy up to six.
+ *
+ * That second half is not merely wasteful, it is what the hourly allowance
+ * rests on. The allowance counts `usage_ledger` rows `WHERE step = 'refine'`
+ * and takes no lock, on the argument that the overshoot past the limit is the
+ * concurrency and not a multiple of it. That argument holds only while one
+ * press writes a bounded, small number of rows: at `maxRetries: 0` a press
+ * costs at most two (the call, and the repair retry), and a press admitted at
+ * 119 leaves the hour at most two rows over. Left at the default, one press
+ * can write six, and the overshoot becomes a multiple of the per-press cost.
+ *
+ * So the caller does not get to forget. Requiring the field HERE, in the
+ * context a refine step is annotated with, makes an omission a COMPILE error
+ * at the call site rather than a comment nobody reads or a runtime throw after
+ * the request was accepted — the same mechanism `Record<RefineVerb, …>` uses
+ * below and `StepContext`'s own docstring uses for the brief, which is absent
+ * rather than optional for exactly this reason. `defineStep` infers a step's
+ * context from its `material` callback's annotation, so annotating that
+ * callback with this type is the whole implementation.
+ *
+ * It requires a NUMBER, not the number `0`. The value is a decision the caller
+ * owns — the plan's route sets `0` — and a type that spelled the answer would
+ * be pinning the policy in the wrong file. What this type refuses is the
+ * caller who never thought about it.
+ */
+export type RefineContext = StepContext & { maxRetries: number };
+
+/**
  * Build the refine step for one verb.
  *
  * Lives here, in `apps/api`, deliberately not beside the five roles in
@@ -131,18 +193,36 @@ const ROLE_LINES: Record<RefineVerb, readonly string[]> = {
  * caching, and a shared instance would only invite a caller to hold one across
  * requests for no benefit.
  *
- * `Step<RefineInput, RefineOutput, StepContext>` — the BASE context, not
- * `RunStepContext` — because a refine is not a step in a pipeline run and has
- * no brief to read; see `StepContext`'s own docstring on why that field is
- * absent rather than merely optional. The API's editor-side call is the first
- * caller that context split was made for.
+ * `Step<RefineInput, RefineOutput, RefineContext>` — built on the BASE
+ * context, not `RunStepContext` — because a refine is not a step in a pipeline
+ * run and has no brief to read; see `StepContext`'s own docstring on why that
+ * field is absent rather than merely optional. The API's editor-side call is
+ * the first caller that context split was made for. `RefineContext` narrows
+ * the base in the one direction this call needs it narrowed: `maxRetries` is
+ * required, for the reasons on that type.
  */
-export function refineStep(verb: RefineVerb): Step<RefineInput, RefineOutput, StepContext> {
+export function refineStep(verb: RefineVerb): Step<RefineInput, RefineOutput, RefineContext> {
+  // Parsed, not trusted. `RefineVerb` is a compile-time guarantee and the
+  // caller this step was built for reads its verb off an HTTP body, where the
+  // compiler has no say: a route that types `body.verb as RefineVerb`, or that
+  // simply has a `string` from a DTO written without `refineVerbSchema`, hands
+  // this function a value the type says is one of three and the process says
+  // is anything at all. Unparsed, `ROLE_LINES[verb]` is `undefined` and the
+  // spread below throws a bare `TypeError` — a 500 on what is a refusal, and
+  // one whose message names an implementation detail.
+  //
+  // It refuses HERE, while building, rather than in `material`: nothing that
+  // reaches this line can produce a `Step`, so an off-list verb cannot be run
+  // and cannot spend a cent. Prototype keys (`constructor`, `toString`,
+  // `__proto__`) are refused by the same parse, which is the reason to parse
+  // against the declared set rather than test `verb in ROLE_LINES`.
+  const role = ROLE_LINES[refineVerbSchema.parse(verb)];
+
   return defineStep({
     name: "refine",
     schema: refineOutputSchema,
-    role: [...ROLE_LINES[verb], "", ...COMMON_RULES],
-    material: (_ctx, input) => [
+    role: [...role, "", ...COMMON_RULES],
+    material: (_ctx: RefineContext, input: RefineInput) => [
       { label: "SELECTION", text: input.selection },
       { label: "BEFORE", text: input.before },
       { label: "AFTER", text: input.after },

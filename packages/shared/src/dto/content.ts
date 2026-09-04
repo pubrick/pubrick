@@ -118,6 +118,20 @@ export type VersionScope = (typeof VERSION_SCOPES)[number];
 export const REFINE_VERBS = ["shorten", "warmer", "punchier"] as const;
 export type RefineVerb = (typeof REFINE_VERBS)[number];
 
+/**
+ * The same closed set, as a runtime refusal.
+ *
+ * `RefineVerb` is a compile-time guarantee and every verb this product will
+ * ever hold arrives as a string off an HTTP body, where the compiler has no
+ * say: a route that reads `body.verb` and hands it on has a `string` the type
+ * says is one of three. Parsing it here is what turns the type back into a
+ * check, and it belongs beside the array for the reason the array itself
+ * exists — `refine_proposals.verb`'s CHECK, the step's role-lines `Record` and
+ * the editor's `Menu` already read one declaration, and a second enum written
+ * out by hand at the route would be a fourth list to keep in step.
+ */
+export const refineVerbSchema = z.enum(REFINE_VERBS);
+
 export const MAX_BODY_LENGTH = 4096;
 
 /**
