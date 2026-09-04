@@ -1,5 +1,5 @@
 /**
- * Who wrote the text on a content item — derived, never stored (spec §6).
+ * Who wrote the text on a content item — derived, never stored (generation-engine spec §6).
  *
  * Three of the four badges need nothing but the `origin` columns:
  *

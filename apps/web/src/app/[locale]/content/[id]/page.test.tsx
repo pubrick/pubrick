@@ -727,14 +727,14 @@ const AI_MASTER = "The model wrote this line.";
 const AI_CHANNEL = "The model wrote this channel copy.";
 
 /**
- * The lens (design §5): a toggle in the editor, off by default.
+ * The lens (provenance-lens design §5): a toggle in the editor, off by default.
  *
  * "Off by default" is a written trade, not an accident — the badge already
  * carries the claim at a glance and the writing surface stays calm (dossier
  * §2.3) — so it is pinned here rather than left to whatever the default happens
  * to be after the next refactor.
  */
-describe("the provenance lens (design §5)", () => {
+describe("the provenance lens (provenance-lens design §5)", () => {
   function lensFixture() {
     return makeItem({
       origin: "ai",
@@ -859,10 +859,10 @@ describe("the provenance lens (design §5)", () => {
 });
 
 /**
- * The counter (design §6): the denominator is the smaller of the platform's
+ * The counter (provenance-lens design §6): the denominator is the smaller of the platform's
  * limit and `MAX_BODY_LENGTH`, and `maxLength` does NOT drop with it.
  */
-describe("the per-channel counter (design §6)", () => {
+describe("the per-channel counter (provenance-lens design §6)", () => {
   const xChannel: Channel = { id: "chx", platform: "x", name: "Announcements" };
 
   function counterFixture(bodies: { a1: string | null; a2: string | null }) {
@@ -899,7 +899,7 @@ describe("the per-channel counter (design §6)", () => {
     // 300 characters of X copy: over that platform's 280, under what the API
     // stores. A hard cap at 280 would make it permanently unfixable — the human
     // could read the text and never edit it — which is exactly what
-    // `adaptationLimit`'s own docstring exists to prevent (design §6).
+    // `adaptationLimit`'s own docstring exists to prevent (provenance-lens design §6).
     const tooLongForX = "x".repeat(300);
     installBaseHandlers({ current: counterFixture({ a1: tooLongForX, a2: null }) }, [], undefined, [
       channel,
@@ -941,7 +941,7 @@ describe("the per-channel counter (design §6)", () => {
   });
 });
 
-describe("the fourth origin badge (design §3)", () => {
+describe("the fourth origin badge (provenance-lens design §3)", () => {
   it("reads human-edited once the body matches no ai version", async () => {
     installBaseHandlers(
       {

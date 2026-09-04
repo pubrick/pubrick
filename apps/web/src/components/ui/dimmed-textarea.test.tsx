@@ -11,7 +11,7 @@ import { Textarea } from "./textarea";
  * jsdom has no layout engine: every rect is zero and nothing wraps. So these
  * tests pin what jsdom can actually prove — the character stream, the flags,
  * the attributes — and *alignment* (do the two layers land a glyph on the same
- * pixel), forced colors and printing are checked in a browser (design §8).
+ * pixel), forced colors and printing are checked in a browser (provenance-lens design §8).
  *
  * Two things that note used to exclude, wrongly, and that are pinned below:
  *
@@ -137,7 +137,7 @@ describe("DimmedTextarea", () => {
     const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
     // Typed at a caret inside "Beta two.", not appended: an editor that only
     // ever tested typing at the end would not notice a surface that no-ops
-    // mid-text (design §1).
+    // mid-text (provenance-lens design §1).
     await user.type(textarea, "ZZ", { initialSelectionStart: 16, initialSelectionEnd: 16 });
 
     expect(textarea.value).toBe("Alpha one. Beta ZZtwo.\n\nGamma three.");
@@ -145,7 +145,7 @@ describe("DimmedTextarea", () => {
   });
 
   /**
-   * ALL versions, per design §3 — the rule the lens has that the gate does not.
+   * ALL versions, per provenance-lens design §3 — the rule the lens has that the gate does not.
    *
    * The gate reads the FIRST `ai` row (it asks "was a human ever involved");
    * the lens dims a sentence still matching ANY row. Today there is one row per
@@ -354,7 +354,7 @@ describe("DimmedTextarea", () => {
   it("shows an over-limit override as over-limit instead of truncating it", () => {
     // The whole point of the two numbers: a 300-character override for X stays
     // editable, and the counter says it is too long rather than the browser
-    // silently cutting it (design §6).
+    // silently cutting it (provenance-lens design §6).
     render(
       <DimmedTextarea
         value={"x".repeat(300)}
@@ -412,8 +412,8 @@ describe("DimmedTextarea", () => {
    * The two guards that do not live in this component, and so are invisible to
    * every other test here.
    *
-   * jsdom applies no stylesheet, so what they DO is a browser check (design
-   * §8). That they still EXIST is a string, and worth a string: both are
+   * jsdom applies no stylesheet, so what they DO is a browser check
+   * (provenance-lens design §8). That they still EXIST is a string, and worth a string: both are
    * unreferenced from any TypeScript file, which makes them exactly the kind of
    * code a tidy-up deletes with nothing turning red.
    */

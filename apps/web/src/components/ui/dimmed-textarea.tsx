@@ -8,7 +8,7 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  * A textarea that shows which sentences are still the AI's.
  *
  * It is a real `<textarea>` with a mirrored overlay, not an editor framework
- * (design §1): the browser keeps caret, IME, dead keys, autocorrect, selection
+ * (provenance-lens design §1): the browser keeps caret, IME, dead keys, autocorrect, selection
  * handles and undo, and we own only paint. The overlay renders the same
  * characters, dimming the spans that are still verbatim AI text.
  *
@@ -16,7 +16,7 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  * place, so:
  *
  *  - both render `MIRRORED_METRICS` — every property that decides where a
- *    glyph lands (design §7);
+ *    glyph lands (provenance-lens design §7);
  *  - the overlay renders `text.slice(start, end)` for a **gapless** partition,
  *    so its `textContent` is character-identical to the textarea's `value`. A
  *    dropped space or newline is a highlight sliding off the words it
@@ -45,14 +45,14 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
  * rather than trusting two different elements to inherit the same one (a
  * `<textarea>` takes the UA's form-control font unless told otherwise).
  *
- * `scrollbar-gutter: stable` is a metric too, and one design §7 does not list:
+ * `scrollbar-gutter: stable` is a metric too, and one provenance-lens design §7 does not list:
  * when the textarea overflows, a classic (space-taking) scrollbar narrows its
  * content box and its wrap points move, while the overlay's do not. Reserving
  * the gutter on both keeps the two content boxes the same width whether or not
  * the scrollbar is showing.
  *
  * Exported so a test can assert it REACHES both elements. Comparing the two
- * class strings to each other would be the tautology design §8 rules out —
+ * class strings to each other would be the tautology provenance-lens design §8 rules out —
  * without layout it proves nothing about alignment. Comparing each against the
  * shared constant proves something else, and the higher-consequence thing:
  * that neither layer has quietly stopped receiving it.
@@ -78,7 +78,7 @@ export type DimmedTextareaProps = {
   onChange: (value: string) => void;
   /** Every `ai` version body to dim against — all of them, never concatenated. */
   aiVersions: readonly string[];
-  /** The lens. Off by default (design §5). */
+  /** The lens. Off by default (provenance-lens design §5). */
   dimmed?: boolean;
   label?: string;
   className?: string;
@@ -87,7 +87,7 @@ export type DimmedTextareaProps = {
    * The hard cap the browser enforces. Deliberately *not* the same number as
    * `displayLimit`: an existing override longer than the platform limit must
    * stay editable, and a cap below its length would make it permanently
-   * unfixable (design §6).
+   * unfixable (provenance-lens design §6).
    */
   maxLength?: number;
   /** The counter's denominator — display only, never a cap. */
@@ -127,7 +127,7 @@ export function DimmedTextarea({
    * the mirror cannot see it — the value has not changed yet. With the
    * textarea's own text transparent, a composing user would be typing into
    * nothing. The lens steps aside for the duration and the real text paints
-   * itself; design §7 lists forced-colors and printing as the conditions where
+   * itself; provenance-lens design §7 lists forced-colors and printing as the conditions where
    * the lens turns itself off, and this is a third.
    */
   const [composing, setComposing] = useState(false);
@@ -196,7 +196,7 @@ export function DimmedTextarea({
   // layout, so it never *generates* a scroll offset — but it stores a written
   // `scrollTop` verbatim and reads it back, which is all the propagation these
   // two lines do. A test writes the offset itself and fires the event. What
-  // still belongs in a browser (design §8) is whether the synced offset lands
+  // still belongs in a browser (provenance-lens design §8) is whether the synced offset lands
   // the two layers on the same pixel row; that needs wrapping, and wrapping
   // needs layout.
   const attachOverlay = useCallback((overlay: HTMLDivElement | null) => {

@@ -18,8 +18,8 @@ import { QueueService } from "../queue/queue.service";
 
 /**
  * Explicit allowlist, per the house rule. Two columns are deliberately absent:
- * `active_job_id` and `lease_expires_at` are the worker's fencing state (spec
- * §5), meaningful only to the handler that holds the lease, and exposing them
+ * `active_job_id` and `lease_expires_at` are the worker's fencing state
+ * (generation-engine spec §5), meaningful only to the handler that holds the lease, and exposing them
  * would invite a client to reason about a lease it cannot take.
  *
  * `steps` is absent too, but for a size reason rather than a secrecy one — see
@@ -321,7 +321,7 @@ export class RunsRepository {
    * depends on it.
    *
    * `FOR UPDATE` is load-bearing rather than decoration: the worker claims a
-   * run with an UPDATE on this same row (the fence, spec §5), which takes the
+   * run with an UPDATE on this same row (the fence, generation-engine spec §5), which takes the
    * same lock. Locking here serialises "is this still cancellable?" against "I
    * am running it now" — either we see the worker's claim, or the worker's
    * claim waits for this transaction and then re-reads a status it must stop

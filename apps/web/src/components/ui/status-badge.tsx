@@ -8,7 +8,7 @@ export type StatusBadgeProps = {
   className?: string;
 };
 
-// The only five status colors that exist (spec §2.4). These `--status-*`
+// The only five status colors that exist (design-system spec §2.4). These `--status-*`
 // variables are deliberately not registered in the `@theme` block (they are
 // not general-purpose theme colors), so they are referenced via Tailwind's
 // arbitrary-value syntax rather than a generated `bg-status-*` utility —

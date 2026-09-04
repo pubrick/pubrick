@@ -238,7 +238,7 @@ export default function SettingsPage() {
   }
 
   /**
-   * The three display rules of the design's §4, rendered.
+   * The three display rules of the generation-engine design's §4, rendered.
    *
    * The fourth branch is the one that matters most: a summary that is a floor of
    * exactly zero means every call we know about went unpriced, and "≥ $0.00"

@@ -39,7 +39,7 @@ export {
 } from "@pubrick/shared";
 
 /**
- * Spec §2.4's five status colors, mapped from every outcome that exists.
+ * The design-system spec's §2.4 five status colors, mapped from every outcome that exists.
  * Seven values, five colors, no sixth palette (constitution).
  *
  * `queued`/`publishing` share `scheduled`'s blue — their own translated labels

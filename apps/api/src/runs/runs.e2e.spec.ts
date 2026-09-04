@@ -288,7 +288,7 @@ describe.skipIf(!url)("runs e2e", () => {
     // assertion is dead: the 400 comes from resolveChannels, so relaxing
     // runCreateSchema to .min(0) stays green while `[]` on a real brand is
     // admitted 201 — producing exactly the item with zero adaptations that
-    // spec §5 names as the reason the bound exists (approve marks it approved
+    // the generation-engine spec's §5 names as the reason the bound exists (approve marks it approved
     // and enqueues nothing). Here the repository has no complaint to make, so
     // the refusal can only come from channelIds.min(1).
     const { brandId } = await brandWithChannel(agent);

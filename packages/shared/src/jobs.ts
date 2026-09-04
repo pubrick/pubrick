@@ -88,7 +88,7 @@ export type GenerateJob = { runId: string; orgId: string };
  * on `started_on + expire_seconds < now()` regardless, and it cannot kill the
  * original handler — so expiry can and will re-dispatch a job whose first
  * handler is still alive. That is why the handler is FENCED via
- * `pipeline_runs.active_job_id` (spec §5): without the fence, two live handlers
+ * `pipeline_runs.active_job_id` (generation-engine spec §5): without the fence, two live handlers
  * would both skip the same checkpoints, both re-run the rest (double spend) and
  * both reach the terminal write, producing two content items for one run.
  * `heartbeatSeconds` is what detects a genuinely dead worker, within 30s.

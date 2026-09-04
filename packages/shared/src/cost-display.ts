@@ -24,7 +24,7 @@
  *             401. Its cost is KNOWN, and it is zero: it neither adds to the sum
  *             nor degrades the label.
  *
- * That last bucket is the refinement §4 gained once metering moved to every
+ * That last bucket is the refinement the generation-engine spec's §4 gained once metering moved to every
  * physical round trip: failed attempts write rows too, and the ledger is
  * lifetime, so a rule that called every null-cost row "unpriced" would let one
  * transient blip stamp "≥ $X (1 unpriced)" on an org's total forever.

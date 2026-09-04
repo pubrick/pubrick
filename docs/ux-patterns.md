@@ -4,8 +4,10 @@
 interaction-pattern layer that sits on top of the fixed design direction
 (restrained Apple-style tool, sidebar shell + bottom tab bar on mobile,
 one-place rule, single "Advanced" disclosure, five status colors, teaching
-empty states — see `docs/superpowers` spec in the origin repo and the design
-canvas). Nothing here relitigates that direction; everything here is about
+empty states — see the design-system spec, `docs/specs/0002-design-system.md`).
+The design canvas that produced its visual direction was a private working
+file in the planning repo and is not part of this repository. Nothing here
+relitigates that direction; everything here is about
 the mechanics of screens. It is the foundation for feature design going
 forward: when a roadmap feature is specced, start from its patterns here.
 

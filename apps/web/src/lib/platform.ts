@@ -39,7 +39,7 @@ export function channelLabel(platform: string, name: string): string {
  * `MAX_BODY_LENGTH`: an existing override already longer than the platform
  * limit must stay editable, and a hard cap below its length would make it
  * permanently unfixable — the human could read the text and never shorten it.
- * Over-limit is shown, never enforced here; see design §6.
+ * Over-limit is shown, never enforced here; see the provenance-lens design's §6.
  *
  * An unknown platform falls back rather than throwing, which is the opposite of
  * what the adapter does with it. There a wrong limit spends the org's money

@@ -27,7 +27,7 @@ const ITEM_COLUMNS = {
   status: schema.contentItems.status,
   /**
    * Who wrote this text. Exposed because the origin badge is DERIVED, not
-   * stored (spec §6): `human` reads human-written, `ai` reads AI-drafted or
+   * stored (generation-engine spec §6): `human` reads human-written, `ai` reads AI-drafted or
    * human-edited depending on `bodyIsAiVerbatim` — whether every sentence of
    * the body is still one the model wrote.
    */
@@ -186,7 +186,7 @@ const ADAPTATION_COLUMNS = {
   /**
    * Tracked per channel because the adaptation body is what actually reaches
    * the platform: an item a human wrote can still carry AI-adapted channel
-   * bodies, which is the "AI-adapted" badge in spec §6.
+   * bodies, which is the "AI-adapted" badge in the generation-engine spec's §6.
    */
   origin: schema.adaptations.origin,
   scheduledAt: schema.adaptations.scheduledAt,
@@ -609,7 +609,7 @@ export class ContentRepository {
     /**
      * The provenance lens's reference text. Returned rather than a
      * server-computed mask because the browser would have to split the
-     * current text identically to align a mask to it anyway (spec §4), and
+     * current text identically to align a mask to it anyway (provenance-lens spec §4), and
      * two splitters that must agree are two splitters that will stop
      * agreeing.
      */
@@ -640,10 +640,10 @@ export class ContentRepository {
        * reference text to compute it from (see `itemAiEvidence`). Before this
        * field, a rewritten item's card read "AI-drafted" while its own detail
        * screen said "Human-edited" one click later, which is the exact claim
-       * design §5 leans on to ship the lens off by default: the badge already
+       * the provenance-lens design's §5 leans on to ship the lens off by default: the badge already
        * carries it at a glance on every card.
        *
-       * The gate's own question (`allSentencesAi`, spec §2), off the same rows
+       * The gate's own question (`allSentencesAi`, authorship-per-sentence spec §2), off the same rows
        * the lens dims against, so the badge and the gate cannot give one screen
        * two answers. Whole-body equality could not: a refine's fragment never
        * EQUALS a whole body, so an accepted proposal made the badge caption the
@@ -816,7 +816,7 @@ export class ContentRepository {
    * A changed override leaves a version row of its own, at the ADAPTATION's
    * level — the same rule as `update`, one level down, and the level matters:
    * filing one channel's text as the master body's would make a history that
-   * restores the wrong text into the wrong place. Spec §6 says so explicitly
+   * restores the wrong text into the wrong place. The authorship-per-sentence spec's §6 says so explicitly
    * because the design's earlier draft was silent about this method.
    */
   async updateAdaptation(
@@ -1021,7 +1021,7 @@ export class ContentRepository {
    *    clause is what keeps it out: it has no `ai` rows at all, so every "is
    *    this still the AI's text?" question below would answer "cannot prove
    *    otherwise" and lock the product's ordinary flow.
-   *    The adaptation half is spec §5, closing the limit this comment used to
+   *    The adaptation half is the authorship-per-sentence spec's §5, closing the limit this comment used to
    *    record: entering on the ITEM's origin alone let a human-written item
    *    carrying AI-WRITTEN ADAPTATIONS skip every check below and ship its
    *    channel text unread. Nothing produced that shape when the gate was
@@ -1050,8 +1050,8 @@ export class ContentRepository {
    * merges a fragment into the body, the body then equals no stored row, and
    * equality reads a human touch that never happened — the gate publishing a
    * draft nobody opened, to exactly the callers it was written for. The
-   * question is therefore asked one sentence at a time (`allSentencesAi`, spec
-   * §2), which needs TWO things per level rather than one row:
+   * question is therefore asked one sentence at a time (`allSentencesAi`,
+   * authorship-per-sentence spec §2), which needs TWO things per level rather than one row:
    *
    * - EVERY `ai` body, for the mask. A sentence still counts as the model's
    *   when ANY `ai` row wrote it, so an accepted proposal's fragment covers the

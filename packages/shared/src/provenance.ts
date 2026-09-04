@@ -514,7 +514,7 @@ export function isSameText(previous: string, next: string): boolean {
  * this module errs towards refusing, and the recovery is one click. The branch
  * is reachable — `bodyText` is `min(1)` and does not trim, so `"   "` stores.
  * A full row that is itself blank is degenerate evidence and refuses too, for
- * §3's reason: without a countable reference this cannot tell a deletion from a
+ * the authorship-per-sentence spec's §3 reason: without a countable reference this cannot tell a deletion from a
  * rewrite, and the mask would mark every sentence human against nothing.
  *
  * **The disagreement with `isUntouchedAi` has a direction, and it is a theorem

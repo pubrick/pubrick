@@ -59,7 +59,7 @@ const beforeTheColumn = (): CostRow => ({
 });
 
 /**
- * The three rules of §4, one test each, named after the rule they defend.
+ * The three rules of the generation-engine spec's §4, one test each, named after the rule they defend.
  *
  * They are the whole reason the ledger's cost column is nullable, so they are
  * tested as a pure function rather than only through whichever screen happens
@@ -102,7 +102,7 @@ describe("the three cost display rules", () => {
 });
 
 /**
- * The refinement §4 gained after metering moved to every physical round trip:
+ * The refinement the generation-engine spec's §4 gained after metering moved to every physical round trip:
  * failed attempts write rows too, and a rule that ignored tokens would let one
  * 429 degrade a lifetime total to "≥ $X (1 unpriced)" forever.
  */

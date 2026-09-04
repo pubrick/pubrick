@@ -70,7 +70,7 @@ type ContentItem = {
   /**
    * The lens's reference text: every `ai` version body, for the item and for
    * each adaptation under its own id. The MASK is computed here rather than
-   * asked of the server (design §4) — a server-computed mask would still have
+   * asked of the server (provenance-lens design §4) — a server-computed mask would still have
    * to be aligned to a split done in the browser, and two splitters that must
    * agree are two splitters that will stop agreeing. That argument is about
    * per-sentence flags and does not reach the badge above, which is one
@@ -134,7 +134,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   /**
-   * The lens, off by default (design §5).
+   * The lens, off by default (provenance-lens design §5).
    *
    * A written trade, not a leftover: the dossier's §5.3 argues AI text should
    * be visibly AI, which points at "on", while its §2.3 keeps the writing
@@ -322,7 +322,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   /**
-   * The counter's denominator for one channel's override (design §6). An
+   * The counter's denominator for one channel's override (provenance-lens design §6). An
    * unresolved channel — deleted, or `GET /api/channels` failed and `channels`
    * is `[]` — keeps what the API can store, the same fallback
    * `adaptationLimit` makes for an id it does not know.
@@ -521,7 +521,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               placeholder={t("overridePlaceholder")}
               /*
                * The counter drops to what this platform accepts; the cap does
-               * not follow it down (design §6). An override already longer
+               * not follow it down (provenance-lens design §6). An override already longer
                * than the platform limit has to stay editable, or it is
                * unfixable forever.
                */

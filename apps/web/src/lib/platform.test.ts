@@ -20,7 +20,7 @@ describe("credentialFieldLabel", () => {
 });
 
 /**
- * The counter's denominator (design §6).
+ * The counter's denominator (provenance-lens design §6).
  *
  * These numbers must equal `adaptationLimit()` in `@pubrick/ai`, which is the
  * limit the adapter actually generates against. Both now read one formula in

@@ -530,7 +530,7 @@ describe("Settings — AI provider: Remove", () => {
 });
 
 /**
- * The design's §4 rules, as the user reads them. The rules themselves are unit
+ * The generation-engine design's §4 rules, as the user reads them. The rules themselves are unit
  * tested in `@pubrick/shared`; these pin that this screen actually applies them
  * instead of printing a bare `SUM()`.
  */

@@ -456,7 +456,7 @@ describe("dimSpans", () => {
     // U+200B is the ONLY such character, and the assertions below pin that:
     // U+FEFF is matched by `\s` and stripped by `.trim()` (ECMAScript's
     // WhiteSpace production includes ZWNBSP), so citing it as a difference is
-    // wrong. The fixture carries both because §7's overlay inserts a
+    // wrong. The fixture carries both because the provenance-lens spec's §7 overlay inserts a
     // zero-width character for a trailing newline; only the U+200B does work.
     expect("\u200B".trim()).toBe("\u200B");
     expect("\uFEFF".trim()).toBe("");
@@ -971,7 +971,7 @@ describe("allSentencesAi", () => {
   it("refuses when the full row is itself blank — degenerate evidence is not evidence", () => {
     // Fails OPEN without the guard: the mask marks every sentence human against
     // a row with no sentences in it, so a blank reference would read "the human
-    // wrote all of it" and publish. §3 puts partial evidence with no evidence,
+    // wrote all of it" and publish. The authorship-per-sentence spec's §3 puts partial evidence with no evidence,
     // and a row that yields no sentence is a reference nothing can be counted
     // against.
     for (const blank of ["", "   ", "\n", "\u200B"]) {

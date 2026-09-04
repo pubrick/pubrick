@@ -253,7 +253,7 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
             {(search || primaryAction) && (
               <div className="flex items-center gap-3">
                 {search}
-                {/* Spec §3: touch targets ≥44px below 640px. Button's own `md`/`sm`
+                {/* Design-system spec §3: touch targets ≥44px below 640px. Button's own `md`/`sm`
                     sizes are 36px/30px tall — min-height (not height) is what a
                     descendant selector can add without fighting Button's own `h-*`
                     utility, since min-height always clamps the box's used height

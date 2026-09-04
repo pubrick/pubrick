@@ -143,7 +143,7 @@ describe.skipIf(!url)("QueueService", () => {
     // column is a COALESCE with the same effect. So on any runner that reuses a
     // database — every dev box, and CI whenever the volume survives — DELETING
     // an option leaves the row exactly as it was and the assertions below stay
-    // green. `deadLetter` is the one that hurts most (spec §5's DLQ consumer is
+    // green. `deadLetter` is the one that hurts most (generation-engine spec §5's DLQ consumer is
     // what marks a run whose retries ran out; without it the run sits at
     // `running` on the queue strip forever, and the brief's snippet omitted it),
     // but the hole is the whole option set, so the whole option set is pinned.
@@ -221,7 +221,7 @@ describe.skipIf(!url)("QueueService", () => {
     // carries the right group — passes exactly as before. The single line that
     // makes the enqueue transactional is only observable when the enclosing
     // transaction rolls back: the job must roll back WITH it, or a run row that
-    // never existed has a job that will run against it (spec §5's terminal
+    // never existed has a job that will run against it (generation-engine spec §5's terminal
     // write then has no row to fence against).
     await expect(
       db.transaction(async (tx) => {

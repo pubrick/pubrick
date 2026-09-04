@@ -1985,7 +1985,7 @@ describe.skipIf(!url)("content e2e", () => {
       // individually reviewed. Editing the master body of a two-channel item
       // clears the refusal even though both channels still ship untouched AI
       // adaptations (the adaptation body wins over the item body in the
-      // worker). Spec §6 defines the refusal as the conjunction of all three
+      // worker). The generation-engine spec's §6 defines the refusal as the conjunction of all three
       // clauses, so this is the rule working, not a hole in it — but it is the
       // rule's real reach, and a reader deserves to see it asserted.
       const agent = await orgAgent();
@@ -2748,7 +2748,7 @@ describe.skipIf(!url)("content e2e", () => {
     /**
      * The origin badge's fourth value, on the CARD as well as on the item.
      *
-     * Design §5 ships the lens off by default on the strength of one sentence:
+     * The provenance-lens design's §5 ships the lens off by default on the strength of one sentence:
      * the badge already carries the claim at a glance on every card. It could
      * not — the list has no reference text — so a rewritten item read
      * "AI-drafted" in the queue and "Human-edited" one click later. The list

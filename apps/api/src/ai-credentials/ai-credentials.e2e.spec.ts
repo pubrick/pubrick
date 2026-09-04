@@ -37,7 +37,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
   /**
    * The one seam that would otherwise call Google or OpenRouter for real. §8 of
-   * the design forbids any test touching a provider, so the probe — which owns
+   * the generation-engine spec forbids any test touching a provider, so the probe — which owns
    * every network line of this feature and nothing else — is replaced here, and
    * the rest of the endpoint (guard, org scoping, decrypt, ledger write, cost
    * rules, response shape) runs for real against a real database.

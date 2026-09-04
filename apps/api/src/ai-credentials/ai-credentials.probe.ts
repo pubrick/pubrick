@@ -44,7 +44,7 @@ const PROBE_INSTRUCTIONS =
  * that matters — it is the only piece of this feature that talks to a provider,
  * so overriding it is what lets the e2e drive the whole endpoint (guard,
  * org-scoping, decrypt, ledger write, response shape) without any test ever
- * calling Google or OpenRouter, which §8 of the design forbids outright. The
+ * calling Google or OpenRouter, which §8 of the generation-engine spec forbids outright. The
  * repository keeps every database line; this keeps every network line.
  */
 /**

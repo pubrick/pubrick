@@ -39,7 +39,7 @@ describe("deriveOrigin", () => {
  * own tests live beside it. What is left for this function is the mapping, and
  * the fail-safe.
  */
-describe("deriveOrigin — human-edited (design §2, §5)", () => {
+describe("deriveOrigin — human-edited (authorship-per-sentence design §2, provenance-lens design §5)", () => {
   it("reads human-edited once the api reports the body is no longer verbatim", () => {
     expect(deriveOrigin({ origin: "ai", adaptations: [], bodyIsAiVerbatim: false })).toBe(
       "humanEdited",
@@ -68,7 +68,7 @@ describe("deriveOrigin — human-edited (design §2, §5)", () => {
   it("shows the badge on a queue card, which carries the same boolean", () => {
     // The whole point of a boolean rather than the version bodies: the LIST
     // response can afford it, so a rewritten item reads "Human-edited" on the
-    // card and on the screen it opens — design §5's argument for shipping the
+    // card and on the screen it opens — the provenance-lens design's §5 argument for shipping the
     // lens off by default is that the badge already carries the claim on every
     // card, and it did not until the list carried this field.
     const listRow = {
