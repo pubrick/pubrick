@@ -69,10 +69,18 @@ openssl rand -base64 32
 docker compose up -d
 ```
 
-Compose ships no fallback secrets: it refuses to start until those values are
-real, rather than booting with a key that is public in this repository.
+Compose ships no fallback secrets, so it refuses to start on an *unset*
+`BETTER_AUTH_SECRET` or `APP_ENCRYPTION_KEY` — but leaving either as the
+placeholder text above is a value, not an unset one, and only the api itself
+catches that, at its own boot. Skip the two `openssl` lines and the api
+crash-loops instead of running on a key public in this repository; check
+`docker compose logs api` if the site does not come up. Details, and why the
+web container won't come up behind it either, in
+[docs/self-hosting.md](docs/self-hosting.md#install).
 
 Web: http://localhost:3000 · API health: http://localhost:3001/api/health
+(both configurable — see the "Ports" section of
+[.env.example](.env.example) if either is already taken on your host)
 
 `APP_ENCRYPTION_KEY` encrypts channel credentials at rest — back it up, because
 losing it makes every stored credential unreadable. To rotate it, put the new

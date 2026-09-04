@@ -12,8 +12,8 @@ git clone https://github.com/pubrick/pubrick && cd pubrick
 cp .env.example .env
 
 # Generate two separate secrets and paste each into .env, replacing the
-# placeholder values of BETTER_AUTH_SECRET and APP_ENCRYPTION_KEY.
-# Compose has no fallback defaults and refuses to start until both are real.
+# placeholder values of BETTER_AUTH_SECRET and APP_ENCRYPTION_KEY — leaving
+# them as shipped does not stop at this command; see below.
 openssl rand -base64 32
 openssl rand -base64 32
 
@@ -22,7 +22,11 @@ docker compose up -d
 ```
 
 Three variables are required and have no defaults; `docker compose up` stops
-immediately with `required variable X is missing a value: …` if any is unset.
+immediately with `required variable X is missing a value: …` if any is unset —
+but that check only looks at whether the variable has *a* value, not whether
+it is still the placeholder text `.env.example` ships. A `.env` copied and
+never edited passes it, because every variable in the block below is set to
+*something*.
 
 - `BETTER_AUTH_SECRET` signs session cookies.
 - `APP_ENCRYPTION_KEY` encrypts channel and AI credentials at rest, so back it
@@ -36,12 +40,42 @@ immediately with `required variable X is missing a value: …` if any is unset.
   403 `Invalid origin`, and one left on `http://` behind TLS serves session
   cookies without the `Secure` attribute.
 
-Neither secret may be a value published in this repository — the api refuses to
-start in production on the old `init.sh` fallbacks or the `.env.example`
-placeholders, rather than running on a key anyone can read off GitHub.
+**Leaving either secret as the shipped placeholder does not fail the way the
+paragraph above does.** `docker compose up` accepts it — the value is set, just
+not to anything real — and only the api itself refuses it, at its own boot:
+either because the placeholder fails the 32-byte format check above, or
+because it exactly matches a value published in this repository (the old
+`init.sh` fallbacks and the `.env.example` placeholders — see
+[`auth-policy.ts`](../apps/api/src/auth-policy.ts)), which the api treats the
+same as a leaked key regardless of format. Either way the refusal happens
+*inside the api container*, as a crash on startup, which `restart:
+unless-stopped` then repeats forever. The web container will not come up
+behind it: it now waits for the api's own healthcheck before starting, so a
+placeholder left in place makes `docker compose up -d` report the failure
+(and no service on port 3000 at all) rather than quietly serving a website
+whose every backend call fails. Run `docker compose logs api` — the first
+lines name exactly which variable is still a placeholder and how to fix it.
 
-Only the web app publishes a port (`3000`); the api is bound to `127.0.0.1:3001`
-and reached through the web proxy. Put your TLS terminator in front of port 3000.
+Every one of the three services publishes a port to the host by default —
+`WEB_PORT` (default `3000`, meant to be reached from outside the host; put
+your TLS terminator here), `API_HOST_PORT` (default `3001`, bound to
+`127.0.0.1` only — the web app proxies `/api` to it over the compose network,
+this mapping exists only so you can `curl` the health endpoint or debug from
+the host) and `POSTGRES_PORT` (default `5432`, also bound to `127.0.0.1` —
+neither the api nor the worker use it, they reach Postgres over the compose
+network regardless of what this resolves to). Set any of the three in `.env`
+if the default is already taken on your host — 5432 in particular is the
+single most common port a developer's machine already has something on. See
+the "Ports" section of [`.env.example`](../.env.example) for the exact
+variable names.
+
+If you instead override a port with a `docker-compose.override.yml`, know
+that Compose **merges** a service's `ports` list by appending rather than
+replacing: an override file that adds its own `ports:` entry for a service
+this file already publishes a port for ends up trying to bind both, and the
+container fails to start. Use the `.env` variables above instead — they
+change the one port entry already in this file rather than adding a second
+one.
 
 Database migrations run automatically when the api container starts.
 
@@ -85,11 +119,14 @@ the ring is also checked against the values published in this repository — a
 rotation cannot smuggle the example key into second place.
 
 If a credential does become unreadable — the key was dropped, or a row was
-tampered with — the product says so in one sentence everywhere it is noticed:
-the channel's connection test, the AI key's Test button, a failed post's error,
-and a failed generation all report that the stored credentials were encrypted
-with a key this instance no longer has. Restore the old key, or save the
-credentials again.
+tampered with — the product notices it in four places, and says two different
+amounts about it. A channel's connection test and a failed post both name the
+cause: the stored credentials were encrypted with a key this instance no longer
+has. The **AI key's Test button and a failed generation say only that the stored
+key could not be read**, and leave you to connect that to a key rotation — so if
+an AI key that worked yesterday now reports that, check `APP_ENCRYPTION_KEY`
+before you go looking for a revoked key at the provider. Either way the fix is
+the same: restore the old key to the ring, or save the credentials again.
 
 ## Who can register
 
@@ -114,14 +151,35 @@ Under `invite` and `closed`, every refused sign-up gets the same reply whether o
 not the address is already registered, so the endpoint cannot be used to test
 which of your colleagues has an account.
 
-**Adding people.** An owner or admin invites an address from their organization
-(organization → invite member). The invitee then registers with exactly that
-address — the pending invitation is what lets their sign-up through — and accepts
-the invitation. Invitations expire after 48 hours; a stale one no longer opens
-the door.
+**Adding people.** Open **Settings** and find the **Workspace** card: it lists
+everyone in the organization, and **Invite** asks for an address. *Any* member
+can invite — Pubrick has no owner/admin distinction anywhere in its interface,
+so it does not pretend to have one here.
 
-Email verification is not required, and there is no built-in mailer: Pubrick does
-not send the invitation for you, so pass the invite link to the person yourself.
+Pubrick has no mailer, so it does not send the invitation for you. What you get
+back is a link to this instance, which you pass to the person yourself. It is
+shown once, in the dialog that created it; inviting the same address again
+replaces the invitation and mints a new link, which is how you re-issue one
+somebody lost — and which stops the old link working.
+
+The invitee opens the link, creates an account **with exactly the address you
+invited**, and lands on a screen offering the organization by name; one click
+joins it. Every member sees the pending invitations on the same Workspace card
+and can **Remove** any of them.
+
+**What the link is, and is not.** It is not a password. Anyone who obtains it
+learns only that this instance exists: joining still requires a session whose
+address matches the invitation, and registering still requires an address the
+signup gate has an invitation for. An invitation is single-use — accepting it
+spends it — and expires 48 hours after it is created; a spent, revoked or stale
+one is refused with the same generic answer a stranger gets, so it cannot be
+used to confirm that an address was ever invited.
+
+**What the address is.** The address *is* the credential, and Pubrick does not
+verify email — there is no mailer to verify it with. So whoever knows an
+invited address can register it before its owner does. Invite an address only
+the recipient controls, and if an invitation goes astray, remove it on the
+Workspace card rather than leaving it to expire.
 
 ## Auth rate limiting and client IPs
 
