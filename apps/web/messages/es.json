@@ -200,6 +200,13 @@
     "aiTestFailUnreadableKey": "No se pudo leer la clave guardada. Vuelve a guardarla.",
     "aiSpendError": "No se pudo cargar el gasto hasta ahora: esto no es un total de cero."
   },
+  "Language": {
+    "title": "Idioma",
+    "confirmTitle": "¿Cambiar de idioma?",
+    "confirmBody": "Cambiar de idioma recarga esta pantalla, y el texto que has escrito aquí todavía no se ha guardado.",
+    "confirmCancel": "Cancelar",
+    "confirmSwitch": "Cambiar"
+  },
   "Runs": {
     "title": "Generación",
     "backToQueue": "Volver a la cola",

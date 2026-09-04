@@ -200,6 +200,13 @@
     "aiTestFailUnreadableKey": "Não foi possível ler a chave salva. Salve-a novamente.",
     "aiSpendError": "Não foi possível carregar o gasto até agora — isto não é um total de zero."
   },
+  "Language": {
+    "title": "Idioma",
+    "confirmTitle": "Mudar de idioma?",
+    "confirmBody": "Mudar de idioma recarrega esta tela, e o texto que você digitou aqui ainda não foi salvo.",
+    "confirmCancel": "Cancelar",
+    "confirmSwitch": "Mudar"
+  },
   "Runs": {
     "title": "Geração",
     "backToQueue": "Voltar para a fila",

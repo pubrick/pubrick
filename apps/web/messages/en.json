@@ -200,6 +200,13 @@
     "aiTestFailUnreadableKey": "The stored key could not be read. Save it again.",
     "aiSpendError": "Spend so far could not be loaded — this is not a total of zero."
   },
+  "Language": {
+    "title": "Language",
+    "confirmTitle": "Switch language?",
+    "confirmBody": "Switching language reloads this screen, and the text you have typed here has not been saved yet.",
+    "confirmCancel": "Cancel",
+    "confirmSwitch": "Switch"
+  },
   "Runs": {
     "title": "Generation",
     "backToQueue": "Back to queue",
