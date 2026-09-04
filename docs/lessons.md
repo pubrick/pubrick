@@ -81,3 +81,59 @@ together in production). Fixed at the root with `pg_advisory_lock` around
 must hold an advisory lock; (2) verify integration suites against a database
 created moments ago, not the one left over from the last run — "it passed
 locally" is not evidence until the DB was fresh.
+
+## 2026-09-02 → 09-05 — a shared checkout turns parallel agents into a collision
+
+Ten agents worked in `~/Projects/pubrick` at once over three days. Observed:
+`git commit` in one agent swallowed another's staged hunks (recovered by
+splitting, twice); a repo-wide `biome check --write` reformatted two files
+another agent was mid-edit on; the shared `pubrick_test` database accumulated
+~6 900 stale pg-boss jobs across tiers until the worker suite went red for
+reasons unrelated to any change; one agent's migration was applied to the
+shared database while another ran the api suite against it; `mutation-check`
+read INCONCLUSIVE in every whole-package run under the load, so authors fell
+back to narrowed runs. Root cause: one working tree and one database for N
+writers. Rule: one agent per checkout; parallelism only across worktrees, each
+with its own database; land by rebase; a verdict measured while another agent
+was running is not a verdict.
+
+## 2026-09-04 — a task that is not independently shippable leaves the gate red
+
+Task 1 of the refine-verbs plan added a strict CHECK on `content_versions`;
+Task 2 owned the fixture helper that writes the rows the CHECK refuses. The
+plan listed them as separate tasks; dispatched alone, Task 1 broke six tests
+in a file it was told not to touch, and the tree was red until Task 2 landed.
+The implementer saw it and recorded it in the commit body for the next agent,
+which is the right recovery — but the dispatcher should have caught it. Rule:
+before dispatching, apply the task mentally and ask whether the gate is green
+with only it. Two tasks that share a test file are one task.
+
+## 2026-09-04 — a premise relayed into a prompt is a claim, not a fact
+
+Three agents were sent to fix something that did not exist as described: a CI
+failure attributed to `Connection terminated unexpectedly` (a mock error a test
+throws on purpose; the real failure was a missing queue schema in a different
+file); a deadlock attributed to two foreign keys (the two pre-locks were the
+mechanism, and the FKs alone were safe); a classifier told that any HTTP status
+means refusal (the SDK throws with status 200 on an unparseable body). Each
+agent disproved the premise and did the right thing, at the cost of the time
+to disprove it. Rule: every claim about code in a prompt is checked with one
+read first, and a reviewer's finding is passed on as "the review claims", not
+as established.
+
+## 2026-09-04 — the one hand-written commit was the one with the hole
+
+The orchestrator mounted a component into a page by hand, without a test, in
+a pass whose whole subject was guards nobody had pinned. The verification round
+found it: deleting the mount left the web suite green. Rule: the standard is
+the same for the orchestrator as for the agents — no commit without the test
+that dies on revert.
+
+## 2026-09-04 — a guard's test that is wrong in two ways pins nothing
+
+Twice in two days: the bot-token redaction's apparent test fed a URL, the one
+shape both redaction passes strip, so either pass could be deleted alone; the
+crypto envelope's version check was "tested" with an input whose key id was
+also unknown, so the version was never examined. Rule: the property under test
+must be the *only* thing wrong with the input, and the assertion must name the
+guard's own refusal, not merely that it threw.

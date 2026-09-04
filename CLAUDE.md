@@ -26,7 +26,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - `apps/api` — NestJS: one module per domain; runs DB migrations on boot.
 - `apps/worker` — NestJS standalone context: pg-boss consumers (jobs, cron). No HTTP.
 - `packages/db` — Drizzle schema + SQL migrations (applied programmatically; never edit applied migrations).
-- `packages/shared` — zod schemas, env parsing, types. No runtime deps beyond zod.
+- `packages/shared` — the rule book: zod DTOs and the closed status/error lists, the provenance and refine-merge rules, credential crypto and the key ring, the ledger's cost buckets, the queue contract. No runtime deps beyond zod; the web imports it in the browser. Map: `docs/architecture.md`.
 - Queue is pg-boss on Postgres. There is NO Redis; do not add one.
 
 ## UX constitution
@@ -315,6 +315,51 @@ package's own `test` script sets that, and without it 8 tests fail on Node ≥24
 ## Things Claude gets wrong
 
 (grown from repeated mistakes — add an entry when a correction happens twice)
+
+- **Running several agents in one checkout.** Every batch of parallel agents in
+  the shared tree has cost something: a commit that swallowed another agent's
+  staged files; a repo-wide formatter rewriting a file mid-edit; the shared test
+  database polluted by one agent's migration while another ran the suite;
+  mutation verdicts reading INCONCLUSIVE from load rather than from code. **Rule:
+  one agent per checkout.** Parallel work runs in separate `git worktree`s, each
+  with its own database, and lands by rebase. If two tasks must share files,
+  they are one task.
+- **Launching a task whose predecessor has not landed.** A migration shipped
+  ahead of the fixture that feeds it and left the gate red for an hour. **Rule:**
+  before dispatching a task, ask whether the gate is green with *only* this task
+  applied. If the plan says two tasks are independent and they touch the same
+  test file, the plan is wrong.
+- **Relaying a claim as a premise without checking it.** Agents were sent to fix
+  "a connection drop in CI" (a deliberately thrown mock error), "two foreign keys
+  closing a lock cycle" (the pre-locks, not the keys), "any HTTP status is a
+  refusal" (the SDK throws with status 200), and model ids that do not exist.
+  Each cost the agent time to disprove. **Rule:** a claim about the code goes
+  through one grep or read before it goes into a prompt. A claim from a reviewer
+  is a claim, not a fact.
+- **Committing without a test, because the change was "just a mount".** The one
+  hand-written commit in the hardening pass was the one with a Critical finding:
+  deleting the line it added left every test green. **Rule:** no commit without
+  the test that dies when the change is reverted — including the orchestrator's
+  own.
+- **Writing the plan fast and reviewing it after.** Implementers found seven
+  errors in one plan; a spec review found eight criticals in another. **Rule:**
+  a spec gets its adversarial review before a plan is written from it; a plan
+  gets a fresh read for hidden dependencies before its first task is
+  dispatched. Both are cheaper than the third fix-up wave.
+- **Trusting an author's mutation log.** Fifteen guards reported pinned by their
+  authors were not. **Rule:** a task is done when a *different* agent has
+  re-run the mutations and read the tests for the "wrong cause" shape — a
+  guard's test input must be wrong in exactly one way.
+- **`rm -rf` on a directory in a repository.** Twice, tracked files went with
+  the scratch. **Rule:** `git status` first; `git clean -n` before any deletion
+  wider than a file you created.
+- **An agent ending its turn on a background wait.** Dozens of "Waiting…"
+  wake-ups, each a full model turn. **Rule:** verification runs in the
+  foreground with a timeout; a background process is for something the agent
+  does not need to act on.
+- **Not writing the lesson down.** `docs/lessons.md` has no entry for the three
+  days in which every one of the above repeated. **Rule:** a correction that
+  happens twice is written into this section the same day, not at the end.
 
 ## Compact instructions
 
