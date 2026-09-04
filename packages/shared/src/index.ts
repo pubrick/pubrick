@@ -63,3 +63,9 @@ export {
   splitSentenceSpans,
   splitSentences,
 } from "./provenance.js";
+export {
+  type AiEvidenceRow,
+  planRefineAccept,
+  type RefineAcceptArgs,
+  type RefineAcceptPlan,
+} from "./refine-merge.js";
