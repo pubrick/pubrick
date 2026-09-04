@@ -70,6 +70,15 @@ connection** on a channel re-encrypts it, and saving credentials through
 until nothing is left on it; there is no harm in leaving it there, and removing
 it early makes whatever is still on it unreadable.
 
+Nothing moves while the ring has one key. Rows written before the ring existed
+carry no version and no key id; under a single key **Test connection** leaves
+them exactly as they are, because there is no other key to move them off — and
+because a worker still on the previous release reads only that shape (see
+[Upgrade](#upgrade)). Rows change format only once a second key is in the ring,
+and from then on they move as described above. A credential saved or edited
+after the upgrade is written in the new format under any ring; a worker on the
+previous release cannot read it, which is why the worker goes first.
+
 Each key is validated at boot, so a typo in the second one is a refusal to start
 rather than a credential that silently cannot be read months later. Every key in
 the ring is also checked against the values published in this repository — a
@@ -171,6 +180,21 @@ docker compose up -d --build
 ```
 
 Migrations apply on boot; back up the `pgdata` volume before major upgrades.
+
+**Deploy the worker before the api, or both at once.** `docker compose up -d
+--build` rebuilds both together and needs no further care. If you roll services
+one at a time — a second host, an orchestrator, a manual restart — the order
+matters for stored credentials: the api WRITES them and the worker READS them,
+and a release can teach the reader a new format before the writer produces it,
+but not the other way round. A worker on the previous release cannot open a
+credential the new api has saved, and a post on that channel fails permanently
+— with the crypto library's own "Unsupported state or unable to authenticate
+data", since the previous release has no better sentence — until the worker
+catches up.
+The new worker reads everything the old api ever wrote, so worker first is
+always safe. Pressing **Test connection** on an existing channel does not
+change its stored format while `APP_ENCRYPTION_KEY` is a single key, so
+channels nobody re-saves during the roll are unaffected in either order.
 
 ## Configuration
 

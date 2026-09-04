@@ -9,7 +9,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  *
  * `APP_ENCRYPTION_KEY` is now ONE OR MORE base64 keys, comma-separated, the
  * active one first. A single key — every value that has ever been deployed —
- * parses as a ring of one and behaves exactly as it did, which is the only
+ * parses as a ring of one and READS exactly as it did, which is the only
  * migration story worth having: nothing to run, nothing to rewrite, no window
  * where the product is down.
  *
@@ -18,6 +18,20 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
  * written before it is still opened with the old one. The old key leaves the
  * ring when nothing is on it any more (`rewrapJson` below is what moves rows
  * off it; `ChannelsRepository.verify` is the one caller that does it today).
+ *
+ * ── WHAT A RING OF ONE MUST NOT DO ────────────────────────────────────────
+ *
+ * Move rows. `rewrapJson` re-seals a blob only when there is a key to move it
+ * OFF: a ring with more than one member, or an envelope naming a key that is no
+ * longer the active one. Under a single key a legacy blob stays legacy, and the
+ * reason is the deploy that introduces this module. A rolling deploy brings the
+ * api up minutes before the worker; if the api's first Test press rewrote a
+ * row into `p1.`, a worker still on the previous build — which reads only the
+ * legacy shape — would fail every post for that channel, permanently, until it
+ * was redeployed. So the stored format advances only when an operator has put
+ * a second key in the ring, which is the moment they are reading the rotation
+ * instructions anyway. (A NEW save still writes `p1.` under any ring, so the
+ * deploy order is written down in `docs/self-hosting.md`: worker first.)
  *
  * ── WHY A TEXT PREFIX AND NOT A LEADING VERSION BYTE ──────────────────────
  *
@@ -285,8 +299,9 @@ function open(payload: string, raw: string): Opened {
  * legacy format is readable for ever and is never written again — which is the
  * asymmetry that makes the change deployable: nothing has to be rewritten
  * before the new code works. Nothing written by the new code is readable by the
- * old code, so this is a one-way deploy; there is no way round that which also
- * carries a version.
+ * old code, so a new SAVE is a one-way step; there is no way round that which
+ * also carries a version. What the old code has already written is a different
+ * matter, and `rewrapJson` is careful not to touch it until a rotation begins.
  */
 export function encryptJson(value: unknown, keyBase64: string): string {
   const ring = ringOf(keyBase64);
@@ -323,6 +338,13 @@ export function decryptJson<T = unknown>(payload: string, keyBase64: string): T 
  * written under a key that has since been demoted costs a decrypt and a
  * re-seal.
  *
+ * A legacy blob under a RING OF ONE is also `null`. There is no other key it
+ * could be on, so there is nothing to move it off, and re-sealing it would only
+ * change its format — which is the one thing a reader on the previous build
+ * cannot follow (see "what a ring of one must not do" at the top of this file).
+ * The blob stays exactly as the old code wrote it until a second key appears in
+ * the ring; from then on it moves, because from then on there IS a key to leave.
+ *
  * The PLAINTEXT BYTES are re-sealed, not a re-serialised object. A JSON
  * round-trip through `JSON.parse`/`JSON.stringify` would rewrite key order and
  * number formatting, so a rewrap would silently alter what was stored; the
@@ -337,5 +359,6 @@ export function rewrapJson(payload: string, keyBase64: string): string | null {
   const active = ring[0] as RingEntry;
   const { plaintext, keyId } = open(payload, keyBase64);
   if (keyId === active.id) return null;
+  if (keyId === null && ring.length === 1) return null;
   return sealWith(active, plaintext);
 }

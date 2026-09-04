@@ -270,6 +270,27 @@ describe("crypto", () => {
       expect(decryptJson(rewrapped, OTHER_KEY)).toEqual({ z: 1, a: 2, n: 1.5, s: "é" });
     });
 
+    it("leaves a legacy blob alone under a ring of ONE — there is no key to move it off", () => {
+      // Every existing install runs a single key, and its rows are in the legacy
+      // shape. Re-sealing one here would change its FORMAT and nothing else, and
+      // a worker still on the previous build reads only the legacy format: a
+      // rolling deploy that brings the api up first would then break every post
+      // for the first channel anyone pressed Test on. So the answer is "nothing
+      // to do", and the stored bytes — the old code's own output — are untouched.
+      expect(rewrapJson(LEGACY_UNDER_KEY, KEY)).toBeNull();
+      // ...and the very same blob DOES move once a second key is in the ring,
+      // whichever position the key that wrote it now holds.
+      expect(rewrapJson(LEGACY_UNDER_KEY, `${OTHER_KEY},${KEY}`)).not.toBeNull();
+      expect(rewrapJson(LEGACY_UNDER_KEY, `${KEY},${OTHER_KEY}`)).not.toBeNull();
+    });
+
+    it("still refuses an unreadable blob under a ring of one, rather than reading the no-op as success", () => {
+      expect(() => rewrapJson(encryptJson({ a: 1 }, THIRD_KEY), KEY)).toThrow(
+        UnreadableCiphertextError,
+      );
+      expect(() => rewrapJson("not-a-blob", KEY)).toThrow(UnreadableCiphertextError);
+    });
+
     it("refuses a blob it cannot open rather than quietly leaving it alone", () => {
       expect(() => rewrapJson(encryptJson({ a: 1 }, THIRD_KEY), `${KEY},${OTHER_KEY}`)).toThrow(
         UnreadableCiphertextError,

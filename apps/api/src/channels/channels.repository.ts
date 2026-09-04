@@ -344,6 +344,13 @@ export class ChannelsRepository {
    * Best effort by construction. A failed rewrap leaves a readable row on an
    * older key — exactly the state it was already in — so it must never turn a
    * successful connection test into an error.
+   *
+   * UNDER A SINGLE KEY THIS WRITES NOTHING. `rewrapJson` answers `null` for a
+   * legacy blob when the ring has one member: there is no key to move it off,
+   * and re-sealing it would only change its format — into one a worker still on
+   * the previous build cannot read, which turned a routine Test press during a
+   * rolling deploy into a channel whose posts failed permanently until the
+   * worker caught up. Rows change shape only once a rotation has begun.
    */
   private async rewrapIfStale(orgId: string, id: string, stored: string): Promise<void> {
     try {

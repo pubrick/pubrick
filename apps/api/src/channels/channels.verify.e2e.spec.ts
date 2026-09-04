@@ -1,6 +1,9 @@
+import { createCipheriv, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { createDb, schema } from "@pubrick/db";
+import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -8,6 +11,7 @@ const url = process.env.TEST_DATABASE_URL;
 
 describe.skipIf(!url)("channels verify e2e", () => {
   let app: INestApplication;
+  let direct: ReturnType<typeof createDb>;
   let telegram: Server;
   const telegramCalls: string[] = [];
 
@@ -67,10 +71,12 @@ describe.skipIf(!url)("channels verify e2e", () => {
     // request and closes it when that request ends, killing any other request
     // in flight (see content.e2e.spec.ts for the measurement).
     await app.listen(0);
+    direct = createDb(url as string);
   });
 
   afterAll(async () => {
     await app.close();
+    await direct.pool.end();
     await new Promise<void>((resolve) => telegram.close(() => resolve()));
   });
 
@@ -128,6 +134,51 @@ describe.skipIf(!url)("channels verify e2e", () => {
     expect(result.body.ok).toBe(false);
     expect(typeof result.body.reason).toBe("string");
     expect(JSON.stringify(result.body)).not.toContain("123:abc");
+  });
+
+  it("leaves a pre-envelope row byte-identical under a single key, so a worker on the previous build still reads it", async () => {
+    // This app boots on ONE key — the ring every existing install runs — and
+    // its rows are `base64(iv || tag || ciphertext)` with no version and no key
+    // id, written by the code before the ring existed. `channels.credentials.e2e`
+    // proves the mirror image on a two-key ring: there, Test MOVES this row.
+    // Here it must not, because the only thing a rewrap could change is the
+    // format, and the previous build's worker reads only this one. The blob is
+    // written out by hand rather than through a helper the reader could drift
+    // with.
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const created = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Old rows",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const id = created.body.id as string;
+    const key = Buffer.from(process.env.APP_ENCRYPTION_KEY as string, "base64");
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify({ botToken: "123:abc", chatId: "-1001234567890" }), "utf8"),
+      cipher.final(),
+    ]);
+    const legacy = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString("base64");
+    expect(legacy).not.toContain(".");
+    await direct.db
+      .update(schema.channels)
+      .set({ credentialsEncrypted: legacy })
+      .where(eq(schema.channels.id, id));
+
+    const result = await agent.post(`/api/channels/${id}/test`).send({}).expect(200);
+    expect(result.body.ok).toBe(true);
+
+    const rows = await direct.db
+      .select({ credentialsEncrypted: schema.channels.credentialsEncrypted })
+      .from(schema.channels)
+      .where(eq(schema.channels.id, id));
+    expect(rows[0]?.credentialsEncrypted).toBe(legacy);
   });
 
   it("404s for another organization's channel", async () => {
