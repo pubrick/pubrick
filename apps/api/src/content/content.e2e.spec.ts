@@ -89,6 +89,20 @@ describe.skipIf(!url)("content e2e", () => {
   const REFINED_BODY = `Café ouvert. ${AI_FRAGMENT}`;
 
   /**
+   * The same three things for a refine that SHORTENED the draft — the flagship
+   * verb doing its job, and the shape the old deletion clause could not tell
+   * from a human trimming the draft.
+   *
+   * A three-sentence draft; the model returns its last two as one line; the
+   * merged body is two sentences and every word of it is still the model's.
+   * The accepted proposal's `unit_delta` is −1, and the whole of increment
+   * 2b-2's fix is that the gate adds it to what it counts against.
+   */
+  const AI_LONG_BODY = `${AI_BODY} On vous attend dès sept heures.`;
+  const AI_SHORTENING_FRAGMENT = "Passez nous voir dès sept heures.";
+  const SHORTENED_BODY = `Café ouvert. ${AI_SHORTENING_FRAGMENT}`;
+
+  /**
    * What Task 8's terminal write leaves behind, written directly.
    *
    * That write creates the item (`origin: "ai"`), its adaptations (each with
@@ -274,7 +288,15 @@ describe.skipIf(!url)("content e2e", () => {
    *
    * `origin` and `scope` default to what a generation writes (`ai`, `full`), so
    * a caller spelling either one out is being explicit about the thing its test
-   * turns on. `replaceExisting` drops the item's own rows first, for the shapes
+   * turns on. `unitDelta` is REQUIRED on a `fragment` and refused on a `full`
+   * row — the database's own CHECK, restated in the fixture's type, so that a
+   * test about a refine cannot be written without saying how many units it
+   * replaced. A helper that defaulted it would have decided the answer of every
+   * case below that turns on the count; a helper that omitted it could not
+   * express the failing branch at all, which is exactly how this clause came to
+   * be pinned by fixtures that could not fail.
+   *
+   * `replaceExisting` drops the item's own rows first, for the shapes
    * that are about what is MISSING. `createdAt` is spelled out only by the
    * tests that turn on ROW ORDER — `defaultNow()` would make "the fragment was
    * written before the full row" depend on how fast the inserts ran. `id` is
@@ -285,13 +307,12 @@ describe.skipIf(!url)("content e2e", () => {
    */
   async function addItemVersions(
     itemId: string,
-    versions: {
+    versions: ({
       id?: string;
       body: string;
       origin?: "ai" | "human";
-      scope?: "full" | "fragment";
       createdAt?: Date;
-    }[],
+    } & ({ scope?: "full"; unitDelta?: never } | { scope: "fragment"; unitDelta: number }))[],
     options: { replaceExisting?: boolean } = {},
   ): Promise<void> {
     const { createDb, schema } = await import("@pubrick/db");
@@ -316,6 +337,7 @@ describe.skipIf(!url)("content e2e", () => {
         body: version.body,
         origin: version.origin ?? ("ai" as const),
         scope: version.scope ?? ("full" as const),
+        unitDelta: version.scope === "fragment" ? version.unitDelta : null,
         ...(version.createdAt ? { createdAt: version.createdAt } : {}),
         ...(version.id ? { id: version.id } : {}),
       })),
@@ -2292,11 +2314,128 @@ describe.skipIf(!url)("content e2e", () => {
       // as a human touch and publishes a draft nobody opened. Per sentence
       // there is nothing human in it — the first sentence is the full row's,
       // the second is the fragment's.
-      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment", unitDelta: 0 }]);
       await agent.patch(`/api/content/${itemId}`).send({ body: REFINED_BODY }).expect(200);
 
       await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
       expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    /**
+     * THE defect this increment is built around, and the ordinary path rather
+     * than a corner: press Shorten once and this is what the tables hold.
+     *
+     * A three-sentence `full` row; a `fragment` carrying the single line the
+     * model returned in place of the last two; `unit_delta = -1`; and a body of
+     * two sentences, every word of which the model wrote. Counted against the
+     * anchor alone the body is a sentence short, which reads as a human
+     * deletion — so the gate opens on a draft nobody has read and the badge
+     * captions the model's own words "Human-edited". That is the inversion
+     * increment 2b-1 exists to prevent, arriving from the flagship verb
+     * WORKING.
+     *
+     * Everything else about this fixture is deliberately correct, so that the
+     * delta is the only thing that can move the answer: nobody has opened the
+     * item, the channel still carries the model's adapted text and its own `ai`
+     * row, and every sentence of the body matches a row, so the mask is all
+     * true and clause 2 has nothing to say. The counterweight below shares
+     * every one of those and differs by one unit of body.
+     */
+    it("refuses a draft the model SHORTENED for you, and the badge still says AI-drafted", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      await addItemVersions(
+        itemId,
+        [
+          { body: AI_LONG_BODY },
+          { body: AI_SHORTENING_FRAGMENT, scope: "fragment", unitDelta: -1 },
+        ],
+        { replaceExisting: true },
+      );
+      const patched = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: SHORTENED_BODY })
+        .expect(200);
+
+      // The badge, on the very response that stored the merged body.
+      expect(patched.body.bodyIsAiVerbatim).toBe(true);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(0);
+    });
+
+    it("still sees a deletion THROUGH a shortening refine — one unit fewer opens it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      // Byte for byte the fixture above, one unit of body removed: the same
+      // rows, the same −1, the same untouched channel, nobody opening anything.
+      // Every sentence LEFT is still the model's — it is the fragment's own
+      // line — so the mask cannot see the human and only the running
+      // expectation can: three units anchored, one replaced away, two owed, one
+      // present. A gate that simply refused every fragment-bearing level would
+      // pass the test above and fail this one.
+      await addItemVersions(
+        itemId,
+        [
+          { body: AI_LONG_BODY },
+          { body: AI_SHORTENING_FRAGMENT, scope: "fragment", unitDelta: -1 },
+        ],
+        { replaceExisting: true },
+      );
+      const patched = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: AI_SHORTENING_FRAGMENT })
+        .expect(200);
+
+      expect(patched.body.bodyIsAiVerbatim).toBe(false);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(await publishJobCount(adaptationIds[0] as string)).toBe(1);
+    });
+
+    /**
+     * The invariant the deltas compose under, asserted on rows rather than
+     * remembered: a level holds at most ONE `ai` `full` row.
+     *
+     * `allSentencesAi` anchors on the first `full` row and adds every fragment
+     * row's `unit_delta` to it. Both halves describe the same text only while
+     * there is one such row: a second — a re-generation over an existing item —
+     * leaves the anchor describing one body and the deltas another, and the
+     * disagreement runs UNSAFE (a long first draft, a short re-generation, and
+     * a body that is every word the model's reads "Human-edited").
+     *
+     * Nothing writes a second one today, and this walks the whole write surface
+     * that could: both PATCH routes, the read receipt and approve, on an item
+     * that already carries the model's own rows. 2c's re-adaptation is the work
+     * that makes the shape reachable; it must decide whether the anchor becomes
+     * the LAST full row and whether earlier deltas are dropped, and this is the
+     * test that should be failing while it does.
+     */
+    it("leaves every level with at most one `ai` `full` row — the shape 2c must not create", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
+
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Une phrase à moi." }).expect(200);
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationIds[0]}`)
+        .send({ body: "Mon propre texte pour ce canal." })
+        .expect(200);
+      await agent.post(`/api/content/${itemId}/opened`).expect(204);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+      // Scoped to this item's own rows, never a count over the table: the
+      // suites share one database and never truncate it.
+      const perLevel = new Map<string, number>();
+      for (const row of await versionRows(itemId)) {
+        if (row.origin !== "ai" || row.scope !== "full") continue;
+        const level = row.adaptationId ?? "the master body";
+        perLevel.set(level, (perLevel.get(level) ?? 0) + 1);
+      }
+      expect(perLevel.size).toBe(2); // the master body, and its one channel
+      expect([...perLevel.values()]).toEqual([1, 1]);
     });
 
     it("opens as soon as one sentence is the human's own", async () => {
@@ -2308,7 +2447,7 @@ describe.skipIf(!url)("content e2e", () => {
       // everything would also satisfy. Same refined body, one sentence of the
       // author's own added: no `ai` row wrote that sentence, so the mask has a
       // false in it and the gate opens.
-      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment", unitDelta: 0 }]);
       await agent
         .patch(`/api/content/${itemId}`)
         .send({ body: `${REFINED_BODY} On vous attend dès sept heures.` })
@@ -2434,7 +2573,7 @@ describe.skipIf(!url)("content e2e", () => {
       // rewrite are indistinguishable — and the body here is the model's own
       // text, untouched. Judging it against the fragment alone (one sentence
       // against two) reads a human edit that never happened.
-      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }], {
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment", unitDelta: 0 }], {
         replaceExisting: true,
       });
 
@@ -2455,7 +2594,7 @@ describe.skipIf(!url)("content e2e", () => {
       // `full` row — and it is the FIRST full row this level has ever had, so a
       // gate that read it would find a reference equal to the body in front of
       // it, take the other branch, and print the other sentence.
-      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }], {
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment", unitDelta: 0 }], {
         replaceExisting: true,
       });
       const before = await agent.post(`/api/content/${itemId}/approve`).send({});
@@ -2974,7 +3113,7 @@ describe.skipIf(!url)("content e2e", () => {
         return listed.find((item) => item.id === itemId)?.bodyIsAiVerbatim;
       };
 
-      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment" }]);
+      await addItemVersions(itemId, [{ body: AI_FRAGMENT, scope: "fragment", unitDelta: 0 }]);
       const edited = await agent
         .patch(`/api/content/${itemId}`)
         .send({ body: REFINED_BODY })
@@ -3033,6 +3172,10 @@ describe.skipIf(!url)("content e2e", () => {
             id: midId,
             body: AI_FRAGMENT,
             scope: "fragment",
+            // One sentence replaced by one: this fragment moves no count, so
+            // the deletion below is countable against the first `full` row and
+            // nothing else — which is what this test is about.
+            unitDelta: 0,
             createdAt: new Date("2026-08-01T09:00:00Z"),
           },
           { id: lowId, body: "Passez nous voir.", createdAt: new Date("2026-08-01T11:00:00Z") },

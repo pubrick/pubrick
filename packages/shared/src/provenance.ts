@@ -27,6 +27,8 @@
  * spelled out again at the call site.
  */
 
+import type { VersionScope } from "./dto/content.js";
+
 // Zero-width space and byte-order mark are invisible spacing that no human
 // types on purpose. `\s` does not cover U+200B — that single character is the
 // whole reason this class exists, and the whole difference between it and
@@ -461,6 +463,42 @@ export function isSameText(previous: string, next: string): boolean {
 }
 
 /**
+ * One `ai` version row, as the whole-text question reads it: the text, whether
+ * that text is a whole body or a refine's fragment, and — on a fragment — how
+ * many units it replaced.
+ *
+ * The three travel together because clause 3 needs all three at once and a
+ * caller that carried them as parallel lists would eventually mis-pair them.
+ * The mask still takes bodies alone (`aiSentenceMaskAny`, `dimSpans`): asking
+ * "is this sentence still the model's" needs no scope, and the lens has no use
+ * for one.
+ *
+ * A bare `string` is accepted in the same list and means exactly one thing: a
+ * `full` row, said shortly, contributing nothing to the count. That is not a
+ * convenience — it is the only honest reading of a caller that has bodies and
+ * no scopes, and it is what the shape delivered to the browser holds
+ * (`aiVersionBodies` is a list of strings; the API reads `scope` and does not
+ * ship it). The trap it leaves is worth naming: passing `rows.map(r => r.body)`
+ * where the rows include a fragment silently restores the old, unsafe clause,
+ * because bodies alone cannot say what was replaced. Anything reading rows out
+ * of the database passes the rows.
+ */
+export type AiVersionRow = {
+  readonly body: string;
+  readonly scope: VersionScope;
+  /**
+   * `n(merged) − n(pre-merge)` at the moment the proposal was accepted, signed.
+   * Null on a `full` row; null on a `fragment` row is degenerate evidence —
+   * MISSING, never zero — and refuses. See `allSentencesAi`.
+   */
+  readonly unitDelta: number | null;
+};
+
+/** The row's text, whichever of the two shapes it arrived in. */
+const evidenceBody = (row: string | AiVersionRow): string =>
+  typeof row === "string" ? row : row.body;
+
+/**
  * Is every sentence of `current` something the model wrote?
  *
  * The question the gate and the badge both ask, and the same evidence the lens
@@ -485,16 +523,60 @@ export function isSameText(previous: string, next: string): boolean {
  *      of the model's sentences would otherwise read "all AI" and refuse a
  *      caller who trimmed the draft — with a message telling them to edit it.
  *
- * Clause 3 **counts** against the level's first `full` row; it does not ask that
- * every sentence of that row still appear in the text. Membership is the
+ * Clause 3 **counts** against the level's first `full` row PLUS what the
+ * fragments changed; it does not ask that every sentence of that row still
+ * appear in the text. Membership is the
  * tempting spelling and it is wrong: a refine REPLACES one of the full row's
  * sentences, so under membership every accepted proposal reads as a deletion and
  * the increment closes nothing. For a body that has PASSED clause 2 the two are
  * the same question — every sentence of such a body matched some row, so "at
- * least as many sentences as the full row had" says exactly "as many
- * fragment-sourced sentences arrived as full-row sentences left". That
+ * least as many sentences as the level's rows account for" says exactly "as
+ * many fragment-sourced sentences arrived as full-row sentences left". That
  * equivalence is conditional on clause 2, and clause 2 is where the limits
  * below live; it says nothing about a body clause 2 has already refused.
+ *
+ * **What the fragments changed is ONE signed number per row, added up.** A
+ * refine replaces units, so the count moves, and the anchor alone cannot say
+ * by how much: `n >= n(firstFullRow)` reads an ordinary successful *shorten*
+ * — two of the model's sentences returned as one — as a human trimming the
+ * draft, opens the gate on text nobody read and captions the model's own
+ * words "Human-edited". So each `fragment` row carries `unitDelta`, the
+ * `n(merged) − n(pre-merge)` measured when its proposal was accepted, and the
+ * expectation is
+ *
+ *     n(firstFullRow) + Σ over fragment rows of unitDelta
+ *
+ * They ADD, and that is not an assumption: each delta was measured against the
+ * body as it stood when that fragment landed, so the sum telescopes to
+ * `n(what the model's text should now be)`. A human deletion between two
+ * refines drops the actual count below that running expectation and opens the
+ * gate, which is correct — a human did delete something.
+ *
+ * `unitDelta` is stored, never recomputed. `introduced − removed` is the same
+ * number, and re-deriving it would mean re-splitting every fragment body on
+ * every gate check and every badge render — two things that must agree, which
+ * in this repository is the argument against, not for.
+ *
+ * A `fragment` row whose `unitDelta` is null is DEGENERATE evidence, not a
+ * zero: the row cannot say what it replaced, so a deletion and a rewrite are
+ * again indistinguishable and this refuses, exactly as a missing `full` row
+ * does. The database makes that shape unreachable (`content_versions`'
+ * `unit_delta` is non-null exactly when `scope = 'fragment'`); it is handled
+ * here because the fail-safe answer must not depend on a CHECK staying
+ * dropped-proof. A `full` row's `unitDelta` is ignored — an anchor is not a
+ * replacement of anything, and a row that claims to be both is read as the
+ * anchor it is.
+ *
+ * **Exactly one `ai` `full` row per level, and this is where that assumption
+ * is spent.** The anchor is one body and the deltas were measured against
+ * whatever body each refine acted on; a SECOND `full` row at the same level —
+ * a re-generation over an existing item — makes those two describe different
+ * texts, and the disagreement runs in the unsafe direction (a longer first
+ * draft, a shorter re-generation, and a body that is 100% the model's reads
+ * human-edited). Nothing writes a second one today: a run always creates a new
+ * content item. 2c's re-adaptation is where that stops being true, and it has
+ * to decide whether the anchor becomes the LAST full row and whether the
+ * deltas before it are dropped — see the test named for it.
  *
  * The row it counts against is `firstFullRow`, NEVER `aiRows[0]`. Nothing in
  * this signature promises `aiRows` is ordered, and nothing makes a level's
@@ -527,12 +609,23 @@ export function isSameText(previous: string, next: string): boolean {
  * unsatisfiable: every disagreement runs the refusing way, and every one of them
  * has `n(current) = 0`. Pinned over a generated corpus, not over examples.
  *
- * **Three known limits, and all three err UNSAFE — they read the model's own
- * text as human-edited, which opens the gate and captions the badge
- * "Human-edited".** Every one of them is a fragment that does not line up with
- * a sentence boundary, and none is closable here, because a fragment row does
- * not record what it replaced. 2b-2 owns them: re-split at Accept and require
- * every unit of the merged body to be attributable, or refuse the proposal.
+ * The theorem is about the fragment-free shape and it survives the sum
+ * untouched rather than by re-derivation: over no fragment rows Σ is 0, so
+ * clause 3 is literally `n(current) >= n(ai)`, the clause the proof is about.
+ * Its corpus sweep is unchanged for the same reason — every row in it is a
+ * whole body. What a fragment-bearing corpus can claim is the weaker, true
+ * property, and it is swept separately: for a body every sentence of which is
+ * attributable, the verdict is `true` exactly when the unit count reaches the
+ * running expectation.
+ *
+ * **Two known limits, and both err UNSAFE — they read the model's own text as
+ * human-edited, which opens the gate and captions the badge "Human-edited".**
+ * Both are a fragment that does not line up with a sentence boundary, so the
+ * merged body holds a unit no row contains and clause 2 refuses it. Neither is
+ * closable HERE, and not for want of a count: nothing this function is handed
+ * contains that unit. They are closed where the fragment's contents are
+ * decided — at Accept, which stores the merged body's own units and refuses a
+ * splice that would launder a human's words into them.
  *
  *   a. **An unterminated fragment fuses with its neighbour.** "Make this hook
  *      punchier" is precisely the verb that returns text with no terminator, so
@@ -546,15 +639,22 @@ export function isSameText(previous: string, next: string): boolean {
  *   b. **A splice can reshape the unit AROUND it.** `1. Get bread.` is a list
  *      marker plus a sentence; the marker belonged to the old unit and the
  *      sentence to the fragment, so neither row contains the result.
- *   c. **A fragment replacing TWO sentences with one** is indistinguishable
- *      from a deletion, and fails clause 3 rather than clause 2.
  *
- * The mirror case errs safe and is pinned as such: a fragment appended while
- * another sentence is deleted keeps the count and reads untouched.
+ * There were three. The third — a fragment replacing TWO sentences with one,
+ * failing clause 3 rather than clause 2 — is what `unitDelta` closes, and it
+ * was the common path rather than a corner: it is what *shorten* does when it
+ * works.
+ *
+ * The mirror case USED to err safe and be pinned as such — a fragment appended
+ * while another sentence was deleted kept the raw count and read untouched.
+ * `unitDelta` closes that too, and in the honest direction: the appended
+ * fragment owes its `+1`, the body is a unit short of what the rows account
+ * for, and a human really did delete a sentence. It is only still reachable
+ * through the bare-body shorthand, where nothing says a unit was added.
  */
 export function allSentencesAi(
   current: string,
-  aiRows: readonly string[],
+  aiRows: readonly (string | AiVersionRow)[],
   firstFullRow: string | null | undefined,
 ): boolean {
   // `== null`, not `=== undefined`: a caller reading this off a row naturally
@@ -563,8 +663,18 @@ export function allSentencesAi(
   if (aiRows.length === 0 || firstFullRow == null) return true;
   const reference = splitSentences(firstFullRow);
   if (reference.length === 0) return true;
+  // Clause 3's expectation, built before anything else is asked, because a
+  // fragment that cannot say what it replaced is missing evidence and takes
+  // the refusing branch the missing-`full`-row check above takes — never the
+  // mask's `false`, which would open the gate on unreadable evidence.
+  let expected = reference.length;
+  for (const row of aiRows) {
+    if (typeof row === "string" || row.scope !== "fragment") continue;
+    if (row.unitDelta == null) return true;
+    expected += row.unitDelta;
+  }
   const sentences = splitSentences(current);
   if (sentences.length === 0) return true;
-  if (!aiSentenceMaskAny(current, aiRows).every((isAi) => isAi)) return false;
-  return sentences.length >= reference.length;
+  if (!aiSentenceMaskAny(current, aiRows.map(evidenceBody)).every((isAi) => isAi)) return false;
+  return sentences.length >= expected;
 }

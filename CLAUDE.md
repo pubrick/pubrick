@@ -104,7 +104,8 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   approval of an `ai` item that nobody opened and nobody touched — body *and*
   every adaptation judged with `allSentencesAi` against that level's `ai`
   `content_versions` rows, missing **or partial** evidence refusing (a level
-  whose only rows are fragments has no countable reference and refuses too).
+  whose only rows are fragments has no countable reference and refuses too, and
+  so does one holding a `fragment` row that cannot say what it replaced).
   Never move this check into
   the UI, and never weaken it to the master body alone: `adaptations.body ??
   contentItems.body` is what actually ships. `first_opened_at` is stamped only by
@@ -117,8 +118,9 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   - **whole text** — the gate ("may this be approved?") and the origin badge
     ("AI-drafted or Human-edited?"): `allSentencesAi(current, aiRows,
     firstFullRow)` (`@pubrick/shared`), over **all** of that level's `ai` rows
-    for the mask plus the level's **first `scope = 'full'`** row for the
-    deletion clause. Run by `ContentRepository` in
+    for the mask, plus — for the deletion clause — the level's **first
+    `scope = 'full'`** row as the anchor **and the sum of every `fragment`
+    row's `unit_delta`**. Run by `ContentRepository` in
     `requireHumanInvolvement`, in `get` and in `list`, and delivered to the web
     as the boolean `bodyIsAiVerbatim` on **both** `GET /api/content/:id` and the
     LIST rows, so a queue card shows the same badge as the screen it opens. Ship
@@ -135,13 +137,32 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   time a proposal is accepted. If you find yourself adding a reference, you are
   about to ship a screen that answers one question twice.
 
-  Two traps, both silent. **`aiRows[0]` is not the first `full` row** — a
+  **The count is against the anchor PLUS what the fragments changed, and the
+  fragments' half is stored, never recomputed.** A refine replaces units, so a
+  successful *shorten* — two of the model's sentences returned as one — leaves
+  the body a unit short of the anchor: counted against the anchor alone that is
+  a human deletion, and the gate opens on an unread draft while the badge
+  captions the model's own words "Human-edited". Each `fragment` row therefore
+  carries `unit_delta`, the signed `n(merged) − n(pre-merge)`, written **once,
+  at Accept, by `planRefineAccept`** and never re-derived from the fragment's
+  text at read time. A `fragment` whose `unit_delta` is null is *missing*
+  evidence, not a zero, and refuses. This composes only while a level has **at
+  most one `ai` `full` row** — a second makes the anchor and the deltas describe
+  different bodies, and it fails unsafe; nothing writes one today, and 2c's
+  re-adaptation owns that decision.
+
+  Three traps, all silent. **`aiRows[0]` is not the first `full` row** — a
   fragment can sort first, and counting against a one-sentence fragment makes
   the deletion clause a no-op, so every deletion reads as untouched AI; any
-  query feeding this must order by `created_at, id` and select `scope`. And
-  while a level has exactly one `full` row and no fragments — every row on live
-  data today — every wrong choice here coincides with the right one, so it looks
-  right in each test you would think to write.
+  query feeding this must order by `created_at, id` and select `scope` **and
+  `unit_delta`** — the two are read together or not at all, because `scope`
+  without the delta is exactly the shape that reads a shorten as a deletion.
+  **Pass the ROWS, never `rows.map((r) => r.body)`** — a bare body is read as a
+  `full` row (which is what the browser's `aiVersionBodies` holds, and all it
+  can hold), so flattening rows that include a fragment silently restores the
+  old, unsafe clause. And while a level has exactly one `full` row and no
+  fragments — every row on live data today — every wrong choice here coincides
+  with the right one, so it looks right in each test you would think to write.
 
   **The badge and the lens can disagree on one screen, honestly.** The whole-text
   grain knows what is no longer there: delete a sentence and every sentence left
@@ -155,9 +176,9 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   its own multiset; replacing it with `aiSentenceMask(current, versions.join())`
   is a silent provenance inversion, not a simplification. The whole-text grain
   cannot take a joined reference either: `allSentencesAi` masks through that same
-  helper, and its deletion clause counts against ONE row — the first `full` one —
-  so joining the versions would measure the text against every version at once
-  and read every AI draft as human-edited.
+  helper, and its deletion clause counts against ONE row — the first `full` one,
+  moved by the fragments' deltas — so joining the versions would measure the text
+  against every version at once and read every AI draft as human-edited.
 - **Pair spans with flags only through `dimSpans`.** The partition and the mask
   do not index-align — `splitSentences` drops blank pieces, so
   `"\n\nHello. World."` is three spans and two sentences, and zipping the mask on

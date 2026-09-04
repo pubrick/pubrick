@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AiVersionRow,
   aiSentenceMask,
   aiSentenceMaskAny,
   allSentencesAi,
@@ -802,6 +803,20 @@ describe("normalizeNewlines", () => {
 describe("allSentencesAi", () => {
   const full = "Alpha one. Beta two. Gamma three.";
 
+  /**
+   * The row an accepted proposal leaves behind: the units it introduced, and
+   * the signed `n(merged) − n(pre-merge)` it was measured at.
+   *
+   * Spelled out here rather than defaulted, because the delta is the property
+   * under test in half the cases below and a helper that guessed it would be
+   * deciding the answer it is supposed to be checking.
+   */
+  const fragment = (body: string, unitDelta: number): AiVersionRow => ({
+    body,
+    scope: "fragment",
+    unitDelta,
+  });
+
   it("is true while every sentence is still the model's", () => {
     expect(allSentencesAi(full, [full], full)).toBe(true);
   });
@@ -934,19 +949,21 @@ describe("allSentencesAi", () => {
     expect(isUntouchedAi("   ", full)).toBe(false);
   });
 
-  it("accepts one false positive: a fragment appended while a sentence was deleted", () => {
-    // The count is unchanged and every sentence is some row's, so this reads
-    // untouched though a human did delete `Gamma three.`. Refusing is the safe
-    // side of the ledger; the unsafe mirror — a refine that replaces two
-    // sentences with one — is named in the function's docstring as 2b-2's to
-    // close, because a fragment row does not record what it replaced.
-    expect(
-      allSentencesAi(
-        "Alpha one. Beta two. A tighter second line.",
-        [full, "A tighter second line."],
-        full,
-      ),
-    ).toBe(true);
+  it("sees a deletion an appended refine used to hide, now that the row carries its delta", () => {
+    // This was the accepted false positive: a fragment APPENDED (+1 unit) while
+    // the human deleted `Gamma three.` leaves the raw count unchanged and every
+    // sentence some row's, so the body read untouched. It errs safe — refusing
+    // rather than publishing — which is why it was accepted rather than fixed.
+    //
+    // The delta closes it as a side effect of closing the shortening case, and
+    // the direction is the honest one: 3 + 1 = 4 units owed, 3 present, a human
+    // really did delete a sentence, and the gate opens. Both halves are pinned
+    // so the improvement cannot be lost silently.
+    const appended = "Alpha one. Beta two. A tighter second line.";
+    expect(allSentencesAi(appended, [full, fragment("A tighter second line.", +1)], full)).toBe(
+      false,
+    );
+    expect(allSentencesAi(appended, [full, "A tighter second line."], full)).toBe(true);
   });
 
   it("counts against the first FULL row, not against aiRows[0]", () => {
@@ -994,16 +1011,22 @@ describe("allSentencesAi", () => {
   /**
    * KNOWN UNSAFE LIMITS — pinned so they cannot be mistaken for correctness.
    *
-   * All three are one root cause: the merged body's partition is not the union
-   * of the rows' partitions, so a fragment that does not line up with a sentence
+   * Both are one root cause: the merged body's partition is not the union of
+   * the rows' partitions, so a fragment that does not line up with a sentence
    * boundary leaves a unit no row contains. The answer is `false` on text that
    * is 100% the model's — the gate publishes it and the badge reads
    * "Human-edited", the exact inversion this increment exists to prevent.
    *
-   * They are not closable here: a fragment row does not record what it replaced.
-   * 2b-2 owns them — re-split at Accept and require every unit of the merged
-   * body to be attributable, or refuse the proposal. Change these expectations
+   * Neither is closable here, and not for want of a count: the unit the rows
+   * are missing is not in anything this function is handed, so no arithmetic
+   * reaches it. They are closed where the fragment's CONTENTS are decided — at
+   * Accept, which stores the merged body's own units. Change these expectations
    * only together with that work.
+   *
+   * There were three. The third — a fragment replacing two sentences with one,
+   * failing clause 3 rather than clause 2 — is closed above by `unitDelta`, and
+   * it was the common path rather than a corner: it is what *shorten* does when
+   * it works.
    */
   it("KNOWN UNSAFE LIMIT: an unterminated fragment fuses with its neighbour", () => {
     // "Make this hook punchier" is exactly the verb that returns text with no
@@ -1032,12 +1055,125 @@ describe("allSentencesAi", () => {
     expect(allSentencesAi(spliced, [listed, "Get bread. Fast."], listed)).toBe(false);
   });
 
-  it("KNOWN UNSAFE LIMIT: a fragment replacing two sentences with one reads as a deletion", () => {
-    // This one fails clause 3 rather than clause 2, and is indistinguishable
-    // from the human trimming the draft.
+  it("is true when a refine SHORTENED the draft — the fragment says what it replaced", () => {
+    // The defect this whole increment is built around, and it is the flagship
+    // verb doing its job rather than a corner: *shorten* returned two of the
+    // model's three sentences as one, so the body is a unit shorter than the
+    // row it is counted against. Against the anchor alone that reads as a human
+    // deletion — the gate opens on a draft nobody read and the badge captions
+    // the model's own words "Human-edited". Nothing here is anybody's but the
+    // model's: unit one is the full row's, unit two is the fragment's, and −1
+    // is how many units the accepted splice removed.
+    expect(
+      allSentencesAi(
+        "Alpha one. One tighter line.",
+        [full, fragment("One tighter line.", -1)],
+        full,
+      ),
+    ).toBe(true);
+  });
+
+  it("still sees a deletion THROUGH a shortening refine", () => {
+    // The counterweight, and the only thing that makes the case above mean
+    // anything: identical rows and delta, one unit fewer in the body. Every
+    // sentence left is still the model's, so the mask cannot see the human and
+    // only the running expectation can — 3 − 1 = 2 units owed, 1 present.
+    expect(
+      allSentencesAi("One tighter line.", [full, fragment("One tighter line.", -1)], full),
+    ).toBe(false);
+  });
+
+  it("expects the units a LENGTHENING refine introduced", () => {
+    // The other sign, which a formula that only ever subtracted would pass by
+    // accident: the proposal came back as two units where one stood, so the
+    // model's text is now four units long and a body of three is a deletion.
+    const rows = [full, fragment("Beta two. And a second line.", +1)];
+    expect(allSentencesAi("Alpha one. Beta two. And a second line. Gamma three.", rows, full)).toBe(
+      true,
+    );
+    expect(allSentencesAi("Alpha one. Beta two. Gamma three.", rows, full)).toBe(false);
+  });
+
+  it("adds several refines' deltas, so the second cannot pay for the first's deletion", () => {
+    // Deltas compose because each was measured against the body as it stood
+    // when that fragment landed: 4 − 1 − 1 = 2 units owed. Summing anything
+    // other than all of them — the first, the last, the largest — reads the
+    // two-unit body as a deletion or excuses a real one.
+    const draft = "Alpha one. Beta two. Gamma three. Delta four.";
+    const rows = [
+      draft,
+      fragment("Beta and gamma, tighter.", -1),
+      fragment("Alpha and beta, tighter.", -1),
+    ];
+    expect(allSentencesAi("Alpha and beta, tighter. Delta four.", rows, draft)).toBe(true);
+    expect(allSentencesAi("Alpha and beta, tighter.", rows, draft)).toBe(false);
+  });
+
+  it("refuses a fragment that cannot say what it replaced, ahead of every other clause", () => {
+    // Unreachable while the database's CHECK stands (`unit_delta` is non-null
+    // exactly when `scope = 'fragment'`), and handled anyway: a fail-safe must
+    // not depend on a constraint staying undropped. A null delta is MISSING
+    // evidence, never a zero, and missing evidence refuses exactly as a missing
+    // `full` row does.
+    const unreadable: AiVersionRow = {
+      body: "One tighter line.",
+      scope: "fragment",
+      unitDelta: null,
+    };
+    // Read as zero, the count would answer false and publish an unread draft.
+    expect(allSentencesAi("One tighter line.", [full, unreadable], full)).toBe(true);
+    // And this is why the check sits ABOVE the mask rather than beside the
+    // count: here the MASK would answer false, on a sentence no row wrote. With
+    // one unreadable row we cannot say which rule the body actually broke, and
+    // `false` is the answer that opens the gate.
+    expect(allSentencesAi("Alpha one. I wrote this myself.", [full, unreadable], full)).toBe(true);
+  });
+
+  it("ignores a `full` row's own unitDelta — an anchor is not a replacement", () => {
+    // The other half of "sum the FRAGMENTS' deltas". Summing every row's would
+    // make the expectation 1 here and read a two-sentence deletion as untouched
+    // AI. The row is one the database refuses, for the same reason this
+    // function does not trust it: a whole body has nothing to have replaced.
+    const rows: AiVersionRow[] = [{ body: full, scope: "full", unitDelta: -2 }];
+    expect(allSentencesAi("Alpha one.", rows, full)).toBe(false);
+  });
+
+  it("reads a bare body as a `full` row, which is why a fragment must not arrive as one", () => {
+    // The shorthand the browser's evidence takes — `aiVersionBodies` is a list
+    // of strings, because the API reads `scope` and does not ship it — means
+    // "these are whole bodies" and nothing else.
+    expect(
+      allSentencesAi(
+        "Alpha one. One tighter line.",
+        [full, fragment("One tighter line.", -1)],
+        full,
+      ),
+    ).toBe(true);
+    // The same evidence flattened with `rows.map((r) => r.body)`: no scopes, so
+    // nothing says a unit was replaced, and the old unsafe clause is back on a
+    // body that is one hundred percent the model's. Pinned so the shorthand
+    // cannot be reached for by anything that has the rows.
     expect(allSentencesAi("Alpha one. One tighter line.", [full, "One tighter line."], full)).toBe(
       false,
     );
+  });
+
+  it("2c's tripwire: a second `ai` `full` row anchors on a body the deltas never saw", () => {
+    // Unreachable today — a run always creates a NEW content item, so a level
+    // has one `ai` `full` row — and pinned because 2c's re-adaptation is what
+    // makes it reachable, in the unsafe direction: a long first draft, a short
+    // re-generation, and a body that is every word the model's reads
+    // "Human-edited" and opens the publish gate.
+    //
+    // The composition argument this function rests on is "each delta was
+    // measured against the body as it stood", and a second full row breaks its
+    // premise rather than its arithmetic: the anchor describes one text and the
+    // deltas another. 2c must decide whether the anchor becomes the LAST full
+    // row and whether earlier deltas are dropped; changing this expectation is
+    // that decision, not a fix.
+    const first = "Alpha one. Beta two. Gamma three. Delta four.";
+    const regenerated = "Alpha one. Beta two.";
+    expect(allSentencesAi(regenerated, [first, regenerated], first)).toBe(false);
   });
 
   it("never opens a gate isUntouchedAi held shut, over a generated corpus", () => {
@@ -1102,5 +1238,77 @@ describe("allSentencesAi", () => {
     expect(openedWhatWasShut).toEqual([]);
     expect(unexplainedDisagreement).toEqual([]);
     expect(exercised).toBeGreaterThan(250);
+  });
+
+  it("never reads an accepted refine as human-edited, over a generated corpus", () => {
+    // The claim the increment is FOR, swept rather than sampled: accept a
+    // proposal and the merged body is still, always, the model's — and a human
+    // who then removes a unit is still, always, seen.
+    //
+    // The corpus is deliberately restricted to SENTENCE-ALIGNED splices with
+    // terminated proposals, which is the shape the two known limits above are
+    // not. That is not the property being weakened to fit the code: those two
+    // are about the merged body holding a unit no row contains, and no delta
+    // reaches them — they are closed at Accept, by what the fragment row is
+    // made of. Widening this sweep to unaligned splices would sweep that
+    // module's job, over a fragment this test would have to compute itself.
+    //
+    // Both separators are swept, because a newline is a sentence boundary
+    // whatever the unit ends with and a space is not, and that asymmetry is
+    // exactly where this module's measured failures live.
+    const draftUnits = ["Alphá one.", "Beta twö.", "Gamma three.", "Mine own."];
+    const proposals = [
+      ["The same again."],
+      ["One tighter line."],
+      ["Two new.", "Lines here."],
+      ["A first.", "A second.", "A third."],
+    ];
+
+    let exercised = 0;
+    const readHumanEdited: string[] = [];
+    const missedADeletion: string[] = [];
+    for (const separator of [" ", "\n"]) {
+      for (let size = 1; size <= draftUnits.length; size++) {
+        const draft = draftUnits.slice(0, size);
+        const reference = draft.join(separator);
+        for (let start = 0; start < size; start++) {
+          for (let end = start + 1; end <= size; end++) {
+            for (const proposal of proposals) {
+              const mergedUnits = [...draft.slice(0, start), ...proposal, ...draft.slice(end)];
+              const merged = mergedUnits.join(separator);
+              // The corpus is only worth anything while the splitter agrees
+              // with the arithmetic about what a unit is; asserted rather than
+              // assumed, because a splitter change that fused two of these
+              // would leave every case below passing vacuously.
+              expect(splitSentences(merged)).toEqual(mergedUnits);
+              const unitDelta = mergedUnits.length - draft.length;
+              // The join is a newline and nothing else: `splitSentenceSpans`
+              // cuts at `\n` before any terminator logic, so a space-joined
+              // fragment whose first unit is unterminated re-splits as one.
+              const rows = [reference, fragment(proposal.join("\n"), unitDelta)];
+              const where = `${JSON.stringify(merged)} / ${JSON.stringify(reference)}`;
+
+              exercised++;
+              if (!allSentencesAi(merged, rows, reference)) readHumanEdited.push(where);
+
+              // …and the counterweight, on every single case: drop any one unit
+              // of the merged body and the verdict must flip. Every unit LEFT
+              // is still some row's, so nothing but the running expectation can
+              // see the human — which is precisely the clause under test.
+              for (let index = 0; index < mergedUnits.length; index++) {
+                const trimmed = mergedUnits.filter((_, at) => at !== index);
+                if (trimmed.length === 0) continue; // an empty body refuses, by design
+                if (allSentencesAi(trimmed.join(separator), rows, reference)) {
+                  missedADeletion.push(`${where} minus ${JSON.stringify(mergedUnits[index])}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(readHumanEdited).toEqual([]);
+    expect(missedADeletion).toEqual([]);
+    expect(exercised).toBeGreaterThan(100);
   });
 });

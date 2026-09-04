@@ -3,6 +3,7 @@ import { schema } from "@pubrick/db";
 import {
   type AdaptationStatus,
   type AdaptationUpdate,
+  type AiVersionRow,
   type ApiErrorCode,
   allSentencesAi,
   CONTENT_STATUSES,
@@ -12,7 +13,6 @@ import {
   type DeliveryOutcome,
   isSameText,
   OUTSTANDING_ADAPTATION_STATUSES,
-  type VersionScope,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -307,24 +307,41 @@ const ADAPTATION_COLUMNS = {
  * version's title, run, author and timestamp would be payload nobody reads and
  * an allowlist nobody could shrink again.
  *
- * `scope` is read but NOT returned. It answers the badge's deletion clause on
- * the server (`collectAiEvidence`); the lens dims a sentence that matches any
- * `ai` row, and a fragment is dimmable text like any other.
+ * `scope` and `unit_delta` are read but NOT returned. They answer the badge's
+ * deletion clause on the server (`collectAiEvidence`): which row is the anchor,
+ * and how many units each accepted refine replaced. The lens dims a sentence
+ * that matches any `ai` row, and a fragment is dimmable text like any other, so
+ * neither column crosses the wire.
+ *
+ * Read them TOGETHER or not at all. `scope` without `unit_delta` is the shape
+ * that reads a successful *shorten* as a human deletion — the body is a unit
+ * shorter than the anchor and nothing on the rows says why — which opens the
+ * publish gate on an unread draft and captions the model's own words
+ * "Human-edited".
  */
 const AI_VERSION_COLUMNS = {
   adaptationId: schema.contentVersions.adaptationId,
   body: schema.contentVersions.body,
   scope: schema.contentVersions.scope,
+  unitDelta: schema.contentVersions.unitDelta,
 };
 
-type AiVersionRow = { adaptationId: string | null; body: string };
+/** What the LENS needs of a version row: which level it belongs to, and its text. */
+type LensVersionRow = { adaptationId: string | null; body: string };
 
 /**
- * The evidence `allSentencesAi` judges ONE level against: every `ai` body, for
- * the mask, and the first `scope = 'full'` body, for the deletion clause.
+ * The evidence `allSentencesAi` judges ONE level against: every `ai` ROW, for
+ * the mask and for the deletion clause's running expectation, and the first
+ * `scope = 'full'` body, as that clause's anchor.
+ *
+ * Rows rather than bodies, and that is the whole of increment 2b-2's fix to
+ * this file. The clause counts against the anchor PLUS the sum of the fragment
+ * rows' `unit_delta`, so a caller that flattened these to `row.body` would be
+ * handing over evidence that cannot say a refine replaced anything — and every
+ * successful *shorten* would read as a human trimming the draft.
  *
  * The two are separate arguments there for a reason worth restating at every
- * call site, because getting it wrong is silent: `bodies[0]` is NOT the full
+ * call site, because getting it wrong is silent: `rows[0]` is NOT the full
  * row. Nothing makes a level's `full` row its oldest one — a fragment sorts
  * first at any level whose full row arrives later, a re-generation after a
  * refine being the obvious way — and counting a body's sentences against a
@@ -332,14 +349,14 @@ type AiVersionRow = { adaptationId: string | null; body: string };
  * true for everything: the deletion clause becomes a no-op and every deletion
  * reads as untouched AI.
  */
-type AiEvidence = { readonly bodies: readonly string[]; readonly firstFullBody?: string };
+type AiEvidence = { readonly rows: readonly AiVersionRow[]; readonly firstFullBody?: string };
 
 /**
  * No rows at all: the fail-safe shape, spelled once and shared by every caller
  * that missed the map — hence `readonly`, so no consumer can push a body into
  * the value the next one reads.
  */
-const NO_AI_EVIDENCE: AiEvidence = { bodies: [], firstFullBody: undefined };
+const NO_AI_EVIDENCE: AiEvidence = { rows: [], firstFullBody: undefined };
 
 /**
  * Collects that evidence per level, from rows already ordered oldest-first.
@@ -351,15 +368,15 @@ const NO_AI_EVIDENCE: AiEvidence = { bodies: [], firstFullBody: undefined };
  * what "first `full`" means: the gate, the item response and the queue all read
  * it from here rather than each picking a row for itself.
  */
-function collectAiEvidence<K, R extends { body: string; scope: VersionScope }>(
+function collectAiEvidence<K, R extends AiVersionRow>(
   rows: readonly R[],
   levelOf: (row: R) => K,
 ): Map<K, AiEvidence> {
-  const byLevel = new Map<K, { bodies: string[]; firstFullBody?: string }>();
+  const byLevel = new Map<K, { rows: AiVersionRow[]; firstFullBody?: string }>();
   for (const row of rows) {
     const level = levelOf(row);
-    const evidence = byLevel.get(level) ?? { bodies: [], firstFullBody: undefined };
-    evidence.bodies.push(row.body);
+    const evidence = byLevel.get(level) ?? { rows: [], firstFullBody: undefined };
+    evidence.rows.push(row);
     if (row.scope === "full" && evidence.firstFullBody === undefined) {
       evidence.firstFullBody = row.body;
     }
@@ -418,7 +435,7 @@ type AiVersionBodies = {
  * version rows at all, comes back as empty lists rather than as an error or a
  * missing field.
  */
-function groupAiVersionBodies(adaptationIds: string[], rows: AiVersionRow[]): AiVersionBodies {
+function groupAiVersionBodies(adaptationIds: string[], rows: LensVersionRow[]): AiVersionBodies {
   const item: string[] = [];
   const adaptations: Record<string, string[]> = Object.fromEntries(
     adaptationIds.map((id) => [id, [] as string[]]),
@@ -483,6 +500,7 @@ export class ContentRepository {
         contentItemId: schema.contentVersions.contentItemId,
         body: schema.contentVersions.body,
         scope: schema.contentVersions.scope,
+        unitDelta: schema.contentVersions.unitDelta,
       })
       .from(schema.contentVersions)
       .where(
@@ -523,7 +541,7 @@ export class ContentRepository {
         const evidence = aiEvidence.get(item.id) ?? NO_AI_EVIDENCE;
         return {
           ...item,
-          bodyIsAiVerbatim: allSentencesAi(item.body, evidence.bodies, evidence.firstFullBody),
+          bodyIsAiVerbatim: allSentencesAi(item.body, evidence.rows, evidence.firstFullBody),
           adaptations: await this.adaptationsFor(orgId, item.id),
         };
       }),
@@ -543,9 +561,10 @@ export class ContentRepository {
    * The same rows the gate reads, at a different grain rather than a different
    * reference. The lens dims a sentence that still matches ANY `ai` version;
    * the gate and the badge ask whether EVERY sentence does (`allSentencesAi`),
-   * off this same list. `scope` comes back too, because that question's
-   * deletion clause counts against the level's first `scope = 'full'` row —
-   * read here and NOT forwarded to the browser, which dims a fragment like any
+   * off this same list. `scope` and `unit_delta` come back too, because that
+   * question's deletion clause counts against the level's first
+   * `scope = 'full'` row plus what each accepted refine replaced — both read
+   * here and NEITHER forwarded to the browser, which dims a fragment like any
    * other text.
    *
    * The `org_id` predicate is defence in depth rather than this endpoint's only
@@ -672,7 +691,7 @@ export class ContentRepository {
        * means `true` — an item whose reference was never written keeps reading
        * AI-drafted instead of over-claiming an edit nobody made.
        */
-      bodyIsAiVerbatim: allSentencesAi(item.body, itemEvidence.bodies, itemEvidence.firstFullBody),
+      bodyIsAiVerbatim: allSentencesAi(item.body, itemEvidence.rows, itemEvidence.firstFullBody),
       aiVersionBodies,
     };
   }
@@ -1152,12 +1171,15 @@ export class ContentRepository {
    *   when ANY `ai` row wrote it, so an accepted proposal's fragment covers the
    *   sentence it replaced. The rows are NOT concatenated — see
    *   `aiSentenceMaskAny`, which keeps each version's own multiset count.
-   * - The first `scope = 'full'` row, as the deletion clause's anchor. A mask
-   *   has no notion of count, so a body that is a strict subset of the model's
-   *   sentences would read "all AI" and a caller who TRIMMED the draft would be
-   *   refused with a message telling them to edit it. A fragment cannot be that
-   *   anchor: it is shorter than the body it edits by construction, so counting
-   *   its sentences as the body's would read every refine as a deletion.
+   * - The first `scope = 'full'` row as the deletion clause's anchor, PLUS
+   *   every fragment row's `unit_delta`. A mask has no notion of count, so a
+   *   body that is a strict subset of the model's sentences would read "all AI"
+   *   and a caller who TRIMMED the draft would be refused with a message
+   *   telling them to edit it. A fragment cannot be that anchor: it is shorter
+   *   than the body it edits by construction, so counting its sentences as the
+   *   body's would read every refine as a deletion. It MOVES the anchor
+   *   instead, by the signed unit count it recorded at Accept — which is what
+   *   stops a successful *shorten* from reading as a deletion nobody made.
    *
    * That is literally the same call the badge makes (`get`, `list`) and the
    * fine grain of what the lens paints, off the same rows — one question, two
@@ -1222,11 +1244,15 @@ export class ContentRepository {
     // ordered so "first" cannot drift: the worker writes item and adaptation
     // versions in one transaction, where `now()` — and therefore `created_at` —
     // is identical for all of them, so `created_at` alone is not a total order.
+    // `unit_delta` travels with `scope`, for the reason `AI_VERSION_COLUMNS`
+    // spells out: without it a refine that SHORTENED the draft is a deletion
+    // this gate cannot tell from a human's, and it opens on an unread draft.
     const versions = await tx
       .select({
         adaptationId: schema.contentVersions.adaptationId,
         body: schema.contentVersions.body,
         scope: schema.contentVersions.scope,
+        unitDelta: schema.contentVersions.unitDelta,
       })
       .from(schema.contentVersions)
       .where(
@@ -1271,7 +1297,7 @@ export class ContentRepository {
      */
     const stillAi = (current: string, level: string | null): boolean => {
       const evidence = aiEvidence.get(level) ?? NO_AI_EVIDENCE;
-      return allSentencesAi(current, evidence.bodies, evidence.firstFullBody);
+      return allSentencesAi(current, evidence.rows, evidence.firstFullBody);
     };
 
     const nobodyOpened = item.firstOpenedAt === null;

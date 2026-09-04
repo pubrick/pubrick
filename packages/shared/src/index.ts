@@ -50,6 +50,7 @@ export {
 } from "./jobs.js";
 export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
 export {
+  type AiVersionRow,
   aiSentenceMask,
   aiSentenceMaskAny,
   allSentencesAi,
