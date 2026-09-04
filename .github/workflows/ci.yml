@@ -8,12 +8,30 @@ on:
 permissions:
   contents: read
 
+# A second push to the same branch/PR while the first run is still going wastes a
+# full runner on a commit nobody will look at again — cancel it instead. Keyed on
+# the ref so pushes to different branches never cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Pinned by digest, not just the `pg16` tag: `pgvector/pgvector` is a
+        # third-party Docker Hub image, and a tag there can be republished at any
+        # time — silently changing which Postgres patch (or which pgvector build)
+        # every run talks to, with no diff in this file to review. `actions/checkout`
+        # and `actions/setup-node` below are NOT pinned this tightly: they are
+        # first-party GitHub actions with reviewed, append-only release history, and
+        # pinning three of those to shifting SHAs is upkeep with little payoff for a
+        # project this size — a compromised `pgvector/pgvector:pg16` retag is the more
+        # plausible failure here, a compromised `actions/checkout` tag is not.
+        # Update: `docker pull pgvector/pgvector:pg16 && docker inspect pgvector/pgvector:pg16
+        # --format '{{index .RepoDigests 0}}'`, then paste the new digest below.
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -25,10 +43,25 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - run: corepack enable
+      # Store-only cache, not a lockfile-skip: keyed on pnpm-lock.yaml, so a
+      # changed lockfile still misses and `--frozen-lockfile` below still verifies
+      # the lockfile is honest — this only saves re-downloading packages pnpm
+      # already resolved before. node_modules itself is never cached (matches
+      # actions/setup-node's own built-in pnpm caching, which this reimplements as
+      # a plain step instead of the `cache: pnpm` input: that input needs pnpm
+      # already on PATH when actions/setup-node runs its cache step, which is
+      # exactly the ordering `corepack enable` afterwards does not give it).
+      - id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
@@ -37,6 +70,8 @@ jobs:
       # env — never the state of the Postgres service the database tier talks to. A restored
       # cache (an actions/cache step, or remote caching) would replay "success" over a
       # database that never ran a query: the same green-badge lie in another costume.
+      # (The pnpm store cache above is a different thing — installed packages, not test
+      # results — and does not touch this.)
       # --concurrency=1: apps/api and apps/worker's e2e specs target the SAME
       # TEST_DATABASE_URL, and turbo would otherwise run both packages' test tasks at once —
       # four bootstrap-heavy workers against one database. This matches the local rule.
