@@ -3,8 +3,8 @@ import { schema } from "@pubrick/db";
 import {
   type BrandCreate,
   type BrandUpdate,
+  isLiveRunStatus,
   isOutstandingAdaptation,
-  LIVE_RUN_STATUSES,
 } from "@pubrick/shared";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { notFound } from "../api-error";
@@ -33,7 +33,9 @@ const PUBLIC_COLUMNS = {
  * The set itself is the same one `ChannelsRepository.delete`,
  * `ContentRepository.reject` and the worker's claim use, which is why it is
  * imported rather than spelled out — it was spelled out in all four.
- * `LIVE_RUN_STATUSES` is the same story for the generate jobs below.
+ * `isLiveRunStatus` is the same story, and the same in-memory shape, for the
+ * generate jobs below: every run of the brand is LOCKED, only the live ones
+ * have a job to cancel.
  */
 
 @Injectable()
@@ -101,11 +103,12 @@ export class BrandsRepository {
    * canceller keeps — see `ChannelsRepository.delete` for why it is kept even
    * where the row is about to be deleted anyway.
    *
-   * LOCK ORDER: the brand row, then EVERY adaptation the cascade will destroy,
-   * by ascending id — `brands` → `adaptations` → `channels`, the product's one
-   * order, written down in `docs/lock-order.md`. The cascade reaches
-   * `content_items` and `pipeline_runs` as well, which that order does not
-   * name; see the note on runs at the end of this comment.
+   * LOCK ORDER: the brand row, then EVERY pipeline run of the brand, then EVERY
+   * adaptation the cascade will destroy, the last two by ascending id —
+   * `brands` → `pipeline_runs` → `adaptations` → `channels` → `content_items`,
+   * the product's one order, written down in `docs/lock-order.md`. `channels`
+   * and `content_items` are reached only by the cascade, which takes them last
+   * and therefore in order.
    *
    * `channels` is not named in the code because this transaction never locks it
    * explicitly: `DELETE FROM brands` cascades into it, and a cascade takes its
@@ -123,33 +126,32 @@ export class BrandsRepository {
    * ones; the extra rows are there to be HELD, in the canonical order, before
    * the cascade can reach them out of it.
    *
-   * Runs are not locked EXPLICITLY, and the sentence that used to stand here —
-   * "a run whose handler is mid-step finds its row gone on the next fenced
-   * write and returns" — was written against the wrong counterparty. It is true
-   * of a mid-STEP handler. It is false of the TERMINAL write: `finish` takes
-   * `pipeline_runs FOR UPDATE` on the run as its first statement and holds it
-   * for the whole transaction, so there is no "next write" at which to find the
-   * row gone. The cascade below does lock that row — `DELETE FROM ONLY
-   * "public"."pipeline_runs" WHERE $1 = "brand_id"` — and waits behind it.
-   *
-   * WHICH LEAVES THIS METHOD IN AN OPEN CYCLE, reproduced as `40P01`. `finish`
-   * holds the run (above) and the channels of the set (`FOR KEY SHARE`, its
-   * second statement), and THEN asks for `brands FOR KEY SHARE` — the foreign
-   * key of its `content_items` insert, four statements later. This transaction
-   * holds the brand `FOR UPDATE` from its first statement and asks for the run
-   * and the channels in its last. Two edges, each reproduced on its own:
-   * `pipeline_runs` and `channels`.
-   *
-   * The lock set below does not help: it covers `adaptations`, and neither edge
-   * runs through `adaptations`. Nor is it the "narrow window" documented in
-   * `docs/lock-order.md` — the rows on both edges exist before either
-   * transaction starts. And the loop above is the proof that this race is
-   * ordinary rather than exotic: `cancelGenerate` exists precisely because this
+   * RUNS ARE LOCKED EXPLICITLY, and this is the half that used to be missing.
+   * The sentence that stood here — "a run whose handler is mid-step finds its
+   * row gone on the next fenced write and returns" — was written against the
+   * wrong counterparty. It is true of a mid-STEP handler. It was false of the
+   * TERMINAL write, which holds `pipeline_runs FOR UPDATE` on the run for its
+   * whole transaction, so there is no "next write" at which to find the row
+   * gone; the cascade reached that row last and waited behind it, while
+   * `GenerateRepository.finish` waited for this transaction's brand. Two edges,
+   * `pipeline_runs` and `channels`, each reproduced against a real database as
+   * `40P01` on its own. The lock set over `adaptations` never helped: neither
+   * edge runs through `adaptations`. And the `cancelGenerate` loop is the proof
+   * the race is ordinary rather than exotic — it exists precisely because this
    * method expects LIVE RUNS for the brand it is deleting.
    *
-   * Not fixed here, because the fix is a choice of order rather than a patch,
-   * and it belongs to whoever makes it. See `docs/lock-order.md`, "The cycle
-   * this order does not close yet".
+   * Closed by naming `pipeline_runs` in the canonical order, at second place,
+   * and taking it here where the order says. `finish` now takes the brand
+   * `FOR KEY SHARE` before its run, so the two transactions can only ever meet
+   * on `brands` — this one holding `FOR UPDATE`, that one waiting, or the other
+   * way round — and never each holding what the other needs next.
+   *
+   * The brand's own `FOR UPDATE` is what makes the run lock set COMPLETE rather
+   * than merely large: a run is inserted with a foreign key to `brands`, whose
+   * `FOR KEY SHARE` this lock conflicts with, so from the first statement on no
+   * new run for this brand can be created at all. That is the same property the
+   * canonical order rests on generally — the root of a cascade is locked first,
+   * and everything the cascade will destroy is then a fixed set.
    */
   async delete(orgId: string, id: string) {
     await db.transaction(async (tx) => {
@@ -160,6 +162,20 @@ export class BrandsRepository {
         .limit(1)
         .for("update");
       if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
+
+      // EVERY run of this brand, `FOR UPDATE`, by ascending id — the second
+      // position in the canonical order, and taken here rather than left to the
+      // cascade for the same reason the adaptations below are. All of them, not
+      // just the live ones: the cascade destroys the finished runs too, and a
+      // lock set narrowed to what has a job to cancel is exactly the mistake
+      // that put this method in a deadlock over `adaptations`. The cancel loop
+      // further down still acts only on the live ones.
+      const doomedRuns = await tx
+        .select({ id: schema.pipelineRuns.id, status: schema.pipelineRuns.status })
+        .from(schema.pipelineRuns)
+        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.brandId, id)))
+        .orderBy(schema.pipelineRuns.id)
+        .for("update");
 
       const brandChannels = tx
         .select({ id: schema.channels.id })
@@ -200,17 +216,10 @@ export class BrandsRepository {
           );
       }
 
-      const runs = await tx
-        .select({ id: schema.pipelineRuns.id })
-        .from(schema.pipelineRuns)
-        .where(
-          and(
-            eq(schema.pipelineRuns.orgId, orgId),
-            eq(schema.pipelineRuns.brandId, id),
-            inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
-          ),
-        );
-      for (const run of runs) await this.queue.cancelGenerate(tx, run.id, orgId);
+      for (const run of doomedRuns) {
+        if (!isLiveRunStatus(run.status)) continue;
+        await this.queue.cancelGenerate(tx, run.id, orgId);
+      }
 
       await tx
         .delete(schema.brands)

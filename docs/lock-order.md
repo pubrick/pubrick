@@ -3,7 +3,7 @@
 **One order, for the whole product:**
 
 ```
-brands  →  adaptations  →  channels  →  content_items
+brands  →  pipeline_runs  →  adaptations  →  channels  →  content_items
 ```
 
 Every transaction that takes row locks on more than one of these tables takes
@@ -49,14 +49,15 @@ of them has been overlooked in this codebase at least once:
   `pipeline_runs`; `DELETE FROM channels` reaches `adaptations`. So the rule for
   a cascading delete is: **lock everything the cascade will destroy, in the
   canonical order, before you issue the delete.** Both deletes in the api do
-  exactly that, and lock *every* adaptation they will destroy — not only the
-  ones whose queue jobs they are about to cancel, because it is the rows outside
-  that filter that produced the measured deadlock.
+  exactly that, and lock *every* adaptation they will destroy — and, for the
+  brand delete, *every* pipeline run — not only the ones whose queue jobs they
+  are about to cancel, because it is the rows outside that filter that produced
+  the measured deadlock, twice.
 - **A `BEFORE DELETE` trigger** runs inside the deleting statement, holding
   whatever that statement has already locked. `publications_stamp_deleted_channel`
   writes `publications` rows while holding the `channels` row.
 
-## Three tables the order does not name, and why
+## Two tables the order does not name, and why
 
 **`publications`** is not in the list because it is never taken on its own: a
 claim or a receipt is only ever written under the lock of the adaptation it
@@ -67,13 +68,33 @@ channel — and the canonical order already puts every adaptation of a channel
 **`organization`** sits above everything (a tenant delete cascades into all of
 it) and is never taken together with anything else by application code.
 
-**`pipeline_runs`** is not in the list, and unlike the other two that is not
-because nothing takes it together with the rest. `GenerateRepository.finish`
-takes it `FOR UPDATE` as its FIRST statement and then goes on to lock `channels`
-and `brands`; `DELETE FROM brands` cascades into it. It is named here because it
-is one of the two tables in the open cycle below, and adding it to the canonical
-order is one of the things that would close that cycle. Until somebody decides
-which, this paragraph is the whole of what is true about it.
+## `pipeline_runs`, and why it sits second
+
+It used to be in neither the list nor this document's silence about it — named
+only as one of the two tables in an open cycle. It is in the order now, between
+`brands` and `adaptations`, because two transactions take it together with the
+rest:
+
+- `GenerateRepository.finish` takes the run `FOR UPDATE` as its fence, and goes
+  on to lock `channels` and — through the `content_items` insert's foreign key —
+  `brands`.
+- `DELETE FROM brands` cascades into it.
+
+**Second, not first**, and that placement is the whole of the choice. The
+alternative was to put the run ahead of the brand and have the brand delete lock
+its runs before locking the brand, and it does not work: a run is inserted with a
+foreign key to `brands`, so it is the brand's `FOR UPDATE` that stops new runs
+from appearing. Lock the runs first and a run created in the gap between the two
+statements is outside the lock set, unlocked, and reachable by the cascade out of
+order — the same shape as the `adaptations` bug, rebuilt. Locking the root of the
+cascade first is what makes "everything the cascade will destroy" a fixed set at
+all, which is why the order starts at `brands` and why the run goes after it.
+
+`finish` therefore takes `brands FOR KEY SHARE` explicitly as its first
+statement. That is the same lock its `content_items` insert would take four
+statements later anyway; taking it up front is what puts the terminal write in
+the canonical order. Its fence is unmoved — the run is still locked and
+re-checked before any write.
 
 ## Same table, two transactions: `ORDER BY id`
 
@@ -82,7 +103,10 @@ order it scans them — for a bulk `UPDATE ... WHERE`, that is heap order, which
 has nothing to do with id order and reverses freely as rows are updated. Two
 transactions walking the same set in opposite orders deadlock each other.
 
-So: **every multi-row lock over `adaptations` is taken in ascending `id`.**
+So: **every multi-row lock over `adaptations` or `pipeline_runs` is taken in
+ascending `id`.** `BrandsRepository.delete` is the only statement that locks
+many runs at once, and it does so `ORDER BY id FOR UPDATE`; nothing else may
+walk that set in another order.
 `ContentRepository.lockAdaptations` does it with `ORDER BY id FOR UPDATE`. Both
 api deletes do. `PublishRepository.sweepAbandoned` is a bulk `UPDATE`, which
 cannot carry an `ORDER BY` of its own, so it takes its locks in a
@@ -95,7 +119,7 @@ re-evaluates its own `WHERE` after acquiring each row lock, and the outer
 renewed still fails the second look and is not swept, which is the property the
 sweep's safety rests on.
 
-## The two cycles this order closes
+## The first two cycles this order closed
 
 Both were reproduced against a real database (`40P01`, `deadlock detected`)
 before the order existed, and both are regression-tested now.
@@ -115,13 +139,12 @@ adaptation its outstanding-only lock set had not covered.
 happened to reverse their id order, raced the sweeper into a deadlock and one of
 the two died.
 
-## The cycle this order does not close yet
+## The third cycle, and how the order closed it
 
-`GenerateRepository.finish` against `BrandsRepository.delete`. Open as of
-2026-09-05, reproduced as `40P01` on a real database, not yet fixed — the fix is
-a choice between three orders and belongs to whoever makes it.
+`GenerateRepository.finish` against `BrandsRepository.delete`. Reproduced as
+`40P01` on a real database on 2026-09-05, closed the same day.
 
-The two acquisition sequences, from the statements:
+The two acquisition sequences it had, from the statements:
 
 ```
 finish          pipeline_runs FOR UPDATE  →  channels FOR KEY SHARE
@@ -132,39 +155,54 @@ brands.delete   brands FOR UPDATE  →  adaptations FOR UPDATE
                    channels, content_items AND pipeline_runs
 ```
 
-`finish` holds the run and the channel and then asks for the brand;
-`brands.delete` holds the brand and then asks for the run and the channel. Two
+`finish` held the run and the channel and then asked for the brand;
+`brands.delete` held the brand and then asked for the run and the channel. Two
 independent cycles, each reproduced on its own with the other's lock removed:
 
-- **`pipeline_runs`** — `CONTEXT: while deleting tuple (0,1) in relation
+- **`pipeline_runs`** — `CONTEXT: while deleting tuple in relation
   "pipeline_runs"`, inside `DELETE FROM ONLY "public"."pipeline_runs" WHERE
   $1 = "brand_id"`.
-- **`channels`** — `CONTEXT: while locking tuple (0,1) in relation "channels"`,
+- **`channels`** — `CONTEXT: while locking tuple in relation "channels"`,
   inside `DELETE FROM ONLY "public"."channels" WHERE $1 = "brand_id"`.
 
-Either side can be the victim. With the delete arriving second, the delete dies
-and `DELETE /api/brands/:id` is a 500. With the delete arriving first, `finish`
-dies inside the foreign-key check — `SELECT 1 FROM ONLY "public"."brands" x
-WHERE "id" = $1 FOR KEY SHARE OF x` — and a fully paid run is thrown away, which
-is the exact loss the channel re-read in `finish` was added to prevent.
+Either side could be the victim. With the delete arriving second, the delete died
+and `DELETE /api/brands/:id` was a 500. With the delete arriving first, `finish`
+died inside the foreign-key check — `SELECT 1 FROM ONLY "public"."brands" x
+WHERE "id" = $1 FOR KEY SHARE OF x`.
 
-**The two FK locks alone are not it**, and this is the part a derivation from
+**The two FK locks alone were not it**, and this is the part a derivation from
 the inserts gets wrong. `content_items.brand_id` → `brands` runs BEFORE
 `adaptations.channel_id` → `channels`, which is the canonical direction. Run
 without the `pipeline_runs` and `channels` pre-locks, the same interleaving
 produces no deadlock at all: `finish` waits for the delete to commit and then
-fails cleanly on `content_items_brand_id_brands_id_fk`. It is the two rows
+fails cleanly on `content_items_brand_id_brands_id_fk`. It was the two rows
 locked *before* the insert — both of them rows the brand's cascade destroys —
-that turn a wait into a cycle. The lock that closes the loop is the one nobody
+that turned a wait into a cycle. The lock that closed the loop was the one nobody
 wrote: a foreign key's `FOR KEY SHARE` on the parent, four statements after the
 statement that made the transaction vulnerable.
 
-Every other pair among these five transactions was run and does not deadlock:
-`finish`×`ChannelsRepository.delete`, `finish`×`ContentRepository.create`
-(`FOR KEY SHARE` against `FOR KEY SHARE` — taken in opposite orders and never in
-conflict), `finish`×`approve`, `finish`×`reject`, `brands.delete`×`channels.delete`,
-`brands.delete`×`approve`, `brands.delete`×`reject`, `channels.delete`×`approve`,
-`channels.delete`×`reject`, and `approve`×`reject`.
+**Now:** `finish` takes `brands FOR KEY SHARE` first, and `brands.delete` takes
+every one of the brand's runs `FOR UPDATE ORDER BY id` second, where the order
+says. The two transactions can now only meet on `brands` — one holding it, the
+other waiting on it — and never each holding what the other asks for next.
+
+**What a run whose brand is deleted mid-flight does now.** It ends as `gone`, the
+outcome `FenceOutcome` already defines for exactly this, logged in one line: the
+brand lock returns no row, and the run's own row went with it (`pipeline_runs.brand_id`
+is `on delete cascade`). It was never going to produce a draft — `content_items.brand_id`
+has nowhere to point once the brand is gone — so what changed is not whether the
+run survives but whether it dies cleanly. What it spent is not lost with it:
+ledger rows are written per call in their own transactions, and
+`usage_ledger.run_id` is `on delete set null` so the org's spend-to-date still
+sums correctly over a run that no longer exists.
+
+Every other pair among these five transactions was re-run after the change and
+does not deadlock: `finish`×`ChannelsRepository.delete`,
+`finish`×`ContentRepository.create` (`FOR KEY SHARE` against `FOR KEY SHARE` —
+taken in opposite orders and never in conflict), `finish`×`approve`,
+`finish`×`reject`, `brands.delete`×`channels.delete`, `brands.delete`×`approve`,
+`brands.delete`×`reject`, `channels.delete`×`approve`, `channels.delete`×`reject`,
+and `approve`×`reject`.
 
 ## The price of the order, stated rather than hidden
 

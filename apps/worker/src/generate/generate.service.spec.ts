@@ -178,6 +178,44 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     return db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId));
   }
 
+  /**
+   * Waits until some backend is parked on a row lock held by `pid`.
+   *
+   * Scoped by BLOCKING PID (`pg_blocking_pids`), not by statement text or
+   * `application_name`: sibling spec files run against this same database at the
+   * same time, so "a backend is waiting on `brands`" does not identify ours,
+   * while "a backend is waiting on a lock THIS transaction holds" does.
+   *
+   * `racing` is passed so that a promise which rejects instead of blocking says
+   * so here, rather than timing out ten seconds later as if the lock were merely
+   * slow.
+   */
+  async function waitForBlockedBy(pid: number, racing: Promise<unknown>): Promise<void> {
+    let settled = false;
+    const watched = racing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE wait_event_type = 'Lock' AND ${pid} = ANY(pg_blocking_pids(pid))`,
+      );
+      if ((rows[0] as { n: number }).n > 0) return;
+      if (settled) {
+        await watched;
+        return;
+      }
+      if (Date.now() > deadline) throw new Error(`no backend blocked by pid ${pid}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   /** Give the run to somebody else, with a lease that has NOT expired. */
   async function claimedByAnother(runId: string, fence: string) {
     await db
@@ -1290,6 +1328,111 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           .where(eq(schema.contentVersions.orgId, seeded.orgId)),
       ).toHaveLength(2);
     }, 30_000);
+
+    /**
+     * THE TERMINAL WRITE AGAINST `DELETE /api/brands/:id`, which used to be a
+     * deadlock: `40P01`, reproduced on a real database, on two independent
+     * edges (`pipeline_runs` and `channels`) with either side as the victim.
+     *
+     * The brand delete is replayed here as its statements rather than called:
+     * it lives in the api, and this file drives the worker. Its sequence is the
+     * one `BrandsRepository.delete` issues — brand `FOR UPDATE`, the brand's
+     * runs, the doomed adaptations, then the cascading `DELETE FROM brands` —
+     * and the ORDER of those statements is the whole subject of the test.
+     *
+     * The delete goes first and holds the brand, which is the arrival order
+     * that used to kill `finish` inside `SELECT 1 FROM ONLY "brands" x … FOR
+     * KEY SHARE OF x`, four statements after it had already taken the run and
+     * the channel. `finish` now asks for the brand BEFORE either of them, so it
+     * parks there holding nothing, and the delete runs to completion.
+     *
+     * BOTH sides are asserted. Checking only the outcome would pass a fix that
+     * merely moved the victim onto the api — which is exactly what adding the
+     * delete's run lock without the brand pre-lock does (measured).
+     */
+    it("a brand delete landing on the terminal write ends the run as `gone`, not as a deadlock", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      expect(
+        await repo.claim(seeded.orgId, seeded.runId, "job-cascade#one", "job-cascade"),
+      ).toBeDefined();
+      // Money already spent by this run, recorded the way every step records it:
+      // its own transaction, before the checkpoint.
+      await db.execute(
+        sql`INSERT INTO usage_ledger (org_id, run_id, step, provider, model_id, cost_usd, cost_source, status)
+            VALUES (${seeded.orgId}, ${seeded.runId}, 'writer', 'google', 'gemini-3.7-flash', 0.004, 'price_table', 'ok')`,
+      );
+
+      const deleting = await pool.connect();
+      let deleteError: string | null = null;
+      let outcome: unknown;
+      try {
+        await deleting.query("BEGIN");
+        const { rows } = await deleting.query("SELECT pg_backend_pid() AS pid");
+        const deletingPid = (rows[0] as { pid: number }).pid;
+        await deleting.query(
+          "SELECT id FROM brands WHERE org_id = $1 AND id = $2 LIMIT 1 FOR UPDATE",
+          [seeded.orgId, seeded.brandId],
+        );
+
+        const finishing = repo.finish(
+          seeded.orgId,
+          seeded.runId,
+          "job-cascade#one",
+          seeded.brandId,
+          {
+            body: "A draft nobody will read.",
+            adaptations: [{ channelId: seeded.channelIds[0] as string, body: "An adaptation." }],
+          },
+        );
+        // The interleaving as a fact, not a hope about promise scheduling: wait
+        // until a backend is parked on a lock held BY THIS delete. Scoped by
+        // blocking pid rather than by statement text, because other spec files
+        // run against this same database concurrently.
+        await waitForBlockedBy(deletingPid, finishing);
+
+        await deleting.query(
+          "SELECT id, status FROM pipeline_runs WHERE org_id = $1 AND brand_id = $2 ORDER BY id FOR UPDATE",
+          [seeded.orgId, seeded.brandId],
+        );
+        await deleting.query(
+          `SELECT id, status, attempt_count FROM adaptations
+            WHERE org_id = $1
+              AND (channel_id IN (SELECT id FROM channels WHERE org_id = $1 AND brand_id = $2)
+                OR content_item_id IN (SELECT id FROM content_items WHERE org_id = $1 AND brand_id = $2))
+            ORDER BY id FOR UPDATE`,
+          [seeded.orgId, seeded.brandId],
+        );
+        deleteError = await deleting
+          .query("DELETE FROM brands WHERE org_id = $1 AND id = $2", [seeded.orgId, seeded.brandId])
+          .then(
+            () => null,
+            (error: { code?: string }) => String(error.code),
+          );
+        await deleting.query("COMMIT");
+        outcome = await finishing;
+      } finally {
+        await deleting.query("ROLLBACK").catch(() => {});
+        deleting.release();
+      }
+
+      expect(
+        deleteError,
+        "DELETE /api/brands/:id was the deadlock victim (40P01 -> 500)",
+      ).toBeNull();
+      // `gone`, not a throw: the brand's row is missing, so the run's is too,
+      // and there is nowhere for `content_items.brand_id` to point. The caller
+      // logs one line instead of raising the terminal-write alarm three times.
+      expect(outcome, "the terminal write was the deadlock victim").toBe("gone");
+      expect(await runRow(seeded.runId)).toBeUndefined();
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+      // And what the run had already spent outlives it: `usage_ledger.run_id` is
+      // ON DELETE SET NULL precisely so the org's bill survives the cascade.
+      const ledger = await ledgerOf(seeded.orgId);
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]?.runId).toBeNull();
+      expect(ledger[0]?.costUsd).toBe("0.004000");
+    }, 25_000);
 
     it("tells a stale fence apart from a finished run, and writes for neither", async () => {
       // The two halves of the same guard, at the repository, where the outcome

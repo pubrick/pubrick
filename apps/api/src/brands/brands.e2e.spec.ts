@@ -480,6 +480,57 @@ describe.skipIf(!url)("brands e2e", () => {
    * Both sides must commit; asserting the HTTP status alone would pass a fix
    * that merely made the worker the victim instead.
    */
+  /**
+   * `pipeline_runs` IS IN THE CANONICAL ORDER NOW, in second place, so this
+   * transaction has to take it there — not leave it to the cascade, which takes
+   * it last and therefore out of order (`docs/lock-order.md`).
+   *
+   * The run below is `succeeded`: nothing to cancel, no job, and so — before
+   * this lock existed — nothing this method touched at all until the cascade
+   * reached it. That is the same gap the outstanding-only ADAPTATION lock set
+   * had, and it produced a measured deadlock; a lock set narrowed to "what has
+   * a job" is the mistake, not the shape.
+   *
+   * Asserted by WHICH statement the delete parks on. Holding the run from
+   * another session, the delete must block inside its own
+   * `select … from "pipeline_runs" … for update`. Without that statement it
+   * gets all the way to `delete from "brands"` and blocks inside the cascade
+   * instead — a different query, so this poll times out and says so.
+   */
+  it("locks every run of the brand, finished ones included, before its cascade can reach them", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Runs" }).expect(201);
+    const runId = randomUUID();
+    await execute(
+      `INSERT INTO pipeline_runs (id, org_id, brand_id, input, status)
+         SELECT '${runId}', org_id, id, '{"kind":"brief","text":"t","channelIds":[]}', 'succeeded'
+           FROM brands WHERE id = '${brand.body.id}'`,
+    );
+
+    const { createDb } = await import("@pubrick/db");
+    const { pool } = createDb(url as string);
+    const holder = await pool.connect();
+    let deleteStatus = 0;
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM pipeline_runs WHERE id = $1 FOR UPDATE", [runId]);
+
+      const deleting = agent.delete(`/api/brands/${brand.body.id}`).then((res) => res.status);
+      await waitForLockWaiter(["%pipeline_runs%for update%"], deleting);
+      await holder.query("COMMIT");
+      deleteStatus = await deleting;
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      holder.release();
+      await pool.end();
+    }
+
+    expect(deleteStatus).toBe(200);
+    // 20s, not vitest's default 5: the poll above needs room to fail with its
+    // own message rather than as "timed out in 5000ms", which reads like a
+    // locking regression instead of the missing statement it actually is.
+  }, 20_000);
+
   it("does not deadlock against a worker recording a delivery for an adaptation it is about to cascade", async () => {
     const agent = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Cascade" }).expect(201);
@@ -569,7 +620,20 @@ describe.skipIf(!url)("brands e2e", () => {
    * before this file's delete had parked at all — and the "interleaving as a fact"
    * this helper exists to establish would be neither.
    */
-  async function waitForLockWaiter(patterns: string[]): Promise<void> {
+  async function waitForLockWaiter(patterns: string[], inFlight?: Promise<unknown>): Promise<void> {
+    // The operation that is SUPPOSED to be doing the blocking. One that REJECTS
+    // instead produces no waiter, ever, and without this the poll spins until
+    // vitest kills the test at its own timeout — see `waitForLockWaiters` in
+    // publish.repository.spec.ts for the CI build that lesson cost.
+    let settled = false;
+    void inFlight?.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
     const matches = patterns.map((pattern) => `query ILIKE '${pattern}'`).join(" OR ");
@@ -584,6 +648,7 @@ describe.skipIf(!url)("brands e2e", () => {
               AND (${matches})`,
         );
         if ((rows[0] as { n: number }).n > 0) return;
+        if (settled) return;
         if (Date.now() > deadline) throw new Error(`no backend blocked on ${patterns.join(" / ")}`);
         await new Promise((resolve) => setTimeout(resolve, 25));
       }

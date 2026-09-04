@@ -634,12 +634,13 @@ export class GenerateRepository {
    * The terminal write: the draft, its per-channel adaptations, the first `ai`
    * version row of each, and the run's completion — one transaction.
    *
-   * The run row is locked FIRST and its status and fence re-checked under that
-   * lock, which is what makes a second content item impossible rather than
-   * merely unlikely. Two handlers arriving here serialise on the lock; the
-   * second one re-reads the row the first committed (READ COMMITTED re-evaluates
-   * a locked `SELECT … FOR UPDATE` against the new version), sees `succeeded`,
-   * and writes nothing.
+   * The run row is locked and its status and fence re-checked under that lock
+   * BEFORE ANY WRITE, which is what makes a second content item impossible
+   * rather than merely unlikely. Two handlers arriving here serialise on the
+   * lock; the second one re-reads the row the first committed (READ COMMITTED
+   * re-evaluates a locked `SELECT … FOR UPDATE` against the new version), sees
+   * `succeeded`, and writes nothing. Only the brand's lock precedes it, and
+   * that one reads nothing and decides nothing — see the order below.
    *
    * The channels are re-read HERE, under `FOR KEY SHARE`, and not taken on trust
    * from the snapshot the run started with. `adaptations.channel_id` is NOT NULL,
@@ -651,49 +652,59 @@ export class GenerateRepository {
    * insert. It is the same lock class the FK insert takes anyway, one statement
    * earlier.
    *
-   * WHAT THIS TRANSACTION ACTUALLY LOCKS, in statement order:
+   * WHAT THIS TRANSACTION LOCKS, in statement order:
    *
-   *   1. `pipeline_runs` — `FOR UPDATE` on the run.
-   *   2. `channels` — `FOR KEY SHARE` on every surviving channel of the set
+   *   1. `brands` — `FOR KEY SHARE` on the run's brand. Nothing is read from
+   *      the row; the lock is the point. The `content_items` INSERT at step 4
+   *      takes exactly this lock anyway, for `content_items.brand_id`, four
+   *      statements later — this takes it up front instead, where the canonical
+   *      order (`docs/lock-order.md`) wants it.
+   *   2. `pipeline_runs` — `FOR UPDATE` on the run, with the status and fence
+   *      re-checked under it. Still before every write, which is the property
+   *      that makes a second content item impossible; see above.
+   *   3. `channels` — `FOR KEY SHARE` on every surviving channel of the set
    *      (the re-read above; no `ORDER BY`).
-   *   3. `brands` — `FOR KEY SHARE`, taken by the `content_items` INSERT for
-   *      `content_items.brand_id`. A foreign key locks the PARENT row, and
-   *      that row already exists and is named by other transactions.
    *   4. its own new `content_items` / `adaptations` rows, for the
-   *      `adaptations` and `content_versions` FKs.
+   *      `adaptations` and `content_versions` FKs. `content_items.brand_id`
+   *      re-takes step 1's lock, which this transaction already holds.
    *
-   * Against `lockAdaptations` (`adaptations` then `content_items`) that is
+   * `brands` → `pipeline_runs` → `channels` → `content_items`, which is the
+   * product's one order with the run in it.
+   *
+   * WHY THE BRAND LOCK IS FIRST AND NOT THE RUN'S. Before it, this transaction
+   * held the run and the channel and then asked for the brand, while
+   * `BrandsRepository.delete` held the brand and then asked for the run and the
+   * channel through its cascade — a cycle, reproduced against a real database
+   * as `40P01` on both edges independently. The run lock could not move: it is
+   * a fence, and a fence checked after the writes is not a fence. So the brand
+   * moved instead, to in front of it.
+   *
+   * THE PRICE, since it is not free. This transaction now parks on the brand
+   * row before it can even discover it has been fenced out, so a `lost` handler
+   * waits behind a concurrent brand rename (`UPDATE brands` takes `FOR UPDATE`)
+   * that it used to ignore. Both are short api transactions and this one makes
+   * no network calls, so the wait is bounded by them; the alternative was a
+   * `40P01` on a run somebody has already paid for.
+   *
+   * AND A BRAND THAT IS ALREADY GONE NOW ENDS THE RUN CLEANLY. Parking on the
+   * brand means a `DELETE /api/brands/:id` is committing, and its cascade takes
+   * this run's row with it (`pipeline_runs.brand_id` is `on delete cascade`) —
+   * so the fence check one statement later finds no run and returns `gone`, the
+   * outcome that already means exactly this (see `FenceOutcome`). The caller
+   * logs one line instead of raising the terminal-write alarm three times over.
+   * The run was never going to produce a draft once its brand was gone —
+   * `content_items.brand_id` has nowhere to point — so what changed is not
+   * whether it survives but whether it dies cleanly. What it spent is not lost
+   * with it: ledger rows are written per call in their own transactions, and
+   * `usage_ledger.run_id` is `on delete set null` precisely so the org's bill
+   * outlives the run.
+   *
+   * Against `lockAdaptations` (`adaptations` then `content_items`) this is
    * safe, and for the reason the previous version of this paragraph gave: both
    * of those tables are reached here only as rows this transaction just
    * created, which no other transaction can yet name. Measured: `approve` and
-   * `reject` against this transaction do not deadlock.
-   *
-   * IT IS NOT SAFE AGAINST `BrandsRepository.delete`, AND STEPS 1-3 ARE WHY.
-   * That transaction takes `brands FOR UPDATE` and then, in its final
-   * `DELETE FROM brands`, cascades into `channels`, `content_items` AND
-   * `pipeline_runs`. So it holds the brand and wants the run and the channel;
-   * this one holds the run and the channel and then wants the brand. Two
-   * cycles, both reproduced against a real database as `40P01`:
-   *
-   *   - `pipeline_runs` (step 1) — `CONTEXT: while deleting tuple in relation
-   *     "pipeline_runs"`.
-   *   - `channels` (step 2) — `CONTEXT: while locking tuple in relation
-   *     "channels"`.
-   *
-   * Either side can be the victim: with the brand delete arriving second it
-   * dies (a 500 on `DELETE /api/brands/:id`), and with it arriving first THIS
-   * transaction dies inside the FK check — `SELECT 1 FROM ONLY "brands" …
-   * FOR KEY SHARE OF x` — losing the fully paid run the re-read above exists
-   * to save.
-   *
-   * The FK pair ALONE is not the problem, and a reading that stops at the two
-   * inserts will miss this: `content_items.brand_id` → `brands` runs BEFORE
-   * `adaptations.channel_id` → `channels`, which is the canonical direction.
-   * Reproduced without steps 1 and 2, this transaction merely waits for the
-   * delete and then fails cleanly on `content_items_brand_id_brands_id_fk` —
-   * no deadlock. It is the two rows locked BEFORE the insert that turn a wait
-   * into a cycle. See `docs/lock-order.md`, "The cycle this order does not
-   * close yet".
+   * `reject` against this transaction do not deadlock, and neither does
+   * `ChannelsRepository.delete` or `ContentRepository.create`.
    */
   async finish(
     orgId: string,
@@ -704,6 +715,26 @@ export class GenerateRepository {
   ): Promise<TerminalOutcome> {
     try {
       return await db.transaction(async (tx) => {
+        // The brand, `FOR KEY SHARE`, before anything else. This is the
+        // `content_items` INSERT's own foreign-key lock, taken four statements
+        // early so that it is taken in the canonical order.
+        //
+        // Its RESULT is deliberately not read, and there is no "brand is gone"
+        // branch here. There cannot be a useful one: a brand this select does
+        // not find is a brand whose delete has committed, and that delete's
+        // cascade took this run's row with it, so the fence check on the very
+        // next statement returns `gone` for exactly the same event. A branch
+        // here would be unreachable by outcome — measured: removing it changes
+        // no test — and it would swallow the one case the two DO differ on, a
+        // caller passing a `brandId` that never existed, which is a bug and
+        // should keep failing loudly on the foreign key.
+        await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+          .limit(1)
+          .for("key share");
+
         const locked = await tx
           .select({
             status: schema.pipelineRuns.status,
