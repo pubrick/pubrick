@@ -317,7 +317,7 @@ export const contentVersions = pgTable(
     runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
     /** Null for AI-written versions. */
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("content_versions_org_id_idx").on(t.orgId),

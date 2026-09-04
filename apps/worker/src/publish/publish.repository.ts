@@ -45,16 +45,22 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * Every write in this file that touches `adaptations` stamps `updated_at`
  * ITSELF, with `now()` evaluated by Postgres — never drizzle's `$onUpdate`.
  *
- * `$onUpdate` sends a client-side `new Date()`, and `updated_at` is `timestamp`
- * WITHOUT time zone: node-postgres serialises the Date with the worker's local
- * offset and Postgres, parsing a value for a column that has no zone, keeps the
- * wall clock and drops the offset. On a worker running in Europe/Moscow the
- * column would land three hours ahead of the `now()` it is later compared with.
- * That comparison is exactly what `sweepAbandoned` makes: a row's silence is
- * measured against this column, so a client-side stamp would make the sweep
- * either blind for ever or wildly early depending on the sign of that
- * offset. Same
- * reasoning, same defect class, as `nowSql()` in generate.repository.ts.
+ * `$onUpdate` sends a client-side `new Date()`. That used to be a correctness
+ * bug outright: `updated_at` was `timestamp` WITHOUT time zone, so Postgres
+ * kept the Date's wall clock and dropped its offset, and on a worker running in
+ * Europe/Moscow the column landed three hours away from the `now()` it is later
+ * compared with. Migration 0014 made the column `timestamptz`, which closes
+ * that hole — an instant from either side is now the same instant.
+ *
+ * The `now()` stamp stays, and is still the right stamp, for the reason that
+ * survives the type change: it is measured on the clock it is compared against.
+ * `sweepAbandoned` decides a row is abandoned by how long it has been silent —
+ * `updated_at < now() - interval` — and a client-side `new Date()` puts the
+ * WORKER's clock on one side of that comparison and the DATABASE's on the
+ * other. They are two machines, and a worker whose clock drifts ahead makes the
+ * sweep blind while one that drifts behind makes it fire early on live
+ * attempts. One clock decides both ends here. Same reasoning as `nowSql()` in
+ * generate.repository.ts, whose columns are still zoneless as well.
  */
 function nowSql() {
   return sql`now()`;

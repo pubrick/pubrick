@@ -1235,10 +1235,13 @@ export class ContentRepository {
   async markOpened(orgId: string, id: string): Promise<void> {
     const stamped = await db
       .update(schema.contentItems)
-      // A JS Date, matching `scheduledAt`: the column is `timestamp` without a
-      // zone and drizzle writes/reads it as UTC on both sides, so this
-      // round-trips whatever the database's own timezone is. Nothing compares
-      // it to anything — the rule above only asks whether it is null.
+      // A JS Date, matching `scheduledAt`: the column is `timestamptz`, so the
+      // instant this process means is the instant Postgres stores whatever
+      // zone either of them is running in. It used to be zoneless, and this
+      // comment used to explain that drizzle's UTC-on-both-sides convention
+      // made the round trip come out right — true, and true only of readers
+      // that go through drizzle. Migration 0014 made it a property of the
+      // column instead of a property of the client.
       .set({ firstOpenedAt: new Date() })
       .where(
         and(

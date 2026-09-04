@@ -5,11 +5,43 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "./client.js";
 import { runMigrations } from "./migrate.js";
 
 const url = process.env.TEST_DATABASE_URL;
+
+/**
+ * READ A ZONELESS `timestamp` AS UTC, the way every other reader in this
+ * codebase does.
+ *
+ * The queries in this file go through raw `pg`, and raw `pg` parses a value
+ * from a column with no time zone by building a `Date` **in the Node process's
+ * own zone** — so on a developer machine in Europe/Moscow a row stamped
+ * `15:38` by the database comes back as `12:38Z`, three hours from where it
+ * actually is. drizzle, which is how the api and the worker read the same
+ * columns, replaces that parser and reads the value as UTC.
+ *
+ * That did not matter while every timestamp column was zoneless: both snapshots
+ * of a before/after comparison were taken through the same wrong lens and
+ * cancelled out. `0014` gives the publishing path's columns a zone, so the
+ * "after" read is now correct while the "before" read is not, and
+ * `expectNoRowRewritten` would report a value as rewritten when nothing about
+ * it moved. Aligning the raw reader with drizzle compares the two ends on one
+ * clock — and the remaining zoneless columns (`pipeline_runs`, `usage_ledger`,
+ * `ai_credentials`, better-auth's tables) are read here the way the product
+ * reads them rather than the way `pg` guesses.
+ *
+ * Module-global to the `pg` instance this test file loads, which is the whole
+ * of its blast radius: vitest gives each file its own module graph, and
+ * drizzle's own per-query parsers are unaffected either way. Applied from a
+ * `beforeAll` rather than at module scope, because a bare call there is a shape
+ * `db-tier.guard.test.ts` refuses: it cannot tell one from a suite registered
+ * through a helper.
+ */
+function readZonelessAsUtc(): void {
+  pg.types.setTypeParser(pg.types.builtins.TIMESTAMP, (value) => new Date(`${value}Z`));
+}
 
 /** The migration whose additivity is proved below, by name rather than by index. */
 const ADDITIVE_MIGRATION = "0006_authorship";
@@ -19,6 +51,49 @@ const INDEX_MIGRATION = "0007_ledger_draft_index";
 
 /** The constraint-only migration, proved against a populated database below. */
 const CONSTRAINT_MIGRATION = "0009_declared_invariants";
+
+/** The migration that gives the publishing path's timestamps a zone. */
+const ZONE_MIGRATION = "0014_scheduled_at_carries_its_zone";
+
+/**
+ * Every column 0014 gives a zone to, in the order `information_schema` sorts
+ * them. Written out rather than derived from the schema: the point of the
+ * assertion is that the DATABASE matches a decision somebody wrote down, and a
+ * list computed from the same types the migration was generated from could only
+ * ever agree with itself.
+ */
+const ZONED_COLUMNS = [
+  "adaptations.created_at",
+  "adaptations.scheduled_at",
+  "adaptations.updated_at",
+  "brands.created_at",
+  "brands.updated_at",
+  "channels.created_at",
+  "channels.updated_at",
+  "content_items.created_at",
+  "content_items.first_opened_at",
+  "content_items.updated_at",
+  "content_versions.created_at",
+  "publications.created_at",
+];
+
+/**
+ * The tables whose timestamps are deliberately still zoneless. The reason for
+ * each is argued in `timestamp-zone.test.ts`, which holds the same split
+ * against the TYPES; this file holds it against the database.
+ */
+const UNZONED_TABLES = [
+  "account",
+  "ai_credentials",
+  "invitation",
+  "member",
+  "organization",
+  "pipeline_runs",
+  "session",
+  "usage_ledger",
+  "user",
+  "verification",
+];
 
 /** The migration that adds the ledger's outcome column, proved additive below. */
 const OUTCOME_MIGRATION = "0012_ledger_call_outcome";
@@ -304,6 +379,8 @@ async function dropStaleDatabases(admin: pg.Client): Promise<void> {
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  beforeAll(readZonelessAsUtc);
+
   it("applies migrations and enables pgvector", async () => {
     await runMigrations(url as string);
     const { db, pool } = createDb(url as string);
@@ -994,4 +1071,202 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  /**
+   * WHAT 0014 DOES TO A ROW THAT ALREADY EXISTS — the only question a type
+   * change over live data has to answer.
+   *
+   * The rows are written at the schema as it stood BEFORE 0014, with literal
+   * wall clocks rather than `now()`, so what the migration reads them as is a
+   * property of the migration and not of when the test ran. They are then
+   * migrated **from a session that is not in UTC**, which is the whole point:
+   * a bare `ALTER COLUMN ... SET DATA TYPE timestamptz` reads a zoneless value
+   * in the session's zone, so on a self-hoster's non-UTC database it would move
+   * every scheduled post by the offset. `USING col AT TIME ZONE 'UTC'` reads it
+   * as UTC, which is the interpretation drizzle has been applying on every read
+   * since these columns existed — so the instant the api served yesterday is
+   * the instant it serves today.
+   *
+   * Both halves are asserted: the value IS the UTC reading, and it is NOT the
+   * session's. Only the second one fails if the `USING` clause is dropped, and
+   * only on a non-UTC session — which is exactly the test that would not have
+   * existed by accident.
+   */
+  it("reads an existing wall clock as UTC, not as the migrating session's zone", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(ZONE_MIGRATION);
+    // Nine hours off UTC and free of DST, so the two readings below are far
+    // apart and stay that way whatever date this runs on.
+    const zoned = new URL(fresh.url);
+    zoned.searchParams.set("options", "-c timezone=Asia/Tokyo");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const naive = await pool.query<{ data_type: string }>(
+          "SELECT data_type FROM information_schema.columns WHERE table_name = 'adaptations' AND column_name = 'scheduled_at'",
+        );
+        // If the column already carried a zone here, "written before 0014"
+        // would be a lie and everything below would prove nothing.
+        expect((naive.rows[0] as { data_type: string }).data_type).toBe(
+          "timestamp without time zone",
+        );
+        const seeded = await seedEveryTable(pool, "org_zone");
+        await pool.query(
+          "UPDATE adaptations SET status = 'scheduled', scheduled_at = TIMESTAMP '2026-03-01 09:30:00' WHERE id = $1",
+          [seeded.adaptationId],
+        );
+        await pool.query(
+          "UPDATE content_items SET first_opened_at = TIMESTAMP '2026-02-28 23:45:00' WHERE id = $1",
+          [seeded.itemId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(zoned.toString());
+
+      const after = new pg.Pool({ connectionString: zoned.toString(), max: 1 });
+      try {
+        // The guard on the two assertions that matter: under UTC they hold
+        // whether or not the migration says `AT TIME ZONE 'UTC'`.
+        const session = await after.query<{ TimeZone: string }>("SHOW timezone");
+        expect(session.rows).toHaveLength(1);
+        expect((session.rows[0] as { TimeZone: string }).TimeZone).toBe("Asia/Tokyo");
+
+        const read = await after.query<{ utc: boolean; local: boolean; opened: boolean }>(
+          `SELECT a.scheduled_at = TIMESTAMPTZ '2026-03-01 09:30:00+00' AS utc,
+                  a.scheduled_at = TIMESTAMPTZ '2026-03-01 09:30:00+09' AS local,
+                  i.first_opened_at = TIMESTAMPTZ '2026-02-28 23:45:00+00' AS opened
+             FROM adaptations a JOIN content_items i ON i.id = a.content_item_id`,
+        );
+        expect(read.rows).toHaveLength(1);
+        const row = read.rows[0] as { utc: boolean; local: boolean; opened: boolean };
+        expect(row.utc, "the stored wall clock was not read as UTC").toBe(true);
+        expect(row.local, "the migrating session's zone was used").toBe(false);
+        expect(row.opened).toBe(true);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The end state, over a database holding a row of every affected table:
+   * every publishing-path timestamp carries a zone, every deliberately-left one
+   * still does not, and nothing was deleted on the way.
+   *
+   * The negative half is not decoration. A migration written as "convert every
+   * timestamp in the schema" would pass the positive half and quietly restate
+   * columns whose reasoning lives in packages this change does not own —
+   * `packages/db/src/timestamp-zone.test.ts` holds that argument, and this is
+   * where it is checked against the database rather than against the types.
+   */
+  it("gives the publishing path's columns a zone, and only those, over a populated database", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(ZONE_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await seedEveryTable(pool, "org_zone_types");
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const types = await after.query<{ name: string; data_type: string }>(
+          `SELECT table_name || '.' || column_name AS name, data_type
+             FROM information_schema.columns
+            WHERE table_schema = 'public' AND data_type LIKE 'timestamp%'
+            ORDER BY name`,
+        );
+        const zoned = types.rows
+          .filter((row) => row.data_type === "timestamp with time zone")
+          .map((row) => row.name);
+        expect(zoned).toEqual(ZONED_COLUMNS);
+        const naive = types.rows
+          .filter((row) => row.data_type === "timestamp without time zone")
+          .map((row) => row.name.split(".")[0] as string);
+        expect(
+          [...new Set(naive)].filter((table) => !UNZONED_TABLES.includes(table)),
+          "a column outside the declared set was left without a zone",
+        ).toEqual([]);
+
+        const counts = await after.query<{ n: string }>(
+          "SELECT (SELECT count(*) FROM adaptations) + (SELECT count(*) FROM publications) + (SELECT count(*) FROM content_versions) AS n",
+        );
+        expect(Number((counts.rows[0] as { n: string }).n)).toBe(4);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * The same end state reached from EVERY version this product has ever been
+   * at, not only from the one immediately before 0014.
+   *
+   * A type change is the migration most likely to depend on the exact shape it
+   * starts from — a column that a later migration re-created, a default some
+   * intermediate version added — and "it works from 0013" says nothing about a
+   * database that has been sitting at 0004 since it was installed. Each cut
+   * point is a real database brought to that version and then migrated to head.
+   */
+  it("reaches the same column types from every earlier version, and from empty", async () => {
+    const journal = JSON.parse(
+      await fs.readFile(
+        path.join(
+          path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations"),
+          "meta",
+          "_journal.json",
+        ),
+        "utf8",
+      ),
+    ) as { entries: { tag: string }[] };
+
+    for (const entry of journal.entries) {
+      const fresh = await withFreshDatabase(url as string);
+      const before = await migrationsFolderBefore(entry.tag);
+      try {
+        const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+        try {
+          // `0000` cuts to an empty folder, which is the "from empty" case.
+          await migrate(drizzle(pool), { migrationsFolder: before });
+        } finally {
+          await pool.end();
+        }
+
+        await runMigrations(fresh.url);
+
+        const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+        try {
+          const types = await after.query<{ name: string }>(
+            `SELECT table_name || '.' || column_name AS name
+               FROM information_schema.columns
+              WHERE table_schema = 'public' AND data_type = 'timestamp with time zone'
+              ORDER BY name`,
+          );
+          expect(
+            types.rows.map((row) => row.name),
+            `starting from ${entry.tag}`,
+          ).toEqual(ZONED_COLUMNS);
+        } finally {
+          await after.end();
+        }
+      } finally {
+        await fs.rm(before, { recursive: true, force: true });
+        await fresh.drop();
+      }
+    }
+  }, 180_000);
 });

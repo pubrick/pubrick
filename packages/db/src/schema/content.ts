@@ -15,8 +15,8 @@ export const brands = pgTable(
     voice: text("voice"),
     audience: text("audience"),
     contentLanguage: text("content_language").notNull().default("en"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
       .defaultNow()
       .notNull(),
@@ -38,8 +38,8 @@ export const channels = pgTable(
     name: text("name").notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
     credentialsEncrypted: text("credentials_encrypted").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
       .defaultNow()
       .notNull(),

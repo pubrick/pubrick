@@ -40,9 +40,9 @@ export const contentItems = pgTable(
      * API and MCP server would also trip. Null here is half of the refusal to
      * publish text no human has read.
      */
-    firstOpenedAt: timestamp("first_opened_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    firstOpenedAt: timestamp("first_opened_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
       .defaultNow()
       .notNull(),
@@ -84,11 +84,40 @@ export const adaptations = pgTable(
      * carry AI-adapted channel bodies.
      */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
-    scheduledAt: timestamp("scheduled_at"),
+    /**
+     * WHEN THIS CHANNEL'S POST GOES OUT — an INSTANT, and stored as one.
+     *
+     * `timestamptz`, like every other timestamp in this table, and the reason
+     * is sharpest here. The value is an instant from the moment it is picked:
+     * the browser turns the reader's local choice into one, the api parses it
+     * into a `Date`, and pg-boss holds the same instant on its own
+     * `timestamptz` `start_after`. Only the column was zoneless, and a zoneless
+     * column does not hold an instant — it holds a wall clock plus an
+     * assumption about whose.
+     *
+     * The assumption was drizzle's: it writes a `Date` as `toISOString()` and
+     * reads a bare value back as if it were UTC, so the round trip agreed with
+     * itself and with the queue. Nothing else did. `created_at` on this same
+     * row is written by `now()`, which is the SESSION's wall clock, so on a
+     * self-hosted Postgres running in a local zone the two columns of one row
+     * sat hours apart — and any SQL that asked the obvious question
+     * (`scheduled_at > now()`: is this post still in the future?) got the wrong
+     * answer, silently, while every screen showed the time the user asked for.
+     * The project's own compose file pins the database to UTC, which is what
+     * made this survivable for a private deployment and stops being an argument
+     * the moment somebody else runs the product on their own machine.
+     *
+     * `timestamptz` removes the assumption rather than documenting it: Postgres
+     * stores the instant, and every writer — a `Date` from the api, `now()`
+     * from either process — and every reader agrees on it in any session zone.
+     * See `packages/db/src/timestamp-zone.test.ts`, which asserts exactly that
+     * from a session that is deliberately not in UTC.
+     */
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
     attemptCount: integer("attempt_count").notNull().default(0),
     lastError: text("last_error"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
       .defaultNow()
       .notNull(),
@@ -292,7 +321,7 @@ export const publications = pgTable(
     externalUrl: text("external_url"),
     error: text("error"),
     attempt: integer("attempt").notNull().default(1),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("publications_org_id_idx").on(t.orgId),
