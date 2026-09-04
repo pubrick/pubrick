@@ -151,6 +151,54 @@ describe("Settings — Appearance", () => {
   });
 });
 
+/**
+ * The commit that shipped `LanguageCard` (`feat(settings): mount the language
+ * switcher beside the theme`) is invisible to every other test in this file:
+ * `LanguageCard` is well covered in isolation (`language-card.test.tsx`), and
+ * the mount itself is one line nothing here exercised. Deleting that line, or
+ * hard-coding its `hasUnsavedText` prop to `false` — silencing the
+ * confirmation that protects an unsaved, unrecoverable API key — both left the
+ * whole suite green.
+ */
+describe("Settings — Language", () => {
+  it("mounts the language switcher on the settings screen", async () => {
+    await renderSettings();
+
+    expect(screen.getByRole("heading", { name: en.Language.title })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Español" })).toBeInTheDocument();
+  });
+
+  /**
+   * A prop-assertion (`toHaveBeenCalledWith({ hasUnsavedText: true })`) would
+   * pass for a component that received the flag and ignored it. This drives
+   * the actual behaviour the flag buys — typing an unsaved key, then trying to
+   * switch language, must surface the confirmation `LanguageCard` renders only
+   * when `hasUnsavedText` is true — so a hard-coded `false` fails it exactly as
+   * a deleted mount does.
+   */
+  it("asks before discarding an unsaved API key when the language is switched", async () => {
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk-live-abcdefgh12345678");
+    await user.click(screen.getByRole("tab", { name: "Español" }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText(en.Language.confirmBody)).toBeInTheDocument();
+    expect(routerMock.replace).not.toHaveBeenCalled();
+  });
+
+  it("switches straight away when there is nothing unsaved on the screen", async () => {
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Español" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("Settings — Account", () => {
   it("shows the signed-in email and signs out via the shared Landing.signOut button", async () => {
     await renderSettings();
