@@ -103,6 +103,58 @@ describe("enum columns are pinned in the database, not only in the types", () =>
   });
 
   /**
+   * THE OTHER DIRECTION, starting from the CHECKS rather than from the types.
+   *
+   * `enumColumns` above is built by scanning column declarations for
+   * `enumValues`, so a column that loses its `{ enum: [...] }` option stops
+   * being an "enum column" by that scan's own definition, even though the
+   * `enumCheck(...)` call sitting right next to it in the table's extras is
+   * untouched and the CHECK still reaches the database. Every test above
+   * starts from the TYPES and would silently stop watching a column the moment
+   * its type option disappears — measured: dropping `{ enum: ADAPTATION_STATUSES }`
+   * from `adaptations.status` while leaving `enumCheck("adaptations_status_check",
+   * t.status, ADAPTATION_STATUSES)` in place survives every test above.
+   *
+   * This one starts from `checks` instead, which that mutation cannot make
+   * vanish, and asks each check's own column whether it still carries a
+   * TypeScript enum that matches. Derived, like `enumColumns`, so the next
+   * column that gains a check is covered without anyone adding a test for it.
+   */
+  it("gives every enum CHECK's own column a TypeScript enum that still matches it", () => {
+    // Every check this package writes, parsed back into (column, values) —
+    // `enumCheck` only ever renders `"table"."column" in ('a', 'b', ...)`, and
+    // the "pins each column INTO its value set" test below is what proves no
+    // check is written any other way.
+    const checkedColumns = tables.flatMap(({ table, config }) =>
+      config.checks.flatMap((constraint) => {
+        const sql = dialect.sqlToQuery(constraint.value).sql;
+        const match = sql.match(/^"[^"]+"\.\s*"([^"]+)"\s+in\s*\(([^)]*)\)$/i);
+        if (!match) return [];
+        const columnName = match[1] as string;
+        const listText = match[2] as string;
+        const pinned = [...listText.matchAll(/'([^']*)'/g)].map((m) => m[1] as string).sort();
+        const column = Object.values(getTableColumns(table)).find((c) => c.name === columnName);
+        return [{ table: config.name, columnName, declared: column?.enumValues, pinned }];
+      }),
+    );
+    // The scanner has to find something, or the assertion below is vacuous —
+    // the same failure mode "finds the enum columns" exists to close above.
+    expect(checkedColumns.length).toBeGreaterThan(10);
+    const untyped = checkedColumns
+      .map(({ table, columnName, declared, pinned }) => ({
+        column: `${table}.${columnName}`,
+        declared: [...(declared ?? [])].sort(),
+        pinned,
+      }))
+      .filter((entry) => JSON.stringify(entry.declared) !== JSON.stringify(entry.pinned));
+    expect(
+      untyped,
+      "CHECK constraint whose own column carries no matching TypeScript enum " +
+        "(dropping `{ enum: [...] }` from a column while its `enumCheck(...)` stays behind is exactly this):",
+    ).toEqual([]);
+  });
+
+  /**
    * THE OPERATOR, not only the values.
    *
    * The two checks above read the constraint through `literalsOf`, which pulls

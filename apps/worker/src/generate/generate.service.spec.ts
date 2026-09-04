@@ -1,4 +1,5 @@
 import { Logger } from "@nestjs/common";
+import type { UsageRecord } from "@pubrick/ai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { channelOf, type ScriptedUsage, scriptedModel } from "../test/scripted-model";
 
@@ -1746,5 +1747,95 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect((await runRow(sibling?.id as string))?.unrecordedCalls).toBe(0);
       expect((await runRow(other.runId))?.unrecordedCalls).toBe(0);
     }, 30_000);
+  });
+
+  /**
+   * Migration 0013 added `unrecorded_calls` NULLABLE, on purpose: a run that
+   * predates the column carries NULL, not 0, because NULL means "nothing is
+   * known" — a back-filled 0 would assert nobody lost anything on runs where a
+   * loss could not even have been seen. `NULL + 1` is NULL, so writing the
+   * FIRST loss against such a run without the `coalesce` in
+   * `GenerateRepository.recordUnrecordedCall` would swallow it: the counter
+   * would still read NULL, which every reader treats exactly like "no losses".
+   *
+   * Every test in "a ledger row that could not be written" above seeds a fresh
+   * run, and a fresh run's `unrecorded_calls` defaults to 0 — that default is
+   * exactly what makes the branch the `coalesce` exists for unreachable
+   * everywhere else in this file. This is the one test that gives a run the
+   * NULL the migration was written for.
+   */
+  describe("the NULL branch coalesce exists for", () => {
+    it("turns a run's NULL counter into 1 on its first recorded loss", async () => {
+      const seeded = await seed({ channels: 1 });
+      await db
+        .update(schema.pipelineRuns)
+        .set({ unrecordedCalls: null })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      expect((await runRow(seeded.runId))?.unrecordedCalls).toBeNull();
+
+      await new Repository().recordUnrecordedCall(seeded.orgId, seeded.runId);
+
+      expect((await runRow(seeded.runId))?.unrecordedCalls).toBe(1);
+    }, 20_000);
+  });
+
+  /**
+   * `GenerateRepository.recordUnrecordedCall`'s own `await db.update(...)` is
+   * what every test above proves, each of them by reading the counter back
+   * only after `handle()` has returned. That proof is worth nothing without the
+   * WORKER'S OWN `await this.repo.recordUnrecordedCall(...)`, inside
+   * `recordUnrecordedCall` (generate.service.ts): without it, `try {
+   * this.repo.recordUnrecordedCall(...); } catch (writeError) { ... }` never
+   * sees a rejection. A bare call's promise settles after the `try` block has
+   * already returned, so a write that fails becomes an unhandled rejection
+   * nobody's `catch` runs, and "UNRECORDED-CALL COUNTER FAILED" — the line
+   * that tells an operator BOTH records of this loss are now gone — never gets
+   * logged.
+   *
+   * Proved against a repository double that rejects, rather than against a
+   * race with the real database: with the `await` in place, the assertion
+   * below and the `catch` settle on the very same promise chain, so there is
+   * no timing window to depend on either way.
+   */
+  describe("the worker's own await on the counter write", () => {
+    it("catches its own counter write when it rejects, and logs that both records are gone", async () => {
+      const failingWrite = vi.fn().mockRejectedValue(new Error("write failed"));
+      const fakeRepo = { recordUnrecordedCall: failingWrite } as unknown as GenerateRepository;
+      const errorLog = vi.spyOn(Logger.prototype, "error").mockImplementation(() => {});
+      const service = new Service(fakeRepo) as unknown as {
+        recordUnrecordedCall: (
+          orgId: string,
+          runId: string,
+          error: unknown,
+          record: UsageRecord,
+        ) => Promise<void>;
+      };
+      const record: UsageRecord = {
+        provider: "google",
+        modelId: "gemini-3.7-flash",
+        attempt: 1,
+        inputTokens: 120,
+        outputTokens: 60,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        costUsd: 0.01,
+        costSource: "price_table",
+        responseMs: 400,
+        status: "ok",
+        outcome: "completed",
+      };
+
+      await service.recordUnrecordedCall(
+        "org-await-1",
+        "run-await-1",
+        new Error("ledger write failed"),
+        record,
+      );
+
+      expect(failingWrite).toHaveBeenCalledWith("org-await-1", "run-await-1");
+      const logged = errorLog.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("UNRECORDED-CALL COUNTER FAILED");
+      vi.restoreAllMocks();
+    });
   });
 });

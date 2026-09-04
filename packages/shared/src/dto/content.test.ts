@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ADAPTATION_STATUSES,
   adaptationUpdateSchema,
+  CONTENT_STATUSES,
   contentCreateSchema,
   contentUpdateSchema,
   DELIVERY_OUTCOMES,
@@ -88,6 +89,38 @@ describe("body newline normalisation", () => {
     // The transform sits inside the object, so the refine that keeps drizzle
     // from being handed an empty SET clause must survive it.
     expect(contentUpdateSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+/**
+ * `content_items.status` and `adaptations.status` are typed FROM these two
+ * arrays in `@pubrick/db` (`text(col, { enum: CONTENT_STATUSES })`, etc.) and
+ * the database's own CHECK constraints are built from the same arrays via
+ * `enumCheck` — so a member silently dropped here silently narrows both the
+ * TypeScript type and the migration's CHECK at once, and nothing that merely
+ * compares one to the other can ever notice: they would still agree, just
+ * about a smaller set than the product actually has. `PINNED_ITEM_MESSAGE` and
+ * `PINNED_ADAPTATION_MESSAGE` in apps/api are `Record`s keyed by these unions
+ * exactly so a status added later is a compile error; a status quietly
+ * REMOVED from here is not caught by that mechanism at all, because a
+ * `Record` with a spare key compiles fine. This is the one place that can
+ * still catch it — by naming the actual members rather than deriving them
+ * from anything that could have dropped one too.
+ */
+describe("the draft and delivery lifecycles keep every status they had", () => {
+  it("content status", () => {
+    expect(CONTENT_STATUSES).toEqual(["draft", "approved", "rejected", "published", "failed"]);
+  });
+
+  it("adaptation status", () => {
+    expect(ADAPTATION_STATUSES).toEqual([
+      "pending",
+      "scheduled",
+      "queued",
+      "publishing",
+      "published",
+      "failed",
+    ]);
   });
 });
 

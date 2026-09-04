@@ -1,4 +1,11 @@
-import { AI_CALL_OUTCOMES, AI_COST_SOURCES, RUN_STATUSES, VERSION_SCOPES } from "@pubrick/shared";
+import {
+  ADAPTATION_STATUSES,
+  AI_CALL_OUTCOMES,
+  AI_COST_SOURCES,
+  CONTENT_STATUSES,
+  RUN_STATUSES,
+  VERSION_SCOPES,
+} from "@pubrick/shared";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import { schema } from "./index.js";
@@ -31,6 +38,40 @@ describe("generation schema", () => {
     expect(RUN_STATUSES).toEqual(["queued", "running", "succeeded", "failed", "cancelled"]);
     // And the column is bounded BY that list rather than merely alongside it.
     expect(schema.pipelineRuns.status.enumValues).toEqual(RUN_STATUSES);
+  });
+
+  /**
+   * The two lists a refactor moved into `@pubrick/shared` and, in moving them,
+   * stopped pinning here. `CONTENT_STATUSES` and `ADAPTATION_STATUSES` are as
+   * load-bearing as `RUN_STATUSES` above — `PINNED_ITEM_MESSAGE` and
+   * `PINNED_ADAPTATION_MESSAGE` in apps/api are `Record`s over them precisely so
+   * a status added without a decision is a compile error — and nothing named
+   * their actual members. Measured: dropping `publishing` from
+   * `ADAPTATION_STATUSES`, or `failed` from `CONTENT_STATUSES`, survived every
+   * test in both this package and `@pubrick/shared`.
+   *
+   * The STRUCTURAL half of "bounded BY that list rather than merely alongside
+   * it" — that a column's own TypeScript enum still matches its CHECK — is
+   * `schema-invariants.test.ts`'s job now: it derives the set of enum columns
+   * AND the set of enum CHECKS from the schema itself, in both directions, so a
+   * column added later is covered without a new `it` block here. What only a
+   * literal can prove is that the SOURCE array still has the members product
+   * vocabulary says it should — deriving that would just compare the array to
+   * itself.
+   */
+  it("keeps content and adaptation statuses free of a status nothing can reach", () => {
+    expect(CONTENT_STATUSES).toEqual(["draft", "approved", "rejected", "published", "failed"]);
+    expect(schema.contentItems.status.enumValues).toEqual(CONTENT_STATUSES);
+
+    expect(ADAPTATION_STATUSES).toEqual([
+      "pending",
+      "scheduled",
+      "queued",
+      "publishing",
+      "published",
+      "failed",
+    ]);
+    expect(schema.adaptations.status.enumValues).toEqual(ADAPTATION_STATUSES);
   });
 
   it("leaves cost nullable so an unpriced call cannot read as free", () => {
