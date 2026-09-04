@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import request from "supertest";
+import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -197,44 +198,274 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
  * next one, by making a collection endpoint that nobody scoped a FAILING BUILD
  * rather than a quiet omission. It runs without a database, so it fails in the
  * same second as a typo.
+ *
+ * Below sits a SECOND, broader property over the same controllers: not just
+ * "does the list have a scoping test", but "does every route — list, get-one,
+ * write, whatever verb — actually carry the guard that makes org scoping
+ * possible at all". They share one AST walk (`parseController`) rather than
+ * each re-deriving "what is a route" from the source text in its own way —
+ * that duplication is exactly how a scanner drifts from what it claims to
+ * cover. The two properties stay separate assertions because they check
+ * different things: the first is about the QUERY (does the filter exist and
+ * get exercised), the second is about the GUARD (does `orgId` even reach the
+ * request in the first place, which is the precondition for the first
+ * property meaning anything).
  */
-describe("no collection endpoint ships without a scoping test", () => {
-  const controllersRoot = join(process.cwd(), "src");
 
-  function controllerFiles(dir: string): string[] {
-    return readdirSync(dir).flatMap((entry) => {
-      const path = join(dir, entry);
-      if (statSync(path).isDirectory()) return controllerFiles(path);
-      return entry.endsWith(".controller.ts") ? [path] : [];
+const controllersRoot = join(process.cwd(), "src");
+
+function controllerFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return controllerFiles(path);
+    return entry.endsWith(".controller.ts") ? [path] : [];
+  });
+}
+
+/** HTTP-verb decorators that mark a class method as a route handler. */
+const HTTP_VERBS = new Set(["Get", "Post", "Put", "Patch", "Delete", "All", "Options", "Head"]);
+
+type DecoratorInfo = { name: string; args: readonly ts.Expression[] };
+
+/** A decorator's name and call arguments — `@Foo` and `@Foo()` both resolve, with
+ *  an empty argument list for the bare form. Anything more exotic (a decorator
+ *  expression that isn't a plain identifier, called or not) resolves to null and
+ *  is refused by the caller rather than silently skipped. */
+function decoratorInfo(decorator: ts.Decorator): DecoratorInfo | null {
+  const expression = decorator.expression;
+  if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression)) {
+    return { name: expression.expression.text, args: expression.arguments };
+  }
+  if (ts.isIdentifier(expression)) return { name: expression.text, args: [] };
+  return null;
+}
+
+/** Every decorator on a class or method declaration, resolved via decoratorInfo.
+ *  `null` entries (an unresolvable decorator expression) are kept as nulls so a
+ *  caller that needs to notice them can, rather than the list just being shorter. */
+function decorators(node: ts.ClassDeclaration | ts.MethodDeclaration): (DecoratorInfo | null)[] {
+  const list = ts.canHaveDecorators(node) ? ts.getDecorators(node) : undefined;
+  return (list ?? []).map(decoratorInfo);
+}
+
+function hasGuard(infos: (DecoratorInfo | null)[], guardName: string): boolean {
+  return infos.some(
+    (d) =>
+      d?.name === "UseGuards" &&
+      d.args.some((arg) => ts.isIdentifier(arg) && arg.text === guardName),
+  );
+}
+
+function has(infos: (DecoratorInfo | null)[], name: string): boolean {
+  return infos.some((d) => d?.name === name);
+}
+
+/** The literal string argument of the first decorator named `name`, if there is
+ *  exactly one such argument and it is a plain string literal. `undefined` means
+ *  the decorator is absent; `null` means it is present but not in that shape
+ *  (a computed path, no argument where one is required) — the two are kept
+ *  distinct so a caller can refuse the second instead of reading it as the first. */
+function literalArg(infos: (DecoratorInfo | null)[], name: string): string | null | undefined {
+  const found = infos.find((d): d is DecoratorInfo => d !== null && d.name === name);
+  if (found === undefined) return undefined;
+  if (found.args.length === 0) return null;
+  const [arg] = found.args;
+  return arg && ts.isStringLiteralLike(arg) ? arg.text : null;
+}
+
+type Route = {
+  methodName: string;
+  verb: string;
+  /** `@Get()` with no argument — the collection route, per LIST_ENDPOINTS above. */
+  bare: boolean;
+  guarded: boolean;
+  anonymous: boolean;
+};
+
+type ParsedController = {
+  file: string;
+  path: string;
+  classGuarded: boolean;
+  classAnonymous: boolean;
+  /** Set by `@NotOrgScoped("reason")`; null when the decorator is absent. */
+  notOrgScopedReason: string | null;
+  routes: Route[];
+};
+
+type ControllerProblem = { file: string; reason: string };
+
+/** Parses one `*.controller.ts` file into its route shape, or explains why it
+ *  couldn't — fail-closed, same reason as db-tier.guard.spec.ts: a file this
+ *  cannot read is a failure here, not a silent absence from either scan below. */
+function parseController(
+  file: string,
+):
+  | { controller: ParsedController; problem?: undefined }
+  | { controller?: undefined; problem: ControllerProblem } {
+  const text = readFileSync(file, "utf8");
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const parseErrors =
+    (source as unknown as { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics ?? [];
+  if (parseErrors[0]) {
+    return { problem: { file, reason: "does not parse, so nothing about it can be checked" } };
+  }
+
+  // A controller file may also export a helper class alongside the controller
+  // (ai-credentials.controller.ts's ParseAiProviderPipe, for one) — the class
+  // that carries `@Controller(...)` is the one this scan is about, not "the
+  // only class in the file".
+  const candidates = source.statements
+    .filter(ts.isClassDeclaration)
+    .map((candidate) => ({ candidate, infos: decorators(candidate) }))
+    .filter(({ infos }) => literalArg(infos, "Controller") !== undefined);
+  const only = candidates[0];
+  if (!only || candidates.length !== 1) {
+    return {
+      problem: {
+        file,
+        reason: `expected exactly one class carrying @Controller(...), found ${candidates.length}`,
+      },
+    };
+  }
+  const { candidate: cls, infos: classInfos } = only;
+  const path = literalArg(classInfos, "Controller");
+  if (path === null || path === undefined) {
+    return { problem: { file, reason: "@Controller(...) argument is not a plain string literal" } };
+  }
+
+  const notOrgScoped = classInfos.find((d) => d?.name === "NotOrgScoped");
+  let notOrgScopedReason: string | null = null;
+  if (notOrgScoped) {
+    const [arg] = notOrgScoped.args;
+    if (!arg || !ts.isStringLiteralLike(arg) || arg.text.trim().length === 0) {
+      return {
+        problem: { file, reason: "@NotOrgScoped(...) needs a non-empty string literal reason" },
+      };
+    }
+    notOrgScopedReason = arg.text;
+  }
+
+  const routes: Route[] = [];
+  for (const member of cls.members) {
+    if (!ts.isMethodDeclaration(member)) continue;
+    const methodInfos = decorators(member);
+    const verbInfo = methodInfos.find((d) => d !== null && HTTP_VERBS.has(d.name));
+    if (!verbInfo) continue; // not a route handler — a private helper method, most likely
+    routes.push({
+      methodName: member.name.getText(source),
+      verb: verbInfo.name,
+      bare: verbInfo.args.length === 0,
+      guarded: hasGuard(methodInfos, "ActiveOrgGuard"),
+      anonymous: has(methodInfos, "AllowAnonymous"),
     });
   }
 
+  return {
+    controller: {
+      file,
+      path,
+      classGuarded: hasGuard(classInfos, "ActiveOrgGuard"),
+      classAnonymous: has(classInfos, "AllowAnonymous"),
+      notOrgScopedReason,
+      routes,
+    },
+  };
+}
+
+function parseAllControllers(): { controllers: ParsedController[]; problems: ControllerProblem[] } {
+  const controllers: ParsedController[] = [];
+  const problems: ControllerProblem[] = [];
+  for (const file of controllerFiles(controllersRoot)) {
+    const result = parseController(file);
+    if (result.problem) problems.push(result.problem);
+    else controllers.push(result.controller);
+  }
+  return { controllers, problems };
+}
+
+describe("no collection endpoint ships without a scoping test", () => {
   it("finds the controllers at all — a scan that matches nothing is a green light for anything", () => {
     // Without this the whole ratchet degrades to `[] ⊆ registry` the first time
     // the layout or the working directory moves, and reports success forever.
     expect(controllerFiles(controllersRoot).length).toBeGreaterThanOrEqual(5);
   });
 
+  it("parses every controller file", () => {
+    const { problems } = parseAllControllers();
+    expect(
+      problems.map((p) => `${p.file}: ${p.reason}`),
+      "A controller file this scan cannot parse reads identically to one with nothing to " +
+        "report, which is the failure this file exists to remove:",
+    ).toEqual([]);
+  });
+
   it("has a table entry (or a written reason) for every bare @Get()", () => {
     const registered = new Set(LIST_ENDPOINTS.map((endpoint) => endpoint.controller));
-    const unscoped: string[] = [];
+    const { controllers } = parseAllControllers();
+    const unscoped = new Set<string>();
 
-    for (const file of controllerFiles(controllersRoot)) {
-      const source = readFileSync(file, "utf8");
+    for (const controller of controllers) {
       // A bare `@Get()` is the collection route; `@Get(":id")` and `@Get("spend")`
       // address a single thing and are pinned by their own 404 tests.
-      if (!/@Get\(\)/.test(source)) continue;
-      const path = /@Controller\("([^"]+)"\)/.exec(source)?.[1];
-      if (path === undefined) throw new Error(`${file} has a @Get() but no @Controller("…") path`);
-      if (registered.has(path) || path in NOT_A_TENANT_LIST) continue;
-      unscoped.push(path);
+      const hasBareGet = controller.routes.some((route) => route.verb === "Get" && route.bare);
+      if (!hasBareGet) continue;
+      if (registered.has(controller.path) || controller.path in NOT_A_TENANT_LIST) continue;
+      unscoped.add(controller.path);
     }
 
     expect(
-      unscoped,
-      `These controllers list rows and no test proves the list is scoped to one org: ${unscoped.join(", ")}. ` +
+      [...unscoped],
+      `These controllers list rows and no test proves the list is scoped to one org: ${[...unscoped].join(", ")}. ` +
         "Add an entry to LIST_ENDPOINTS in this file (a seed that creates one row and names every branch's URL), " +
         "or, if the endpoint returns nothing tenant-owned, say so in NOT_A_TENANT_LIST with a reason.",
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The broader property: org isolation does not depend on a developer
+ * remembering `@UseGuards(ActiveOrgGuard)` on each new controller. `@OrgId()`
+ * already throws loudly when used on an unguarded route (see org-id.decorator.ts)
+ * — but only on a route actually exercised, and only if it reads orgId through
+ * that decorator at all. A controller that reads orgId some other way, or a
+ * write-only controller nobody wrote a request against yet, is caught by
+ * nothing at runtime. This is the fail-closed backstop: every route in every
+ * controller must be ActiveOrgGuard-protected, explicitly anonymous (no
+ * session, so no organization to be active in — `health`, for instance), or
+ * carry `@NotOrgScoped("reason")` (`invitations`, for instance — a pre-org
+ * state where the concept does not apply). A route with none of the three
+ * fails here, by name, rather than by however it happens to misbehave in
+ * production.
+ */
+describe("every org-scoped controller route is protected by the guard", () => {
+  it("finds routes to guard — a scan that matches nothing proves nothing below it", () => {
+    const { controllers } = parseAllControllers();
+    const routeCount = controllers.reduce((total, c) => total + c.routes.length, 0);
+    expect(routeCount).toBeGreaterThanOrEqual(10);
+  });
+
+  it("guards, excuses anonymously, or excuses by name — every route, no fourth option", () => {
+    const { controllers } = parseAllControllers();
+    const unprotected: string[] = [];
+
+    for (const controller of controllers) {
+      for (const route of controller.routes) {
+        const anonymous = controller.classAnonymous || route.anonymous;
+        const guarded = controller.classGuarded || route.guarded;
+        if (anonymous || guarded || controller.notOrgScopedReason !== null) continue;
+        unprotected.push(`${controller.path} ${route.verb.toUpperCase()} ${route.methodName}()`);
+      }
+    }
+
+    expect(
+      unprotected,
+      "These routes are reachable by an authenticated caller with no proof that they are " +
+        "scoped to an organization: nothing binds them to ActiveOrgGuard, and nothing says " +
+        `they legitimately run outside org scope: ${unprotected.join(", ")}. ` +
+        "Add `@UseGuards(ActiveOrgGuard)` (class-level, unless only one route needs it), or " +
+        "`@AllowAnonymous()` if the route genuinely runs with no session, or " +
+        '`@NotOrgScoped("reason")` on the controller if the organization concept does not ' +
+        "apply here — see org/not-org-scoped.decorator.ts.",
     ).toEqual([]);
   });
 });

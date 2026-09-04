@@ -1,5 +1,6 @@
 import { Controller, Get } from "@nestjs/common";
 import { InvitationsRepository } from "./invitations.repository";
+import { NotOrgScoped } from "./not-org-scoped.decorator";
 import { UserId } from "./user-id.decorator";
 
 /**
@@ -14,6 +15,9 @@ import { UserId } from "./user-id.decorator";
  * read the invitations addressed to themselves.
  */
 @Controller("org")
+@NotOrgScoped(
+  "an invited account has no active organization yet, which is the entire situation this answers; scoped instead to the session's own user id",
+)
 export class InvitationsController {
   constructor(private readonly invitations: InvitationsRepository) {}
 
