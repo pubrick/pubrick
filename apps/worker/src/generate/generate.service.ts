@@ -16,8 +16,13 @@ import {
   WRITER,
   withRunFailure,
 } from "@pubrick/ai";
-import { type GenerateJob, PermanentError, type RunFailure } from "@pubrick/shared";
-import { z } from "zod";
+import {
+  type BriefRunInput,
+  briefRunInputSchema,
+  type GenerateJob,
+  PermanentError,
+  type RunFailure,
+} from "@pubrick/shared";
 import {
   type ClaimedRun,
   type FenceOutcome,
@@ -100,20 +105,6 @@ function redactInPlace(error: unknown, secret: string | undefined): unknown {
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
-
-/**
- * `pipeline_runs.input` as this increment can execute it.
- *
- * Parsed here rather than trusted, because it is a jsonb column: a row written
- * by an older build, or by a future `kind: "topic"` producer this worker does
- * not understand yet, must fail the run with a sentence rather than throw a
- * `TypeError` deep inside a step and be retried until the attempts run out.
- */
-const briefInputSchema = z.object({
-  kind: z.literal("brief"),
-  text: z.string().min(1),
-  channelIds: z.array(z.string().uuid()).min(1),
-});
 
 type ModelFactory = (credential: AiCredential, modelId?: string) => ReturnType<typeof resolveModel>;
 
@@ -518,8 +509,23 @@ export class GenerateService {
     }
   }
 
-  private parseInput(input: unknown): z.infer<typeof briefInputSchema> {
-    const parsed = briefInputSchema.safeParse(input);
+  /**
+   * `pipeline_runs.input` as this increment can execute it.
+   *
+   * Parsed rather than trusted, because it is a jsonb column: a row written by
+   * an older build, or by a future `kind: "topic"` producer this worker does
+   * not understand yet, must fail the run with a sentence rather than throw a
+   * `TypeError` deep inside a step and be retried until the attempts run out.
+   *
+   * The schema is `@pubrick/shared`'s — the same declaration `pipeline_runs.input`
+   * is typed from, so the column's shape and the parse cannot describe different
+   * things. Deliberately the BRIEF MEMBER (`briefRunInputSchema`) and not the
+   * column-wide `runInputSchema`: they are the same object while `brief` is the
+   * only kind, and the day a second one exists this must keep refusing what this
+   * build cannot execute.
+   */
+  private parseInput(input: unknown): BriefRunInput {
+    const parsed = briefRunInputSchema.safeParse(input);
     if (parsed.success) return parsed.data;
     const detail = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)

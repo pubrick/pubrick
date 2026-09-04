@@ -1,6 +1,98 @@
 import { z } from "zod";
 
 /**
+ * GENERATION RUN LIFECYCLE — the one declaration, for every package that
+ * stores, moves or paints a run's status.
+ *
+ * Here rather than beside the column for the reason `CONTENT_STATUSES` gives:
+ * `apps/web` cannot depend on `@pubrick/db` and had kept a hand-written copy of
+ * this list, with a comment saying it was a copy and nothing anywhere comparing
+ * the two. `@pubrick/db` types `pipeline_runs.status` with it and builds that
+ * column's CHECK constraint from it, so a status still cannot be added without
+ * a migration — which is the point `enumCheck` argues at length.
+ *
+ * `awaiting_review` is deliberately NOT a member: nothing transitions into it
+ * yet, and a status no code can reach is a decision deferred without an owner.
+ * When it arrives it arrives here, and the compiler then names every place that
+ * has to decide what it means — see `LIVE_RUN_STATUSES` below.
+ */
+export const RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+/**
+ * A RUN THE QUEUE STILL OWNS: it has a pg-boss generate job behind it, it may
+ * spend the org's money at any moment, and a handler may claim it.
+ *
+ * This was spelled as the literal `["queued", "running"]` in SIX places across
+ * two apps — the brand delete's job cancellation, the cancel guard, the queue
+ * strip's `open` filter, the concurrency cap's count, the worker's fence claim
+ * and the dead-letter consumer's write. All six ask the same question, and the
+ * answer for a status that does not exist yet has to be given once rather than
+ * six times.
+ *
+ * `as const satisfies` rather than a `readonly RunStatus[]` annotation: both
+ * make a typo a compile error, but this one keeps the literal member types,
+ * which is what makes `Exclude<RunStatus, LiveRunStatus>` — and every `Record`
+ * keyed on it — exhaustive by construction.
+ */
+export const LIVE_RUN_STATUSES = ["queued", "running"] as const satisfies readonly RunStatus[];
+export type LiveRunStatus = (typeof LIVE_RUN_STATUSES)[number];
+
+/** The complement: every status a run can no longer be moved out of by the queue. */
+export type SettledRunStatus = Exclude<RunStatus, LiveRunStatus>;
+
+/** Is the queue still going to act on this run? */
+export function isLiveRunStatus(status: RunStatus): status is LiveRunStatus {
+  return LIVE_RUN_STATUSES.some((live) => live === status);
+}
+
+/**
+ * A settled run the queue strip keeps carrying until a human clears it.
+ *
+ * A failed or cancelled run creates no content item, so if its strip entry
+ * vanished on its own the outcome would be invisible everywhere; a human
+ * dismissing it is the acknowledgement. This is the second arm of the `open`
+ * filter, and it used to be a second literal inside the same query as the
+ * first.
+ */
+export const DISMISSABLE_RUN_STATUSES = [
+  "failed",
+  "cancelled",
+] as const satisfies readonly SettledRunStatus[];
+export type DismissableRunStatus = (typeof DISMISSABLE_RUN_STATUSES)[number];
+
+/**
+ * A settled run the strip does NOT carry: it finished and left a draft behind,
+ * so the draft is where the reader looks.
+ */
+const OFF_STRIP_RUN_STATUSES = ["succeeded"] as const satisfies readonly SettledRunStatus[];
+
+/**
+ * EVERY RUN STATUS IS CLASSIFIED ABOVE, AND THIS LINE IS WHAT SAYS SO.
+ *
+ * The three sets are spelled independently on purpose — derive one of them from
+ * the other two and this assertion becomes a tautology, which is precisely the
+ * kind of guard that reads as protection and protects nothing. As written, a
+ * status added to `RUN_STATUSES` and classified nowhere makes the annotation
+ * below resolve to that status's own literal type, so `= true` stops compiling
+ * with the missing member named in the error:
+ *
+ *   Type 'true' is not assignable to type '"awaiting_review"'.
+ *
+ * That is the FIRST of the compile errors a new status has to answer. The rest
+ * follow from the sets: `Record<SettledRunStatus, …>` in the api's cancel and
+ * dismiss refusals, and `Record<RunStatus, …>` for the web's badge colors.
+ */
+type UnclassifiedRunStatus = Exclude<
+  RunStatus,
+  LiveRunStatus | DismissableRunStatus | (typeof OFF_STRIP_RUN_STATUSES)[number]
+>;
+const _everyRunStatusIsClassified: [UnclassifiedRunStatus] extends [never]
+  ? true
+  : UnclassifiedRunStatus = true;
+void _everyRunStatusIsClassified;
+
+/**
  * Upper bound on the brief a run is started from. Deliberately smaller than
  * `MAX_BODY_LENGTH` (4096, the cap on the text a post actually carries): a
  * brief is an instruction to the model, not the draft, and every character of
@@ -174,3 +266,68 @@ export type RunFailure = (typeof RUN_FAILURES)[number];
 export function isRunFailure(value: unknown): value is RunFailure {
   return typeof value === "string" && (RUN_FAILURES as readonly string[]).includes(value);
 }
+
+/**
+ * WHAT A RUN WAS ASKED TO PRODUCE — `pipeline_runs.input`, as ONE schema.
+ *
+ * A jsonb column has no shape the database can check, so its shape is whatever
+ * the last writer put there. This column had three descriptions of it: a
+ * hand-written type on the drizzle `$type<>()`, an identical hand-written copy
+ * in the web, and the worker's zod parse — and only the parse could notice a
+ * change, at runtime, on one row at a time. Now the type IS the parse's
+ * inference, so the column, the browser and the worker cannot describe it
+ * differently.
+ *
+ * `kind` is discriminated from the start so a watched source can add
+ * `"topic"` without a migration.
+ */
+export const briefRunInputSchema = z.object({
+  kind: z.literal("brief"),
+  text: z.string().min(1),
+  channelIds: z.array(z.string().uuid()).min(1),
+});
+export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
+
+/**
+ * Everything the column may hold — one member today.
+ *
+ * Kept as a separate name from `briefRunInputSchema` because the two answer
+ * different questions the day a second `kind` exists: this one is "what may be
+ * stored", and the brief member is "what THIS worker build can execute". The
+ * worker parses with the member, so a `topic` run reaching a build that cannot
+ * run one fails the run with a sentence instead of being accepted and then
+ * crashing inside a step.
+ */
+export const runInputSchema = briefRunInputSchema;
+export type RunInput = z.infer<typeof runInputSchema>;
+
+/**
+ * ONE ENTRY PER FINISHED STEP of a run — `pipeline_runs.steps`, as ONE schema.
+ *
+ * Keyed `researcher | writer | editor | factcheck` or `adapter:<channelId>` — a
+ * single `adapter` key would make a crash mid-fan-out re-run every channel that
+ * already succeeded, which is the exact re-spend checkpoints exist to prevent.
+ * A key's presence means "skip on resume".
+ *
+ * `failed` IS a member even though no writer produces one today. It is what the
+ * COLUMN may contain — the web's run receipt already renders a failed step from
+ * it — and narrowing the stored shape to the one arm the current worker writes
+ * would delete a reader's branch on the strength of today's writer. The writer's
+ * own narrower shape is derived from this one in `apps/worker` rather than
+ * declared beside it, so the two cannot describe different columns.
+ *
+ * `output` and `usage` are `unknown` because they are jsonb inside jsonb: their
+ * shape is whatever the worker build that wrote them produced, and every reader
+ * narrows before using them.
+ */
+export const runStepCheckpointSchema = z.object({
+  status: z.enum(["succeeded", "failed"]),
+  output: z.unknown().optional(),
+  usage: z.unknown().optional(),
+  finishedAt: z.string().optional(),
+});
+export type RunStepCheckpoint = z.infer<typeof runStepCheckpointSchema>;
+
+/** The checkpoint map exactly as the column holds it. */
+export const runStepsSchema = z.record(z.string(), runStepCheckpointSchema);
+export type RunSteps = z.infer<typeof runStepsSchema>;

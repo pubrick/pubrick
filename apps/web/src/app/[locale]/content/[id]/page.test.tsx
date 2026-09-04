@@ -1,3 +1,4 @@
+import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
 import {
   adaptationUpdateSchema,
   allSentencesAi,
@@ -24,11 +25,6 @@ import { ApiError, api, apiVoid } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
 const mockApiVoid = vi.mocked(apiVoid);
-
-type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
-type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
-/** The api's verdict, the seventh value included — see `@pubrick/shared`. */
-type DeliveryOutcome = AdaptationStatus | "unknown";
 
 type Adaptation = {
   id: string;

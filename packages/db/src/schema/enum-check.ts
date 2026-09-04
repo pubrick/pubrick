@@ -25,16 +25,24 @@ import { type AnyPgColumn, check } from "drizzle-orm/pg-core";
  * That is the point. Every status this product has is load-bearing in a
  * transition table somewhere, and a status that ships without a migration is a
  * status that shipped without anyone reading the transitions — `RUN_STATUSES`
- * already says so in prose ("Increment 2 adds it with its own migration"), and
- * this makes the prose enforceable. `schema-enum-check.test.ts` is the other
- * half: it fails when an enum column has no check, so the pair cannot drift.
+ * already says so in prose ("when it arrives it arrives here"), and this makes
+ * the prose enforceable. `schema-enum-check.test.ts` is the other half: it
+ * fails when an enum column has no check, so the pair cannot drift.
+ *
+ * "TWO PLACES" IS THE COLUMN AND THE MIGRATION, NOT TWO COPIES OF THE LIST.
+ * The lists themselves are declared once, in `@pubrick/shared`, and this
+ * package imports them: the web has no database dependency and must not grow
+ * one, so a status list restated here is a status list the browser keeps a
+ * hand-written copy of. What the constraint adds is the SQL half — a value set
+ * the database enforces rather than one the ORM merely claims.
  *
  * The literals are interpolated with `sql.raw` rather than bound as parameters
  * because this expression is DDL — drizzle-kit renders it into a migration
  * file, where a `$1` placeholder has nothing to bind to. Safe by construction
  * and not by trust: every value comes from a `readonly [...]` of string
- * literals declared in this package, never from input, and `assertQuotable`
- * refuses anything that could close the quote it is being placed inside.
+ * literals declared in this package or in `@pubrick/shared` — never from input
+ * — and `assertQuotable` refuses anything that could close the quote it is
+ * being placed inside.
  */
 export function enumCheck(name: string, column: AnyPgColumn, values: readonly string[]) {
   const list = values.map(assertQuotable).join(", ");

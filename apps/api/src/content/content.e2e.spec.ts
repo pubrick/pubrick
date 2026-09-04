@@ -1615,17 +1615,16 @@ describe.skipIf(!url)("content e2e", () => {
       expect(patched.body).toMatchObject({ status: "failed", deliveryOutcome: "unknown" });
     });
 
-    /**
-     * The ratchet that replaces the deleted one. The web keyed a badge color off
-     * every value this union can carry; a status added to the adaptation column
-     * without being added to `DELIVERY_OUTCOMES` would arrive at a screen with no
-     * color and no label for it.
+    /*
+     * DELETED: "can carry every adaptation status, plus the one the column
+     * cannot hold". It compared `DELIVERY_OUTCOMES` against
+     * `schema.ADAPTATION_STATUSES + "unknown"` when those were two hand-written
+     * lists in two packages. `DELIVERY_OUTCOMES` is now literally
+     * `[...ADAPTATION_STATUSES, "unknown"]` in `@pubrick/shared`, so the
+     * assertion compared a value with itself. What it was protecting is now
+     * structural at both ends: the union is derived, and the SQL above ends
+     * `else adaptations.status`, which forwards a status it has never heard of.
      */
-    it("can carry every adaptation status, plus the one the column cannot hold", async () => {
-      const { schema } = await import("@pubrick/db");
-      const { DELIVERY_OUTCOMES } = await import("@pubrick/shared");
-      expect([...DELIVERY_OUTCOMES]).toEqual([...schema.ADAPTATION_STATUSES, "unknown"]);
-    });
   });
 
   it('400s an empty PATCH instead of 500ing on drizzle\'s "No values to set"', async () => {

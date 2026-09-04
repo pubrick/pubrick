@@ -9,9 +9,12 @@ import { schema } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
+  LIVE_RUN_STATUSES,
   PermanentError,
+  type PlatformId,
   preferredCredential,
   type RunFailure,
+  type RunStepCheckpoint,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
@@ -127,7 +130,7 @@ export type ClaimedRun = {
 /** The brand and channels one run writes for, in the shape `@pubrick/ai` takes. */
 export type RunContext = {
   brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
-  channels: Array<{ id: string; name: string; platform: (typeof schema.PLATFORMS)[number] }>;
+  channels: Array<{ id: string; name: string; platform: PlatformId }>;
 };
 
 /** What one finished run writes: the master body plus one body per channel. */
@@ -155,8 +158,22 @@ export type FenceOutcome = "held" | "lost" | "gone" | "cancelled" | "finished";
  */
 export type TerminalOutcome = FenceOutcome | "no-channels";
 
-/** One step's stored result. `usage` is the ledger rows that step produced. */
-export type StepCheckpoint = {
+/**
+ * One step's stored result, AS THIS WORKER WRITES IT.
+ *
+ * Narrower than what the column may hold, on both axes, and derived from
+ * `RunStepCheckpoint` (`@pubrick/shared`) rather than declared beside it: every
+ * optional half is one this writer always fills, and `succeeded` is the only
+ * arm it produces — a step that breaks writes no checkpoint at all, the error
+ * lands on the run. The reader in apps/web still renders a `failed` one, which
+ * is why the COLUMN keeps that arm; narrowing the stored shape to today's
+ * writer would delete a branch on the strength of who happens to write today.
+ *
+ * `usage` is the ledger rows that step produced — `unknown` on the column
+ * because `@pubrick/shared` cannot depend on `@pubrick/ai`, concrete here
+ * because this is the code that puts them there.
+ */
+export type StepCheckpoint = RunStepCheckpoint & {
   status: "succeeded";
   output: unknown;
   usage: UsageRecord[];
@@ -207,8 +224,9 @@ export class GenerateRepository {
    * before its next model call. A retry can always resume, and two live handlers
    * cannot both keep spending.
    *
-   * `status in ('queued','running')` is the other half, and it is load-bearing
-   * three times over. It stops a job delivered after `POST /runs/:id/cancel`
+   * `LIVE_RUN_STATUSES` — `status in ('queued','running')`, imported rather
+   * than spelled out here — is the other half, and it is load-bearing three
+   * times over. It stops a job delivered after `POST /runs/:id/cancel`
    * from flipping `cancelled` back to `running` and spending the money the user
    * just refused; it stops a run failed by `AiCredentialsRepository.delete` from
    * being resurrected; and it is what makes a second content item impossible
@@ -233,7 +251,7 @@ export class GenerateRepository {
         and(
           eq(schema.pipelineRuns.orgId, orgId),
           eq(schema.pipelineRuns.id, runId),
-          inArray(schema.pipelineRuns.status, ["queued", "running"]),
+          inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           sql`(
             ${schema.pipelineRuns.activeJobId} is null
             or split_part(${schema.pipelineRuns.activeJobId}, '#', 1) = ${jobId}
@@ -827,12 +845,17 @@ export class GenerateRepository {
    * The DLQ consumer's write: pg-boss spent every retry without a permanent
    * error ever firing, so nothing will ever run this again.
    *
-   * Guarded on `queued` OR `running`, not on `running` alone. A delivery that
-   * died before it could claim — the database was unreachable, the process was
-   * killed during boot — leaves the run at `queued`, and that is precisely the
-   * run with nothing left to move it: no job, no handler, and a strip entry that
-   * would sit "queued" forever. Both states are terminal-by-now; the fence is
-   * deliberately not consulted, because the handler that held it is gone.
+   * Guarded on `LIVE_RUN_STATUSES` — `queued` OR `running` — not on `running`
+   * alone. A delivery that died before it could claim — the database was
+   * unreachable, the process was killed during boot — leaves the run at
+   * `queued`, and that is precisely the run with nothing left to move it: no
+   * job, no handler, and a strip entry that would sit "queued" forever. Both
+   * states are terminal-by-now; the fence is deliberately not consulted,
+   * because the handler that held it is gone.
+   *
+   * That this is the same set the claim uses is not a coincidence to be spelled
+   * twice: a run the queue still owns is exactly a run the queue may give up
+   * on.
    */
   async markExhausted(orgId: string, runId: string, error: RunFailure): Promise<boolean> {
     const rows = await db
@@ -842,7 +865,7 @@ export class GenerateRepository {
         and(
           eq(schema.pipelineRuns.orgId, orgId),
           eq(schema.pipelineRuns.id, runId),
-          inArray(schema.pipelineRuns.status, ["queued", "running"]),
+          inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
         ),
       )
       .returning({ id: schema.pipelineRuns.id });

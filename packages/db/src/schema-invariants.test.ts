@@ -6,9 +6,8 @@ import { schema } from "./index.js";
 const dialect = new PgDialect();
 
 /** Every table declared in this package, by its Postgres name. */
-// Cast to `unknown` values first: `schema` also exports the enum arrays these
-// checks are built from, and a type predicate has to be assignable to the type
-// of what it narrows.
+// Cast to `unknown` values first: this module's exports are not all tables, and
+// a type predicate has to be assignable to the type of what it narrows.
 const tables = Object.values(schema as Record<string, unknown>)
   .filter((value): value is PgTable => is(value, PgTable))
   .map((table) => ({ table, config: getTableConfig(table) }));

@@ -1,6 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { BrandCreate, BrandUpdate } from "@pubrick/shared";
+import {
+  type BrandCreate,
+  type BrandUpdate,
+  isOutstandingAdaptation,
+  LIVE_RUN_STATUSES,
+} from "@pubrick/shared";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db } from "../db";
@@ -20,22 +25,16 @@ const PUBLIC_COLUMNS = {
 };
 
 /**
- * Adaptation statuses that still have a publish job behind them — the same set
- * `ChannelsRepository.delete` and `ContentRepository.reject` cancel.
+ * `isOutstandingAdaptation` (`@pubrick/shared`) is applied in memory, not as a
+ * `WHERE` clause: the lock set and the cancel set are different sets here. The
+ * delete locks every adaptation the cascade will destroy
+ * (`docs/lock-order.md`); only the outstanding ones have a job.
+ *
+ * The set itself is the same one `ChannelsRepository.delete`,
+ * `ContentRepository.reject` and the worker's claim use, which is why it is
+ * imported rather than spelled out — it was spelled out in all four.
+ * `LIVE_RUN_STATUSES` is the same story for the generate jobs below.
  */
-const OUTSTANDING_ADAPTATIONS = ["queued", "scheduled", "publishing"] as const;
-
-/**
- * Applied in memory, not as a `WHERE` clause: the lock set and the cancel set
- * are different sets here. The delete locks every adaptation the cascade will
- * destroy (`docs/lock-order.md`); only the outstanding ones have a job.
- */
-function isOutstanding(status: (typeof schema.ADAPTATION_STATUSES)[number]): boolean {
-  return (OUTSTANDING_ADAPTATIONS as readonly string[]).includes(status);
-}
-
-/** Run statuses that still have a generate job behind them. */
-const OUTSTANDING_RUNS = ["queued", "running"] as const;
 
 @Injectable()
 export class BrandsRepository {
@@ -166,7 +165,7 @@ export class BrandsRepository {
         .for("update");
 
       for (const adaptation of doomed) {
-        if (!isOutstanding(adaptation.status)) continue;
+        if (!isOutstandingAdaptation(adaptation.status)) continue;
         await this.queue.cancelPublish(tx, adaptation.id, orgId);
         await tx
           .update(schema.adaptations)
@@ -183,7 +182,7 @@ export class BrandsRepository {
           and(
             eq(schema.pipelineRuns.orgId, orgId),
             eq(schema.pipelineRuns.brandId, id),
-            inArray(schema.pipelineRuns.status, [...OUTSTANDING_RUNS]),
+            inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           ),
         );
       for (const run of runs) await this.queue.cancelGenerate(tx, run.id, orgId);

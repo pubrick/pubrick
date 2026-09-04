@@ -1,6 +1,101 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
 
+/**
+ * DRAFT LIFECYCLE — the one declaration of it, for every package that stores,
+ * validates or paints a content item's status.
+ *
+ * It lives in `@pubrick/shared` rather than beside the column it bounds because
+ * a status is product vocabulary, not a database artefact, and every consumer
+ * already depends on this package: `@pubrick/db` types `content_items.status`
+ * with it AND builds that column's CHECK constraint from it, `apps/api` derives
+ * its editable/pinned split by `Exclude`-ing from it, and `apps/web` — which
+ * has no database dependency and must not grow one — keys its badge colors on
+ * it. It used to be declared three times over, and the copy that mattered had a
+ * comment saying it was a copy and no test comparing it to anything.
+ *
+ * `approved` means every adaptation was queued or scheduled.
+ */
+export const CONTENT_STATUSES = ["draft", "approved", "rejected", "published", "failed"] as const;
+export type ContentStatus = (typeof CONTENT_STATUSES)[number];
+
+/** Per-channel delivery lifecycle. One declaration, for the reasons above. */
+export const ADAPTATION_STATUSES = [
+  "pending",
+  "scheduled",
+  "queued",
+  "publishing",
+  "published",
+  "failed",
+] as const;
+export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
+
+/**
+ * A DELIVERY THAT STILL HAS A PUBLISH JOB BEHIND IT — and therefore the exact
+ * set of rows a canceller must cancel and a worker may still send.
+ *
+ * `scheduled` is a job waiting on its `startAfter`, `queued` is one waiting for
+ * a worker, and `publishing` is one mid-attempt whose transient-retry chain is
+ * still live. `pending` and `failed` have no job; `published` is history.
+ *
+ * FOUR CALL SITES SPELLED THIS OUT AS A LITERAL, in two apps and from two
+ * directions — "what must I cancel?" (`BrandsRepository.delete`,
+ * `ChannelsRepository.delete`, `ContentRepository.reject`) and "what may I
+ * send?" (`PublishRepository`'s claim). They are one set because they are one
+ * fact: a live pg-boss job exists for this row. Leaving `publishing` out of the
+ * cancel half is a defect this product has already shipped once — the reject
+ * matched nothing, the retry chain ended on its own, and the adaptation sat in
+ * `publishing` for ever with no job behind it — so the two halves disagreeing
+ * is not a hypothetical.
+ *
+ * Written as a member list rather than as "not pending, failed or published"
+ * on purpose: the complement fails OPEN, and a status added later would land
+ * inside the cancel set and inside the claim set without anyone deciding it
+ * should. `adaptations_one_live_per_item_channel` is written the other way
+ * round for the opposite reason — there, admitting a new status is the safe
+ * direction.
+ */
+export const OUTSTANDING_ADAPTATION_STATUSES = [
+  "queued",
+  "scheduled",
+  "publishing",
+] as const satisfies readonly AdaptationStatus[];
+export type OutstandingAdaptationStatus = (typeof OUTSTANDING_ADAPTATION_STATUSES)[number];
+
+/** Does this adaptation still have a publish job behind it? */
+export function isOutstandingAdaptation(status: AdaptationStatus): boolean {
+  return (OUTSTANDING_ADAPTATION_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * What one delivery attempt is, or ended as — `publications.status`.
+ *
+ * `in_flight` is the only non-terminal one, and it is written BEFORE the
+ * request goes to the platform rather than after it comes back — it is the
+ * claim that says "an attempt is out there". `unknown` is what a claim becomes
+ * when the attempt never came back to resolve it: the request left, the answer
+ * did not, and nobody can say from here whether a post is live. Neither is a
+ * failure and neither is a success; a human has to look at the channel.
+ */
+export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknown"] as const;
+export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
+
+/**
+ * Who wrote the text — `content_items.origin`, `adaptations.origin` and
+ * `content_versions.origin`.
+ */
+export const CONTENT_ORIGINS = ["ai", "human"] as const;
+export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
+
+/**
+ * How much of a body a version row holds. `full` is a whole body — the only
+ * kind that can be restored, listed as history, or answer the publish gate's
+ * "did a human delete something" clause. `fragment` is a refine proposal's
+ * replacement text, which is evidence of a touch but is not a body.
+ */
+export const VERSION_SCOPES = ["full", "fragment"] as const;
+export type VersionScope = (typeof VERSION_SCOPES)[number];
+
 export const MAX_BODY_LENGTH = 4096;
 
 /**
@@ -148,16 +243,17 @@ export type ContentApprove = z.infer<typeof contentApproveSchema>;
  * The status is part of the pair on purpose: a re-approved adaptation is
  * `queued` again, and an older attempt's `unknown` receipt must not keep
  * describing the delivery that is currently in flight.
+ *
+ * DERIVED FROM `ADAPTATION_STATUSES` rather than spelled out beside it. "Six
+ * of the seven values are the adaptation row's own status" IS the definition,
+ * so a seventh adaptation status has to appear here — and the moment it does,
+ * every `Record<DeliveryOutcome, …>` in the web is missing a key and stops
+ * compiling, which is exactly where the decision about its color belongs.
+ * Written out by hand it would just be a shorter list than the column, and the
+ * badge lookup would answer `undefined` for the new status and paint a badge
+ * with `undefined` classes.
  */
-export const DELIVERY_OUTCOMES = [
-  "pending",
-  "scheduled",
-  "queued",
-  "publishing",
-  "published",
-  "failed",
-  "unknown",
-] as const;
+export const DELIVERY_OUTCOMES = [...ADAPTATION_STATUSES, "unknown"] as const;
 export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
 
 /** Is this string one of the outcomes? Guards a value read back off the wire. */

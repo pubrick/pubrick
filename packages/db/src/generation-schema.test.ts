@@ -1,3 +1,4 @@
+import { AI_CALL_OUTCOMES, AI_COST_SOURCES, RUN_STATUSES, VERSION_SCOPES } from "@pubrick/shared";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import { schema } from "./index.js";
@@ -19,14 +20,23 @@ describe("generation schema", () => {
     expect(schema.adaptations.origin.notNull).toBe(true);
   });
 
+  /**
+   * The ratchet `enumCheck`'s docstring argues for: a status arrives with a
+   * migration, or it does not arrive. The list itself lives in
+   * `@pubrick/shared` now — this asserts the SET, from the package whose
+   * migrations are the cost of changing it.
+   */
   it("keeps run statuses free of a status nothing can reach", () => {
     // awaiting_review arrives with increment 2, when something transitions into it.
-    expect(schema.RUN_STATUSES).toEqual(["queued", "running", "succeeded", "failed", "cancelled"]);
+    expect(RUN_STATUSES).toEqual(["queued", "running", "succeeded", "failed", "cancelled"]);
+    // And the column is bounded BY that list rather than merely alongside it.
+    expect(schema.pipelineRuns.status.enumValues).toEqual(RUN_STATUSES);
   });
 
   it("leaves cost nullable so an unpriced call cannot read as free", () => {
     expect(schema.usageLedger.costUsd.notNull).toBe(false);
-    expect(schema.COST_SOURCES).toEqual(["provider_reported", "price_table", "unknown"]);
+    expect(AI_COST_SOURCES).toEqual(["provider_reported", "price_table", "unknown"]);
+    expect(schema.usageLedger.costSource.enumValues).toEqual(AI_COST_SOURCES);
   });
 
   /**
@@ -36,11 +46,11 @@ describe("generation schema", () => {
    * file such a row as free.
    */
   it("lets a ledger row say we do not know what became of the call", () => {
-    expect(schema.CALL_OUTCOMES).toEqual(["completed", "refused", "unknown"]);
+    expect(AI_CALL_OUTCOMES).toEqual(["completed", "refused", "unknown"]);
     // Bounded BY that list rather than merely alongside it — `text("outcome")`
     // with no enum stores whatever a caller sends, and a value outside the set
     // reads as `completed` to both readers: silently free.
-    expect(schema.usageLedger.outcome.enumValues).toEqual(schema.CALL_OUTCOMES);
+    expect(schema.usageLedger.outcome.enumValues).toEqual(AI_CALL_OUTCOMES);
   });
 
   /**
@@ -63,14 +73,14 @@ describe("generation schema", () => {
   // `full` is the default because it is what every row written before fragments
   // existed already means: a whole body, restorable and listable as history.
   it("gives every existing version row the meaning it already had", () => {
-    expect(schema.VERSION_SCOPES).toEqual(["full", "fragment"]);
+    expect(VERSION_SCOPES).toEqual(["full", "fragment"]);
     expect(schema.contentVersions.scope.notNull).toBe(true);
     expect(schema.contentVersions.scope.default).toBe("full");
     // The column is bounded BY that list, not merely alongside it. Without
     // this, `text("scope")` with no enum — or one spelled out a second time and
     // left to drift — stores whatever a caller sends, and the badge's deletion
     // clause silently stops finding the level's `full` row.
-    expect(schema.contentVersions.scope.enumValues).toEqual(schema.VERSION_SCOPES);
+    expect(schema.contentVersions.scope.enumValues).toEqual(VERSION_SCOPES);
   });
 
   // A refine call has no run, so `run_id` alone cannot answer what refining a

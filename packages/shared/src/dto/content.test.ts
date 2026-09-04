@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADAPTATION_STATUSES,
   adaptationUpdateSchema,
   contentCreateSchema,
   contentUpdateSchema,
+  DELIVERY_OUTCOMES,
+  isDeliveryOutcome,
+  isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  OUTSTANDING_ADAPTATION_STATUSES,
 } from "./content.js";
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
@@ -138,5 +143,50 @@ describe("duplicate channels on create", () => {
       channelIds: [CHANNEL, CHANNEL],
     });
     expect(JSON.stringify(parsed.error?.issues)).not.toContain("belong to this brand");
+  });
+});
+
+/**
+ * The set four call sites used to spell out for themselves, in two apps and
+ * from two directions: "what must I cancel?" (`BrandsRepository.delete`,
+ * `ChannelsRepository.delete`, `ContentRepository.reject`) and "what may I
+ * send?" (`PublishRepository`'s claim). One fact — a live pg-boss publish job
+ * exists for this row — so one list, and these are what notice a member moving.
+ *
+ * The complement matters as much as the set: `pending` and `failed` have no job
+ * to cancel, and `published` is history. `publishing` was once missing from the
+ * cancel half, and a reject during a retry chain then matched nothing, leaving
+ * the adaptation there for ever with no job behind it.
+ */
+describe("which deliveries still have a publish job", () => {
+  it("is exactly the three statuses a job is behind", () => {
+    expect([...OUTSTANDING_ADAPTATION_STATUSES]).toEqual(["queued", "scheduled", "publishing"]);
+  });
+
+  it("answers for every adaptation status, and leaves the three with no job out", () => {
+    expect(ADAPTATION_STATUSES.filter((s) => !isOutstandingAdaptation(s))).toEqual([
+      "pending",
+      "published",
+      "failed",
+    ]);
+  });
+});
+
+/**
+ * The api's `deliveryOutcome` is the adaptation column plus the one value the
+ * column cannot hold. Derived rather than listed, so this asserts the SHAPE of
+ * the derivation — that nothing but `unknown` was added, and that the column's
+ * own order is preserved — rather than re-listing the members.
+ */
+describe("what the wire can say about a delivery", () => {
+  it("adds exactly one value to the adaptation column's own", () => {
+    expect(
+      DELIVERY_OUTCOMES.filter((o) => !(ADAPTATION_STATUSES as readonly string[]).includes(o)),
+    ).toEqual(["unknown"]);
+  });
+
+  it("recognises every one of them, and nothing else", () => {
+    for (const outcome of DELIVERY_OUTCOMES) expect(isDeliveryOutcome(outcome)).toBe(true);
+    expect(isDeliveryOutcome("in_flight")).toBe(false);
   });
 });

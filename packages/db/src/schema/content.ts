@@ -1,18 +1,7 @@
+import { PLATFORM_IDS } from "@pubrick/shared";
 import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { enumCheck } from "./enum-check.js";
-
-export const PLATFORMS = [
-  "telegram",
-  "vk",
-  "dzen",
-  "vc_ru",
-  "max",
-  "bluesky",
-  "mastodon",
-  "x",
-] as const;
-export type Platform = (typeof PLATFORMS)[number];
 
 export const brands = pgTable(
   "brands",
@@ -45,7 +34,7 @@ export const channels = pgTable(
     brandId: uuid("brand_id")
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
-    platform: text("platform", { enum: PLATFORMS }).notNull(),
+    platform: text("platform", { enum: PLATFORM_IDS }).notNull(),
     name: text("name").notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
     credentialsEncrypted: text("credentials_encrypted").notNull(),
@@ -64,6 +53,6 @@ export const channels = pgTable(
      * keyed by this string. A value outside the set resolves to no adapter and
      * no limit — see `enumCheck`.
      */
-    enumCheck("channels_platform_check", t.platform, PLATFORMS),
+    enumCheck("channels_platform_check", t.platform, PLATFORM_IDS),
   ],
 );

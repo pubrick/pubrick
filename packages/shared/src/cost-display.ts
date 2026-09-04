@@ -51,13 +51,20 @@
  * screen: three copies of a rounding rule become three different numbers.
  */
 
-/** Where a ledger row's dollar figure came from. Mirrors `COST_SOURCES` in `@pubrick/db`. */
+/**
+ * Where a ledger row's dollar figure came from — `usage_ledger.cost_source`.
+ *
+ * THE declaration, not a mirror of one. `@pubrick/db` types the column with it
+ * and builds the column's CHECK constraint from it; `@pubrick/ai` decides which
+ * member each call gets; the rules above read it. It used to be written out in
+ * all three, held together by a pin test in a fourth package.
+ */
 export const AI_COST_SOURCES = ["provider_reported", "price_table", "unknown"] as const;
 export type AiCostSource = (typeof AI_COST_SOURCES)[number];
 
 /**
- * What became of the round trip a row records. Mirrors `CALL_OUTCOMES` in
- * `@pubrick/db`.
+ * What became of the round trip a row records — `usage_ledger.outcome`, and
+ * the one declaration of it.
  *
  * `refused` is a verdict the provider delivered instead of a generation, so it
  * is genuinely free. `unknown` is a request that left and never came back, so
@@ -66,6 +73,27 @@ export type AiCostSource = (typeof AI_COST_SOURCES)[number];
  */
 export const AI_CALL_OUTCOMES = ["completed", "refused", "unknown"] as const;
 export type AiCallOutcome = (typeof AI_CALL_OUTCOMES)[number];
+
+/**
+ * How the ATTEMPT ended — `usage_ledger.status`. A row exists even when the
+ * call failed after the provider had counted tokens, which is why this and
+ * `AI_CALL_OUTCOMES` are two columns rather than one: the attempt can fail on
+ * the schema while the provider's side of the round trip completed and billed.
+ *
+ * Beside the cost vocabulary because it IS the ledger row's vocabulary, and
+ * because the alternative is where it was: hand-typed as a union in
+ * `@pubrick/ai` and as an array in `@pubrick/db`, with nothing comparing them.
+ */
+export const LEDGER_STATUSES = ["ok", "errored"] as const;
+export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
+
+/**
+ * Whose key paid for the call — `usage_ledger.key_ownership`. Always `byok`
+ * today; the column exists so the later platform-key quota queries need no
+ * migration.
+ */
+export const KEY_OWNERSHIPS = ["byok", "platform"] as const;
+export type KeyOwnership = (typeof KEY_OWNERSHIPS)[number];
 
 /**
  * A total plus the provenance needed to render it truthfully.

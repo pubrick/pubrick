@@ -6,6 +6,7 @@ import {
   type ChannelUpdate,
   decryptJson,
   encryptJson,
+  isOutstandingAdaptation,
   isUnreadableCiphertext,
   rewrapJson,
   UNREADABLE_CREDENTIALS_MESSAGE,
@@ -34,24 +35,17 @@ const PUBLIC_COLUMNS = {
 };
 
 /**
- * Adaptation statuses that still have a publish job behind them.
+ * `isOutstandingAdaptation` (`@pubrick/shared`) is applied in memory rather than
+ * as a `WHERE` clause, because the lock set and the cancel set are no longer the
+ * same set: the delete locks EVERY adaptation its cascade will destroy
+ * (`docs/lock-order.md`), and only the outstanding ones have a job to cancel.
  *
- * The same set `ContentRepository.reject` cancels, and for the same reasons:
- * `scheduled` is a job waiting on `startAfter`, `queued` is one waiting for a
- * worker, and `publishing` is one mid-attempt whose transient-retry chain is
- * still live. `pending` and `failed` have no job; `published` is history.
+ * The set is the same one `ContentRepository.reject` cancels and the worker
+ * claims from, which is why it is imported rather than restated: `scheduled` is
+ * a job waiting on `startAfter`, `queued` is one waiting for a worker, and
+ * `publishing` is one mid-attempt whose transient-retry chain is still live.
+ * `pending` and `failed` have no job; `published` is history.
  */
-const OUTSTANDING_STATUSES = ["queued", "scheduled", "publishing"] as const;
-
-/**
- * Applied in memory rather than as a `WHERE` clause, because the lock set and
- * the cancel set are no longer the same set: the delete locks EVERY adaptation
- * its cascade will destroy (`docs/lock-order.md`), and only the outstanding ones
- * have a job to cancel.
- */
-function isOutstanding(status: (typeof schema.ADAPTATION_STATUSES)[number]): boolean {
-  return (OUTSTANDING_STATUSES as readonly string[]).includes(status);
-}
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -236,7 +230,7 @@ export class ChannelsRepository {
         .for("update");
 
       for (const adaptation of doomed) {
-        if (!isOutstanding(adaptation.status)) continue;
+        if (!isOutstandingAdaptation(adaptation.status)) continue;
         await this.queue.cancelPublish(tx, adaptation.id, orgId);
         await tx
           .update(schema.adaptations)

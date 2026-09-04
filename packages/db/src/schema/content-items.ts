@@ -1,3 +1,9 @@
+import {
+  ADAPTATION_STATUSES,
+  CONTENT_ORIGINS,
+  CONTENT_STATUSES,
+  PUBLICATION_STATUSES,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   index,
@@ -12,42 +18,6 @@ import {
 import { organization } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { enumCheck } from "./enum-check.js";
-
-/** Draft lifecycle. `approved` means every adaptation was queued or scheduled. */
-export const CONTENT_STATUSES = ["draft", "approved", "rejected", "published", "failed"] as const;
-export type ContentStatus = (typeof CONTENT_STATUSES)[number];
-
-/** Per-channel delivery lifecycle. */
-export const ADAPTATION_STATUSES = [
-  "pending",
-  "scheduled",
-  "queued",
-  "publishing",
-  "published",
-  "failed",
-] as const;
-export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
-
-/**
- * What one delivery attempt is, or ended as.
- *
- * `in_flight` is the only non-terminal one, and it is written BEFORE the
- * request goes to the platform rather than after it comes back — it is the
- * claim that says "an attempt is out there". `unknown` is what a claim becomes
- * when the attempt never came back to resolve it: the request left, the answer
- * did not, and nobody can say from here whether a post is live. Neither is a
- * failure and neither is a success; a human has to look at the channel.
- */
-export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknown"] as const;
-export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
-
-/**
- * Who wrote the text. Lives here rather than in `generation.ts` because the
- * first columns using it are these two, and the reverse direction would make
- * the two schema modules import each other.
- */
-export const CONTENT_ORIGINS = ["ai", "human"] as const;
-export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
 
 export const contentItems = pgTable(
   "content_items",

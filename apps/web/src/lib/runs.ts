@@ -1,17 +1,26 @@
-import { isRunFailure, type RunFailure } from "@pubrick/shared";
+import {
+  isLiveRunStatus,
+  isRunFailure,
+  type RunFailure,
+  type RunInput,
+  type RunStatus,
+  type RunStepCheckpoint,
+  type RunSteps,
+} from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
 /**
  * A generation run's lifecycle, as the API reports it.
  *
- * A local copy of `@pubrick/db`'s `RUN_STATUSES`, exactly as this app already
- * keeps its own `ContentStatus`/`AdaptationStatus`: the web package has no
- * database dependency and must not grow one for a string union. The maps below
- * are keyed by it, so a status added upstream and mirrored here without a
- * decision is a compile error rather than a blank badge.
+ * Re-exported from `@pubrick/shared`, which is where the list is declared. It
+ * used to be a hand-written COPY of `@pubrick/db`'s, justified by this app
+ * having no database dependency — true, and not a reason to write the list
+ * twice, since every screen here already imports the package that now holds it.
+ * Nothing compared the two, so a status added upstream reached this app as a
+ * `RUN_BADGE_STATUS` lookup returning `undefined` and a badge rendered with
+ * `undefined` classes.
  */
-export const RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
-export type RunStatus = (typeof RUN_STATUSES)[number];
+export { RUN_STATUSES, type RunStatus } from "@pubrick/shared";
 
 /**
  * The five status colors (constitution) mapped from every run status that
@@ -31,15 +40,20 @@ export const RUN_BADGE_STATUS: Record<RunStatus, StatusBadgeStatus> = {
   cancelled: "draft",
 };
 
-/** Statuses from which nothing further happens on its own — where polling stops. */
-const TERMINAL_RUN_STATUSES = [
-  "succeeded",
-  "failed",
-  "cancelled",
-] as const satisfies readonly RunStatus[];
-
+/**
+ * Statuses from which nothing further happens on its own — where polling stops.
+ *
+ * THE COMPLEMENT OF `LIVE_RUN_STATUSES`, computed, not listed. It was listed —
+ * `["succeeded", "failed", "cancelled"]` — and that made it the one spelling of
+ * this partition that would answer a NEW status differently from the six that
+ * spell out the live half: a status in neither list is not live (so nothing
+ * will move it) and not terminal (so this screen polls it for ever, and its
+ * un-reached steps say "waiting" about a run that is over). "The queue is not
+ * going to touch this again" and "stop asking" are one fact, so they get one
+ * definition and the negation says which side this app is asking from.
+ */
 export function isTerminalRunStatus(status: RunStatus): boolean {
-  return (TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(status);
+  return !isLiveRunStatus(status);
 }
 
 /**
@@ -67,8 +81,8 @@ export const RUN_STEP_BADGE_STATUS: Record<RunStepState, StatusBadgeStatus> = {
  */
 export const OPEN_RUNS_POLL_INTERVAL_MS = 5000;
 
-/** What a run was asked to produce. `kind` is discriminated upstream for later increments. */
-export type RunInput = { kind: "brief"; text: string; channelIds: string[] };
+/** What a run was asked to produce — the column's own schema, inferred. */
+export type { RunInput } from "@pubrick/shared";
 
 /** `GET /api/runs` — the strip's shape. No `steps`: see `RunDetail`. */
 export type Run = {
@@ -93,16 +107,18 @@ export type Run = {
 };
 
 /**
- * One finished step, as checkpointed by the worker.
+ * One finished step, as checkpointed by the worker — the column's own schema.
  *
- * `output` is the step's own model output, `unknown` because it is a jsonb
- * column and its shape is whatever the worker build that wrote it produced.
- * The readers below narrow it; nothing else in this app may touch it raw.
+ * This app used to declare a THIRD shape for it, narrower than the column's by
+ * two fields; the worker declares a narrower one still, for what it writes.
+ * `output` is the step's own model output, `unknown` because it is jsonb inside
+ * jsonb and its shape is whatever the worker build that wrote it produced. The
+ * readers below narrow it; nothing else in this app may touch it raw.
  */
-export type RunStepCheckpoint = { status: "succeeded" | "failed"; output?: unknown };
+export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 
 /** `GET /api/runs/:id` — the receipt's shape, which adds the checkpoint map. */
-export type RunDetail = Run & { steps: Record<string, RunStepCheckpoint> };
+export type RunDetail = Run & { steps: RunSteps };
 
 /**
  * The five roles, in the order the worker runs them. `adapter` is one row for

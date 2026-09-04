@@ -1,40 +1,17 @@
-import type { DeliveryOutcome } from "@pubrick/shared";
+import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
-
-/**
- * The two lifecycles the content screens render, and the colors they wear.
- *
- * Local copies of `@pubrick/db`'s `CONTENT_STATUSES` / `ADAPTATION_STATUSES`,
- * for the reason `lib/runs.ts` already states for `RUN_STATUSES`: the web
- * package has no database dependency and must not grow one for a string union.
- * They lived inline in `content/page.tsx` and `content/[id]/page.tsx` — two
- * copies of the same union and two copies of the same color map, which is one
- * copy too many now that both screens also have to agree about what "in
- * flight" means.
- */
-export const CONTENT_STATUSES = ["draft", "approved", "rejected", "published", "failed"] as const;
-export type ContentStatus = (typeof CONTENT_STATUSES)[number];
-
-export const ADAPTATION_STATUSES = [
-  "pending",
-  "scheduled",
-  "queued",
-  "publishing",
-  "published",
-  "failed",
-] as const;
-export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
 
 /**
  * What actually happened to one channel's post: the api's own
  * `deliveryOutcome` field, re-exported so the badge map below is keyed on the
  * same union the response carries.
  *
- * It is `@pubrick/shared`'s, not a local copy, precisely because it is a WIRE
- * field — the reason `ADAPTATION_STATUSES` above is a copy does not reach it.
- * The seven values and what each of them means are documented there; the one
- * this screen exists to get right is `unknown`, a send whose answer never came
- * back, which is neither a success nor a failure.
+ * `@pubrick/shared` derives it as `[...ADAPTATION_STATUSES, "unknown"]`, so a
+ * status added to the column arrives in this union and `DELIVERY_BADGE_STATUS`
+ * below stops compiling until somebody picks its color. The seven values and
+ * what each of them means are documented there; the one this screen exists to
+ * get right is `unknown`, a send whose answer never came back, which is neither
+ * a success nor a failure.
  *
  * This module used to derive that seventh value itself, by matching a fixed
  * English sentence at the front of `lastError` — the only trace of an unknown
@@ -44,6 +21,22 @@ export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
  * channel. There is nothing left here to reword.
  */
 export type { DeliveryOutcome } from "@pubrick/shared";
+/**
+ * The two lifecycles the content screens render, and the colors they wear.
+ *
+ * The lists are `@pubrick/shared`'s and are re-exported, not copied. They were
+ * copies — first inline in `content/page.tsx` and `content/[id]/page.tsx`, then
+ * once here — on the grounds that this package has no database dependency and
+ * must not grow one for a string union. That is still true and is no longer a
+ * reason to write them twice: they live in the package every screen here
+ * already imports, beside the wire types they have to agree with.
+ */
+export {
+  ADAPTATION_STATUSES,
+  type AdaptationStatus,
+  CONTENT_STATUSES,
+  type ContentStatus,
+} from "@pubrick/shared";
 
 /**
  * Spec §2.4's five status colors, mapped from every outcome that exists.

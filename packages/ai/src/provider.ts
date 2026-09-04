@@ -7,12 +7,19 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 // `pnpm -r ls @ai-sdk/provider --depth 10`, which must show one version).
 import type { LanguageModelV4, SharedV4ProviderOptions } from "@ai-sdk/provider";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { PermanentError } from "@pubrick/shared";
+import { type AiProviderId, PermanentError } from "@pubrick/shared";
 import { withRunFailure } from "./classify.js";
 
-/** Providers a BYOK key can be stored for. Mirrors `AI_PROVIDERS` in `@pubrick/db`. */
-export const AI_PROVIDERS = ["google", "openrouter"] as const;
-export type AiProvider = (typeof AI_PROVIDERS)[number];
+/**
+ * Providers a BYOK key can be stored for.
+ *
+ * Re-exported from `@pubrick/shared`, not restated. This package used to keep
+ * its own copy and `@pubrick/db` a third, held together by a pin test in
+ * apps/api; there is one list now, and `AiProvider` is an alias of its member
+ * type rather than a second name for a second union.
+ */
+export { AI_PROVIDERS } from "@pubrick/shared";
+export type AiProvider = AiProviderId;
 
 /**
  * An org's key, already decrypted.

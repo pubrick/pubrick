@@ -1,3 +1,4 @@
+import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
 import { runCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
@@ -19,11 +20,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
 import { ApiError, api } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
-
-type ContentStatus = "draft" | "approved" | "rejected" | "published" | "failed";
-type AdaptationStatus = "pending" | "scheduled" | "queued" | "publishing" | "published" | "failed";
-/** The api's verdict, the seventh value included — see `@pubrick/shared`. */
-type DeliveryOutcome = AdaptationStatus | "unknown";
 
 type Adaptation = {
   id: string;

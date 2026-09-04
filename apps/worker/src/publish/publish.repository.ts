@@ -1,7 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { PublishResult } from "@pubrick/integrations";
-import { decryptJson, PUBLISH_QUEUE_OPTIONS } from "@pubrick/shared";
+import {
+  type AdaptationStatus,
+  type ContentStatus,
+  decryptJson,
+  OUTSTANDING_ADAPTATION_STATUSES,
+  type PlatformId,
+  PUBLISH_QUEUE_OPTIONS,
+} from "@pubrick/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
@@ -10,17 +17,27 @@ export type LoadedAdaptation = {
   id: string;
   orgId: string;
   channelId: string;
-  status: (typeof schema.ADAPTATION_STATUSES)[number];
+  status: AdaptationStatus;
   body: string | null;
   itemBody: string;
   /** Parent content item's status: `rejected` means do not deliver. */
-  itemStatus: (typeof schema.CONTENT_STATUSES)[number];
-  platform: (typeof schema.PLATFORMS)[number];
+  itemStatus: ContentStatus;
+  platform: PlatformId;
   attemptCount: number;
 };
 
-/** Statuses an adaptation may be in and still be legitimately publishable. */
-const CLAIMABLE_STATUSES = ["queued", "scheduled", "publishing"] as const;
+/**
+ * Statuses an adaptation may be in and still be legitimately publishable.
+ *
+ * `OUTSTANDING_ADAPTATION_STATUSES` (`@pubrick/shared`), imported rather than
+ * spelled out: "may I send this?" and "must I cancel this?" — the question the
+ * brand delete, the channel delete and `ContentRepository.reject` each asked
+ * with their own copy of this literal — are the same fact asked from two sides,
+ * namely that a live pg-boss publish job exists for this row. The two halves
+ * disagreeing is not hypothetical: `publishing` was once missing from the
+ * cancel half, and the adaptation stayed there for ever with no job behind it.
+ */
+const CLAIMABLE_STATUSES = OUTSTANDING_ADAPTATION_STATUSES;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -67,7 +84,7 @@ function nowSql() {
  * the caller is told whether it matched.
  */
 export type AttemptFence = {
-  status: (typeof schema.ADAPTATION_STATUSES)[number];
+  status: AdaptationStatus;
   attemptCount: number;
 };
 
@@ -1084,7 +1101,7 @@ export class PublishRepository {
       );
     if (rows.length === 0) return;
 
-    let nextStatus: (typeof schema.CONTENT_STATUSES)[number] | undefined;
+    let nextStatus: ContentStatus | undefined;
     if (rows.every((r) => r.status === "published")) nextStatus = "published";
     else if (rows.every((r) => r.status === "failed")) nextStatus = "failed";
     if (!nextStatus) return;

@@ -12,6 +12,7 @@ type PublishServiceCtor = typeof import("./publish.service").PublishService;
 type PublishServiceInstance = InstanceType<PublishServiceCtor>;
 type SendClaim = import("./publish.repository").SendClaim;
 type Schema = typeof import("@pubrick/db").schema;
+type AdaptationStatus = import("@pubrick/shared").AdaptationStatus;
 
 /**
  * Exercises PublishRepository's raw SQL (and PublishService.markExhausted on
@@ -175,7 +176,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    * finds after the api approved a multi-channel item and the queue got to some
    * of the channels before others.
    */
-  async function seedFanOut(statuses: readonly (typeof schema.ADAPTATION_STATUSES)[number][]) {
+  async function seedFanOut(statuses: readonly AdaptationStatus[]) {
     const [item] = await db
       .insert(schema.contentItems)
       .values({ orgId, brandId, body: "Hello world", status: "approved" })

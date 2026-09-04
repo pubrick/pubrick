@@ -1,13 +1,18 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  type AdaptationStatus,
   type AdaptationUpdate,
   type ApiErrorCode,
   allSentencesAi,
+  CONTENT_STATUSES,
   type ContentCreate,
+  type ContentStatus,
   type ContentUpdate,
   type DeliveryOutcome,
   isSameText,
+  OUTSTANDING_ADAPTATION_STATUSES,
+  type VersionScope,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -31,14 +36,6 @@ const ITEM_COLUMNS = {
   updatedAt: schema.contentItems.updatedAt,
 };
 
-/** Validated (not `as never`-cast) against this at the API boundary in `list()`. */
-type ContentStatusValue = (typeof schema.CONTENT_STATUSES)[number];
-
-type AdaptationStatusValue = (typeof schema.ADAPTATION_STATUSES)[number];
-
-/** `full` or `fragment` — whether a version row is a whole body or a refine's. */
-type VersionScopeValue = (typeof schema.VERSION_SCOPES)[number];
-
 /**
  * Item statuses in which the text is still the author's to change.
  *
@@ -61,7 +58,7 @@ type VersionScopeValue = (typeof schema.VERSION_SCOPES)[number];
  * (Telegram 400: too long, bad entities). Fixing the text is the entire point
  * of that screen.
  *
- * `as const satisfies` rather than a `readonly ContentStatusValue[]`
+ * `as const satisfies` rather than a `readonly ContentStatus[]`
  * annotation: both make a typo a compile error, but this one also keeps the
  * literal member types, which is what lets `PINNED_ITEM_MESSAGE` below be
  * exhaustive by construction.
@@ -70,11 +67,11 @@ const EDITABLE_ITEM_STATUSES = [
   "draft",
   "rejected",
   "failed",
-] as const satisfies readonly ContentStatusValue[];
+] as const satisfies readonly ContentStatus[];
 
 type EditableItemStatus = (typeof EDITABLE_ITEM_STATUSES)[number];
 /** The complement: every status in which the text is pinned. */
-type PinnedItemStatus = Exclude<ContentStatusValue, EditableItemStatus>;
+type PinnedItemStatus = Exclude<ContentStatus, EditableItemStatus>;
 
 /**
  * The 409 body, in the words of the status the user is actually looking at.
@@ -116,10 +113,10 @@ const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
 const EDITABLE_ADAPTATION_STATUSES = [
   "pending",
   "failed",
-] as const satisfies readonly AdaptationStatusValue[];
+] as const satisfies readonly AdaptationStatus[];
 
 type EditableAdaptationStatus = (typeof EDITABLE_ADAPTATION_STATUSES)[number];
-type PinnedAdaptationStatus = Exclude<AdaptationStatusValue, EditableAdaptationStatus>;
+type PinnedAdaptationStatus = Exclude<AdaptationStatus, EditableAdaptationStatus>;
 
 /** Per-status 409 body for one channel's override — exhaustive, as above. */
 const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
@@ -170,13 +167,11 @@ const UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE =
   "editing the body cannot clear this refusal, because no complete AI version of the body " +
   "was ever recorded";
 
-function isEditableItemStatus(status: ContentStatusValue): status is EditableItemStatus {
+function isEditableItemStatus(status: ContentStatus): status is EditableItemStatus {
   return EDITABLE_ITEM_STATUSES.some((editable) => editable === status);
 }
 
-function isEditableAdaptationStatus(
-  status: AdaptationStatusValue,
-): status is EditableAdaptationStatus {
+function isEditableAdaptationStatus(status: AdaptationStatus): status is EditableAdaptationStatus {
   return EDITABLE_ADAPTATION_STATUSES.some((editable) => editable === status);
 }
 
@@ -336,7 +331,7 @@ const NO_AI_EVIDENCE: AiEvidence = { bodies: [], firstFullBody: undefined };
  * what "first `full`" means: the gate, the item response and the queue all read
  * it from here rather than each picking a row for itself.
  */
-function collectAiEvidence<K, R extends { body: string; scope: VersionScopeValue }>(
+function collectAiEvidence<K, R extends { body: string; scope: VersionScope }>(
   rows: readonly R[],
   levelOf: (row: R) => K,
 ): Map<K, AiEvidence> {
@@ -483,9 +478,9 @@ export class ContentRepository {
   }
 
   async list(orgId: string, status?: string) {
-    if (status !== undefined && !(schema.CONTENT_STATUSES as readonly string[]).includes(status)) {
+    if (status !== undefined && !(CONTENT_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException(
-        `Unknown status: ${status}. Expected one of: ${schema.CONTENT_STATUSES.join(", ")}`,
+        `Unknown status: ${status}. Expected one of: ${CONTENT_STATUSES.join(", ")}`,
       );
     }
     const where = status
@@ -493,7 +488,7 @@ export class ContentRepository {
           eq(schema.contentItems.orgId, orgId),
           // Safe: membership just verified above, so the widened `string` really is one
           // of the literal statuses drizzle's column type expects.
-          eq(schema.contentItems.status, status as ContentStatusValue),
+          eq(schema.contentItems.status, status as ContentStatus),
         )
       : eq(schema.contentItems.orgId, orgId);
     const items = await db.select(ITEM_COLUMNS).from(schema.contentItems).where(where);
@@ -1267,7 +1262,7 @@ export class ContentRepository {
     tx: Tx,
     orgId: string,
     id: string,
-    status: ContentStatusValue,
+    status: ContentStatus,
   ): Promise<void> {
     await tx
       .update(schema.contentItems)
@@ -1317,7 +1312,7 @@ export class ContentRepository {
     tx: Tx,
     orgId: string,
     contentItemId: string,
-    statuses: (typeof schema.ADAPTATION_STATUSES)[number][],
+    statuses: AdaptationStatus[],
   ) {
     return tx
       .select({
@@ -1479,9 +1474,7 @@ export class ContentRepository {
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
-        "queued",
-        "scheduled",
-        "publishing",
+        ...OUTSTANDING_ADAPTATION_STATUSES,
       ]);
       await this.requireNotPublished(tx, orgId, id);
 

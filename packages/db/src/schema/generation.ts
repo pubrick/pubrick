@@ -1,4 +1,16 @@
 import {
+  AI_CALL_OUTCOMES,
+  AI_COST_SOURCES,
+  AI_PROVIDERS,
+  CONTENT_ORIGINS,
+  KEY_OWNERSHIPS,
+  LEDGER_STATUSES,
+  RUN_STATUSES,
+  type RunInput,
+  type RunSteps,
+  VERSION_SCOPES,
+} from "@pubrick/shared";
+import {
   foreignKey,
   index,
   integer,
@@ -12,101 +24,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
-import { adaptations, CONTENT_ORIGINS, contentItems } from "./content-items.js";
+import { adaptations, contentItems } from "./content-items.js";
 import { enumCheck } from "./enum-check.js";
-
-/** Model providers a BYOK key can be stored for. */
-export const AI_PROVIDERS = ["google", "openrouter"] as const;
-export type AiProvider = (typeof AI_PROVIDERS)[number];
-
-/**
- * Generation run lifecycle.
- *
- * `awaiting_review` is deliberately NOT a member: nothing in increment 1
- * transitions into it, and a status no code can reach is a decision deferred
- * without an owner. Increment 2 adds it with its own migration.
- */
-export const RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
-export type RunStatus = (typeof RUN_STATUSES)[number];
-
-/**
- * Where a ledger row's dollar figure came from. `unknown` is a real outcome —
- * OpenRouter's cost field is optional and the price table has a long tail — and
- * it is why `cost_usd` is nullable: summing a missing cost as zero renders a
- * confident, wrong number.
- */
-export const COST_SOURCES = ["provider_reported", "price_table", "unknown"] as const;
-export type CostSource = (typeof COST_SOURCES)[number];
-
-/** A ledger row exists even when the call failed after the provider counted tokens. */
-export const LEDGER_STATUSES = ["ok", "errored"] as const;
-export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
-
-/**
- * Whether we know what the provider did with this round trip — the same
- * distinction `publications.status` draws for a delivery, drawn here for a
- * charge.
- *
- * `status` says how the ATTEMPT ended. This says what happened to the money,
- * and only these three answers are honest:
- *
- * - `completed` — the round trip came back. Whether we could parse it or liked
- *   it is `status`'s business; the provider's side of it is over and its tokens
- *   are on the row.
- * - `refused` — the provider answered with a NON-2xx HTTP status instead of a
- *   generation: a 429, a 401, a 400. A verdict delivered in place of work, so
- *   the call really did cost nothing.
- * - `unknown` — the request was dispatched and we never learned what came of
- *   it: a timeout, a socket reset, a 200 whose body the provider package could
- *   not parse, a transport error carrying no status, an abort. Google bills a
- *   completed generation whether or not the client received it and OpenRouter
- *   charges on upstream completion, so this row may be a full charge.
- *
- * NULL is what rows written before this column carry. The readers treat it as
- * `completed`, which is exactly the meaning those rows already had — nothing
- * can retroactively know which of the three a historical failure was, and
- * guessing `unknown` would stamp "≥" on every old org's lifetime total.
- */
-export const CALL_OUTCOMES = ["completed", "refused", "unknown"] as const;
-export type CallOutcome = (typeof CALL_OUTCOMES)[number];
-
-/**
- * Whose key paid for the call. Always `byok` in increment 1 — the column exists
- * now so the later platform-key quota queries need no migration.
- */
-export const KEY_OWNERSHIPS = ["byok", "platform"] as const;
-export type KeyOwnership = (typeof KEY_OWNERSHIPS)[number];
-
-/**
- * How much of a body a version row holds. `full` is a whole body — the only
- * kind that can be restored, listed as history, or answer the publish gate's
- * "did a human delete something" clause. `fragment` is a refine proposal's
- * replacement text, which is evidence of a touch but is not a body.
- *
- * `full` is the default because it is what every row written before fragments
- * existed already is.
- */
-export const VERSION_SCOPES = ["full", "fragment"] as const;
-export type VersionScope = (typeof VERSION_SCOPES)[number];
-
-/**
- * What a run was asked to produce. `kind` is discriminated from the start so
- * watched sources can add `"topic"` without a migration.
- */
-export type RunInput = { kind: "brief"; text: string; channelIds: string[] };
-
-/**
- * One entry per finished step, keyed `researcher | writer | editor | factcheck`
- * or `adapter:<channelId>` — a single `adapter` key would make a crash
- * mid-fan-out re-run every channel that already succeeded, which is the exact
- * re-spend checkpoints exist to prevent. A key's presence means "skip on resume".
- */
-export type RunStepCheckpoint = {
-  status: "succeeded" | "failed";
-  output?: unknown;
-  usage?: unknown;
-  finishedAt?: string;
-};
 
 /** One BYOK provider key per org. */
 export const aiCredentials = pgTable(
@@ -151,10 +70,18 @@ export const pipelineRuns = pgTable(
     brandId: uuid("brand_id")
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
+    /**
+     * Typed from `runInputSchema` (`@pubrick/shared`), not from a shape written
+     * out here. A jsonb column's shape is whatever its last writer put there, so
+     * the only description of it worth having is the one the worker actually
+     * parses with — see that schema for why the `kind` discriminator is there
+     * from the start.
+     */
     input: jsonb("input").$type<RunInput>().notNull(),
     status: text("status", { enum: RUN_STATUSES }).notNull().default("queued"),
     currentStep: text("current_step"),
-    steps: jsonb("steps").$type<Record<string, RunStepCheckpoint>>().notNull().default({}),
+    /** Typed from `runStepsSchema` (`@pubrick/shared`) — see `input` above. */
+    steps: jsonb("steps").$type<RunSteps>().notNull().default({}),
     /**
      * Set on success. `set null` rather than cascade: a run is a record of what
      * was spent and when, and it must outlive the draft it produced.
@@ -288,11 +215,12 @@ export const usageLedger = pgTable(
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
     /** Null when nothing could price the call; read `cost_source` before summing. */
     costUsd: numeric("cost_usd", { precision: 12, scale: 6 }),
-    costSource: text("cost_source", { enum: COST_SOURCES }).notNull(),
+    costSource: text("cost_source", { enum: AI_COST_SOURCES }).notNull(),
     status: text("status", { enum: LEDGER_STATUSES }).notNull(),
     /**
-     * What became of the round trip — see `CALL_OUTCOMES`. Nullable ONLY so
-     * this column could be added to a populated table; every writer sets it.
+     * What became of the round trip — see `AI_CALL_OUTCOMES` in
+     * `@pubrick/shared`. Nullable ONLY so this column could be added to a
+     * populated table; every writer sets it.
      *
      * It is what separates the two failures a zero-token row cannot otherwise
      * tell apart: a 429 the provider rejected before counting anything (free)
@@ -300,7 +228,7 @@ export const usageLedger = pgTable(
      * hanging up (`unknown`). Both readers count an `unknown` row as unpriced,
      * which is what puts the "≥" on the org's total.
      */
-    outcome: text("outcome", { enum: CALL_OUTCOMES }),
+    outcome: text("outcome", { enum: AI_CALL_OUTCOMES }),
     responseMs: integer("response_ms").notNull().default(0),
     keyOwnership: text("key_ownership", { enum: KEY_OWNERSHIPS }).notNull().default("byok"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -345,7 +273,7 @@ export const usageLedger = pgTable(
      * guess about.
      */
     enumCheck("usage_ledger_provider_check", t.provider, AI_PROVIDERS),
-    enumCheck("usage_ledger_cost_source_check", t.costSource, COST_SOURCES),
+    enumCheck("usage_ledger_cost_source_check", t.costSource, AI_COST_SOURCES),
     enumCheck("usage_ledger_status_check", t.status, LEDGER_STATUSES),
     enumCheck("usage_ledger_key_ownership_check", t.keyOwnership, KEY_OWNERSHIPS),
     /**
@@ -354,7 +282,7 @@ export const usageLedger = pgTable(
      * legal while a misspelled `unkown` is refused. A value outside the set
      * would read as `completed` to both readers — silently free.
      */
-    enumCheck("usage_ledger_outcome_check", t.outcome, CALL_OUTCOMES),
+    enumCheck("usage_ledger_outcome_check", t.outcome, AI_CALL_OUTCOMES),
   ],
 );
 

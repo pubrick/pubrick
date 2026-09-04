@@ -2,9 +2,14 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type ApiErrorCode,
+  DISMISSABLE_RUN_STATUSES,
+  isLiveRunStatus,
+  LIVE_RUN_STATUSES,
   MAX_CONCURRENT_RUNS,
   RUN_LIST_STATES,
   type RunCreate,
+  type RunStatus,
+  type SettledRunStatus,
 } from "@pubrick/shared";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -57,27 +62,26 @@ const RUN_COLUMNS = {
  */
 const RUN_DETAIL_COLUMNS = { ...RUN_COLUMNS, steps: schema.pipelineRuns.steps };
 
-type RunStatusValue = (typeof schema.RUN_STATUSES)[number];
-
 /**
  * Statuses a run can still be cancelled from — the two in which something is
  * either about to spend money or is spending it right now.
  *
- * `as const satisfies` rather than a `readonly RunStatusValue[]` annotation:
- * both make a typo a compile error, but this one keeps the literal member
- * types, which is what makes the two message maps below exhaustive by
- * construction. Adding a status to `RUN_STATUSES` without deciding what cancel
- * and dismiss mean for it is then a compile error here, not a confident wrong
- * sentence in the UI.
+ * That is `LIVE_RUN_STATUSES` (`@pubrick/shared`), and it is imported rather
+ * than spelled out here: the same two-member literal stood in six places across
+ * this app and the worker, so "is a run in this status still the queue's?" had
+ * six chances to be answered differently for a status that does not exist yet.
+ *
+ * The exhaustiveness the local copy bought is unchanged, because the shared
+ * declaration is `as const satisfies readonly RunStatus[]` and so keeps its
+ * literal member types: `SettledRunStatus` is `Exclude`d from them, and the two
+ * message maps below are `Record`s over that. Adding a status to `RUN_STATUSES`
+ * without deciding what cancel and dismiss mean for it is still a compile error
+ * here, not a confident wrong sentence in the UI.
  */
-const CANCELLABLE_STATUSES = ["queued", "running"] as const satisfies readonly RunStatusValue[];
-
-type CancellableStatus = (typeof CANCELLABLE_STATUSES)[number];
-/** The complement: every status a run can no longer be moved out of. */
-type TerminalStatus = Exclude<RunStatusValue, CancellableStatus>;
+type CancellableStatus = (typeof LIVE_RUN_STATUSES)[number];
 
 /** The 409 body for cancelling, in the words of the status the user is looking at. */
-const NOT_CANCELLABLE_MESSAGE: Record<TerminalStatus, string> = {
+const NOT_CANCELLABLE_MESSAGE: Record<SettledRunStatus, string> = {
   succeeded: "This run has already finished; its draft is ready",
   failed: "This run has already failed; there is nothing left to cancel",
   cancelled: "This run has already been cancelled",
@@ -90,11 +94,11 @@ const NOT_CANCELLABLE_MESSAGE: Record<TerminalStatus, string> = {
  * the record above is keyed by status at all: "this run has already finished;
  * its draft is ready" and "there is nothing left to cancel" are three different
  * true things, and a single code plus a status argument would push the choice
- * between them into the browser. Total over `TerminalStatus` here as well, so a
+ * between them into the browser. Total over `SettledRunStatus` here as well, so a
  * new run status is a compile error twice rather than a code that silently
  * matches the wrong sentence.
  */
-const NOT_CANCELLABLE_CODE: Record<TerminalStatus, ApiErrorCode> = {
+const NOT_CANCELLABLE_CODE: Record<SettledRunStatus, ApiErrorCode> = {
   succeeded: "run_not_cancellable_succeeded",
   failed: "run_not_cancellable_failed",
   cancelled: "run_not_cancellable_cancelled",
@@ -117,8 +121,8 @@ const NOT_DISMISSABLE_CODE: Record<CancellableStatus, ApiErrorCode> = {
   running: "run_not_dismissable_running",
 };
 
-function isCancellable(status: RunStatusValue): status is CancellableStatus {
-  return CANCELLABLE_STATUSES.some((cancellable) => cancellable === status);
+function isCancellable(status: RunStatus): status is CancellableStatus {
+  return isLiveRunStatus(status);
 }
 
 /**
@@ -154,9 +158,9 @@ export class RunsRepository {
       );
     }
     const open = or(
-      inArray(schema.pipelineRuns.status, ["queued", "running"]),
+      inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
       and(
-        inArray(schema.pipelineRuns.status, ["failed", "cancelled"]),
+        inArray(schema.pipelineRuns.status, [...DISMISSABLE_RUN_STATUSES]),
         isNull(schema.pipelineRuns.dismissedAt),
       ),
     );
@@ -250,7 +254,7 @@ export class RunsRepository {
       .where(
         and(
           eq(schema.pipelineRuns.orgId, orgId),
-          inArray(schema.pipelineRuns.status, ["queued", "running"]),
+          inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
         ),
       );
     const inFlight = rows[0]?.count ?? 0;
@@ -307,7 +311,7 @@ export class RunsRepository {
    * claim waits for this transaction and then re-reads a status it must stop
    * on.
    */
-  private async lockRun(tx: Tx, orgId: string, id: string): Promise<RunStatusValue> {
+  private async lockRun(tx: Tx, orgId: string, id: string): Promise<RunStatus> {
     const rows = await tx
       .select({ status: schema.pipelineRuns.status })
       .from(schema.pipelineRuns)

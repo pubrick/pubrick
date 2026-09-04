@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import {
   ADAPTATION_STATUSES,
+  CONTENT_BADGE_STATUS,
   CONTENT_LIST_POLL_INTERVAL_MS,
   CONTENT_STATUSES,
   DELIVERY_BADGE_STATUS,
@@ -22,12 +23,16 @@ import {
  * The api ships `deliveryOutcome` now, so there is no sentence to pin and
  * nothing to read the worker's source for. What is left to check is that the
  * values the wire can carry all have a color.
+ *
+ * ALSO DELETED, on 2026-09-04: "is the one outcome the adaptation column cannot
+ * hold", which asserted `DELIVERY_OUTCOMES === [...ADAPTATION_STATUSES,
+ * "unknown"]` while those were a web copy and a `@pubrick/shared` list. Both
+ * names are the shared package's now and the union is literally that spread, so
+ * the assertion compared a value with itself. The relation it guarded is
+ * asserted where it can still fail — `packages/shared/src/dto/content.test.ts`,
+ * "adds exactly one value to the adaptation column's own".
  */
 describe("the unknown delivery outcome", () => {
-  it("is the one outcome the adaptation column cannot hold", () => {
-    expect(DELIVERY_OUTCOMES).toEqual([...ADAPTATION_STATUSES, "unknown"]);
-  });
-
   it("gives every value the api can send a color, and no value it cannot", () => {
     expect(Object.keys(DELIVERY_BADGE_STATUS).sort()).toEqual([...DELIVERY_OUTCOMES].sort());
   });
@@ -59,9 +64,17 @@ describe("what counts as in flight", () => {
   });
 });
 
+/**
+ * The list itself is `@pubrick/shared`'s and is asserted there. What only this
+ * app can answer is whether every member of it has been given one of the five
+ * colors — and the runtime check earns its place beside the `Record<
+ * ContentStatus, …>` annotation, because this app resolves the shared package
+ * from its BUILD: a stale `dist` type-checks against the old union while the
+ * screen runs against the new list.
+ */
 describe("the status unions", () => {
   it("keeps every content status colored", () => {
-    expect(CONTENT_STATUSES).toEqual(["draft", "approved", "rejected", "published", "failed"]);
+    expect(Object.keys(CONTENT_BADGE_STATUS).sort()).toEqual([...CONTENT_STATUSES].sort());
   });
 });
 

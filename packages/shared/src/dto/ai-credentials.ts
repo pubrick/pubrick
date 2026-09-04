@@ -2,16 +2,20 @@ import { z } from "zod";
 import type { CostSummary } from "../cost-display.js";
 
 /**
- * Model providers a BYOK key can be stored for.
+ * Model providers a BYOK key can be stored for — the one declaration.
  *
- * Third hand-maintained copy of one list: `@pubrick/db` owns the column enum and
- * `@pubrick/ai` owns the provider factory. Neither can import this package's
- * enum today — `@pubrick/db` does not depend on `@pubrick/shared` at all, and
- * `@pubrick/ai`'s copy predates this one — so `apps/api/src/ai-providers.spec.ts`
- * pins all three, at the type level and the value level, exactly as
- * `platforms.spec.ts` pins the platform list. A provider added to one list and
- * not the others is then a failing gate, not a 500 the first time someone saves
- * a key.
+ * It was three hand-maintained copies of one list: `@pubrick/db` had the column
+ * enum, `@pubrick/ai` had the provider factory's, and this was the zod enum the
+ * API validates bodies and path parameters against. Neither of the other two
+ * could import this one — `@pubrick/db` had no dependency on this package at
+ * all — so `apps/api/src/ai-providers.spec.ts` pinned all three at the type and
+ * value level. `@pubrick/db` now depends on this package and both other copies
+ * are gone, which is why that pin test is gone with them: it compared a value
+ * against itself.
+ *
+ * Drift used to mean a provider the API accepts and the column rejects (a 500
+ * on save), or one the column allows and no factory can build (a 500 on the
+ * first call). Neither is expressible from one list.
  */
 export const AI_PROVIDERS = ["google", "openrouter"] as const;
 export type AiProviderId = (typeof AI_PROVIDERS)[number];

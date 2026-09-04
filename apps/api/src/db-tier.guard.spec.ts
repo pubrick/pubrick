@@ -71,13 +71,16 @@ import { describe, expect, it } from "vitest";
  *
  * WHY THREE COPIES AND NOT A SHARED HELPER
  *
- * A helper would have to live somewhere every database-owning package can import from.
- * packages/db is the leaf the other two depend on and has no workspace dependency of its
- * own; putting the helper in @pubrick/shared would invert that edge, and a fourth package
- * existing only to hold one test helper is worse than what it replaces. So the copies stay —
- * and check 7 makes the duplication self-policing. Editing one copy and not the others is
- * now a named failure in all three packages instead of silent drift, which is the only cost
- * duplication actually has here.
+ * A helper would have to live somewhere every database-owning package can import from, and
+ * the only such place is @pubrick/shared. packages/db does depend on it now (the product's
+ * status enums are declared there, so the schema imports them rather than restating them),
+ * so the edge is no longer the objection — but @pubrick/shared is a RUNTIME package that
+ * ships into the browser bundle and carries no dependency but zod, and this guard reads the
+ * filesystem and parses TypeScript ASTs. Putting it there would put a test-only helper, and
+ * its compiler dependency, inside shipped code; a fourth package existing only to hold one
+ * test helper is worse still. So the copies stay — and check 7 makes the duplication
+ * self-policing. Editing one copy and not the others is now a named failure in all three
+ * packages instead of silent drift, which is the only cost duplication actually has here.
  *
  * WHAT THIS GUARD STILL DOES NOT SEE
  *
@@ -565,9 +568,9 @@ describe("database tier guard", () => {
     expect(
       drifted,
       "Copies of this guard have drifted above the shared-region marker, measured against " +
-        `${REFERENCE_COPY}. There is no shared helper on purpose — packages/db is the leaf ` +
-        "apps/api and apps/worker depend " +
-        "on, so a helper would invert that edge — and this assertion is the price: change " +
+        `${REFERENCE_COPY}. There is no shared helper on purpose — the only package all ` +
+        "three could import from is @pubrick/shared, which ships at runtime and must not " +
+        "carry a filesystem-and-AST test helper — and this assertion is the price: change " +
         "one copy above the marker, change all three identically. Below the marker they may " +
         "differ (only api and worker have a migration barrier to hold to account):",
     ).toEqual([]);

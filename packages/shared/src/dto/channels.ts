@@ -12,6 +12,15 @@ export const PLATFORM_IDS = [
 ] as const;
 
 /**
+ * One platform name. The one declaration: `@pubrick/db` types
+ * `channels.platform` with `PLATFORM_IDS` and builds that column's CHECK
+ * constraint from it, so the column and this union cannot name different sets.
+ * They used to be two hand-maintained lists held together by a pin test in
+ * apps/api.
+ */
+export type PlatformId = (typeof PLATFORM_IDS)[number];
+
+/**
  * The platforms Pubrick can actually publish to today — a subset of
  * `PLATFORM_IDS`, and the only ones a channel may be created for.
  *

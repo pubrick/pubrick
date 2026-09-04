@@ -1,21 +1,25 @@
+import type { AiCallOutcome, AiCostSource, LedgerStatus } from "@pubrick/shared";
 import { APICallError } from "ai";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { AiProvider } from "./provider.js";
 
-/** Where a ledger row's dollar figure came from. Mirrors `COST_SOURCES` in `@pubrick/db`. */
-export type CostSource = "provider_reported" | "price_table" | "unknown";
-
-/** A row exists even when the call failed after the provider had counted tokens. */
-export type UsageStatus = "ok" | "errored";
-
 /**
- * What became of one physical round trip. Mirrors `CALL_OUTCOMES` in `@pubrick/db`.
+ * The ledger row's three value sets, aliased from `@pubrick/shared` rather than
+ * hand-typed here as unions.
  *
- * `UsageStatus` says how the ATTEMPT ended; this says what happened to the
- * money. The two are independent: a round trip that `completed` can belong to
- * an attempt that went on to fail on the schema, and both rows are real spend.
+ * They were hand-typed here, hand-typed again in `@pubrick/db`, and declared a
+ * third time in `@pubrick/shared`; two of the three were held together by a pin
+ * test in apps/api and the third — `UsageStatus` — by nothing at all. An alias
+ * cannot drift from what it aliases, so a member added to the shared list
+ * arrives here, and in the column, at once.
+ *
+ * `UsageStatus` says how the ATTEMPT ended; `CallOutcome` says what happened to
+ * the money. The two are independent: a round trip that `completed` can belong
+ * to an attempt that went on to fail on the schema, and both rows are real spend.
  */
-export type CallOutcome = "completed" | "refused" | "unknown";
+export type CostSource = AiCostSource;
+export type UsageStatus = LedgerStatus;
+export type CallOutcome = AiCallOutcome;
 
 /**
  * One **physical** round trip to the provider, in the shape the ledger stores it.

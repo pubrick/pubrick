@@ -12,7 +12,11 @@ export {
   type CostSummary,
   costTotals,
   formatUsd,
+  KEY_OWNERSHIPS,
+  type KeyOwnership,
+  LEDGER_STATUSES,
   type LedgerCostTotals,
+  type LedgerStatus,
   summarizeCost,
   toLedgerCostUsd,
 } from "./cost-display.js";
