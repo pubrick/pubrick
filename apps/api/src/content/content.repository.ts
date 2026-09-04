@@ -167,6 +167,26 @@ const UNREAD_AI_DRAFT_OPEN_ONLY_MESSAGE =
   "editing the body cannot clear this refusal, because no complete AI version of the body " +
   "was ever recorded";
 
+/**
+ * Deliveries a new schedule cannot be applied to — the exact complement, within
+ * the statuses `approve` can meet, of the set it re-targets.
+ *
+ * `approve` locks and re-enqueues `pending | failed | scheduled`. `published`
+ * is history and is refused one level up (`requireNotPublished`). What is left
+ * is these two, and they are the rows the old code silently skipped while
+ * answering 200 — see `requireScheduleReachesEveryChannel`.
+ *
+ * Written as the two members rather than as "everything the target list does
+ * not contain", for the reason `OUTSTANDING_ADAPTATION_STATUSES` gives about
+ * itself: the complement fails OPEN. A seventh adaptation status would land
+ * inside a negated set without anybody deciding it should, and here that means
+ * a new status silently going back to being skipped-and-reported-as-done.
+ */
+const UNSCHEDULABLE_STATUSES = [
+  "queued",
+  "publishing",
+] as const satisfies readonly AdaptationStatus[];
+
 function isEditableItemStatus(status: ContentStatus): status is EditableItemStatus {
   return EDITABLE_ITEM_STATUSES.some((editable) => editable === status);
 }
@@ -950,6 +970,81 @@ export class ContentRepository {
   }
 
   /**
+   * Refuses a NEW SCHEDULE that cannot reach every one of the item's channels.
+   *
+   * `approve` re-targets `pending`, `failed` and `scheduled` deliveries and
+   * leaves `queued` and `publishing` alone, for reasons its own comment gives
+   * and which are not in question here: a queued send is on its way with no
+   * delay left to change, and re-enqueueing either would cancel a live job — for
+   * `publishing`, an entire transient-retry chain that may still succeed.
+   *
+   * WHAT WAS WRONG WAS THE ANSWER, NOT THE BEHAVIOUR. Setting a new time on an
+   * item whose channels were all queued matched nothing, enqueued nothing,
+   * wrote `scheduled_at` nowhere — and returned 200. The screen re-read the
+   * item, painted the delivery it was given, and the post went out at the old
+   * time. That is this project's named class: an early exit that reports the
+   * same success as real work (`requireAdaptations` above is the same class
+   * from the other end, and `reject`'s 409 on a published item is the same
+   * again).
+   *
+   * IT REFUSES RATHER THAN MOVING WHAT IT CAN. A partial answer — "two channels
+   * took the new time, one is already gone" — is a post going out at two
+   * different times from one decision, which nobody asked for and which the
+   * reader would have to notice rather than be told. Refusing changes nothing,
+   * costs nothing, and leaves one recovery to describe instead of a state to
+   * explain.
+   *
+   * ONLY A SCHEDULE. "Publish now" over the same rows still answers 200, and
+   * truthfully: the caller is asking for the post to be on its way, and a
+   * queued or publishing channel already is. There is no belief to correct, so
+   * there is nothing to refuse — and the existing behaviour that re-approving
+   * enqueues nothing for those rows is exactly right.
+   *
+   * `publishing` WINS OVER `queued` when both are present, because it is the
+   * sharper fact: one is committed and the other may already be live, and the
+   * sentence a reader needs is the one about the delivery that cannot be taken
+   * back.
+   *
+   * AN UNLOCKED READ, deliberately. `approve` does not lock `queued` or
+   * `publishing` rows — that is the whole of why it does not wait on the worker
+   * — and locking them here to decide a refusal would hand it the deadlock
+   * exposure the target set was chosen to avoid. The status it reads can change
+   * a moment later, and in the only direction that matters: an attempt that
+   * lands turns the row `published` or `failed`, and the caller's retry then
+   * succeeds. A refusal that a retry clears is the fail-safe direction; a 200
+   * that changed nothing is not.
+   */
+  private async requireScheduleReachesEveryChannel(
+    tx: Tx,
+    orgId: string,
+    id: string,
+  ): Promise<void> {
+    const committed = await tx
+      .select({ status: schema.adaptations.status })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, id),
+          inArray(schema.adaptations.status, UNSCHEDULABLE_STATUSES),
+        ),
+      );
+    if (committed.length === 0) return;
+    if (committed.some((adaptation) => adaptation.status === "publishing")) {
+      throw conflict(
+        "schedule_already_publishing",
+        "This post is being sent to one of its channels right now, so it cannot be moved to a " +
+          "new time; wait for that delivery to finish and decide from what it reports",
+      );
+    }
+    throw conflict(
+      "schedule_already_queued",
+      "This post is already queued for publishing, so it cannot be moved to a new time; reject " +
+        "it to stop the delivery, then approve it again with the time you want",
+    );
+  }
+
+  /**
    * Refuses to re-decide an item that has already gone out.
    *
    * Existence was never the only precondition: `setItemStatus` writes
@@ -1359,6 +1454,12 @@ export class ContentRepository {
    * (Rejecting DOES act on both — there the point is to stop the delivery, not
    * to move it.)
    *
+   * Skipping them is not the same as being silent about them. A request that
+   * names a NEW TIME and meets one of those rows is refused
+   * (`requireScheduleReachesEveryChannel`), because the post would otherwise go
+   * out at the old time behind a 200. A request with no time is not: "publish
+   * now" is already true of a queued or publishing channel.
+   *
    * An item that has ALREADY published every one of its adaptations is refused
    * with a 409 (`requireNotPublished`): there is nothing left to enqueue, and
    * the only lasting effect used to be overwriting `published` with `approved`.
@@ -1400,6 +1501,11 @@ export class ContentRepository {
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
+      // Only for a request that names a time: "Publish now" over a queued or
+      // publishing channel is already true of it. See the method's own comment.
+      if (scheduledAt !== null) {
+        await this.requireScheduleReachesEveryChannel(tx, orgId, id);
+      }
       // After `requireNotPublished`: an item already live in a channel gets the
       // message about the post that went out, not one about reading it. Before
       // the loop, so a refusal costs no queue work.

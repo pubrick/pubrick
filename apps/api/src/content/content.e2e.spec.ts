@@ -1060,6 +1060,174 @@ describe.skipIf(!url)("content e2e", () => {
   });
 
   /**
+   * MOVING A POST THAT IS ALREADY ON ITS WAY — the 200 that changed nothing.
+   *
+   * `approve` re-targets `pending`, `failed` and `scheduled` and leaves
+   * `queued` and `publishing` alone, which is the right behaviour and is not
+   * what these cases are about. They are about the ANSWER. An item whose only
+   * channel was already queued matched nothing, wrote no `scheduled_at`,
+   * enqueued nothing — and answered 200 with an item the screen then painted as
+   * approved, while the post went out at the time the reader had just tried to
+   * change.
+   *
+   * Driven through HTTP rather than through the repository on purpose: the
+   * thing being fixed is what a person is TOLD, and the code that carries it —
+   * the one field a screen can translate — only exists on the wire.
+   */
+  it("409s a new schedule for a post that is already queued, and names the recovery", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Already on its way", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    const when = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const refused = await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: when })
+      .expect(409);
+    expect(refused.body.code).toBe("schedule_already_queued");
+    // The sentence names the one thing that actually moves the post: reject,
+    // which cancels the queued job and returns the channel to `pending`.
+    expect(refused.body.message).toContain("reject");
+
+    // And it changed NOTHING — which is the half a 200 could also have claimed.
+    const after = await agent.get(`/api/content/${itemId}`).expect(200);
+    expect(after.body.adaptations[0].status).toBe("queued");
+    expect(after.body.adaptations[0].scheduledAt).toBeNull();
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const jobs = await db.execute(
+      `SELECT count(*)::int AS n, min(start_after)::text AS starts FROM pgboss.job
+        WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+    );
+    await pool.end();
+    const job = jobs.rows[0] as { n: number; starts: string };
+    expect(job.n).toBe(1);
+    // The one live job still fires now, not tomorrow: the queue was not touched.
+    expect(new Date(job.starts).getTime()).toBeLessThan(Date.now() + 60_000);
+  });
+
+  /**
+   * The other half of the distinction: `publishing` is not `queued`.
+   *
+   * One is committed; the other is mid-send and may already be live in the
+   * channel. Rejecting recovers the first and cannot unsend the second, so the
+   * two get different codes and different sentences — the same argument the
+   * per-status pinned-edit codes make.
+   */
+  it("409s a new schedule for a post mid-send, with a code of its own", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Going out now", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    // What `markPublishing` leaves behind.
+    {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE adaptations SET status = 'publishing', attempt_count = 1 WHERE id = '${adaptationId}'`,
+      );
+      await pool.end();
+    }
+
+    const refused = await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 24 * 3_600_000).toISOString() })
+      .expect(409);
+    expect(refused.body.code).toBe("schedule_already_publishing");
+    // No recovery is offered, because there is none: the send is out there.
+    expect(refused.body.message).not.toContain("reject");
+  });
+
+  /**
+   * A PARTIAL move is refused whole, and nothing lands.
+   *
+   * The tempting alternative is to move the channels that can move and stay
+   * quiet about the one that cannot — which produces one post going out at two
+   * different times from a single decision, discovered rather than announced.
+   * The assertion that matters is the second one: the movable channel is still
+   * `pending`, so the refusal really did roll the transaction back rather than
+   * half-applying and then complaining.
+   */
+  it("refuses a schedule that cannot reach every channel, and moves none of them", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const second = await agent
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "telegram",
+        name: "Second",
+        credentials: { botToken: "123:abc", chatId: "-1009876543210" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Two channels", channelIds: [channelId, second.body.id] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+    const queued = adaptations.find((a) => a.channelId === channelId) as { id: string };
+    const pending = adaptations.find((a) => a.channelId !== channelId) as { id: string };
+
+    // One channel committed, the other untouched — the shape a partial answer
+    // would have been tempted by.
+    {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(`UPDATE adaptations SET status = 'queued' WHERE id = '${queued.id}'`);
+      await pool.end();
+    }
+
+    const refused = await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 24 * 3_600_000).toISOString() })
+      .expect(409);
+    expect(refused.body.code).toBe("schedule_already_queued");
+
+    const after = await agent.get(`/api/content/${itemId}`).expect(200);
+    const rows = after.body.adaptations as { id: string; status: string }[];
+    expect(rows.find((a) => a.id === pending.id)?.status).toBe("pending");
+    expect(rows.find((a) => a.id === queued.id)?.status).toBe("queued");
+    expect(after.body.status).toBe("draft");
+  });
+
+  /**
+   * AND THE REQUEST THAT IS STILL HONEST AT 200: "Publish now".
+   *
+   * The refusal above is scoped to a request that names a time, and this is the
+   * assertion that keeps it scoped. A caller with no time is asking for the
+   * post to be on its way; a queued channel already is, so nothing about their
+   * belief is wrong and there is nothing to refuse. Widening the guard to every
+   * approve would turn the ordinary double-click into a 409.
+   */
+  it("still approves a queued item with no schedule, because that request is already true", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Now, again", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    const again = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    expect(again.body.adaptations[0].status).toBe("queued");
+  });
+
+  /**
    * `lockAdaptations` WALKS ITS SET `ORDER BY id`, and nothing observed it.
    *
    * The order is not decoration and not a preference: it is one half of the

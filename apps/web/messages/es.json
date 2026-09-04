@@ -278,6 +278,8 @@
     "unread_ai_draft": "Nadie ha leído todavía este borrador escrito por la IA. Ábrelo, o edítalo, antes de aprobarlo.",
     "unread_ai_draft_open_only": "Nadie ha leído todavía el texto que escribió la IA en esta publicación. Ábrela antes de aprobarla: editar el texto no basta, porque nunca se registró una versión completa de la IA.",
     "schedule_in_past": "Elige una hora futura para programar esta publicación.",
+    "schedule_already_queued": "Esta publicación ya está en cola para publicarse, así que su hora no se puede cambiar. Recházala para detener el envío y vuelve a aprobarla con la hora que quieras.",
+    "schedule_already_publishing": "Esta publicación se está enviando a uno de sus canales en este momento, así que su hora no se puede cambiar. Espera a que termine ese envío y decide según lo que informe.",
     "channels_not_in_brand": "Alguno de los canales elegidos no pertenece a esta marca. Recarga la página y vuelve a elegirlos.",
     "channel_not_found": "Este canal ya no existe: es posible que se haya eliminado.",
     "unreadable_credentials": "Pubrick ya no puede leer las credenciales guardadas de este canal: la clave de cifrado de esta instancia ha cambiado. Usa Editar para volver a guardarlas.",

@@ -101,6 +101,43 @@ export const API_ERROR_CODES = [
   "unread_ai_draft_open_only",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
+  /**
+   * A NEW TIME FOR A POST THAT IS ALREADY ON ITS WAY — the two refusals that
+   * replaced a 200 which changed nothing.
+   *
+   * `ContentRepository.approve` re-targets an item's `pending`, `failed` and
+   * `scheduled` deliveries and deliberately leaves `queued` and `publishing`
+   * alone: re-enqueueing either cancels a live job for no gain, which is the
+   * right call and stays the right call. What was wrong was the answer. A
+   * reader who set a new time on an item every one of whose channels was
+   * already queued got 200 and a screen that showed the time they picked, while
+   * the post went out at the old one — this project's own named defect class, an
+   * early exit reporting the same success as real work.
+   *
+   * It refuses whenever the schedule cannot reach EVERY channel, rather than
+   * moving the channels it can: one post going out at two different times is
+   * not what anybody asked for, and it is a state the reader would have to
+   * discover rather than be told.
+   *
+   * TWO CODES, because the two states are different facts with different things
+   * to do about them, and one sentence cannot be true of both — the same
+   * argument the pinned-status codes above make.
+   *
+   * - `schedule_already_queued`: the delivery is committed but nothing has been
+   *   sent. There IS a recovery and the sentence names it — `reject` cancels the
+   *   queued job and puts the channel back to `pending`, so rejecting and
+   *   approving again applies the new time.
+   * - `schedule_already_publishing`: a worker is talking to the platform right
+   *   now. The post may already be live, so the sentence offers no recovery and
+   *   tells the reader to wait for the attempt to land. Rejecting here would
+   *   cancel a retry chain without unsending anything.
+   *
+   * Only a SCHEDULE is refused. "Publish now" on the same item still answers
+   * 200, and honestly: a queued or publishing channel is already doing exactly
+   * what that request asks for, so nothing about the reader's belief is wrong.
+   */
+  "schedule_already_queued",
+  "schedule_already_publishing",
 
   // ── channels named by a request ───────────────────────────────────────────
   /** One of the channel ids is not this brand's. Shared by content and runs. */

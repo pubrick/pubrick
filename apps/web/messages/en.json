@@ -278,6 +278,8 @@
     "unread_ai_draft": "No one has read this AI-written draft yet. Open it, or edit it, before approving.",
     "unread_ai_draft_open_only": "No one has read the AI-written text in this post yet. Open it before approving — editing the text cannot clear this, because no complete AI version of it was ever recorded.",
     "schedule_in_past": "Pick a time in the future to schedule this post.",
+    "schedule_already_queued": "This post is already queued for publishing, so its time cannot be changed. Reject it to stop the delivery, then approve it again with the time you want.",
+    "schedule_already_publishing": "This post is being sent to one of its channels right now, so its time cannot be changed. Wait for that delivery to finish, then decide from what it reports.",
     "channels_not_in_brand": "One or more of the chosen channels do not belong to this brand. Reload the page and pick them again.",
     "channel_not_found": "This channel no longer exists — it may have been deleted.",
     "unreadable_credentials": "Pubrick can no longer read this channel's stored credentials — this instance's encryption key has changed. Use Edit to save them again.",
