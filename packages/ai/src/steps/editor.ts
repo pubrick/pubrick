@@ -44,10 +44,14 @@ export const EDITOR: Step<EditorInput, EditOutput, RunStepContext> = defineStep(
   material: (ctx: RunStepContext, input) => {
     // The editor keeps the person's ask in force at the edit, so it gets the
     // material for the same reason it gets the brief — see the researcher for
-    // why the two predicates are loose.
+    // why the two predicates are loose and why blank counts as absent.
     const blocks: Material[] = [];
-    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
-    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
+    if (ctx.brief != null && ctx.brief.trim() !== "") {
+      blocks.push({ label: "BRIEF", text: ctx.brief });
+    }
+    if (ctx.material != null && ctx.material.trim() !== "") {
+      blocks.push({ label: "SOURCE", text: ctx.material });
+    }
     blocks.push({ label: "PLAN", text: planMaterial(input.research) });
     blocks.push({ label: "DRAFT", text: input.body });
     return blocks;

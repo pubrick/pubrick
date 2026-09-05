@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { PermanentError } from "@pubrick/shared";
 import type { ZodType } from "zod";
+import { withRunFailure } from "../classify.js";
 import { generateStructured } from "../generate.js";
 import type { Step, StepAttribution, StepContext } from "./types.js";
 
@@ -152,6 +154,33 @@ async function callStep<O>(
     material: readonly Material[];
   },
 ): Promise<O> {
+  // A STEP WITH NO BLOCKS HAS NOTHING TO ASK, AND ASKING IT COSTS MONEY.
+  // `materialFor([])` is `""`, and an empty `prompt` is not an error to any
+  // provider: the call is made, billed, answered from the role lines alone and
+  // checkpointed, and the run finishes looking normal. Until `brief` became
+  // nullable, `brief: string` made "at least one block" a fact the compiler
+  // enforced for the three steps that read it; two nullable fields deleted that
+  // guarantee, and this replaces it.
+  //
+  // A RUNTIME REFUSAL RATHER THAN A TYPE, for the same reason the block
+  // predicates are loose `!= null`: vitest strips types, and so does every
+  // caller that is not TypeScript. A union on `RunStepContext` would forbid the
+  // both-null literal and nothing else — not a stale spec, not a value read back
+  // out of a jsonb checkpoint — and it would say nothing at all about the two
+  // steps whose emptiness would come from their INPUT rather than their context.
+  // Here it holds for all five steps and for the sixth nobody has written yet,
+  // and it holds before the provider is reached, which is the whole point.
+  //
+  // Permanent, because an empty prompt cannot become non-empty on a retry and
+  // every retry of a run is another paid call; `internal` because nothing the
+  // user did produced it.
+  if (args.material.length === 0) {
+    throw withRunFailure(
+      new PermanentError(`the ${args.attribution.step} step was given no material to work on`),
+      "internal",
+    );
+  }
+
   return generateStructured<O>({
     model: ctx.model,
     provider: ctx.provider,

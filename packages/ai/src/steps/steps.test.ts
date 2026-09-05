@@ -104,6 +104,20 @@ function halvesOf(model: MockLanguageModelV4, call = 0): { system: string; user:
   return { system: JSON.stringify(system), user: JSON.stringify(user) };
 }
 
+/**
+ * The labels of a user half's blocks, IN THE ORDER the model reads them.
+ *
+ * Order is a rule, not an accident — the brief and the material come before the
+ * plan, and the plan before the draft — and it is invisible to an assertion
+ * built from independent `toContain`s: swapping two blocks leaves every one of
+ * them true. Matching only the OPENING marker (`--- LABEL <nonce> ---`) is what
+ * keeps this a list of blocks rather than of fence lines; `--- END BRIEF …`
+ * cannot match, because the label capture would have to swallow the space.
+ */
+function blockLabelsOf(user: string): string[] {
+  return [...user.matchAll(/--- ([A-Z]+) [0-9a-f]{8,} ---/g)].map((match) => match[1] ?? "");
+}
+
 const channel = {
   id: "3f1f0a1c-0d5b-4f5c-9b7e-2c4a6d8e0f11",
   name: "Cafe Notes",
@@ -931,36 +945,47 @@ describe("material a person pasted", () => {
     run: (ctx: RunStepContext) => Promise<unknown>;
     reply: string;
     receives: boolean;
+    /**
+     * Every block this step's user half carries, in order, for a run that has
+     * BOTH a brief and material — the plan's per-step table read back off the
+     * built prompt.
+     */
+    blocks: readonly string[];
   }> = [
     {
       label: "researcher",
       run: (ctx) => RESEARCHER.run(ctx, undefined),
       reply: JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }),
       receives: true,
+      blocks: ["BRIEF", "SOURCE"],
     },
     {
       label: "writer",
       run: (ctx) => WRITER.run(ctx, { research }),
       reply: JSON.stringify({ body: "text" }),
       receives: true,
+      blocks: ["BRIEF", "SOURCE", "PLAN"],
     },
     {
       label: "editor",
       run: (ctx) => EDITOR.run(ctx, { research, body: DRAFT_MARKER }),
       reply: JSON.stringify({ body: "text", changes: [] }),
       receives: true,
+      blocks: ["BRIEF", "SOURCE", "PLAN", "DRAFT"],
     },
     {
       label: "factcheck",
       run: (ctx) => FACTCHECK.run(ctx, { body: DRAFT_MARKER }),
       reply: JSON.stringify({ claims: [] }),
       receives: false,
+      blocks: ["DRAFT"],
     },
     {
       label: "adapter",
       run: (ctx) => adapterFor(channel).run(ctx, { body: DRAFT_MARKER }),
       reply: JSON.stringify({ body: "short" }),
       receives: false,
+      blocks: ["DRAFT"],
     },
   ];
 
@@ -1034,6 +1059,12 @@ describe("material a person pasted", () => {
       );
       expect(system).not.toContain(BRIEF);
       expect(system).not.toContain(MATERIAL_MARKER);
+      // And in THAT order, which the two assertions above cannot see: each is
+      // independently true with the material moved in front of the brief or
+      // behind the plan. "The material goes exactly where the brief goes" is
+      // the rule the fan-out was chosen for — a SOURCE block after the PLAN
+      // reads as a footnote to the plan rather than as what the person said.
+      expect(blockLabelsOf(user)).toEqual(step.blocks);
     });
   }
 
@@ -1066,27 +1097,81 @@ describe("material a person pasted", () => {
    * that was never updated would run with `undefined` here, and a `!== null`
    * predicate would push a labelled block reading the word "undefined" onto a
    * paid call. `!= null` is what makes that impossible, and nothing in a green
-   * run over four correct builders proves it — this test is the only thing that
-   * distinguishes the two operators.
+   * run over four correct builders proves it — these tests are the only thing
+   * that distinguishes the two operators.
+   *
+   * ONE FIELD IS FABRICATED AT A TIME, and one `it` per step. A single `it`
+   * looping over the steps stops at the first failure and cannot say which step
+   * regressed — the same "per step, not somewhere" discipline the fan-out
+   * assertions above are built on. And a context with BOTH fields undefined
+   * would leave the researcher with no block at all, which `callStep` now
+   * refuses outright: the prompt that would have carried the verdict is never
+   * built, so a two-field fabrication would stop testing the predicate.
    */
-  it("emits no block for a field a caller left undefined rather than null", async () => {
-    for (const step of cases.filter((c) => c.receives)) {
+  const fabrications = cases
+    .filter((c) => c.receives)
+    .flatMap((step) =>
+      [
+        { field: "brief", patch: { brief: undefined }, marker: /--- (END )?BRIEF / },
+        { field: "material", patch: { material: undefined }, marker: /--- (END )?SOURCE / },
+      ].map((absence) => ({ step, absence })),
+    );
+
+  it.each(fabrications)(
+    "$step.label emits no block for a $absence.field a caller left undefined rather than null",
+    async ({ step, absence }) => {
       const model = jsonModel(step.reply);
+      // Both fields present, then exactly one of them fabricated away: a guard's
+      // input is wrong in one way, so a failure names which way.
       const fabricated = {
-        ...contextFor(model),
-        brief: undefined,
-        material: undefined,
-        sourceUrl: undefined,
+        ...pasteContext(model),
+        brief: BRIEF,
+        ...absence.patch,
       } as unknown as RunStepContext;
 
       await step.run(fabricated);
 
       const { user } = halvesOf(model);
+      expect(user).not.toMatch(absence.marker);
+      // A belt, and sound only because every marker in this file is ours: on a
+      // real pasted article the word is the article's to use.
       expect(user).not.toContain("undefined");
+    },
+  );
+
+  /**
+   * A BLANK brief is no brief, and the step says so itself.
+   *
+   * `runs.repository.create` already stores `null` for the `""` the compose
+   * screen sends unconditionally, for exactly the reason `types.ts` gives: a
+   * labelled but empty BRIEF block tells the model the person wrote nothing
+   * USEFUL rather than that they wrote nothing, on three paid calls. This is the
+   * same rule `instructionsFor` applies to an unset brand voice, one field over
+   * — the step omits the label rather than describing an absence to the model.
+   * It changes no text that IS sent, so it is not the step-level renormalisation
+   * that would make a prompt differ from the receipt the run screen shows.
+   */
+  for (const step of cases.filter((c) => c.receives)) {
+    it(`${step.label} treats a blank brief as no brief at all`, async () => {
+      const model = jsonModel(step.reply);
+
+      await step.run({ ...pasteContext(model), brief: "   \n  " });
+
+      const { user } = halvesOf(model);
       expect(user).not.toMatch(/--- (END )?BRIEF /);
+      expect(user).toMatch(/--- SOURCE [0-9a-f]{8,} ---/);
+    });
+
+    it(`${step.label} treats blank material as no material at all`, async () => {
+      const model = jsonModel(step.reply);
+
+      await step.run({ ...contextFor(model), material: "   \n  " });
+
+      const { user } = halvesOf(model);
       expect(user).not.toMatch(/--- (END )?SOURCE /);
-    }
-  });
+      expect(user).toMatch(/--- BRIEF [0-9a-f]{8,} ---/);
+    });
+  }
 
   /**
    * What a brief-only run's user half looked like before this feature existed,
@@ -1121,4 +1206,78 @@ describe("material a person pasted", () => {
       expect(withoutNonce(halvesOf(model).user)).toBe(BRIEF_ONLY_USER_HALVES[step.label]);
     });
   }
+});
+
+/**
+ * A step with nothing to say to the model.
+ *
+ * Until `brief` became nullable, `brief: string` made "at least one block" a
+ * fact the compiler enforced for the researcher, the writer and the editor. Two
+ * nullable fields deleted that: a context with neither builds an empty block
+ * list, `materialFor([])` returns `""`, and the step buys a model call whose
+ * user message is the empty string — a real, billed, unrefused call that
+ * completes normally and writes a ledger row.
+ *
+ * The replacement is a runtime refusal rather than a type, and deliberately:
+ * this package's own argument for the loose `!= null` predicate is that vitest
+ * strips types, so a type is exactly the guarantee a stale spec — or a JS
+ * caller, or a value parsed out of a jsonb checkpoint — walks straight past. It
+ * lives in `callStep`, the one path every step's call goes through, so it holds
+ * for the five steps here and for the sixth nobody has written yet.
+ */
+describe("a step given nothing to work on", () => {
+  it("refuses before the provider is reached, and buys nothing", async () => {
+    const model = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+    const onUsage = vi.fn();
+    const ctx = { ...contextFor(model, onUsage), brief: null, material: null, sourceUrl: null };
+
+    await expect(RESEARCHER.run(ctx, undefined)).rejects.toThrow(/researcher/);
+
+    // The whole point: the money is not spent and the ledger has nothing to
+    // record. An assertion on the thrown error alone would pass just as well
+    // with the guard placed after the call.
+    expect(model.doGenerateCalls).toHaveLength(0);
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("names the cause, and fails the run for good rather than retrying it", async () => {
+    const model = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+    const ctx = { ...contextFor(model), brief: null, material: null, sourceUrl: null };
+
+    const error = await RESEARCHER.run(ctx, undefined).catch((e: unknown) => e);
+
+    // Permanent, because the prompt cannot become non-empty on a retry, and
+    // every retry of a run is another paid call. `internal` is the honest code:
+    // nothing the user did produced this, and the sentence says which step.
+    expect(error).toBeInstanceOf(PermanentError);
+    expect(runFailureOf(error)).toBe("internal");
+    expect((error as Error).message).toContain("researcher");
+  });
+
+  it("refuses a run whose only brief is blank", async () => {
+    // The two halves compose: a blank brief is no brief, and no brief with no
+    // material is no prompt. Without the second, this is a paid call carrying a
+    // single empty labelled block.
+    const model = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+    const ctx = { ...contextFor(model), brief: "   \n  ", material: null, sourceUrl: null };
+
+    await expect(RESEARCHER.run(ctx, undefined)).rejects.toThrow(/researcher/);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("refuses for any step, not only the three this feature touched", async () => {
+    // `callStep` is not exported, so the guard is reached the way a real step
+    // reaches it. A step written tomorrow whose material closure returns nothing
+    // for some input gets the same refusal, under its own name.
+    const SILENT: Step<void, { body: string }> = defineStep({
+      name: "silent",
+      schema: z.object({ body: z.string().min(1) }),
+      role: ["You are given nothing."],
+      material: () => [],
+    });
+    const model = jsonModel(JSON.stringify({ body: "never asked for" }));
+
+    await expect(SILENT.run(contextFor(model), undefined)).rejects.toThrow(/silent/);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
 });

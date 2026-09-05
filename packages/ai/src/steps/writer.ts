@@ -44,10 +44,15 @@ export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep
   ],
   material: (ctx: RunStepContext, input) => {
     // The person's words first, in whichever forms they exist — see the
-    // researcher for why the two predicates are loose — and then the plan.
+    // researcher for why the two predicates are loose and why blank counts as
+    // absent — and then the plan.
     const blocks: Material[] = [];
-    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
-    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
+    if (ctx.brief != null && ctx.brief.trim() !== "") {
+      blocks.push({ label: "BRIEF", text: ctx.brief });
+    }
+    if (ctx.material != null && ctx.material.trim() !== "") {
+      blocks.push({ label: "SOURCE", text: ctx.material });
+    }
     // Not re-parsed here: a resumed run reads this from a jsonb checkpoint, and
     // the place to validate that is the run, which can classify the failure. A
     // ZodError thrown from inside a step would reach pg-boss unclassified and be

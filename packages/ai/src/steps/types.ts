@@ -93,6 +93,20 @@ export type StepContext = ModelCallOptions & {
  * That is a compile-time guarantee only, and the three closures know it: vitest
  * strips types, so a spec that was never updated runs with `undefined` here.
  * The blocks are therefore emitted on `!= null` (loose), which covers both.
+ *
+ * "OR BOTH" IS NOT "OR NEITHER", AND THE TYPE CANNOT SAY SO. Two independently
+ * nullable members permit a context with neither, which builds an empty block
+ * list and buys a model call whose user message is the empty string — billed,
+ * answered from the role lines alone, and checkpointed as if it had worked.
+ * Until this type existed, `brief: string` made "at least one block" a fact the
+ * compiler enforced. A union here (`{brief: string; material: null} | …`) would
+ * restore the compile-time half and only that half, which is exactly the half
+ * that a stripped spec, a JS caller and a jsonb checkpoint all walk past — the
+ * reason the predicates above are loose in the first place. So the invariant is
+ * kept where it can refuse: `callStep` throws a `PermanentError` on an empty
+ * block list before the provider is reached, for every step rather than these
+ * three, and for emptiness that comes from a step's INPUT as readily as from
+ * its context.
  */
 export type RunStepContext = StepContext & {
   /**
@@ -102,7 +116,12 @@ export type RunStepContext = StepContext & {
    *
    * `null` and never `""`. An empty labelled BRIEF block tells the model the
    * person wrote nothing USEFUL rather than that they wrote nothing, and it
-   * says it on three paid calls in a row.
+   * says it on three paid calls in a row. `runs.repository.create` blanks the
+   * `""` the compose screen sends unconditionally, and the three steps hold the
+   * same line themselves — a blank value emits no block, the way an unset brand
+   * voice omits its line. That is a decision about PRESENCE only: no step
+   * rewrites the text it was given, so no prompt can differ from the receipt
+   * the run screen shows.
    */
   brief: string | null;
   /**

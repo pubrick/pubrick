@@ -48,8 +48,20 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
     // loose on purpose: `undefined` is unreachable through the type but not
     // through a spec that vitest stripped, and a strict check would interpolate
     // the word "undefined" into a labelled block on a paid call.
-    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
-    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
+    //
+    // BLANK IS ABSENT TOO, which is the same rule `instructionsFor` applies to
+    // an unset brand voice: a labelled but empty block tells the model the
+    // person wrote nothing USEFUL rather than that they wrote nothing.
+    // `runs.repository.create` already stores `null` for the `""` the compose
+    // screen sends unconditionally, so this is the belt behind that boundary and
+    // not a second opinion about it — it decides PRESENCE only and never edits
+    // the text, so no prompt can differ from the receipt the run screen shows.
+    if (ctx.brief != null && ctx.brief.trim() !== "") {
+      blocks.push({ label: "BRIEF", text: ctx.brief });
+    }
+    if (ctx.material != null && ctx.material.trim() !== "") {
+      blocks.push({ label: "SOURCE", text: ctx.material });
+    }
     // `ctx.sourceUrl` is deliberately absent: attribution, not material.
     return blocks;
   },
