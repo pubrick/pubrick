@@ -59,6 +59,16 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   the handler must never throw again, since a retry at that point would post a
   duplicate.
 - Conventional commits. One logical change per commit.
+- Prefer a maintained library to hand-rolled code when one fits (owner's
+  standing rule, 2026-09-05). Before writing a parser, a sanitiser, a retry
+  loop, a diff, a date/URL/HTML helper, a sentence splitter, a rate limiter or
+  a queue, check what the workspace already depends on (`pnpm why`, the
+  lockfile) and what the ecosystem has; add a dependency when it is
+  maintained, licence-compatible with AGPL, and smaller than the code it
+  replaces. Say in the commit which library was chosen and which alternative
+  was rejected. Hand-rolling is right only where the rule book
+  (`packages/shared`) must own the exact semantics — provenance, the closed
+  status lists, the crypto envelope — and the commit says so.
 - TypeScript stays on the 5.x line workspace-wide until tsup/NestJS fully support 7.x; one compiler version for the whole monorepo — never pin a different major in an individual package.
 
 ## Generation (`packages/ai`, `apps/worker/src/generate`)
