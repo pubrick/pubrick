@@ -238,6 +238,10 @@
     "title": "Генерация",
     "backToQueue": "Назад в очередь",
     "briefLabel": "Бриф",
+    "materialLabel": "Вставленный текст",
+    "sourceLabel": "Источник",
+    "noBrief": "Без брифа — черновик по источнику.",
+    "pastedLabel": "Черновик по вставленному тексту",
     "stepsTitle": "Шаги",
     "step": {
       "researcher": "Исследование",

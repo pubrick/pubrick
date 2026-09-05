@@ -238,6 +238,10 @@
     "title": "Generación",
     "backToQueue": "Volver a la cola",
     "briefLabel": "Brief",
+    "materialLabel": "Texto pegado",
+    "sourceLabel": "Fuente",
+    "noBrief": "Sin brief: redactado a partir de la fuente.",
+    "pastedLabel": "Redactado a partir de texto pegado",
     "stepsTitle": "Pasos",
     "step": {
       "researcher": "Investigación",

@@ -1,5 +1,6 @@
 "use client";
 
+import type { RunCreate } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -32,6 +33,7 @@ import {
   RUN_BADGE_STATUS,
   type Run,
   runFailureMessage,
+  sourceHost,
 } from "@/lib/runs";
 
 /** The filter tabs, in lifecycle order — a picker, not a priority list. */
@@ -48,6 +50,40 @@ const GROUP_STATUSES: readonly ContentStatus[] = [
   "failed",
   ...CONTENT_STATUSES.filter((s) => s !== "failed"),
 ];
+
+/**
+ * The body that asks for the same run again — every field `runCreateSchema`
+ * accepts, and no field it refuses.
+ *
+ * Typed as `RunCreate` rather than assembled inline, so the request the screen
+ * sends and the request the api validates are held together by the compiler as
+ * well as by a test.
+ *
+ * `?? undefined` on BOTH nullable fields, and it is the same defect twice: the
+ * stored member spells "absent" as `null` (`text`, `sourceUrl`) while the
+ * REQUEST spells it as an omitted key, `JSON.stringify` transmits `null`
+ * faithfully, and `z.string().optional()` refuses `null` on the type check
+ * before any refine runs. Forwarding `run.input.text` unchanged is what made
+ * Try again answer a source run with "brief: Invalid input" — a 400 about a
+ * brief the person never wrote, on the one screen whose job is to let a failed
+ * run be tried again.
+ *
+ * `material` is deliberately NOT `?? undefined`: it is `z.string().min(1)` on
+ * the stored member, so on a source run it is always there, and writing a
+ * fallback would describe a case that cannot occur.
+ */
+function retryBody(run: Run): RunCreate {
+  if (run.input.kind === "source") {
+    return {
+      brandId: run.brandId,
+      brief: run.input.text ?? undefined,
+      material: run.input.material,
+      sourceUrl: run.input.sourceUrl ?? undefined,
+      channelIds: run.input.channelIds,
+    };
+  }
+  return { brandId: run.brandId, brief: run.input.text, channelIds: run.input.channelIds };
+}
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -221,11 +257,7 @@ export default function ContentQueuePage() {
     try {
       const created = await api<Run>("/api/runs", {
         method: "POST",
-        body: JSON.stringify({
-          brandId: run.brandId,
-          brief: run.input.text,
-          channelIds: run.input.channelIds,
-        }),
+        body: JSON.stringify(retryBody(run)),
       });
       const dismissed = await api(`/api/runs/${run.id}/dismiss`, { method: "POST" })
         .then(() => true)
@@ -263,6 +295,22 @@ export default function ContentQueuePage() {
     }
   }
 
+  /**
+   * What the strip's link SAYS — and it can never be empty.
+   *
+   * `run.input.text` alone is not that: both arms of the union carry `text`, so
+   * a paste with no brief type-checked into a clickable row with no words in
+   * it, on the product's main screen, directly above the Retry and Dismiss
+   * buttons a person reaches for. A run always has a name here: the brief if
+   * one was written, else where the material came from, else that it came from
+   * a paste at all.
+   */
+  function stripLabel(run: Run): string {
+    if (run.input.text !== null) return run.input.text;
+    const host = run.input.kind === "source" ? sourceHost(run.input.sourceUrl) : null;
+    return host ?? tr("pastedLabel");
+  }
+
   function channelLabel(channelId: string): string {
     const ch = channels.find((c) => c.id === channelId);
     return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
@@ -295,7 +343,7 @@ export default function ContentQueuePage() {
           href={`/${locale}/content/runs/${run.id}`}
           className="min-w-0 flex-1 truncate text-[15px] font-semibold text-fg hover:text-accent"
         >
-          {run.input.text}
+          {stripLabel(run)}
         </Link>
         {failure && <span className="w-full text-[13px] text-danger">{failure}</span>}
         {terminal && (

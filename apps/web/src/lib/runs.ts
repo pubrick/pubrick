@@ -85,6 +85,36 @@ export const OPEN_RUNS_POLL_INTERVAL_MS = 5000;
 export type { RunInput } from "@pubrick/shared";
 
 /**
+ * A source URL as a person would say it aloud — `example.com`, not the whole
+ * address.
+ *
+ * The queue strip has one line for a run and it must never be empty, so a paste
+ * with no brief is named by where it came from. The full URL belongs on the
+ * receipt, which has room for it.
+ *
+ * NORMALISED THE SAME WAY THE WATCHED-SOURCES GATE NORMALISES IT: lowercased
+ * BEFORE the `www.` strip, matching `regexp_replace(lower(…), '^www\.', '')`
+ * in the query that decides whether 3b gets built. The `toLowerCase()` is
+ * redundant in this half — the URL parser already lowercases a host — and it is
+ * written anyway, because the day these two derivations are compared, the thing
+ * that must be obvious is that they are the same derivation. Two spellings of
+ * "the host" in one product is a bill this repository has paid before.
+ *
+ * `null` for anything that is not a URL. The DTO refuses those
+ * (`sourceRunInputSchema.sourceUrl`), so nothing the api can return reaches
+ * this branch — but this app does not parse the api's body, and a row written
+ * by hand is a row the strip still has to draw.
+ */
+export function sourceHost(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * `GET /api/runs` — the strip's shape. No `steps`: see `RunDetail`.
  *
  * THE WIRE SCHEMA'S OWN TYPE, not a hand-written twin of it. This app used to

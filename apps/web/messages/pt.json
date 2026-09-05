@@ -238,6 +238,10 @@
     "title": "Geração",
     "backToQueue": "Voltar para a fila",
     "briefLabel": "Briefing",
+    "materialLabel": "Texto colado",
+    "sourceLabel": "Fonte",
+    "noBrief": "Sem briefing: redigido a partir da fonte.",
+    "pastedLabel": "Redigido a partir de texto colado",
     "stepsTitle": "Etapas",
     "step": {
       "researcher": "Pesquisa",

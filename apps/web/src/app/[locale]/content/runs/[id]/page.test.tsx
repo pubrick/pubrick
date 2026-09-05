@@ -1,4 +1,4 @@
-import { runDetailDtoSchema } from "@pubrick/shared";
+import { runDetailDtoSchema, type SourceRunInput } from "@pubrick/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import type { RunDetail, RunStatus } from "@/lib/runs";
@@ -536,5 +536,107 @@ describe("calls the ledger could not record", () => {
     // fixture here that quietly leaves it out fails the same way.
     const { unrecordedCalls: _dropped, ...without } = makeRun();
     expect(() => runDetailDtoSchema.parse(without)).toThrow();
+  });
+});
+
+/**
+ * The receipt of a run that was drafted from pasted material.
+ *
+ * `run.input` is a union and BOTH arms carry `text`, so none of this is a
+ * compile error: a receipt with no branch renders `run.input.text` for a source
+ * run exactly as it does for a brief one, and for a paste-only run that is an
+ * empty labelled block — the screen saying "the person wrote nothing useful"
+ * about a person who wrote nothing. Only a test can find that, so these are it.
+ */
+describe("a run drafted from pasted material", () => {
+  const MATERIAL = "The council voted on Tuesday to fund the bridge.";
+
+  /** Built through the wire schema like every other fixture here. */
+  function sourceRun(overrides: Partial<SourceRunInput> = {}): RunDetail {
+    return makeRun({
+      input: {
+        kind: "source",
+        text: null,
+        sourceUrl: null,
+        material: MATERIAL,
+        channelIds: [CHANNEL_A],
+        ...overrides,
+      },
+    });
+  }
+
+  it("shows the material it was drafted from, under its own label", async () => {
+    installHandlers({ current: sourceRun() });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.materialLabel)).toBeInTheDocument();
+    expect(screen.getByText(MATERIAL)).toBeInTheDocument();
+  });
+
+  it("says there was no brief instead of labelling an empty one", async () => {
+    installHandlers({ current: sourceRun() });
+
+    const { container } = await renderRun();
+
+    expect(await screen.findByText(en.Runs.noBrief)).toBeInTheDocument();
+    // The label with nothing under it is the defect this line replaces.
+    expect(screen.queryByText(en.Runs.briefLabel)).not.toBeInTheDocument();
+    // ...and `text: null` is never printed AS a value: `{null}` renders
+    // nothing, `String(null)` renders the word, and both type-check.
+    expect(container.textContent).not.toContain("null");
+  });
+
+  it("keeps the brief when the person wrote one beside the paste", async () => {
+    installHandlers({ current: sourceRun({ text: "Keep it under 200 words" }) });
+
+    await renderRun();
+
+    expect(await screen.findByText("Keep it under 200 words")).toBeInTheDocument();
+    expect(screen.getByText(en.Runs.briefLabel)).toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.noBrief)).not.toBeInTheDocument();
+    // Both, not one instead of the other: the brief is an instruction ABOUT the
+    // material, so a receipt showing only it would not say what was worked from.
+    expect(screen.getByText(MATERIAL)).toBeInTheDocument();
+  });
+
+  it("links the source URL, and asks the network for nothing but the run", async () => {
+    const calls: Call[] = [];
+    installHandlers({ current: sourceRun({ sourceUrl: "https://example.com/story" }) }, calls);
+
+    await renderRun();
+
+    const link = await screen.findByRole("link", { name: "https://example.com/story" });
+    expect(link).toHaveAttribute("href", "https://example.com/story");
+    // A link out of this app must not hand the destination a handle on this
+    // window, or this app's URL.
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(link.getAttribute("rel")).toContain("noreferrer");
+    // The URL is attribution and is NEVER fetched — not by the server, and not
+    // by the screen that shows it.
+    expect(calls.map((c) => c.path)).toEqual([`/api/runs/${RUN_ID}`]);
+  });
+
+  it("shows no source line at all when the paste came with no link", async () => {
+    installHandlers({ current: sourceRun() });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.materialLabel)).toBeInTheDocument();
+    // An empty "Source" is the same defect as an empty "Brief".
+    expect(screen.queryByText(en.Runs.sourceLabel)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /example\.com/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves a brief run's receipt exactly as it was", async () => {
+    installHandlers({ current: makeRun() });
+
+    await renderRun();
+
+    expect(await screen.findByText("A post about our new pricing")).toBeInTheDocument();
+    expect(screen.getByText(en.Runs.briefLabel)).toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.materialLabel)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.sourceLabel)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.noBrief)).not.toBeInTheDocument();
   });
 });

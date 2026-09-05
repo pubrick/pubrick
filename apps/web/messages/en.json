@@ -238,6 +238,10 @@
     "title": "Generation",
     "backToQueue": "Back to queue",
     "briefLabel": "Brief",
+    "materialLabel": "Pasted text",
+    "sourceLabel": "Source",
+    "noBrief": "No brief — drafted from the source.",
+    "pastedLabel": "Drafted from pasted text",
     "stepsTitle": "Steps",
     "step": {
       "researcher": "Research",

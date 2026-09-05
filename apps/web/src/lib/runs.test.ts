@@ -14,6 +14,7 @@ import {
   runEditorChanges,
   runFailureMessage,
   runStepStates,
+  sourceHost,
 } from "./runs";
 
 const CH_A = "channel-a";
@@ -347,5 +348,39 @@ describe("the claims list never says anything was checked", () => {
     for (const text of under) {
       for (const pattern of forbidden) expect(text).not.toMatch(pattern);
     }
+  });
+});
+
+describe("sourceHost", () => {
+  it("names the host a person would read out, without the scheme or the path", () => {
+    expect(sourceHost("https://example.com/2026/09/the-story?utm=x")).toBe("example.com");
+  });
+
+  it("agrees with the gate's SQL: lowercased, THEN stripped of www.", () => {
+    // `regexp_replace(lower(input->>'sourceUrl' …), '^www\\.', '')`. A host
+    // derived the other way round keeps `WWW.` and counts as its own source,
+    // which is the under-count the gate exists to avoid.
+    expect(sourceHost("https://WWW.Example.com/story")).toBe("example.com");
+    expect(sourceHost("https://www.example.com/story")).toBe("example.com");
+  });
+
+  it("strips only a LEADING www., because news.www.example.com is one host", () => {
+    expect(sourceHost("https://news.www.example.com/x")).toBe("news.www.example.com");
+  });
+
+  it("keeps http, which the DTO allows beside https", () => {
+    expect(sourceHost("http://example.com")).toBe("example.com");
+  });
+
+  it("answers null for null — a paste with no link has no host to show", () => {
+    expect(sourceHost(null)).toBeNull();
+  });
+
+  it("answers null rather than throwing on a value no request could have stored", () => {
+    // The DTO refuses these, and this app does not parse the api's body: a row
+    // written by hand still has to draw a strip rather than blank the screen.
+    expect(sourceHost("not a url")).toBeNull();
+    expect(sourceHost("")).toBeNull();
+    expect(sourceHost("mailto:someone@example.com")).toBeNull();
   });
 });

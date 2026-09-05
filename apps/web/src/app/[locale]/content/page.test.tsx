@@ -1,5 +1,5 @@
 import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
-import { runCreateSchema } from "@pubrick/shared";
+import { runCreateSchema, runDtoSchema, type SourceRunInput } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,8 +75,15 @@ const RUN_ID = "88888888-8888-4888-8888-888888888888";
 const NEW_RUN_ID = "99999999-9999-4999-8999-999999999999";
 const BRIEF = "A post about our new pricing";
 
+/**
+ * A run as the api returns it — PARSED through the wire schema, like the
+ * receipt's own fixture, not merely typed as it. A hand-typed fixture can be a
+ * body the api could never send: `input` is a discriminated union now, and a
+ * source arm missing `sourceUrl` or carrying `text: ""` would type-check here
+ * and be refused everywhere it matters.
+ */
 function run(overrides: Partial<Run> = {}): Run {
-  return {
+  return runDtoSchema.parse({
     id: RUN_ID,
     brandId: BRAND_ID,
     input: { kind: "brief", text: BRIEF, channelIds: [RUN_CHANNEL_ID] },
@@ -89,7 +96,7 @@ function run(overrides: Partial<Run> = {}): Run {
     createdAt: "2026-08-28T10:00:00.000Z",
     updatedAt: "2026-08-28T10:00:00.000Z",
     ...overrides,
-  };
+  });
 }
 
 const noChannels: Channel[] = [];
@@ -602,6 +609,186 @@ describe("run strips (Task 10)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * The queue's two reads of `run.input`, on the arm neither of them was written
+ * for.
+ *
+ * Neither is a compile error: both arms of the union carry `text`, so the
+ * label renders `string | null` and the retry body posts it. A source run with
+ * no brief therefore drew a clickable row with no words in it, directly above
+ * the Retry button that then 400d about a brief the person never wrote.
+ */
+describe("a run drafted from pasted material", () => {
+  const MATERIAL = "The council voted on Tuesday to fund the bridge.";
+
+  function sourceRun(overrides: Partial<SourceRunInput> = {}, run_: Partial<Run> = {}): Run {
+    return run({
+      status: "failed",
+      errorCode: "internal",
+      input: {
+        kind: "source",
+        text: null,
+        sourceUrl: null,
+        material: MATERIAL,
+        channelIds: [RUN_CHANNEL_ID],
+        ...overrides,
+      },
+      ...run_,
+    });
+  }
+
+  /** What the strip posts when Try again is pressed. */
+  async function retryBody(runs: Run[]): Promise<unknown> {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, { current: runs });
+    render(<ContentQueuePage />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "POST" && c.path === "/api/runs")).toBe(true),
+    );
+    const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
+    return JSON.parse(post?.body ?? "{}");
+  }
+
+  describe("the strip's label", () => {
+    it("names the source's host when the paste came with a link", async () => {
+      installHandlers([], () => [], noChannels, {
+        current: [sourceRun({ sourceUrl: "https://WWW.Example.com/2026/the-story" })],
+      });
+
+      render(<ContentQueuePage />);
+
+      // Lowercased before `www.` is stripped — the gate's own normalisation.
+      expect(await screen.findByRole("link", { name: "example.com" })).toHaveAttribute(
+        "href",
+        `/en/content/runs/${RUN_ID}`,
+      );
+    });
+
+    it("says the draft came from pasted text when there is no link either", async () => {
+      installHandlers([], () => [], noChannels, { current: [sourceRun()] });
+
+      render(<ContentQueuePage />);
+
+      // The defect this replaces is a link with NO words in it, on the product's
+      // main screen, above the buttons a person reaches for.
+      const link = await screen.findByRole("link", { name: en.Runs.pastedLabel });
+      expect(link.textContent?.trim()).not.toBe("");
+    });
+
+    it("still prefers the brief when the person wrote one beside the paste", async () => {
+      installHandlers([], () => [], noChannels, {
+        current: [sourceRun({ text: "Keep it short", sourceUrl: "https://example.com/story" })],
+      });
+
+      render(<ContentQueuePage />);
+
+      expect(await screen.findByRole("link", { name: "Keep it short" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "example.com" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Try again re-posts what the run was actually asked for", () => {
+    /**
+     * The URL-LESS case first, because it is the common one — a paste with no
+     * link — and it is the one a fix written against the URL-bearing case
+     * leaves broken: `sourceUrl` is `.nullable()` on the stored member and
+     * `.optional()` on the request, `JSON.stringify` transmits `null`
+     * faithfully, and `runCreateSchema` refuses it on the type check.
+     */
+    it("omits sourceUrl entirely when the run has none", async () => {
+      const body = await retryBody([sourceRun()]);
+
+      expect(body).toEqual({
+        brandId: BRAND_ID,
+        material: MATERIAL,
+        channelIds: [RUN_CHANNEL_ID],
+      });
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    });
+
+    it("forwards the URL when the run has one", async () => {
+      const body = await retryBody([sourceRun({ sourceUrl: "https://example.com/story" })]);
+
+      expect(body).toEqual({
+        brandId: BRAND_ID,
+        material: MATERIAL,
+        sourceUrl: "https://example.com/story",
+        channelIds: [RUN_CHANNEL_ID],
+      });
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    });
+
+    it("forwards the brief too when the run carried both", async () => {
+      const body = await retryBody([sourceRun({ text: "Keep it short" })]);
+
+      expect(body).toEqual({
+        brandId: BRAND_ID,
+        brief: "Keep it short",
+        material: MATERIAL,
+        channelIds: [RUN_CHANNEL_ID],
+      });
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    });
+
+    it("sends no material at all for a run started from a brief", async () => {
+      const body = await retryBody([run({ status: "failed", errorCode: "internal" })]);
+
+      // `toEqual` is the assertion that catches an EXTRA key: a retry that
+      // forwarded `material: null` for a brief run would be refused by the
+      // schema, and one that forwarded `material: ""` would be refused by the
+      // stored member the moment the api tried to write it.
+      expect(body).toEqual({
+        brandId: BRAND_ID,
+        brief: BRIEF,
+        channelIds: [RUN_CHANNEL_ID],
+      });
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    });
+
+    it("creates the new run before dismissing the one it replaces", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, { current: [sourceRun()] });
+
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+      await waitFor(() => expect(calls.some((c) => c.path.endsWith("/dismiss"))).toBe(true));
+      // The order the docstring defends, on the arm that used to 400 here: a
+      // dismissal that fails must never be able to cost the person their retry.
+      const posts = calls.filter((c) => c.method === "POST").map((c) => c.path);
+      expect(posts.indexOf("/api/runs")).toBeLessThan(posts.indexOf(`/api/runs/${RUN_ID}/dismiss`));
+    });
+
+    it("leaves the strip exactly where it was when the create fails", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, { current: [sourceRun()] });
+      // The api refuses the retry — the 400 this whole task exists to stop
+      // being the answer to a source run's Try again.
+      const handlers = mockApi.getMockImplementation();
+      if (!handlers) throw new Error("installHandlers did not install one");
+      mockApi.mockImplementation(async (...args: unknown[]) => {
+        const path = args[0] as string;
+        const method = ((args[1] as RequestInit | undefined)?.method ?? "GET") as string;
+        if (method === "POST" && path === "/api/runs") {
+          calls.push({ path, method });
+          throw new ApiError(400, "brief: Invalid input", false);
+        }
+        return handlers(...(args as Parameters<typeof handlers>));
+      });
+
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+      // Nothing was dismissed: a failed create must leave the run exactly where
+      // the person can press it again.
+      await screen.findByRole("alert");
+      expect(calls.some((c) => c.path.endsWith("/dismiss"))).toBe(false);
+      expect(screen.getByRole("button", { name: en.Runs.tryAgain })).toBeInTheDocument();
+    });
   });
 });
 

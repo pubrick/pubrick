@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useState } from "react";
+import { type ReactNode, use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -88,6 +88,16 @@ type StepLinesProps = {
   /** Suffix for a marked line. Only the claims have one. */
   mark?: string;
 };
+
+/** One labelled thing the run was asked for. Every block in the card is one. */
+function RunField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="mb-1 text-sm font-medium text-fg-secondary">{label}</p>
+      {children}
+    </div>
+  );
+}
 
 /**
  * The generation receipt: five steps as a live checklist, the error when the
@@ -238,9 +248,59 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             </StatusBadge>
           </p>
 
+          {/*
+            WHAT THE RUN WAS ASKED FOR, branched on `kind` — and the branch is
+            not one the compiler asked for. Both arms of `RunInput` carry
+            `text`, so an unbranched `{run.input.text}` type-checks against a
+            source run and renders NOTHING for a paste with no brief: a labelled
+            empty block on the screen whose only job is to say what happened.
+            `material` is the field that does not compile without the narrowing,
+            which means the compiler points at the new half and stays silent
+            about the old one.
+          */}
           <Card className="mb-6">
-            <p className="mb-1 text-sm font-medium text-fg-secondary">{t("briefLabel")}</p>
-            <p className="whitespace-pre-wrap text-sm text-fg">{run.input.text}</p>
+            <div className="flex flex-col gap-4">
+              {run.input.kind === "source" && run.input.text === null ? (
+                /*
+                  Not an empty "Brief" block. A label with nothing under it reads
+                  as "the person wrote nothing useful"; this line says what
+                  actually happened — they wrote nothing and the draft came from
+                  the material below.
+                */
+                <p className="text-sm text-fg-tertiary">{t("noBrief")}</p>
+              ) : (
+                <RunField label={t("briefLabel")}>
+                  <p className="whitespace-pre-wrap text-sm text-fg">{run.input.text}</p>
+                </RunField>
+              )}
+
+              {run.input.kind === "source" && (
+                <>
+                  {run.input.sourceUrl !== null && (
+                    <RunField label={t("sourceLabel")}>
+                      {/*
+                        Attribution, and ONLY attribution: nothing here or on the
+                        server ever fetches it, and it never reaches a model. It
+                        is a link because the DTO refuses any scheme but
+                        http/https — the reason `sourceUrl` constrains its
+                        protocol rather than merely being a URL.
+                      */}
+                      <a
+                        href={run.input.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="break-all text-sm text-accent hover:underline"
+                      >
+                        {run.input.sourceUrl}
+                      </a>
+                    </RunField>
+                  )}
+                  <RunField label={t("materialLabel")}>
+                    <p className="whitespace-pre-wrap text-sm text-fg">{run.input.material}</p>
+                  </RunField>
+                </>
+              )}
+            </div>
           </Card>
 
           {/* A failed run produces no content item, so this sentence is the
