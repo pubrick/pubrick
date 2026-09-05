@@ -192,8 +192,23 @@ describe("the refine request", () => {
  * somebody else's money.
  */
 describe("MAX_REFINE_CALLS_PER_HOUR", () => {
-  /** The upper end of the constant's own per-CALL estimate. */
-  const MAX_COST_PER_REFINE_CALL_USD = 0.005;
+  /**
+   * The upper end of the constant's own per-CALL estimate, which is the unit
+   * the allowance counts: the ledger writes one row per PHYSICAL call. The
+   * per-PRESS figure in the same docstring is twice this, because `maxRetries:
+   * 0` allows a press two round trips — deriving the ceiling from that one
+   * states a promise twice as expensive as the one the constant makes, which is
+   * what this test used to do.
+   */
+  const MAX_COST_PER_REFINE_CALL_USD = 0.0025;
+
+  /**
+   * How much dearer than `gemini-3.7-flash` the priciest model the price table
+   * knows is (`gemini-3.1-pro-preview`, $2/$12 against $0.75/$3.75). The
+   * estimate above is the cheap model's, and the model is the ORG's choice, so
+   * the promise has to hold at the top of the table too.
+   */
+  const PRICIEST_MODEL_MULTIPLE = 3;
 
   /**
    * What an unthrottled loop over this route could spend in an hour, taken
@@ -206,6 +221,11 @@ describe("MAX_REFINE_CALLS_PER_HOUR", () => {
   it("keeps worst-case hourly spend at least two orders of magnitude below an unbounded route", () => {
     const worstCaseHourlySpend = MAX_REFINE_CALLS_PER_HOUR * MAX_COST_PER_REFINE_CALL_USD;
     expect(worstCaseHourlySpend).toBeLessThan(UNBOUNDED_HOURLY_SPEND_ESTIMATE_USD / 100);
+    // ...on the model the org actually chose, and not only on the cheap one the
+    // number was picked against.
+    expect(worstCaseHourlySpend * PRICIEST_MODEL_MULTIPLE).toBeLessThan(
+      UNBOUNDED_HOURLY_SPEND_ESTIMATE_USD / 100,
+    );
   });
 
   it("is a positive, finite number of calls — not disabled by 0, Infinity or a fraction", () => {

@@ -154,13 +154,21 @@ export const refineVerbSchema = z.enum(REFINE_VERBS);
  *
  * WHY 120, AND WHY COUNTED IN CALLS. The unit is the thing being protected. A
  * refine sends at most a whole body plus its selection and gets a selection
- * back, which is roughly $0.002–$0.005 a press at the two round trips
- * `maxRetries: 0` allows (the call, and `generateStructured`'s repair retry
- * for a schema violation). The ledger writes one row per PHYSICAL call, so a
- * press that met the repair retry consumes two and the limit bounds money
- * rather than clicks. 120 rows an hour is at worst around $0.5 an hour —
- * two orders of magnitude below the unbounded hole a loop over this endpoint
- * would otherwise be, and the same order as the Test button's own $0.24.
+ * back, which is roughly $0.001–$0.0025 a CALL, and so $0.002–$0.005 a press at
+ * the two round trips `maxRetries: 0` allows (the call, and
+ * `generateStructured`'s repair retry for a schema violation). The ledger
+ * writes one row per PHYSICAL call, so a press that met the repair retry
+ * consumes two and the limit bounds money rather than clicks.
+ *
+ * The ceiling is therefore about $0.30 an hour — 120 CALLS at the upper
+ * estimate, not 120 presses at it, which is the arithmetic this docstring used
+ * to get wrong in the safe direction. Both figures are `gemini-3.7-flash`'s
+ * ($0.75/$3.75 per Mtok, `packages/ai/src/pricing.ts`), the model the number was
+ * picked against; the model is the ORG's choice, and the priciest one the price
+ * table knows — `gemini-3.1-pro-preview`, $2/$12 — is about three times that, so
+ * roughly $1 an hour. Both stay two orders of magnitude below the unbounded hole
+ * a loop over this endpoint would otherwise be, and the cheap-model figure is
+ * the same order as the Test button's own $0.24.
  *
  * The other half of the judgement, and the half that picks the number: honest
  * use is a person editing one draft, and the dossier's staging loop makes them

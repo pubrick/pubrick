@@ -1400,17 +1400,19 @@ export class ContentRepository {
    * surprise.
    *
    * The delete is keyed on `content_item_id` ALONE — the unique index's own
-   * column. Adding `org_id` would look stricter and would in fact leave a row
-   * the insert then collides with, turning a supersede into a 500; the tenancy
-   * check has already happened, above, against the item.
+   * column, so it removes exactly the row the insert below could collide with.
+   * Adding `org_id` would not be stricter: tenancy was checked above against
+   * the item, an item belongs to one org, and the row's `org_id` is always that
+   * item's, so the two predicates select the same row (a mutation that adds it
+   * survives the suite, which is the evidence). What it would be is a predicate
+   * narrower than the constraint it exists to satisfy.
    *
-   * WHAT THIS TRANSACTION LOCKS, for `docs/lock-order.md`: the item's existing
-   * proposal row (`DELETE`), and `content_items` in `FOR KEY SHARE` through the
-   * insert's foreign key — plus `organization` and `user`, which no
-   * application transaction ever takes together with anything else.
-   * `content_items` is LAST in the canonical order and is the only one of the
-   * five taken here, so this cannot invert anything. The model call is already
-   * over by the time it opens.
+   * WHAT THIS TRANSACTION LOCKS, for `docs/lock-order.md`: `content_items`
+   * first, then the item's existing proposal row — plus `organization` and
+   * `user` through the insert's other two foreign keys, neither of which any
+   * transaction takes together with anything else. That order is the product's,
+   * and `insertProposal` below takes it deliberately rather than as a side
+   * effect. The model call is already over by the time this opens.
    */
   private async stageProposal(row: {
     orgId: string;
@@ -1439,6 +1441,47 @@ export class ContentRepository {
     return staged;
   }
 
+  /**
+   * THE ITEM FIRST, THEN ITS PROPOSAL ROW — `docs/lock-order.md`'s order, taken
+   * here rather than left to the insert's foreign key.
+   *
+   * Without this statement the acquisition order is the inverse: the `DELETE`
+   * locks the proposal row and `content_items FOR KEY SHARE` arrives four
+   * statements later, inside the insert. Both of the transactions that touch
+   * these two rows go the other way — a brand delete's cascade destroys the
+   * item and then its proposal children, and Accept locks the item `FOR UPDATE`
+   * and then reads the proposal under it — so the inverse order is a cycle, and
+   * it was reproduced as `40P01` against a real database from both sides. A
+   * deadlock here is expensive in a way a deadlock usually is not: the model
+   * call is paid for and the ledger row written before this opens, and `40P01`
+   * is not `23503`, so it reached the reader as a 500 with no proposal.
+   *
+   * `FOR NO KEY UPDATE`, not `FOR KEY SHARE`, and the difference is the second
+   * defect this closes. `FOR KEY SHARE` would order the acquisition and nothing
+   * else: two presses could hold it at once, both delete a row neither can see,
+   * and the second would be answered `duplicate key` — a 500 for a call the
+   * person had already paid for. `FOR NO KEY UPDATE` is the weakest mode two
+   * holders cannot share, so two overlapping presses queue on the item and the
+   * later one supersedes the earlier, which is exactly what two sequential
+   * presses do. Serialising them is preferred to catching `23505` and retrying:
+   * a retry can lose the same race again to a third press, and "supersede" is
+   * easier to reason about when it is a total order rather than a rule with an
+   * exception. What the lock cannot order is a press against an api replica
+   * still running the build before this one, which takes no such lock — a
+   * window that closes when that replica goes, and not worth a recovery path
+   * nothing afterwards can reach.
+   *
+   * It is deliberately NOT `requireEditableItem`'s `FOR UPDATE`: this
+   * transaction does not change the item, and `FOR NO KEY UPDATE` leaves the
+   * foreign-key `FOR KEY SHARE` that `content_versions` and `usage_ledger`
+   * inserts take unblocked.
+   *
+   * NO ROW is not an error here. The draft can be deleted while the model is
+   * answering; the insert then violates its foreign key and `stageProposal`
+   * turns that into 404 `content_not_found`, which is the one answer this case
+   * has ever had. Throwing from here instead would leave that arm unreachable
+   * and untested.
+   */
   private async insertProposal(row: {
     orgId: string;
     contentItemId: string;
@@ -1451,6 +1494,17 @@ export class ContentRepository {
     reason: string;
   }): Promise<RefineProposal | undefined> {
     return db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(
+          and(
+            eq(schema.contentItems.orgId, row.orgId),
+            eq(schema.contentItems.id, row.contentItemId),
+          ),
+        )
+        .limit(1)
+        .for("no key update");
       await tx
         .delete(schema.refineProposals)
         .where(eq(schema.refineProposals.contentItemId, row.contentItemId));

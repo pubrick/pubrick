@@ -3,7 +3,8 @@
 **One order, for the whole product:**
 
 ```
-brands  →  pipeline_runs  →  adaptations  →  channels  →  content_items
+brands  →  pipeline_runs  →  adaptations  →  channels  →  content_items  →
+refine_proposals
 ```
 
 Every transaction that takes row locks on more than one of these tables takes
@@ -46,9 +47,9 @@ of them has been overlooked in this codebase at least once:
   order the constraints were created. `content_versions` does the same to
   `content_items` and `adaptations`.
 - **A cascade acquires locks in its own scan order**, invisibly. `DELETE FROM
-  brands` reaches `channels`, `content_items`, `adaptations` and
-  `pipeline_runs`; `DELETE FROM channels` reaches `adaptations`. So the rule for
-  a cascading delete is: **lock everything the cascade will destroy, in the
+  brands` reaches `channels`, `content_items`, `adaptations`, `pipeline_runs`
+  and — through `content_items` — `refine_proposals`; `DELETE FROM channels`
+  reaches `adaptations`. So the rule for a cascading delete is: **lock everything the cascade will destroy, in the
   canonical order, before you issue the delete.** Both deletes in the api do
   exactly that, and lock *every* adaptation they will destroy — and, for the
   brand delete, *every* pipeline run — not only the ones whose queue jobs they
@@ -78,23 +79,6 @@ by plain reads. That is the same standing the `channels`/`adaptations` edge had
 before it became the first cycle this file records, so if a second writer of
 `ai_credentials` ever appears, put it in the order rather than re-deriving this
 paragraph.
-
-**`refine_proposals`** is not in the list because the only transaction that
-touches it takes nothing else in the order except the row its own foreign key
-reaches. `ContentRepository.refine` stages a proposal by deleting the item's
-existing row and inserting the new one, and the insert takes `FOR KEY SHARE` on
-`content_items` (and on `organization` and `user`, neither of which is ever
-taken with anything else). `content_items` is LAST in the canonical order and is
-the only one of the five held, so this transaction cannot invert anything.
-
-Two things about that transaction are load-bearing and easy to undo by
-accident. It opens **after** the model call has returned — the whole reason the
-editability read earlier in `refine` is a plain `SELECT` and not
-`requireEditableItem`'s `SELECT … FOR UPDATE` is that holding a row lock and a
-pool connection across a forty-five-second call is pool exhaustion at exactly
-the concurrency it is meant to permit. And the delete is keyed on
-`content_item_id` alone, the unique index's own column: adding `org_id` would
-leave a row the insert then collides with.
 
 **`usage_ledger`** is not in the list either, and its absence used to be
 unexplained rather than decided. Every ledger insert takes `FOR KEY SHARE`
@@ -136,6 +120,80 @@ statement. That is the same lock its `content_items` insert would take four
 statements later anyway; taking it up front is what puts the terminal write in
 the canonical order. Its fence is unmoved — the run is still locked and
 re-checked before any write.
+
+## `refine_proposals`, and why it sits last
+
+It is in the order rather than in the list above, and the earlier claim that it
+could stay out of the order — "the only transaction that touches it takes
+nothing else in the order except the row its own foreign key reaches, and
+`content_items` is last, so this cannot invert anything" — was wrong twice over.
+Being last protects a transaction whose *other* locks are all in the order; a
+table **outside** it, taken **before** `content_items`, is a new acquisition
+sequence, which is exactly what the `usage_ledger` paragraph above says belongs
+in the order. And "the only transaction" was never true: the proposal row is
+reached by three.
+
+The three, all of them taking `content_items` first:
+
+- **`ContentRepository.insertProposal`** locks the item, deletes the draft's
+  existing proposal row and inserts the new one. It takes the item explicitly,
+  as its first statement, rather than leaving it to the insert's foreign key
+  four statements later — that is the whole of the fix, and without it the order
+  is the inverse.
+- **`DELETE FROM brands`** cascades into `content_items` and, from there, into
+  the `refine_proposals` rows of every draft it destroys. Structurally in that
+  order: the child rows can only be reached by the statement that has already
+  deleted — and so locked — the parent.
+- **Accept** (2b-2b Task 6) takes `content_items FOR UPDATE` through
+  `requireEditableItem` and reads and deletes the proposal row under it.
+
+Both of the deadlocks the inverse order produced were reproduced as `40P01` on a
+real database, from both sides, and are regression-tested in
+`content.e2e.spec.ts` under *"what a second transaction on the same draft does
+to it"*. They cost more than a deadlock usually does: the staging transaction
+opens *after* a model call that has already been paid for and its ledger row
+written, and `40P01` is not `23503`, so the victim's reader was answered a 500
+with no proposal.
+
+**`BrandsRepository.delete` does not pre-lock `refine_proposals`, and must not.**
+The rule for a cascading delete above is "lock everything the cascade will
+destroy, in the canonical order, before you issue the delete", and the reason it
+exists is a counterparty that reaches those rows out of order. There is none
+here: the cascade already takes `content_items` before the proposal rows, and so
+does every other transaction that touches them. Adding a pre-lock would *create*
+the inversion it is meant to prevent — that delete does not lock `content_items`
+at all (nothing else takes it out of order against the brand), so a
+`refine_proposals` pre-lock would be the one statement in the product that took
+the two backwards.
+
+Three things about the staging transaction are load-bearing and easy to undo by
+accident.
+
+It opens **after** the model call has returned. The whole reason the editability
+read earlier in `refine` is a plain `SELECT` and not `requireEditableItem`'s
+`SELECT … FOR UPDATE` is that holding a row lock and a pool connection across a
+forty-five-second call is pool exhaustion at exactly the concurrency it is meant
+to permit.
+
+Its lock on the item is **`FOR NO KEY UPDATE`**, and the mode is a decision, not
+a default. `FOR KEY SHARE` — the mode the insert's foreign key would take anyway
+— orders the acquisition and nothing else: two presses can hold it at once, both
+delete a row neither can see, and the second is answered `duplicate key` by the
+unique index, which is a 500 for a call the person has already paid for.
+`FOR NO KEY UPDATE` is the weakest mode two holders cannot share, so overlapping
+presses queue on the item and the later supersedes the earlier, exactly as two
+sequential presses do. It is deliberately not `FOR UPDATE`: this transaction
+changes no item, and `FOR NO KEY UPDATE` leaves the foreign-key `FOR KEY SHARE`
+that `content_versions` and `usage_ledger` inserts take unblocked.
+
+The delete is keyed on **`content_item_id` alone**, the unique index's own
+column — the row the insert could collide with, and no narrower a predicate than
+the constraint it has to satisfy. Adding `org_id` would not be stricter: tenancy
+is checked before the call, against the item, and the proposal's `org_id` is
+always that item's, so the two predicates select the same row. (An earlier note
+here claimed the narrower delete would leave a row behind and turn a supersede
+into a 500. It cannot, for that reason, and the mutation that adds `org_id`
+survives the suite — an equivalent mutation, which is the evidence.)
 
 ## Same table, two transactions: `ORDER BY id`
 

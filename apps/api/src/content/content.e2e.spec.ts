@@ -9,12 +9,21 @@ import { RefineCaller, type RefineOutcome } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
 
 const url = process.env.TEST_DATABASE_URL;
+/**
+ * The same database, tagged. `application_name` rides in the connection string
+ * and lands in `pg_stat_activity.application_name`, which is what lets
+ * `waitForLockWaiter` below recognise a backend of THIS FILE'S app pool rather
+ * than guessing from statement text — brands.e2e.spec.ts documents the measured
+ * reason at length, and this file cascades through the same tables.
+ */
+const APP_NAME = "content-e2e";
+const appUrl = url ? `${url}${url.includes("?") ? "&" : "?"}application_name=${APP_NAME}` : url;
 
 describe.skipIf(!url)("content e2e", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    process.env.DATABASE_URL = url as string;
+    process.env.DATABASE_URL = appUrl as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     // Migrations run once for the whole suite in vitest.global-setup.ts (a single
@@ -4277,6 +4286,27 @@ describe.skipIf(!url)("content e2e", () => {
           .send({ verb: "shorten", ...SELECTION })
           .expect(201);
       });
+
+      /**
+       * The other half of "rolling", and the half a window that is too WIDE
+       * cannot fail: a call made half an hour ago is inside the hour and has to
+       * count. Without a row in that band the interval can be narrowed from an
+       * hour to a couple of minutes with the suite green — and a narrower
+       * window is a WEAKER bound, not a stricter one: 120 calls per two minutes
+       * is thirty times the ceiling the constant reasons about.
+       */
+      it("counts a call made inside the hour, not only one made this minute", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR, { ageHours: 0.5 });
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_limit_reached");
+        expect(refineCalls, "a refused press must cost nothing").toEqual([]);
+      });
     });
 
     /**
@@ -4418,6 +4448,416 @@ describe.skipIf(!url)("content e2e", () => {
         // The call happened, so the money is recorded: this refusal is about
         // what the answer would do to the body, not about the answer failing.
         expect(await ledgerRows(orgId)).toHaveLength(1);
+      });
+
+      /**
+       * THE BOUND'S EDGE, both sides of it.
+       *
+       * The case above overflows by thousands of characters, which proves the
+       * check exists and nothing about where it sits. An off-by-one here stages
+       * exactly the proposal it exists to stop — one Accept can only ever
+       * refuse, after the call was paid for — or refuses a reply that would
+       * have fit.
+       *
+       * The body is built backwards from the reply so the merge lands on the
+       * limit exactly: `before` is empty, so the merged length is the reply's
+       * plus everything after the selection.
+       */
+      it("stages a reply that fills the body to exactly the limit", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await setItemBody(
+          itemId,
+          `${SELECTED_TEXT}${"x".repeat(MAX_BODY_LENGTH - AI_REPLACEMENT.length)}`,
+        );
+
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        expect(staged.body.proposal).toBe(AI_REPLACEMENT);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      it("refuses the same reply one character past it", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await setItemBody(
+          itemId,
+          `${SELECTED_TEXT}${"x".repeat(MAX_BODY_LENGTH - AI_REPLACEMENT.length + 1)}`,
+        );
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_too_long");
+        expect(await proposalRows(itemId)).toEqual([]);
+      });
+
+      /**
+       * WHAT IS MEASURED AND WHAT IS STORED ARE THE SAME STRING, and it is the
+       * one the product's bodies are made of: newlines are U+000A, settled at
+       * the DTO for every writer, and a model's reply is a writer.
+       *
+       * A stored CR makes the lens's overlay lay down more characters than the
+       * textarea holds, sliding every highlight after it off the words it
+       * describes — `bodyText`'s own docstring has the mechanism. Accept
+       * splices this exact string into the body and Task 6's `unit_delta`
+       * counts the merge, so a CR here is a CR in the post.
+       */
+      it("stores the reply with the newlines the product uses, not the ones the model sent", async () => {
+        const { agent, itemId } = await refinableDraft();
+        refineOutcome = {
+          ok: true,
+          text: "Ouvert dès sept heures.\r\nEt le dimanche aussi.",
+          reason: AI_REASON,
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        expect(staged.body.proposal).toBe("Ouvert dès sept heures.\nEt le dimanche aussi.");
+        expect((await proposalRows(itemId))[0]?.proposal).toBe(
+          "Ouvert dès sept heures.\nEt le dimanche aussi.",
+        );
+      });
+    });
+
+    /**
+     * TWO TRANSACTIONS, ONE DRAFT.
+     *
+     * The staging transaction is short and opens only after the model has
+     * answered, but it is not alone on these two rows. A brand delete's cascade
+     * destroys `content_items` and then the item's `refine_proposals` child;
+     * Task 6's Accept will lock the item `FOR UPDATE` and then read and delete
+     * the same proposal row. Both of those take the item FIRST, so the staging
+     * transaction has to as well — deleting the proposal row and reaching
+     * `content_items` afterwards through the insert's foreign key is the
+     * inverse order, and both pairs were reproduced as `40P01` against this
+     * database before it took `content_items` up front.
+     *
+     * A deadlock here is not a wasted round trip: the money is already spent
+     * and the ledger row already written by the time this transaction opens,
+     * and `40P01` is not `23503`, so it reached the reader as a 500 with no
+     * proposal.
+     *
+     * Each peer below is hand-written on a connection of its own, the way
+     * brands.e2e.spec.ts hand-writes the publish worker's two statements: what
+     * is under test is the order THIS repository takes its locks in, and the
+     * peer only has to hold the other one.
+     */
+    describe("what a second transaction on the same draft does to it", () => {
+      /** The brand a draft hangs off, for the cascade that destroys both. */
+      async function brandOf(itemId: string): Promise<string> {
+        const { createDb } = await import("@pubrick/db");
+        const { db, pool } = createDb(url as string);
+        const [row] = (
+          await db.execute(`SELECT brand_id FROM content_items WHERE id = '${itemId}'`)
+        ).rows as { brand_id: string }[];
+        await pool.end();
+        return row?.brand_id as string;
+      }
+
+      /**
+       * Waits until THIS FILE'S app backend is parked on a row lock inside a
+       * statement matching one of `patterns` — the interleaving as a fact
+       * rather than a hope about promise scheduling.
+       *
+       * Two patterns, for the same reason brands.e2e.spec.ts passes two: with
+       * the order kept the request parks on its locking read of the item, and
+       * with it broken there is no such statement, so it gets as far as
+       * `insert into "refine_proposals"` and parks there. Matching either is
+       * what makes a broken order report the deadlock it causes rather than
+       * this poll's own timeout.
+       *
+       * The first pattern deliberately does not name the lock MODE. What these
+       * two cases are about is the ORDER; the mode is the overlapping-press
+       * case's business, and a pattern that spelled it would make these two
+       * fail for its reason instead of their own.
+       *
+       * Scoped by `application_name`, never by statement text alone: other e2e
+       * files run against this same database and reach `pg_stat_activity` with
+       * statements of their own.
+       */
+      async function waitForLockWaiter(
+        patterns: string[],
+        inFlight?: Promise<unknown>,
+      ): Promise<void> {
+        // The operation that is SUPPOSED to be doing the blocking. One that
+        // finishes instead produces no waiter, ever, and without this the poll
+        // spins until vitest kills the test with its own message.
+        let settled = false;
+        void inFlight?.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        const { createDb } = await import("@pubrick/db");
+        const { db, pool } = createDb(url as string);
+        const matches = patterns.map((pattern) => `query ILIKE '${pattern}'`).join(" OR ");
+        try {
+          const deadline = Date.now() + 10_000;
+          for (;;) {
+            const { rows } = await db.execute(
+              `SELECT count(*)::int AS n FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND application_name = '${APP_NAME}'
+                  AND wait_event_type = 'Lock'
+                  AND (${matches})`,
+            );
+            if ((rows[0] as { n: number }).n > 0) return;
+            if (settled) return;
+            if (Date.now() > deadline) {
+              throw new Error(`no backend blocked on ${patterns.join(" / ")}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        } finally {
+          await pool.end();
+        }
+      }
+
+      /** Where a staging refine can be parked: on the item, or on its own insert. */
+      const STAGING_WAITS_ON = ["%content_items%for %", '%insert into "refine_proposals"%'];
+
+      /**
+       * TASK 6'S ACCEPT, WHICH DOES NOT EXIST YET AND MUST NOT HAVE TO BE
+       * WRITTEN AROUND THIS.
+       *
+       * Its first two statements are specified: `requireEditableItem`
+       * (`content_items FOR UPDATE`), then the proposal row it reads and
+       * deletes under that lock. Held here on a connection of its own, that is
+       * the exact inverse of the order the staging transaction used to take,
+       * and the pair deadlocks: whichever side loses, a person loses either the
+       * refine they paid for or the Accept they pressed.
+       */
+      it("does not deadlock against an Accept holding the item and reaching for the proposal", async () => {
+        const { agent, itemId } = await refinableDraft();
+        // A committed proposal, so the supersede DELETE below has a row to lock
+        // rather than a gap.
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        // THE LEDGER ROW IS NOT PART OF THIS INTERLEAVING, and leaving it in
+        // would hide the one that is. `recordRefineUsage` writes it in a
+        // transaction of its own, a moment earlier, and its foreign key takes
+        // `content_items FOR KEY SHARE` too — so with a peer already holding
+        // the item, the request parks THERE, on a transaction holding nothing,
+        // and the peer is through before the staging transaction opens. The
+        // deadlock lives in the window after that insert has committed: an
+        // empty `usage` is how a test reaches it, and `recordRefineUsage`
+        // returns on it without writing.
+        refineOutcome = { ...refineOutcome, usage: [] as RefineOutcome["usage"] };
+
+        const { createDb } = await import("@pubrick/db");
+        const { pool } = createDb(url as string);
+        const accept = await pool.connect();
+        let acceptError: string | null = null;
+        let status = 0;
+        try {
+          await accept.query("BEGIN");
+          await accept.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
+
+          const pressing = agent
+            .post(`/api/content/${itemId}/refine`)
+            .send({ verb: "punchier", ...SELECTION })
+            .then((res) => res.status);
+          await waitForLockWaiter(STAGING_WAITS_ON, pressing);
+
+          acceptError = await accept
+            .query("DELETE FROM refine_proposals WHERE content_item_id = $1", [itemId])
+            .then(
+              () => null,
+              (error: { code?: string }) => String(error.code),
+            );
+          await accept.query("COMMIT");
+          status = await pressing;
+        } finally {
+          await accept.query("ROLLBACK").catch(() => {});
+          accept.release();
+          await pool.end();
+        }
+
+        expect(acceptError, "the Accept was the deadlock victim (40P01)").toBeNull();
+        expect(status, "the staging refine was the deadlock victim (40P01 -> 500)").toBe(201);
+        // ...and the press that waited still staged what it had paid for.
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      }, 20_000);
+
+      /**
+       * THE BRAND DELETE'S CASCADE — the same order arriving from the other
+       * end: `DELETE FROM brands` reaches `content_items` and, through
+       * `refine_proposals.content_item_id`, the proposal row of every draft it
+       * destroys.
+       *
+       * The item's own lock is taken as a separate statement first, so the
+       * interleaving is a fact rather than a race inside one cascading
+       * statement; it is the same lock the cascade's `DELETE FROM ONLY
+       * content_items` takes on that row a moment later.
+       *
+       * What the request owes the reader once the draft really is gone is
+       * unchanged, and asserted here rather than assumed: 404
+       * `content_not_found`, with the spend still recorded against a null
+       * `content_item_id`.
+       */
+      it("does not deadlock against a brand delete cascading into the same two rows", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+        const brandId = await brandOf(itemId);
+        // THE LEDGER ROW IS NOT PART OF THIS INTERLEAVING, and leaving it in
+        // would hide the one that is. `recordRefineUsage` writes it in a
+        // transaction of its own, a moment earlier, and its foreign key takes
+        // `content_items FOR KEY SHARE` too — so with a peer already holding
+        // the item, the request parks THERE, on a transaction holding nothing,
+        // and the peer is through before the staging transaction opens. The
+        // deadlock lives in the window after that insert has committed: an
+        // empty `usage` is how a test reaches it, and `recordRefineUsage`
+        // returns on it without writing.
+        refineOutcome = { ...refineOutcome, usage: [] as RefineOutcome["usage"] };
+
+        const { createDb } = await import("@pubrick/db");
+        const { pool } = createDb(url as string);
+        const cascade = await pool.connect();
+        let cascadeError: string | null = null;
+        let refusal: { status: number; code?: string } = { status: 0 };
+        try {
+          await cascade.query("BEGIN");
+          await cascade.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
+
+          const pressing = agent
+            .post(`/api/content/${itemId}/refine`)
+            .send({ verb: "punchier", ...SELECTION })
+            .then((res) => ({ status: res.status, code: res.body.code as string | undefined }));
+          await waitForLockWaiter(STAGING_WAITS_ON, pressing);
+
+          cascadeError = await cascade.query("DELETE FROM brands WHERE id = $1", [brandId]).then(
+            () => null,
+            (error: { code?: string }) => String(error.code),
+          );
+          await cascade.query("COMMIT");
+          refusal = await pressing;
+        } finally {
+          await cascade.query("ROLLBACK").catch(() => {});
+          cascade.release();
+          await pool.end();
+        }
+
+        expect(cascadeError, "DELETE /api/brands/:id was the deadlock victim (40P01)").toBeNull();
+        // Not a 500 about a foreign key, and not a 500 about a deadlock: the
+        // draft this refine was about is gone, which is a sentence a reader can
+        // act on.
+        expect(refusal.status, "the staging refine was the deadlock victim (40P01 -> 500)").toBe(
+          404,
+        );
+        expect(refusal.code).toBe("content_not_found");
+      }, 20_000);
+
+      /**
+       * TWO PRESSES THAT GENUINELY OVERLAP.
+       *
+       * The unique index makes two rows impossible; it does not make the second
+       * transaction recover. Without the item lock both presses delete nothing
+       * — neither can see the other's uncommitted row — the second blocks on
+       * the index, and when the first commits it is answered `23505`, which is
+       * not `23503`, so it reached the reader as a 500 for a call they had
+       * already paid for.
+       *
+       * The peer is a hand-written copy of `insertProposal`'s own three
+       * statements, because that is what the other press is: another api
+       * replica running this code.
+       */
+      it("serialises a press that overlaps another, rather than losing it to a duplicate key", async () => {
+        const { agent, itemId } = await refinableDraft();
+
+        const { createDb } = await import("@pubrick/db");
+        const { pool } = createDb(url as string);
+        const peer = await pool.connect();
+        let status = 0;
+        try {
+          await peer.query("BEGIN");
+          await peer.query("SELECT id FROM content_items WHERE id = $1 FOR NO KEY UPDATE", [
+            itemId,
+          ]);
+          await peer.query("DELETE FROM refine_proposals WHERE content_item_id = $1", [itemId]);
+          await peer.query(
+            `INSERT INTO refine_proposals
+               (org_id, content_item_id, verb, selected_text, start_offset, end_offset, proposal, reason)
+             SELECT org_id, id, 'shorten', $2, 0, 12, 'The other press.', 'r'
+               FROM content_items WHERE id = $1`,
+            [itemId, SELECTED_TEXT],
+          );
+
+          const pressing = agent
+            .post(`/api/content/${itemId}/refine`)
+            .send({ verb: "punchier", ...SELECTION })
+            .then((res) => res.status);
+          await waitForLockWaiter(STAGING_WAITS_ON, pressing);
+          await peer.query("COMMIT");
+          status = await pressing;
+        } finally {
+          await peer.query("ROLLBACK").catch(() => {});
+          peer.release();
+          await pool.end();
+        }
+
+        expect(status, "the later press was answered a duplicate key as a 500").toBe(201);
+        const rows = await proposalRows(itemId);
+        expect(rows).toHaveLength(1);
+        // The LATER press's proposal, superseding the one it overlapped — the
+        // same outcome two sequential presses already get.
+        expect(rows[0]?.proposal).toBe(AI_REPLACEMENT);
+      }, 20_000);
+
+      /**
+       * THE DELETE AND THE INSERT ARE ONE TRANSACTION, and this is the
+       * assertion that can tell.
+       *
+       * The supersede destroys a proposal a person paid for and is looking at.
+       * If the insert that replaces it fails, the delete has to go with it —
+       * otherwise a request that stages nothing has still thrown away the card
+       * on the screen, which is worse than the refusal it answers.
+       *
+       * The failure injected is a NUL byte in the model's `reason`: a character
+       * a JSON string may carry, that no `text` column can, and that nothing
+       * upstream of the insert rejects. Any failed insert would do — this one
+       * is simply reachable from the seam a test can reach.
+       */
+      it("keeps the staged proposal when the row that would replace it cannot be written", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        refineOutcome = {
+          ok: true,
+          text: "Encore ouvert.",
+          reason: "Plus court.\u0000",
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "punchier", ...SELECTION })
+          .expect(500);
+
+        const rows = await proposalRows(itemId);
+        expect(rows, "the supersede deleted a paid-for proposal it could not replace").toHaveLength(
+          1,
+        );
+        expect(rows[0]?.id).toBe(staged.body.id);
+        expect(rows[0]?.proposal).toBe(AI_REPLACEMENT);
       });
     });
   });
