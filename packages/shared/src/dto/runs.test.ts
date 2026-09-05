@@ -145,7 +145,12 @@ describe("a run asked for from material a person pasted", () => {
    * nothing would report. `z.url()` alone constrains no scheme in zod 4.
    */
   it("refuses a url whose scheme is not http or https", () => {
-    for (const sourceUrl of ["javascript:alert(1)", "mailto:someone@example.com"]) {
+    // `httpx://` is what an unanchored `/^https?/` would let through.
+    for (const sourceUrl of [
+      "javascript:alert(1)",
+      "mailto:someone@example.com",
+      "httpx://example.com",
+    ]) {
       const denied = sourceRunInputSchema.safeParse({ ...pasted, sourceUrl });
       expect(denied.success).toBe(false);
       expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
@@ -153,6 +158,16 @@ describe("a run asked for from material a person pasted", () => {
     expect(
       sourceRunInputSchema.parse({ ...pasted, sourceUrl: "http://example.com" }).sourceUrl,
     ).toBe("http://example.com");
+  });
+
+  it("bounds a stored url at 2048 characters", () => {
+    const path = "a".repeat(2048 - "http://x.io/".length);
+    const atBound = `http://x.io/${path}`;
+    expect(atBound.length).toBe(2048);
+    expect(sourceRunInputSchema.parse({ ...pasted, sourceUrl: atBound }).sourceUrl).toBe(atBound);
+    const denied = sourceRunInputSchema.safeParse({ ...pasted, sourceUrl: `${atBound}a` });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
   });
 
   it("stores the paste unbounded: the length limit is the request's, not the column's", () => {
@@ -247,7 +262,11 @@ describe("what a run may be asked for", () => {
   });
 
   it("refuses a source url whose scheme is not http or https", () => {
-    for (const sourceUrl of ["javascript:alert(1)", "mailto:someone@example.com"]) {
+    for (const sourceUrl of [
+      "javascript:alert(1)",
+      "mailto:someone@example.com",
+      "httpx://example.com",
+    ]) {
       const denied = runCreateSchema.safeParse({ ...base, material: "The article.", sourceUrl });
       expect(denied.success).toBe(false);
       expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
@@ -259,6 +278,20 @@ describe("what a run may be asked for", () => {
         sourceUrl: "https://example.com/a",
       }).sourceUrl,
     ).toBe("https://example.com/a");
+  });
+
+  it("bounds a request's source url at 2048 characters", () => {
+    const atBound = `http://x.io/${"a".repeat(2048 - "http://x.io/".length)}`;
+    expect(
+      runCreateSchema.parse({ ...base, material: "The article.", sourceUrl: atBound }).sourceUrl,
+    ).toBe(atBound);
+    const denied = runCreateSchema.safeParse({
+      ...base,
+      material: "The article.",
+      sourceUrl: `${atBound}a`,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
   });
 
   /**

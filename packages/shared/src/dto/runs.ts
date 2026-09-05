@@ -410,9 +410,11 @@ export const sourceRunInputSchema = z.object({
    * TOP-LEVEL rather than nested under an attribution object: the gate that
    * decides whether watched sources get built reads `input->>'sourceUrl'`, and
    * a nested key would make that expression return NULL for every row while the
-   * query still ran. `null` rather than an absent key for the same reason —
-   * `jsonb ->> 'k'` yields SQL NULL for a JSON null and nothing at all for a
-   * missing key, and the gate's `count(distinct …)` depends on the first.
+   * query still ran. `null` rather than an absent key so that the shape of a
+   * source run is one shape: `.nullable()` makes the key mandatory at the DTO,
+   * so a stored row always carries it and a reader never has to ask "absent or
+   * null?" (`jsonb ->> 'k'` returns SQL NULL for both, so the gate's
+   * `count(distinct …)` would not tell them apart either way).
    */
   sourceUrl: z
     .url({ protocol: /^https?$/ })
