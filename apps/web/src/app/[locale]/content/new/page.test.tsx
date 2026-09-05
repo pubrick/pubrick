@@ -4,6 +4,7 @@ import {
   MAX_BODY_LENGTH,
   MAX_CONCURRENT_RUNS,
   MAX_SOURCE_TEXT_LENGTH,
+  MAX_SOURCE_URL_LENGTH,
   runCreateSchema,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
@@ -480,11 +481,28 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toBeVisible();
     // The two promises the product makes about this field, in the open: the
     // text is used as pasted, and the link is recorded rather than fetched.
-    expect(screen.getByText(en.ContentNew.sourceHelp)).toBeVisible();
+    const help = screen.getByText(en.ContentNew.sourceHelp);
+    expect(help).toBeVisible();
+    // And they reach a reader who cannot see the paragraph, through the fields
+    // themselves. The textarea MERGES this with its own counter id, so the
+    // assertion is containment rather than equality.
+    expect(
+      screen.getByLabelText(en.ContentNew.materialLabel).getAttribute("aria-describedby"),
+    ).toContain(help.id);
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toHaveAttribute(
+      "aria-describedby",
+      help.id,
+    );
     // A URL keyboard, and deliberately NOT `type="url"` — see the test named
-    // "does not kill the primary action" below, and the comment on the field.
+    // "reaches OUR refusal, not a dead button" below, and the comment on the
+    // field. The length bound is the schema's own exported constant, so the
+    // screen cannot promise a bound the boundary stopped enforcing.
     expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toHaveAttribute("inputmode", "url");
     expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).not.toHaveAttribute("type", "url");
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toHaveAttribute(
+      "maxlength",
+      String(MAX_SOURCE_URL_LENGTH),
+    );
   });
 
   it("counts the paste against MAX_SOURCE_TEXT_LENGTH as it is typed", async () => {
@@ -688,6 +706,36 @@ describe("what Generate sends (Task 5 Steps 2 and 4)", () => {
     expect(runCreateSchema.parse(sent)).toEqual(sent);
   });
 
+  it("sends the link exactly as it was typed, untrimmed", async () => {
+    // The rule the brief and the material follow, stated on its own because it
+    // cannot ride in the table above: `z.url()` PARSES to the normalised href,
+    // so `runCreateSchema.parse(sent)` is not `sent` for a padded link and the
+    // round-trip form would fail on a value the API accepts. The boundary
+    // normalises; the screen does not. The trim decides presence, and the run's
+    // stored input is a receipt of what the person actually typed.
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "run-7" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await generateWith(userEvent.setup(), {
+      material: ARTICLE,
+      url: "  https://example.com/ruling  ",
+    });
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalled());
+    const sent = parsedBody(calls.find((c) => c.method === "POST" && c.path === "/api/runs"));
+    expect(sent.sourceUrl).toBe("  https://example.com/ruling  ");
+    expect(runCreateSchema.safeParse(sent).success).toBe(true);
+  });
+
   it("sends no `brief` key whatsoever for a paste-only run", async () => {
     // Stated on its own because it is the assertion this increment turns on:
     // `brief` used to go out unconditionally from a `""` default, and `""` is
@@ -751,10 +799,17 @@ describe("what Generate sends (Task 5 Steps 2 and 4)", () => {
 });
 
 /**
- * "CREATE POST" WITH AN ARTICLE PASTED (Task 5 Step 3).
+ * "CREATE POST" WHILE THE SOURCE SECTION HOLDS SOMETHING (Task 5 Step 3).
  *
  * `contentCreateSchema` has no `material` and no `sourceUrl`, so this path
- * would create a post from the typed body and drop the paste with no undo.
+ * would create a post from the typed body and drop whatever is in that section
+ * with no undo and nothing on screen to say it happened.
+ *
+ * The refusal reads `hasMaterial || hasSourceUrl` — `Advanced`'s `dirty`
+ * expression, character for character. The dot says "there is something in
+ * here"; the primary action may not then throw that something away without a
+ * word, and a link typed seconds earlier is exactly as much a person's value as
+ * a paste is.
  *
  * EVERY TEST HERE TYPES A BODY, and that is the whole point of the step. The
  * body `Textarea` is `required` and the header button is a real
@@ -762,15 +817,25 @@ describe("what Generate sends (Task 5 Steps 2 and 4)", () => {
  * a test that pastes material and submits an empty form passes without ever
  * reaching the guard, and would keep passing after the guard was deleted.
  */
-describe("'Create post' while the Source section holds material (Task 5 Step 3)", () => {
-  async function compose(user: ReturnType<typeof userEvent.setup>, material: string | undefined) {
+describe("'Create post' while the Source section holds something (Task 5 Step 3)", () => {
+  const ARTICLE_PASTE = "The regulator published its ruling this morning.";
+
+  async function compose(
+    user: ReturnType<typeof userEvent.setup>,
+    source: { material?: string; url?: string },
+  ) {
     await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await screen.findByLabelText(/Main channel/);
     await user.click(screen.getByLabelText(/Main channel/));
     await user.type(screen.getByLabelText(en.ContentNew.body), "Text I typed myself");
-    if (material !== undefined) {
+    if (source.material !== undefined || source.url !== undefined) {
       await user.click(screen.getByText(en.ContentNew.sourceTitle));
-      await user.type(screen.getByLabelText(en.ContentNew.materialLabel), material);
+      if (source.material !== undefined) {
+        await user.type(screen.getByLabelText(en.ContentNew.materialLabel), source.material);
+      }
+      if (source.url !== undefined) {
+        await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), source.url);
+      }
     }
   }
 
@@ -781,18 +846,57 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
-    await compose(user, "The regulator published its ruling this morning.");
+    await compose(user, { material: ARTICLE_PASTE });
 
     await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
 
-    expect(await screen.findByText(en.ContentNew.materialBlocksCreate)).toBeInTheDocument();
+    // Asserted through the LIVE REGION, not merely as text on the page: this
+    // refusal moves no focus and puts no request in flight, so `role="alert"`
+    // is the only thing that tells a screen-reader user the button did
+    // something.
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
+    // And it names a control that is on the screen — this org has a key, so
+    // Generate is rendered.
+    expect(screen.getByRole("button", { name: en.ContentNew.generate })).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     expect(routerMock.push).not.toHaveBeenCalled();
     // Refused, not consumed: both texts are still on screen to act on.
-    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
-      "The regulator published its ruling this morning.",
-    );
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(ARTICLE_PASTE);
     expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
+  });
+
+  it("refuses over a link alone, which no post can carry either", async () => {
+    // §2.4 on the create path. `contentCreateSchema` drops `sourceUrl` exactly
+    // as it drops `material`, so before this guard the link went nowhere, the
+    // screen navigated to the new item, and nothing said so — while the dot
+    // over the section it came from was still lit.
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content") return { id: "new-item-6" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, { url: "https://example.com/ruling" });
+
+    // The dot and the refusal are one expression: if the section is worth a
+    // dot, it is worth a sentence.
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    expect(await screen.findByText(en.ContentNew.sourceBlocksCreate)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toHaveValue(
+      "https://example.com/ruling",
+    );
   });
 
   it("refuses on the form's own submit event too, not only on the header button", async () => {
@@ -808,12 +912,38 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
     const { container } = render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
-    await compose(user, "The regulator published its ruling this morning.");
+    await compose(user, { material: ARTICLE_PASTE });
 
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
 
-    expect(await screen.findByText(en.ContentNew.materialBlocksCreate)).toBeInTheDocument();
+    expect(await screen.findByText(en.ContentNew.sourceBlocksCreate)).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("names Settings, not Generate, for an org with no AI key", async () => {
+    // A refusal may only name what the person can SEE. Without a credential
+    // the Generate button is not rendered at all — `aiNotConfigured` and a
+    // link to Settings take its place — so "use Generate" would point at a
+    // control that is not on this screen. The Source section itself stays: it
+    // holds a person's typed text, and `credentials` reads `[]` for a FAILED
+    // request too, so hiding the section would delete a field over a GET that
+    // did not answer.
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, noCredentials);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, { material: ARTICLE_PASTE });
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    expect(await screen.findByText(en.ContentNew.sourceBlocksCreateNoAi)).toBeInTheDocument();
+    expect(screen.queryByText(en.ContentNew.sourceBlocksCreate)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.ContentNew.generate })).not.toBeInTheDocument();
+    expect(screen.getByText(en.ContentNew.aiNotConfigured)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
   });
 
   it("creates the post exactly as before when there is no material", async () => {
@@ -829,7 +959,7 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
 
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
-    await compose(userEvent.setup(), undefined);
+    await compose(userEvent.setup(), {});
 
     await userEvent.setup().click(screen.getByRole("button", { name: en.ContentNew.submit }));
 
@@ -842,18 +972,25 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
     });
   });
 
-  it("a link the browser would call invalid does not kill the primary action", async () => {
+  it("a link the browser would call invalid reaches OUR refusal, not a dead button", async () => {
     /**
      * THE FIELD IS NOT `type="url"`, AND THIS IS WHY.
      *
      * A constrained control that is invalid while it cannot be focused — which
      * is what every field in a COLLAPSED `Advanced` is — makes the browser
      * refuse the form's submit and report nothing: no bubble, no inline error,
-     * no request. The person typed "example.com" into a link field an hour
-     * ago, collapsed the section, wrote a post, and now the one primary action
-     * on the screen does nothing at all, forever, with no sentence anywhere.
-     * The constitution's rule about a primary action naming its refusal is the
-     * rule that forbids it, and jsdom reproduces the whole sequence.
+     * no request, no sentence. The person typed "example.com" into a link
+     * field an hour ago, collapsed the section, wrote a post, and the one
+     * primary action on the screen does nothing at all, forever. The
+     * constitution's rule about a primary action naming its refusal is the rule
+     * that forbids it, and jsdom reproduces the whole sequence.
+     *
+     * What proves the control is unconstrained is therefore that THE SCREEN's
+     * own sentence renders: the submit event ran, our code read the section,
+     * and it said so in the reader's language. Restore `type="url"` and jsdom
+     * swallows the submit — no request, no navigation and no refusal anywhere,
+     * which is what this test then fails on. `validity.valid` is the second
+     * half of the same claim, read off the control itself.
      */
     const calls: Call[] = [];
     installHandlers(
@@ -880,17 +1017,18 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
 
     await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
 
-    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/new-item-5"));
-    // The value is still not a URL anything would accept — Generate refuses it
-    // with `sourceUrlNotHttp` — so what is asserted here is only that the
-    // browser's own validity is not standing silently in the way.
+    expect(await screen.findByText(en.ContentNew.sourceBlocksCreate)).toBeInTheDocument();
     expect((container.querySelector("#sourceUrl") as HTMLInputElement).validity.valid).toBe(true);
+    // Refused by this screen, in its own words — not by a browser that filed
+    // the problem in a console nobody reads.
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 
   it("creates the post when the Source section holds only whitespace", async () => {
-    // The same trimmed predicate as the dot and the request body. Untrimmed,
-    // a single stray space would block the screen's primary action outright,
-    // over material nobody can see and the request would not have sent.
+    // The same trimmed predicate as the dot and the request body, in BOTH
+    // halves. Untrimmed, a single stray space in either field would block the
+    // screen's primary action outright, over a value nobody can see and the
+    // request would not have sent.
     const calls: Call[] = [];
     installHandlers(
       calls,
@@ -904,12 +1042,13 @@ describe("'Create post' while the Source section holds material (Task 5 Step 3)"
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
-    await compose(user, "   ");
+    await compose(user, { material: "   ", url: "  " });
 
     await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
 
     await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/new-item-4"));
-    expect(screen.queryByText(en.ContentNew.materialBlocksCreate)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.ContentNew.sourceBlocksCreate)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.ContentNew.sourceBlocksCreateNoAi)).not.toBeInTheDocument();
   });
 });
 

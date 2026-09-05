@@ -5,6 +5,7 @@ import {
   MAX_BODY_LENGTH,
   MAX_BRIEF_LENGTH,
   MAX_SOURCE_TEXT_LENGTH,
+  MAX_SOURCE_URL_LENGTH,
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -28,6 +29,7 @@ type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
 
 const FORM_ID = "new-content-form";
+const SOURCE_HELP_ID = "source-help";
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
@@ -69,6 +71,20 @@ export default function NewContentPage() {
   const hasBrief = brief.trim() !== "";
   const hasMaterial = material.trim() !== "";
   const hasSourceUrl = sourceUrl.trim() !== "";
+
+  /**
+   * "IS GENERATE ON THIS SCREEN" — the condition that RENDERS the button, read
+   * again by the refusal that names it.
+   *
+   * A refusal may only name a control the person can see, and this one is the
+   * screen's own answer to "what do I do with what I pasted". Without a
+   * credential the button is not rendered at all (`aiNotConfigured` and a link
+   * to Settings take its place), so the sentence has to point at Settings
+   * instead. One expression for both, or the copy starts describing a screen
+   * that is not there — which is what it did while `credentials` was read only
+   * at the render site.
+   */
+  const canGenerate = credentials !== null && credentials.length > 0;
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -127,14 +143,21 @@ export default function NewContentPage() {
   // before onFormSubmit fires, exactly as if the button sat inside the form.
   async function createContent() {
     setError(null);
-    // THE PASTE IS NOT PART OF A MANUAL POST. `contentCreateSchema` has no
-    // `material` and no `sourceUrl`, so this path would create a post from the
-    // typed body, drop the article the person pasted, and navigate away — with
-    // no undo and nothing on screen to say it happened. Refused rather than
-    // confirmed: the opposite direction (Generate discarding a typed body) is
-    // something a person might actually want, and this never is.
-    if (hasMaterial) {
-      setError(t("materialBlocksCreate"));
+    // THE SOURCE SECTION IS NOT PART OF A MANUAL POST. `contentCreateSchema`
+    // has no `material` and no `sourceUrl`, so this path would create a post
+    // from the typed body, drop BOTH of the things the person put in that
+    // section, and navigate away — with no undo and nothing on screen to say it
+    // happened. Refused rather than confirmed: the opposite direction (Generate
+    // discarding a typed body) is something a person might actually want, and
+    // this never is.
+    //
+    // The condition is `Advanced`'s own `dirty` expression, character for
+    // character (see the disclosure below). A dot that says "there is something
+    // in here" beside a primary action that silently deletes that something is
+    // the disagreement the three named predicates exist to make impossible —
+    // and a link is a value someone typed just as much as a paste is.
+    if (hasMaterial || hasSourceUrl) {
+      setError(t(canGenerate ? "sourceBlocksCreate" : "sourceBlocksCreateNoAi"));
       return;
     }
     if (channelIds.size === 0) {
@@ -328,7 +351,7 @@ export default function NewContentPage() {
               rows={3}
             />
             {credentials !== null &&
-              (credentials.length > 0 ? (
+              (canGenerate ? (
                 <div>
                   <Button variant="secondary" onClick={onGenerate} disabled={generating}>
                     {t("generate")}
@@ -361,6 +384,7 @@ export default function NewContentPage() {
                 placeholder={t("materialPlaceholder")}
                 maxLength={MAX_SOURCE_TEXT_LENGTH}
                 showCount
+                aria-describedby={SOURCE_HELP_ID}
                 rows={6}
               />
               {/*
@@ -386,11 +410,16 @@ export default function NewContentPage() {
                 value={sourceUrl}
                 onChange={(e) => setSourceUrl(e.target.value)}
                 placeholder={t("sourceUrlPlaceholder")}
-                maxLength={2048}
+                maxLength={MAX_SOURCE_URL_LENGTH}
+                aria-describedby={SOURCE_HELP_ID}
               />
               {/* Both promises in one line, where the fields are: nothing
-                  rewrites the paste, and nothing opens the link. */}
-              <p className="text-sm text-fg-tertiary">{t("sourceHelp")}</p>
+                  rewrites the paste, and nothing opens the link — and wired to
+                  both fields, because a promise only sighted readers can reach
+                  is not the promise this product makes. */}
+              <p id={SOURCE_HELP_ID} className="text-sm text-fg-tertiary">
+                {t("sourceHelp")}
+              </p>
             </div>
           </Advanced>
 

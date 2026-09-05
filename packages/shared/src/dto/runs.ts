@@ -125,6 +125,18 @@ export const MAX_BRIEF_LENGTH = 2000;
 export const MAX_SOURCE_TEXT_LENGTH = 8000;
 
 /**
+ * Upper bound on the link recorded beside a paste — `runCreateSchema.sourceUrl`
+ * and `sourceRunInputSchema.sourceUrl`, which are the same bound because they
+ * are the same value on its way in and at rest.
+ *
+ * Exported for the compose screen, whose `<input maxLength>` is what keeps an
+ * over-long link from becoming a 400 nobody can act on. Hand-copied on that
+ * screen, the two would drift the first time this number moved, and the screen
+ * would go on promising a bound the boundary no longer enforces.
+ */
+export const MAX_SOURCE_URL_LENGTH = 2048;
+
+/**
  * How many runs one org may have in `queued | running` at once.
  *
  * Exported rather than inlined in the 409 message because the web app names the
@@ -215,7 +227,7 @@ export const runCreateSchema = z
      */
     sourceUrl: z
       .url({ protocol: /^https?$/ })
-      .max(2048)
+      .max(MAX_SOURCE_URL_LENGTH)
       .optional(),
     channelIds: z
       .array(z.string().uuid())
@@ -418,7 +430,7 @@ export const sourceRunInputSchema = z.object({
    */
   sourceUrl: z
     .url({ protocol: /^https?$/ })
-    .max(2048)
+    .max(MAX_SOURCE_URL_LENGTH)
     .nullable(),
   /**
    * The material itself, carried BY VALUE so the receipt cannot dangle. There
