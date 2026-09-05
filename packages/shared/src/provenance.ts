@@ -523,6 +523,35 @@ const evidenceBody = (row: string | AiVersionRow): string =>
  *      of the model's sentences would otherwise read "all AI" and refuse a
  *      caller who trimmed the draft — with a message telling them to edit it.
  *
+ * **Ahead of all three: the anchor's own text, back byte for byte, is the
+ * model's.** `current === firstFullRow` (newlines canonicalised) answers `true`
+ * before clause 3 runs, and that is not an optimisation. A human deletion is
+ * PERMANENT in the running expectation — each delta was measured against the
+ * body as it stood, and nothing subtracts a deletion back out — so a later
+ * refine that RESTORES the deleted sentence pushes the expectation up rather
+ * than back: the body is once again the model's draft, character for
+ * character, while the count says a unit is owed. Clause 3 then reads a
+ * deletion that is no longer there, the gate opens on a draft nobody read and
+ * the badge captions the model's own words "Human-edited". Measured end to end
+ * through the real routes, not argued: delete a sentence, refine the next one
+ * so the model hands it back, accept.
+ *
+ * It is also the invariant this formula owes the one it replaced. Whole-body
+ * equality answered `true` for exactly this body, and the theorem below
+ * promises that `new = false ∧ old = true` is unsatisfiable — a promise that
+ * held only for the fragment-free shape, because a fragment's delta could make
+ * clause 3 refuse a body the old rule called untouched. Equality restores it
+ * for every shape, in the direction this module's header names as the safe one:
+ * a body no human word appears in is credited to the model.
+ *
+ * Byte-identity and not `isUntouchedAi`, which is the old rule in full: the
+ * narrowest closure that answers the measured case is the one to take when the
+ * question is whether a machine may be credited with a person's writing.
+ * `firstFullRow` and not "any `full` row", because the anchor is what clause 3
+ * counts against, and while a level has at most one `full` row — the invariant
+ * this formula already spends below — the two are the same set. A second one is
+ * 2c's decision to make, and the test named for it still holds.
+ *
  * Clause 3 **counts** against the level's first `full` row PLUS what the
  * fragments changed; it does not ask that every sentence of that row still
  * appear in the text. Membership is the
@@ -651,6 +680,15 @@ const evidenceBody = (row: string | AiVersionRow): string =>
  * fragment owes its `+1`, the body is a unit short of what the rows account
  * for, and a human really did delete a sentence. It is only still reachable
  * through the bare-body shorthand, where nothing says a unit was added.
+ *
+ * With ONE stated exception, and it is the equality clause above rather than a
+ * hole in this one: delete the line a refine added and what is left is the
+ * model's own draft, character for character. A human acted, and the count can
+ * see them — but the TEXT is a text no person wrote a word of, so this answers
+ * "the model's" and the gate asks for the draft to be opened rather than
+ * captioning three of the model's sentences as somebody's own writing. That is
+ * the same accepted false positive the module header names: under-claiming
+ * human authorship, never over-claiming it.
  */
 export function allSentencesAi(
   current: string,
@@ -663,6 +701,14 @@ export function allSentencesAi(
   if (aiRows.length === 0 || firstFullRow == null) return true;
   const reference = splitSentences(firstFullRow);
   if (reference.length === 0) return true;
+  // The anchor's own text, back byte for byte: the model produced this body in
+  // full, so it is the model's, and no arithmetic about what happened in
+  // between may say otherwise. Answered before clause 3 because clause 3 is
+  // exactly what gets it wrong — see the docstring's "restored by a refine".
+  // Newlines are canonicalised on both sides for the reason `normalizeNewlines`
+  // gives: a body that arrived by some other road (a model's own output) is not
+  // guaranteed to have crossed the DTO.
+  if (normalizeNewlines(current) === normalizeNewlines(firstFullRow)) return true;
   // Clause 3's expectation, built before anything else is asked, because a
   // fragment that cannot say what it replaced is missing evidence and takes
   // the refusing branch the missing-`full`-row check above takes — never the

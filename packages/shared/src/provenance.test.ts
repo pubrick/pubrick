@@ -1091,7 +1091,14 @@ describe("allSentencesAi", () => {
     expect(allSentencesAi("Alpha one. Beta two. And a second line. Gamma three.", rows, full)).toBe(
       true,
     );
-    expect(allSentencesAi("Alpha one. Beta two. Gamma three.", rows, full)).toBe(false);
+    // Delete the model's added line and the count sees the human — but only
+    // while the body it leaves behind is not the anchor's own text. Take the
+    // draft back to exactly what the model first wrote and equality answers
+    // first, deliberately: this used to read `false`, which captioned three
+    // sentences the model wrote "Human-edited" and opened the gate on them.
+    // The counterweight is the case below, one word away from this one.
+    expect(allSentencesAi("Alpha one. Beta two. Gamma three.", rows, full)).toBe(true);
+    expect(allSentencesAi("Alpha one. Beta two.", rows, full)).toBe(false);
   });
 
   it("adds several refines' deltas, so the second cannot pay for the first's deletion", () => {
@@ -1107,6 +1114,29 @@ describe("allSentencesAi", () => {
     ];
     expect(allSentencesAi("Alpha and beta, tighter. Delta four.", rows, draft)).toBe(true);
     expect(allSentencesAi("Alpha and beta, tighter.", rows, draft)).toBe(false);
+  });
+
+  it("reads a body the model produced in full as the model's, whatever happened in between", () => {
+    // A person deletes one of the draft's three sentences; a later refine's
+    // Accept puts it back, and the merged body is BYTE-IDENTICAL to the model's
+    // own draft. The running expectation cannot see that: a human deletion is
+    // permanent in the sum, so the restoring fragment's +1 pushes the count
+    // owed to four against three present, clause 3 reads a deletion, the gate
+    // opens on a draft nobody has read and the badge captions the model's own
+    // words "Human-edited". Driven end to end through the real routes by the
+    // increment's whole-branch review.
+    //
+    // Equality is what answers it, and it answers ahead of the arithmetic: a
+    // text the model produced IN FULL is the model's, whatever the history in
+    // between. It is also the formula this one replaced, so the fast path can
+    // never be laxer than whole-body equality was — which is exactly what the
+    // theorem below promises for the fragment-free shape and could not, until
+    // now, promise once a fragment was in play.
+    const restored = fragment("Beta two.\nGamma three.", +1);
+    expect(allSentencesAi(full, [full, restored], full)).toBe(true);
+    // ...and it swallows nothing: delete a sentence from that restored body and
+    // the count sees the human again, exactly as it did before.
+    expect(allSentencesAi("Alpha one. Gamma three.", [full, restored], full)).toBe(false);
   });
 
   it("refuses a fragment that cannot say what it replaced, ahead of every other clause", () => {

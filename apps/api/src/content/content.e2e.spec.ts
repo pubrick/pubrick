@@ -255,12 +255,12 @@ describe.skipIf(!url)("content e2e", () => {
   async function refinableDraft() {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
-    const { itemId } = await aiDraft(agent, brandId, [channelId]);
+    const { itemId, adaptationIds } = await aiDraft(agent, brandId, [channelId]);
     await agent
       .put("/api/ai-credentials")
       .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
       .expect(200);
-    return { agent, itemId, orgId: await orgOf(itemId) };
+    return { agent, itemId, adaptationIds, orgId: await orgOf(itemId) };
   }
 
   /** The org an item belongs to, for the fixtures that write rows themselves. */
@@ -5167,6 +5167,251 @@ describe.skipIf(!url)("content e2e", () => {
         expect(await masterVersionRows(itemId)).toHaveLength(1);
         expect(await proposalRows(itemId)).toHaveLength(1);
         expect(item.body.refineProposal.id).toBe(staged.body.id);
+      });
+
+      /**
+       * THE SAME REFUSAL, WITH THE PERSON'S SENTENCE SAVED THE WAY A PERSON
+       * SAVES ONE — through `PATCH`, which files an `origin = 'human'` version
+       * row of the whole body.
+       *
+       * The case above plants the text with a raw `UPDATE`, so the level holds
+       * no row at all besides the model's own. That is the shape in which every
+       * wrong choice coincides with the right one: drop `origin = 'ai'` from the
+       * evidence read and nothing changes, because there is nothing else to
+       * read. Here there is — the author's own save — and reading it as evidence
+       * would file `Note: ` as the model's, justified by the row in which the
+       * PERSON wrote it. Measured: without that predicate this Accept answers
+       * 200 and stores a fragment holding the author's own prefix.
+       */
+      it("refuses to launder a sentence the author saved through the API", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const body = "Café ouvert. Note: passez demain.";
+        await agent.patch(`/api/content/${itemId}`).send({ body }).expect(200);
+        const start = body.indexOf("passez demain.");
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "warmer", start, end: body.length })
+          .expect(201);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_would_launder");
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.body).toBe(body);
+        // The model's draft and the person's save, and nothing else: no
+        // fragment row, so nothing claims a model wrote a word of that line.
+        const rows = await masterVersionRows(itemId);
+        expect(rows.map((row) => row.origin)).toEqual(["ai", "human"]);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * ...AND AN `ai` ROW AT THE ADAPTATION LEVEL IS EVIDENCE ABOUT THE
+       * CHANNEL'S OWN TEXT, never about the master body being spliced here.
+       *
+       * A per-channel adaptation is a rewrite of this draft, so the model's
+       * adapted text ordinarily repeats the master body's sentences — including
+       * the one the PERSON wrote. Read at this level it would vouch for a line
+       * no model wrote into the body being edited. Measured: without
+       * `adaptation_id IS NULL` this Accept answers 200 and files the author's
+       * words as the model's, justified by evidence about an override.
+       */
+      it("refuses to launder a sentence only an adaptation's ai row vouches for", async () => {
+        const { agent, itemId, adaptationIds } = await refinableDraft();
+        const body = "Café ouvert. Note: passez demain.";
+        await setItemBody(itemId, body);
+        await addAdaptationVersion(itemId, adaptationIds[0] as string, body);
+        const start = body.indexOf("passez demain.");
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "warmer", start, end: body.length })
+          .expect(201);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_would_launder");
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.body).toBe(body);
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * A BODY THE DTO NEVER NORMALISED — the model's own, carrying CRLF.
+       *
+       * `editor.ts` and `writer.ts` bound the reply's length and nothing else,
+       * and the worker's terminal write inserts it verbatim, so a stored body
+       * whose newlines are not U+000A is a real row rather than a hypothesis.
+       * `planRefineAccept` requires the canonical form because that is the
+       * string its offsets were measured against: hand it the raw one and every
+       * offset past a CR is one too large in the merged text it reasons about.
+       *
+       * The visible cost is the EVIDENCE ROW, which is what this whole route is
+       * for. Un-normalised, the fragment comes out holding `Passez nous voir.`
+       * as well — a sentence this refine never touched, filed as the work of
+       * this proposal because the guard was reading a different string from the
+       * one it wrote. (On a body where a person's line sits above the model's,
+       * the same shift refuses a paid-for call outright.)
+       */
+      it("reads the body in canonical form, so a CR draft files the units it really changed", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const crBody = "Café ouvert.\r\nPassez nous voir.\r\nOn vous attend dès sept heures.";
+        await setAiDraft(itemId, crBody);
+        const selected = "On vous attend dès sept heures.";
+        const start = crBody.indexOf(selected);
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start, end: start + selected.length })
+          .expect(201);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(`Café ouvert.\nPassez nous voir.\n${AI_REPLACEMENT}`);
+        const rows = await masterVersionRows(itemId);
+        expect(rows).toHaveLength(2);
+        expect(rows[1]?.body).toBe(AI_REPLACEMENT);
+        expect(rows[1]?.unitDelta).toBe(0);
+      });
+
+      /**
+       * THE LENGTH BOUND, RE-CHECKED AT ACCEPT — the one arm of the plan's
+       * refusals that propose time cannot cover.
+       *
+       * Propose refuses a reply that would overflow the body it measured. The
+       * body then grows underneath the staged card, which is the ordinary thing
+       * to happen while somebody reads a suggestion, and the same merge no
+       * longer fits. The refusal is a 409 the person can act on — shorten the
+       * post — and it keeps the proposal, because the call was paid for and
+       * accepting it is one edit away.
+       */
+      it("refuses at accept when the body grew past the limit under the staged card", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        const padding = "y".repeat(MAX_BODY_LENGTH - AI_BODY.length - 6);
+        const grown = `${AI_BODY}\n${padding}.`;
+        await agent.patch(`/api/content/${itemId}`).send({ body: grown }).expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_too_long");
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.body).toBe(grown);
+        // The model's own row and the save that grew the body — no fragment.
+        expect(await masterVersionRows(itemId)).toHaveLength(2);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * A PINNED POST ANSWERS THE PINNED 409 EVEN WHEN THE PROPOSAL IS GONE,
+       * and that is a decision about what a person is told rather than a
+       * consequence of the lock order — `lockedProposal` takes no lock, so the
+       * two statements could be swapped without moving anything the database
+       * cares about.
+       *
+       * The pinned sentence is the one that governs everything they can do with
+       * this post and names the act that changes it, and it is the SAME
+       * sentence they get when the card is still staged. A 404 here would tell
+       * two different stories about one pinned post depending on which of two
+       * requests won.
+       */
+      it("answers a pinned post's refusal, not the missing proposal's, when both are true", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        await agent.delete(`/api/content/${itemId}/refine/${proposalId}`).expect(204);
+        await agent.post(`/api/content/${itemId}/opened`).expect(204);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("content_pinned_approved");
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * TWO COPIES, EQUALLY FAR FROM WHERE THE SELECTION SAT — and the earlier
+       * one wins. Nothing about the draft can break the tie, so the rule is a
+       * total order chosen once rather than one that depends on which way the
+       * scan happened to run: the same body must give the same splice on every
+       * machine and after every refactor of the loop.
+       */
+      it("splices the earlier copy when two are equally far from the stored offset", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const selected = "Passez nous voir.";
+        const stored = AI_BODY.indexOf(selected);
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: stored, end: stored + selected.length })
+          .expect(201);
+        // Rewritten so the two copies sit ten characters either side of the
+        // offset the proposal stored, model-written like the rest so nothing
+        // here turns on attribution.
+        const tied = `Un ${selected} - ${selected}`;
+        expect(tied.indexOf(selected) + tied.lastIndexOf(selected)).toBe(stored * 2);
+        await setAiDraft(itemId, tied);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(`Un ${AI_REPLACEMENT} - ${selected}`);
+      });
+
+      /**
+       * THE GATE SCENARIO A WHOLE-BRANCH REVIEW DROVE THROUGH THESE ROUTES: a
+       * person deletes one of the model's sentences, and a later refine hands
+       * it back.
+       *
+       * The merged body is BYTE-IDENTICAL to the draft the model wrote. The
+       * running expectation cannot see that on its own — a human deletion is
+       * permanent in the sum of the deltas, so the restoring fragment's `+1`
+       * pushes the count owed up rather than back — and the count alone would
+       * caption three sentences the model wrote "Human-edited" and let the post
+       * be approved without anybody reading it. `allSentencesAi` answers on the
+       * anchor's own text first, and this is that clause through the real
+       * routes: the badge tells the truth and the gate holds.
+       */
+      it("reads a draft a refine restored to the model's own words as the model's", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await setAiDraft(itemId, AI_LONG_BODY);
+        const deleted = "Café ouvert. On vous attend dès sept heures.";
+        await agent.patch(`/api/content/${itemId}`).send({ body: deleted }).expect(200);
+        // A human really did delete a sentence, and the badge says so — this is
+        // the state the restore has to move, and asserting it is what stops the
+        // case below from passing for the wrong reason.
+        const edited = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(edited.body.bodyIsAiVerbatim).toBe(false);
+
+        const selected = "On vous attend dès sept heures.";
+        const start = deleted.indexOf(selected);
+        refineOutcome = {
+          ok: true,
+          text: `Passez nous voir. ${selected}`,
+          reason: AI_REASON,
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "warmer", start, end: start + selected.length })
+          .expect(201);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(AI_LONG_BODY);
+        expect(accepted.body.bodyIsAiVerbatim).toBe(true);
+        // ...and the publish promise with it: this text is the model's, so it
+        // takes a person opening the draft, not a count that happens to differ.
+        const refused = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(refused.body.code).toBe("unread_ai_draft");
       });
 
       /**

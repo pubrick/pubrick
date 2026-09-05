@@ -161,6 +161,18 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   different bodies, and it fails unsafe; nothing writes one today, and 2c's
   re-adaptation owns that decision.
 
+  **Equality with the anchor answers first, and it is not an optimisation.** A
+  human deletion is permanent in that sum — nothing subtracts it back out — so a
+  later refine that RESTORES the deleted sentence pushes the expectation up
+  instead: the body is the model's draft character for character while the count
+  says a unit is owed, and the count alone captions the model's own words
+  "Human-edited" and opens the gate. `allSentencesAi` therefore answers `true`
+  when `current` IS the anchor's text (newlines canonicalised) before it counts
+  anything. It is also the invariant this formula owes the whole-body equality
+  it replaced — never laxer than that rule was — which had held only while no
+  fragment was in play. Byte-identity, and the ANCHOR rather than any `full`
+  row: the narrowest closure, and 2c still owns what a second `full` row means.
+
   Three traps, all silent. **`aiRows[0]` is not the first `full` row** — a
   fragment can sort first, and counting against a one-sentence fragment makes
   the deletion clause a no-op, so every deletion reads as untouched AI; any

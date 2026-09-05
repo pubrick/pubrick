@@ -150,7 +150,13 @@ The three that lock more than it, all of them taking `content_items` first:
   whose foreign key takes `FOR KEY SHARE` on that same item — touches a row it
   already holds in a strictly stronger mode, and it files nothing against an
   adaptation, which is the one thing `recordHumanVersion` warns would invert
-  this order.
+  this order. With one row named rather than left out, because a *true half-
+  statement* is what this file's own preamble says builds cycles: that version
+  insert also takes `FOR KEY SHARE` on **`organization`** through `org_id`
+  (`packages/db/src/schema/generation.ts`), which this transaction does not
+  already hold. Nothing is wrong — `organization` is exempted above, never
+  taken together with anything else by application code — but the sentence is
+  now complete.
 
 **`ContentRepository.discardRefine` is the exception, and it is safe to be
 one.** It is a single `DELETE` against `refine_proposals` and takes nothing

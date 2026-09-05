@@ -1677,11 +1677,21 @@ export class ContentRepository {
    *
    * **THE `ai` ROWS ARE READ INSIDE THIS TRANSACTION**, never through
    * `aiVersionRows`, which runs on the pool. The rows decide whether the
-   * characters a merged sentence absorbs came from text a model wrote; read
-   * outside the lock this transaction holds, that verdict would be computed
-   * against a body another transaction had already replaced — and the failure
-   * runs in the unsafe direction, since evidence read too late reads as
-   * attributable.
+   * characters a merged sentence absorbs came from text a model wrote, and
+   * that verdict must be computed against the same rows this transaction is
+   * about to add one to.
+   *
+   * The mechanism is the LOCK, not the transaction, and an earlier draft of
+   * this comment got it wrong in a way worth correcting rather than deleting:
+   * it said a pool read would see "a body another transaction had already
+   * replaced". This database is `read committed` (nothing in `packages/db`
+   * sets an isolation level), so a statement issued on the pool and one issued
+   * here take the same kind of fresh snapshot — being inside the transaction
+   * buys no stability by itself. What excludes a concurrent writer is the
+   * `content_items FOR UPDATE` this transaction already holds, and every
+   * writer of these rows takes that item first (enumerated below). The
+   * correction matters because the reason as first written would let a future
+   * reader conclude the `FOR UPDATE` is the redundant half.
    *
    * The MASTER level only (`adaptation_id IS NULL`). This increment does not
    * refine a per-channel override, and an adaptation's own `ai` rows say
@@ -1695,7 +1705,13 @@ export class ContentRepository {
    * reason that is itself a lock argument rather than a gap in the tests: every
    * writer of these rows takes `content_items` first, and this transaction
    * holds it `FOR UPDATE`, so while we are here there is no concurrent writer
-   * for the two reads to disagree about. That is a fact about the CURRENT lock
+   * for the two reads to disagree about. Enumerated rather than assumed —
+   * `content_versions` has exactly three writers, and no `UPDATE` or `DELETE`
+   * of one exists anywhere: `recordHumanVersion` (always `origin: 'human'`,
+   * which this read filters out anyway, and taken under the item's own lock),
+   * this method's own insert, and the worker's terminal write, which CREATES
+   * the `content_items` row in the same transaction and so cannot race an
+   * Accept on it. That is a fact about the CURRENT lock
    * discipline, not about this method — a future writer of `content_versions`
    * that did not take the item would make the pool read wrong, silently and in
    * the unsafe direction, and no test would have to change for it to happen.
@@ -1720,10 +1736,41 @@ export class ContentRepository {
    */
   async acceptRefine(orgId: string, id: string, proposalId: string) {
     await db.transaction(async (tx) => {
+      // The item first — and this order is one of REFUSALS, not of locks.
+      // `lockedProposal` takes no lock of its own (its own docstring says why),
+      // so swapping these two statements would move nothing in the lock order:
+      // the first lock either way is this `FOR UPDATE`. What it does decide is
+      // what a person is told when a post an approval has pinned is accepted
+      // with a proposal id that is already gone, and the answer is the pinned
+      // 409 rather than the 404. It is the fact that governs everything they
+      // can do with this post, it tells them the act that changes it (reject
+      // the approval), and it is the SAME sentence they get when the proposal
+      // is still staged — one story about a pinned post, not two depending on
+      // whether the card they are looking at survived.
       const item = await this.requireEditableItem(tx, orgId, id);
       const proposal = await this.lockedProposal(tx, orgId, id, proposalId);
 
-      const start = nearestOccurrence(item.body, proposal.selectedText, proposal.start);
+      // THE BODY IN ITS CANONICAL FORM, and the same string throughout: the
+      // anchor is found in it, the offsets index it, the merge is spliced into
+      // it and the guard reasons about it. `planRefineAccept` requires this and
+      // says so — it normalises the merged body while `start`/`end` stay where
+      // they were measured — and `content_items.body` is only canonical for
+      // bodies written through the DTO. The worker's is not: `editor.ts` and
+      // `writer.ts` bound the model's reply's length and nothing else, and the
+      // terminal write inserts it verbatim, so a draft carrying a CR is a real
+      // row rather than a hypothesis. Measured on that shape: every offset
+      // after the CR is one too large in the merged string, and the fragment
+      // row comes out holding a sentence the splice never touched — the
+      // product's evidence that a model wrote a unit, filed off a string it did
+      // not write.
+      //
+      // `proposal.start` was measured against the body BEFORE this, and stays
+      // as it is: it is not a splice point, only what "nearest" is measured
+      // from, and a handful of characters of drift cannot pick a different
+      // occurrence of the same sentence. The splice point is the occurrence
+      // itself, found in this string.
+      const body = normalizeNewlines(item.body);
+      const start = nearestOccurrence(body, proposal.selectedText, proposal.start);
       if (start === null) {
         throw conflict(
           "refine_anchor_lost",
@@ -1744,7 +1791,7 @@ export class ContentRepository {
         );
 
       const plan = planRefineAccept({
-        body: item.body,
+        body,
         start,
         // The range is derived from the RE-LOCATED anchor, never from the
         // stored offsets: those describe where the selection was when the model
@@ -1761,6 +1808,14 @@ export class ContentRepository {
       if (!("unchanged" in plan)) {
         await tx
           .update(schema.contentItems)
+          // The `org_id` predicate is defence in depth and CANNOT be pinned by a
+          // test, unlike the identical-looking one on the proposal read: an item
+          // belongs to exactly one organisation, so `requireEditableItem` has
+          // already refused every other org's item and there is no row a planted
+          // fixture could reach here. The proposal read's predicate is pinnable
+          // precisely because a `refine_proposals` row can carry one org's id
+          // while pointing at another's draft (`otherOrgProposalRow`), and this
+          // asymmetry is the reason a mutation dropping this line SURVIVES.
           .set({ body: plan.mergedBody })
           .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
         await tx.insert(schema.contentVersions).values({
