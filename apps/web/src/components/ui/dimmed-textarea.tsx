@@ -2,7 +2,7 @@
 
 import { dimSpans, normalizeNewlines } from "@pubrick/shared";
 import type { SyntheticEvent, TextareaHTMLAttributes, UIEvent } from "react";
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 /**
  * A textarea that shows which sentences are still the AI's.
@@ -93,18 +93,57 @@ export type DimmedTextareaProps = {
    * selection as surely as clicking elsewhere does, and a caller that only
    * wires the selection event would keep reporting a range that no longer
    * means anything the instant a keystroke lands inside it. `null` is reported
-   * when the selection is collapsed to a caret or the element has none to give
-   * (`selectionStart`/`selectionEnd` are typed `number | null` on the DOM
-   * element, independently of collapse). Never fires while an IME composition
-   * is in progress, for the same reason the lens steps aside then (see
-   * `composing` below): the pre-edit text is not yet part of `value` for this
-   * to index into.
+   * when the selection is collapsed to a caret — which is what an ordinary
+   * keystroke leaves behind. (`HTMLTextAreaElement.selectionStart`/`End` are
+   * plain `number`s, never `null`; only an `<input>` of a type that does not
+   * support selection returns `null`, and this component renders a textarea.
+   * There is therefore no null case to test for, and a branch pretending
+   * otherwise would be unreachable code claiming to be a guard.)
+   *
+   * Nothing is reported *during* an IME composition, for the same reason the
+   * lens steps aside then (see `composing` below): the pre-edit text is not
+   * yet part of `value` for offsets to index into. The invalidation is
+   * DEFERRED, not dropped — `compositionend` reports once the commit has
+   * landed, which is `null` for the collapsed caret an IME commit normally
+   * leaves.
+   *
+   * Deferring rather than dropping is what makes the event ORDER stop
+   * mattering, and the order is not something to take on faith. Driving a real
+   * composition through CDP (`Input.imeSetComposition` then `Input.insertText`)
+   * in Chromium 152 fires `compositionstart` → `input` → `input` →
+   * `compositionend`: the committing input lands BEFORE the composition ends,
+   * which is the order usually attributed to Safari and Android IMEs rather
+   * than to Chrome. Both inputs are suppressed by the guard, so with the
+   * report dropped instead of deferred the caller would still be holding the
+   * range it selected before the composition, now measured against text the
+   * IME has replaced — the silent mis-splice this callback exists to prevent,
+   * arriving through the one edit that skips the report. Measured live: the
+   * read-out held a stale `12-18 "eta tw"` through the whole composition and
+   * only went `null` at `compositionend`.
+   *
+   * A `value` prop that changes from OUTSIDE — a poll, a refetch, a parent
+   * that rewrites the body — also reports `null`, and this is a contract, not
+   * a courtesy: offsets measured against the old body describe nothing in the
+   * new one, and a caller cannot be asked to notice on its own. Comparing the
+   * reported `text` against the current body would let a *disciplined* caller
+   * detect the drift; reporting `null` makes the stale splice impossible
+   * instead of merely detectable. Callers therefore never need to re-check
+   * `text` before slicing — they need only honour the last report, and the
+   * last report is `null` whenever the body moved underneath it.
    *
    * Read from the element's own `selectionStart`/`selectionEnd`, never from
    * `window.getSelection()`: the mirrored overlay is a sibling subtree of text
    * nodes sharing the same characters, which a document-selection API has no
    * reason to exclude, where the textarea's own selection properties are
-   * immune to it by construction. Both properties are always reported
+   * immune to it by construction. Confirmed in Chromium 152, dragging across
+   * the dimmed/undimmed boundary with the lens on: the element reported
+   * `7-51` and sliced exactly the dragged characters, while
+   * `getSelection().getRangeAt(0)` was a COLLAPSED range on the wrapper
+   * `<div>` — `startOffset` and `endOffset` both `0` — that happened to
+   * stringify to the right text. An implementation reading those offsets
+   * would report a caret over the whole draft; no jsdom test can see this,
+   * because there a textarea's selection is not part of the document
+   * selection at all. Both properties are always reported
    * `start <= end` regardless of which way the user dragged — the direction
    * lives in `selectionDirection`, untouched here — so a backwards selection
    * is reported exactly like a forwards one over the same characters.
@@ -170,6 +209,18 @@ export function DimmedTextarea({
   const lensOn = dimmed && !composing;
 
   /**
+   * The same flag the selection path reads, kept in a ref beside the state.
+   * Not a duplicate for its own sake: `onCompositionEnd` has to report the
+   * invalidation the composition deferred, and inside that handler the state
+   * update it just queued has not reached any closure yet — the state would
+   * still say `true` and the report would be dropped for the third time. A ref
+   * is current the instant it is written, which is what a guard read by an
+   * event handler needs. The state stays because the LENS is painted from it,
+   * and paint needs a render.
+   */
+  const composingRef = useRef(false);
+
+  /**
    * What both layers render, and what the counter counts.
    *
    * A `<textarea>` strips CR from its API value, so handing the element a
@@ -222,6 +273,14 @@ export function DimmedTextarea({
   };
 
   /**
+   * The last selection handed to the caller, `null` once invalidated. Kept in
+   * a ref rather than state because nothing about it is painted: it exists so
+   * a `value` that changes from outside can be compared against the body the
+   * live report was measured in, and so that comparison costs no render.
+   */
+  const lastReported = useRef<{ start: number; end: number; text: string } | null>(null);
+
+  /**
    * `text` here is the WHOLE normalised body the offsets index into, not the
    * selected substring — the parent can always derive that with
    * `text.slice(start, end)`, but could not go the other way. Reporting the
@@ -233,21 +292,57 @@ export function DimmedTextarea({
    * `element.value`, not the closed-over `text` variable: the DOM's own value
    * is always the up-to-date normalised string the element's own offsets
    * index, including inside the `onChange` handler, where React's `text` is
-   * still one render behind the keystroke that just landed.
+   * still one render behind the keystroke that just landed. That gap is not
+   * theoretical — an edit leaving a NON-collapsed selection behind is
+   * ordinary (undo and redo restore one, a text drag-drop selects what it
+   * dropped, `setRangeText(…, "select")` says so outright), and the closed-over
+   * variable would pair post-edit offsets with the pre-edit body.
+   *
+   * The composing guard reads `composingRef`, not the `composing` state, so
+   * that `onCompositionEnd` can clear it and report in the same handler.
    */
   const reportSelection = (element: HTMLTextAreaElement) => {
-    if (!onSelectionChange || composing) return;
+    if (!onSelectionChange || composingRef.current) return;
     const { selectionStart, selectionEnd } = element;
-    if (selectionStart == null || selectionEnd == null || selectionStart === selectionEnd) {
+    if (selectionStart === selectionEnd) {
+      lastReported.current = null;
       onSelectionChange(null);
       return;
     }
-    onSelectionChange({
+    const selection = {
       start: selectionStart,
       end: selectionEnd,
       text: element.value,
-    });
+    };
+    lastReported.current = selection;
+    onSelectionChange(selection);
   };
+
+  /**
+   * The body moved without the element moving it — a poll, a refetch, a parent
+   * rewriting the draft. Every other invalidation rides an event on this
+   * textarea; this one has no event, so the offsets the caller is holding
+   * would quietly go on describing a string that no longer exists. Reporting
+   * `null` here is what turns "the caller could detect the drift by comparing
+   * `text`" into "the caller cannot splice the wrong characters".
+   *
+   * Fires only when a live, non-null report is outstanding AND the body it was
+   * measured in differs from the current one, so an edit made through the
+   * textarea — which already reported synchronously with the new body — adds
+   * no second call.
+   *
+   * Silent while an IME is composing, and deliberately: Chrome puts the
+   * pre-edit text into `value` on every keystroke of a composition, so without
+   * this the caller would be told `null` several times about text that is not
+   * committed yet. `onCompositionEnd` is what reports once it is — the two
+   * paths divide the work rather than overlapping on it.
+   */
+  useEffect(() => {
+    const last = lastReported.current;
+    if (composingRef.current || !last || last.text === text) return;
+    lastReported.current = null;
+    onSelectionChange?.(null);
+  }, [text, onSelectionChange]);
 
   const handleSelect = (event: SyntheticEvent<HTMLTextAreaElement>) => {
     reportSelection(event.currentTarget);
@@ -300,11 +395,20 @@ export function DimmedTextarea({
           onSelect={handleSelect}
           onScroll={syncScroll}
           onCompositionStart={(event) => {
+            composingRef.current = true;
             setComposing(true);
             onCompositionStart?.(event);
           }}
           onCompositionEnd={(event) => {
+            composingRef.current = false;
             setComposing(false);
+            // The report the composition deferred, delivered now that the
+            // commit has landed. On Chrome's order (`compositionend` before
+            // the final `input`) it reports the caret the commit left; on
+            // Safari's and several Android IMEs' (`input` first) it is the
+            // only thing standing between the caller and a range measured
+            // against text the IME has already replaced.
+            reportSelection(event.currentTarget);
             onCompositionEnd?.(event);
           }}
           data-dim-input={lensOn ? "" : undefined}

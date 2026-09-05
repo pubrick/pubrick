@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { SyntheticEvent } from "react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { DimmedTextarea, MIRRORED_METRICS } from "./dimmed-textarea";
@@ -452,6 +453,24 @@ describe("DimmedTextarea", () => {
    * offsets index. Every guard below is one an implementation can drop
    * independently, so each gets its own failing-for-its-own-reason case
    * rather than one assertion doing several jobs.
+   *
+   * What these cases stand in for, and what they cannot prove. Every one of
+   * them dispatches `select` by hand; jsdom emits none of its own. Driven in
+   * Chromium 152 against the gallery's `provenance-lens` demo, the gestures
+   * the callback claims to cover do reach it — a mouse drag, a double-click
+   * word-select, shift+arrow (once per keypress), ⌘A (the WHOLE body, not the
+   * visible part), and the same word re-selected after a caret move (React's
+   * `onSelect` de-dup does not swallow it). The selection also survives the
+   * refine button taking focus: `selectionStart`/`selectionEnd` are retained,
+   * the last report stands, and nothing reports `null`.
+   *
+   * One of those gestures works by a route no test here touches: a caret move
+   * that COLLAPSES a live selection emits no native `select` event at all in
+   * Chromium, and the `null` still arrives — React synthesises `onSelect`
+   * from lower-level events rather than only forwarding the DOM one. So the
+   * invalidation-on-caret-move depends on React's select plugin, and
+   * replacing `onSelect` with a native `addEventListener("select")` would
+   * silently drop it while every case below stayed green.
    */
   describe("onSelectionChange", () => {
     /**
@@ -566,12 +585,14 @@ describe("DimmedTextarea", () => {
     });
 
     /**
-     * The overlay is a sibling subtree of text nodes painted OVER the
-     * textarea. Reading the selection via `window.getSelection()` instead of
-     * the element's own `selectionStart`/`selectionEnd` would be at the mercy
-     * of whatever that subtree does to a document-level selection range; the
-     * element's own properties are immune to it by construction. This proves
-     * selection reporting still works, unchanged, with the lens on.
+     * What this proves, exactly: mounting the overlay does not disturb
+     * reporting. It does NOT prove the `window.getSelection()` argument the
+     * component's docstring makes, and no jsdom test can — in jsdom a
+     * textarea's internal selection is not part of the document selection at
+     * all, so the overlay's sibling text nodes could not interfere even with a
+     * wrong implementation. That claim is settled in a browser, dragging
+     * across a dimmed/undimmed boundary with the lens on (provenance-lens
+     * design §8).
      */
     it("reports the selection correctly while the lens is on and the overlay is painted over it", () => {
       const onSelectionChange = vi.fn();
@@ -675,13 +696,265 @@ describe("DimmedTextarea", () => {
       expect(onSelectionChange).toHaveBeenCalledWith({ start: 2, end: 10, text: "Alpha one." });
     });
 
-    it("does nothing when no onSelectionChange is given", () => {
+    /**
+     * The version of this that read `expect(() => fireEvent.select(textarea))
+     * .not.toThrow()` was structurally incapable of catching the guard it
+     * names: React 19 does not surface an event-handler throw synchronously
+     * through `fireEvent`, so dropping the `!onSelectionChange` check left
+     * every case in this file passing and reddened the suite only through
+     * vitest's unhandled-error channel — a kill with no named killer.
+     *
+     * So assert an OBSERVABLE consequence instead. `onSelect` is chained
+     * AFTER the report; a report that throws never reaches it, and the
+     * failure says which line stopped running.
+     */
+    it("reports nothing, and still runs the caller's own handler, when no onSelectionChange is given", () => {
+      const onSelect = vi.fn();
       render(
-        <DimmedTextarea value="Alpha one." onChange={() => {}} aiVersions={[]} label="Body" />,
+        <DimmedTextarea
+          value="Alpha one."
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelect={onSelect}
+        />,
       );
       const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
       textarea.setSelectionRange(0, 5);
-      expect(() => fireEvent.select(textarea)).not.toThrow();
+      fireEvent.select(textarea);
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(textarea).toBeInTheDocument();
+    });
+
+    /**
+     * `onSelect` used to reach the textarea through the `{...rest}` spread and
+     * work by itself; this component destructures it out and re-adds it by
+     * hand, which is a working path replaced by a hand-written one. Nothing
+     * measured that until this case: dropping the chain-call left the whole
+     * suite green.
+     */
+    it("chains a caller's own onSelect instead of swallowing it", () => {
+      const onSelectionChange = vi.fn();
+      // The event is read INSIDE the handler on purpose: React 19 nulls a
+      // synthetic event's `currentTarget` once dispatch returns, so a spy's
+      // recorded call cannot be asked afterwards which element it fired on.
+      let seenCurrentTarget: EventTarget | null = null;
+      const onSelect = vi.fn((event: SyntheticEvent<HTMLTextAreaElement>) => {
+        seenCurrentTarget = event.currentTarget;
+      });
+      render(
+        <DimmedTextarea
+          value="Alpha one. Beta two."
+          onChange={() => {}}
+          aiVersions={[]}
+          label="Body"
+          onSelectionChange={onSelectionChange}
+          onSelect={onSelect}
+        />,
+      );
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+      textarea.setSelectionRange(0, 5);
+      fireEvent.select(textarea);
+
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(seenCurrentTarget).toBe(textarea);
+    });
+
+    /**
+     * The central claim of the whole selection path: `reportSelection` reads
+     * `element.value`, NOT the closed-over `text` render variable. Only an
+     * edit can tell the two apart, and only an edit that leaves a
+     * NON-collapsed selection behind can tell them apart observably — inside
+     * `onChange` the render variable is still the pre-edit body, while the
+     * element's own offsets already index the post-edit one.
+     *
+     * That combination is ordinary, not a corner: undo and redo restore a
+     * selection, dropping dragged text selects what was dropped (Chrome and
+     * Firefox both), and `setRangeText(..., "select")` asks for it outright.
+     * Here the body gains a leading "Zed. " and "Alpha" stays selected at its
+     * new offsets 5-10. Reporting the render variable would pair those
+     * offsets with the OLD body and slice out " one." — five characters the
+     * person never selected, from a string no longer on screen. That is the
+     * silent mis-splice this callback exists to prevent, re-entering through
+     * the handler added to prevent it.
+     *
+     * The single call also pins that reporting synchronously from `onChange`
+     * leaves nothing for the external-value effect below to invalidate: the
+     * body the caller was handed IS the body the next render carries.
+     */
+    it("reports the body the element holds after an edit, not the render variable one behind it", () => {
+      const onSelectionChange = vi.fn();
+      function EditHarness() {
+        const [value, setValue] = useState("Alpha one. Beta two.");
+        return (
+          <DimmedTextarea
+            value={value}
+            onChange={setValue}
+            aiVersions={[]}
+            label="Body"
+            onSelectionChange={onSelectionChange}
+          />
+        );
+      }
+      render(<EditHarness />);
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, {
+        target: { value: "Zed. Alpha one. Beta two.", selectionStart: 5, selectionEnd: 10 },
+      });
+
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      const selection = onSelectionChange.mock.calls[0]?.[0];
+      expect(selection?.text).toBe("Zed. Alpha one. Beta two.");
+      // The assertion the closed-over variable fails: slicing ITS OWN reported
+      // text at ITS OWN reported offsets must land on what is selected.
+      expect(selection?.text.slice(selection?.start, selection?.end)).toBe("Alpha");
+    });
+
+    /**
+     * Safari and several Android IMEs fire the final `input` BEFORE
+     * `compositionend`. That input is suppressed — `composing` is still set,
+     * and the pre-edit text is not something offsets can index — so if the
+     * composition ended in silence too, the caller would be left holding the
+     * range it selected before the composition, measured against a body the
+     * IME has already replaced. Task 8 stages a paid model call on exactly
+     * that range.
+     *
+     * So the guard DEFERS the invalidation rather than dropping it:
+     * `compositionend` reports what the element holds once the commit has
+     * landed, which for the collapsed caret an IME commit leaves is `null`.
+     */
+    it("invalidates the selection when the IME's final input arrives BEFORE compositionend", () => {
+      const onSelectionChange = vi.fn();
+      function ImeHarness() {
+        const [value, setValue] = useState("Alpha one. Beta two.");
+        return (
+          <DimmedTextarea
+            value={value}
+            onChange={setValue}
+            aiVersions={[]}
+            label="Body"
+            onSelectionChange={onSelectionChange}
+          />
+        );
+      }
+      render(<ImeHarness />);
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      textarea.setSelectionRange(11, 15);
+      fireEvent.select(textarea);
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        start: 11,
+        end: 15,
+        text: "Alpha one. Beta two.",
+      });
+
+      onSelectionChange.mockClear();
+      fireEvent.compositionStart(textarea);
+      // The commit lands as an ordinary `input`, still inside the composition:
+      // "Beta" is gone and the body is 20 characters no more.
+      fireEvent.change(textarea, {
+        target: { value: "Alpha one. こん two.", selectionStart: 13, selectionEnd: 13 },
+      });
+      expect(onSelectionChange).not.toHaveBeenCalled();
+
+      fireEvent.compositionEnd(textarea);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null);
+    });
+
+    /**
+     * Chrome's documented order is the other one: `compositionend` first, the
+     * final `input` after it. The invalidation must arrive exactly once here
+     * too — and this is the case that would catch a `composing` flag cleared
+     * too late to matter, since the report riding the final `input` reads the
+     * same guard.
+     */
+    it("invalidates the selection when compositionend arrives BEFORE the IME's final input", () => {
+      const onSelectionChange = vi.fn();
+      function ImeHarness() {
+        const [value, setValue] = useState("Alpha one. Beta two.");
+        return (
+          <DimmedTextarea
+            value={value}
+            onChange={setValue}
+            aiVersions={[]}
+            label="Body"
+            onSelectionChange={onSelectionChange}
+          />
+        );
+      }
+      render(<ImeHarness />);
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      textarea.setSelectionRange(11, 15);
+      fireEvent.select(textarea);
+      onSelectionChange.mockClear();
+
+      fireEvent.compositionStart(textarea);
+      // Chrome has already put the composed text in the field by the time the
+      // composition ends; React has not been told, so this is written onto the
+      // element directly, exactly as the browser wrote it.
+      textarea.value = "Alpha one. こん two.";
+      textarea.setSelectionRange(13, 13);
+      fireEvent.compositionEnd(textarea);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null);
+
+      // ...and the input that follows carries the same body through React,
+      // which must not resurrect anything.
+      fireEvent.change(textarea, {
+        target: { value: "Alpha one. こん two.", selectionStart: 13, selectionEnd: 13 },
+      });
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null);
+    });
+
+    /**
+     * The failure the plan's Task 8 will otherwise walk into: its poll brings a
+     * different `item.body` while a selection is live. Every other invalidation
+     * rides an event on this textarea; this one has no event at all, so
+     * without it the caller would go on holding offsets 11-15 and splice
+     * "e. B" out of the new body where the person selected "Beta" — silently.
+     *
+     * Reporting `null` is what makes that impossible rather than merely
+     * detectable. The alternative — leaving the caller to compare the reported
+     * `text` against the body it now holds — is a discipline nothing enforces,
+     * and Task 8 is the code that would have to remember.
+     *
+     * The two negative assertions matter as much as the positive one: a
+     * re-render that changes nothing must not invent an invalidation (that
+     * would make the callback unusable — every parent render would clear the
+     * selection), and a SECOND body change with nothing outstanding must stay
+     * silent, which is the report being forgotten once it is spent.
+     */
+    it("reports null when the value prop changes underneath a live selection, and only then", () => {
+      const onSelectionChange = vi.fn();
+      const props = {
+        onChange: () => {},
+        aiVersions: [],
+        label: "Body",
+        onSelectionChange,
+      };
+      const { rerender } = render(<DimmedTextarea value="Alpha one. Beta two." {...props} />);
+      const textarea = screen.getByLabelText("Body") as HTMLTextAreaElement;
+
+      textarea.setSelectionRange(11, 15);
+      fireEvent.select(textarea);
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        start: 11,
+        end: 15,
+        text: "Alpha one. Beta two.",
+      });
+
+      rerender(<DimmedTextarea value="Alpha one. Beta two." {...props} />);
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+
+      rerender(<DimmedTextarea value="A longer draft. Beta two." {...props} />);
+      expect(onSelectionChange).toHaveBeenCalledTimes(2);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null);
+
+      rerender(<DimmedTextarea value="Something else entirely." {...props} />);
+      expect(onSelectionChange).toHaveBeenCalledTimes(2);
     });
   });
 });

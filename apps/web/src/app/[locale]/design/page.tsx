@@ -17,6 +17,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Advanced, type AdvancedProps } from "@/components/ui/advanced";
 import { Button, type ButtonSize, type ButtonVariant } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   IconBrands,
@@ -75,6 +76,7 @@ const NAV_SECTIONS = [
   { id: "icons", label: "Icons" },
   { id: "buttons", label: "Buttons" },
   { id: "inputs", label: "Inputs" },
+  { id: "provenance-lens", label: "Provenance lens" },
   { id: "segmented", label: "Segmented" },
   { id: "status-badges", label: "Status badges" },
   { id: "cards", label: "Cards" },
@@ -124,6 +126,63 @@ function TextareaDemo() {
       value={value}
       onChange={(event) => setValue(event.target.value)}
     />
+  );
+}
+
+/**
+ * The lens and its selection read-out, together, because three things this
+ * component promises are unfalsifiable in jsdom and this is where they get
+ * checked by hand (provenance-lens design §8, and the Task 7 review's browser
+ * list):
+ *
+ *  - that `select` fires at all for the gestures the callback claims to cover
+ *    — a mouse drag, shift+arrow, a double-click word-select, ⌘A, and a caret
+ *    move that collapses a live selection (which must read `null`);
+ *  - that reading the element's own `selectionStart`/`selectionEnd` rather
+ *    than `window.getSelection()` is what keeps the mirrored overlay out of
+ *    the answer: drag across a dimmed/undimmed boundary with the lens ON and
+ *    the read-out must still describe the textarea's own text;
+ *  - that the selection survives a button taking focus, since the refine
+ *    action does exactly that.
+ *
+ * The read-out prints the slice the callback's own `text` and offsets produce,
+ * not a substring taken from anywhere else — a mis-splice shows up as the
+ * wrong words rather than as nothing at all.
+ */
+function DimmedTextareaDemo() {
+  const [value, setValue] = useState(
+    "Alpha one. Beta two.\n\nThis third sentence was written by a person.",
+  );
+  const [dimmed, setDimmed] = useState(true);
+  const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(
+    null,
+  );
+
+  return (
+    <div className="flex flex-col gap-2">
+      <DimmedTextarea
+        label="Post body"
+        value={value}
+        onChange={setValue}
+        onSelectionChange={setSelection}
+        aiVersions={["Alpha one. Beta two.\n\nAnd a third the model wrote."]}
+        dimmed={dimmed}
+        showCount
+        displayLimit={280}
+      />
+      <div className="flex items-center gap-3">
+        <Button size="sm" variant="secondary" onClick={() => setDimmed((on) => !on)}>
+          {dimmed ? "Lens on" : "Lens off"}
+        </Button>
+        <p data-testid="selection-readout" className="font-mono text-[11px] text-fg-secondary">
+          {selection
+            ? `${selection.start}-${selection.end} ${JSON.stringify(
+                selection.text.slice(selection.start, selection.end),
+              )}`
+            : "null"}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -305,6 +364,10 @@ function GallerySections({ withAnchors }: { withAnchors: boolean }) {
             <option value="dzen">Dzen</option>
           </Select>
         </div>
+      </Section>
+
+      <Section id={id("provenance-lens")} title="Provenance lens">
+        <DimmedTextareaDemo />
       </Section>
 
       <Section id={id("segmented")} title="Segmented">
