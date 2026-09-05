@@ -356,7 +356,7 @@ describe("sourceHost", () => {
     expect(sourceHost("https://example.com/2026/09/the-story?utm=x")).toBe("example.com");
   });
 
-  it("agrees with the gate's SQL: lowercased, THEN stripped of www.", () => {
+  it("folds case and strips www., the one axis it shares with the gate's SQL", () => {
     // `regexp_replace(lower(input->>'sourceUrl' …), '^www\\.', '')`. A host
     // derived the other way round keeps `WWW.` and counts as its own source,
     // which is the under-count the gate exists to avoid.

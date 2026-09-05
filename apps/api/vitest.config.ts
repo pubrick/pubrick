@@ -13,6 +13,13 @@ export default defineConfig({
     // runs — measured, not assumed; see the fix commit. Capping workers bounds how many of
     // those bootstraps run at once instead of hiding the contention behind a bigger timeout.
     maxWorkers: 2,
+    // A timeout is a hang detector, not a load detector: a hung `await` never
+    // returns, so 20 s catches it as well as vitest's 5 s default does — and
+    // 5 s is the number that turned three green gates red on 2026-09-05 when a
+    // second checkout ran its own suite beside this one. 20 s is what the six
+    // genuinely slow tests here had already picked by hand.
+    testTimeout: 20_000,
+    hookTimeout: 30_000,
     // The two auth-posture defaults, turned off HERE rather than branched on inside
     // the auth config, so the divergence between the suite and the shipped image is
     // one visible list instead of a hidden `if (isTest)`:

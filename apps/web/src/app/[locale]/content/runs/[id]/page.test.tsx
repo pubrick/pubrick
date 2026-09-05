@@ -572,6 +572,12 @@ describe("a run drafted from pasted material", () => {
 
     expect(await screen.findByText(en.Runs.materialLabel)).toBeInTheDocument();
     expect(screen.getByText(MATERIAL)).toBeInTheDocument();
+    // Up to MAX_SOURCE_TEXT_LENGTH characters sit ABOVE the failure sentence
+    // and the unrecorded-calls warning; unbounded, a long paste pushes both
+    // below the fold. The block scrolls inside a fixed height instead.
+    const block = screen.getByTestId("run-material");
+    expect(block.className).toContain("max-h-64");
+    expect(block.className).toContain("overflow-y-auto");
   });
 
   it("says there was no brief instead of labelling an empty one", async () => {

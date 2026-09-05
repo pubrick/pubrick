@@ -69,7 +69,15 @@ try {
           `--outputFile=${out}`,
           ...only,
         ],
-        { stdio: ["ignore", "ignore", "ignore"] },
+        {
+          stdio: ["ignore", "ignore", "ignore"],
+          // `pnpm exec vitest` bypasses each package's own `test` script, and
+          // apps/web's script is where `--no-experimental-webstorage` lives;
+          // without it a CLEAN web tree reads KILLED. Harmless for node packages.
+          // Set outright rather than appended: this script is not a turbo task,
+          // and nothing else sets NODE_OPTIONS for it.
+          env: { ...process.env, NODE_OPTIONS: "--no-experimental-webstorage" },
+        },
       );
     } catch (error) {
       exit = error.status ?? 1;

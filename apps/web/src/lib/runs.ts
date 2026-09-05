@@ -92,13 +92,16 @@ export type { RunInput } from "@pubrick/shared";
  * with no brief is named by where it came from. The full URL belongs on the
  * receipt, which has room for it.
  *
- * NORMALISED THE SAME WAY THE WATCHED-SOURCES GATE NORMALISES IT: lowercased
+ * ON ONE AXIS THIS AGREES WITH THE WATCHED-SOURCES GATE'S SQL: lowercased
  * BEFORE the `www.` strip, matching `regexp_replace(lower(…), '^www\.', '')`
- * in the query that decides whether 3b gets built. The `toLowerCase()` is
- * redundant in this half — the URL parser already lowercases a host — and it is
- * written anyway, because the day these two derivations are compared, the thing
- * that must be obvious is that they are the same derivation. Two spellings of
- * "the host" in one product is a bill this repository has paid before.
+ * in the query that decides whether 3b gets built (Task 8). It is NOT the same
+ * derivation: this side goes through the WHATWG URL parser, so a port, a
+ * query without a path, a fragment, userinfo and an IDN host all come out
+ * differently from `split_part(…, '://', 2)` (measured in the Task 4 review).
+ * That divergence is carried to Task 8, which must either match this parser
+ * or say which inputs it counts differently. The `toLowerCase()` is redundant
+ * here — the parser already lowercases a host — and stays because the SQL's
+ * `lower()` is load-bearing and the two lines should read alike.
  *
  * `null` for anything that is not a URL. The DTO refuses those
  * (`sourceRunInputSchema.sourceUrl`), so nothing the api can return reaches

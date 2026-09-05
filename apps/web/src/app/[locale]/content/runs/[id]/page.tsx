@@ -296,7 +296,12 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                     </RunField>
                   )}
                   <RunField label={t("materialLabel")}>
-                    <p className="whitespace-pre-wrap text-sm text-fg">{run.input.material}</p>
+                    <p
+                      data-testid="run-material"
+                      className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm text-fg"
+                    >
+                      {run.input.material}
+                    </p>
                   </RunField>
                 </>
               )}
