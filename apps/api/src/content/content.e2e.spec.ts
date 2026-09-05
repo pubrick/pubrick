@@ -4585,20 +4585,31 @@ describe.skipIf(!url)("content e2e", () => {
        */
       async function waitForLockWaiter(
         patterns: string[],
-        inFlight?: Promise<unknown>,
+        inFlight: Promise<unknown> | Promise<unknown>[],
+        waiters = 1,
       ): Promise<void> {
-        // The operation that is SUPPOSED to be doing the blocking. One that
+        // The operations that are SUPPOSED to be doing the blocking. One that
         // finishes instead produces no waiter, ever, and without this the poll
         // spins until vitest kills the test with its own message.
-        let settled = false;
-        void inFlight?.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        //
+        // It RAISES rather than returning, and that is the difference between a
+        // test and a decoration. Returning quietly hands the caller a green run
+        // for an interleaving that never happened — the peer commits against
+        // nothing, every assertion about the survivor holds trivially, and the
+        // case reports a lock order it never exercised. Both sentences below
+        // name which of the two it was.
+        let settled = 0;
+        const pending = [inFlight].flat();
+        for (const operation of pending) {
+          void operation.then(
+            () => {
+              settled++;
+            },
+            () => {
+              settled++;
+            },
+          );
+        }
         const { createDb } = await import("@pubrick/db");
         const { db, pool } = createDb(url as string);
         const matches = patterns.map((pattern) => `query ILIKE '${pattern}'`).join(" OR ");
@@ -4612,10 +4623,17 @@ describe.skipIf(!url)("content e2e", () => {
                   AND wait_event_type = 'Lock'
                   AND (${matches})`,
             );
-            if ((rows[0] as { n: number }).n > 0) return;
-            if (settled) return;
+            if ((rows[0] as { n: number }).n >= waiters) return;
+            if (settled === pending.length) {
+              throw new Error(
+                `every operation that should have blocked on ${patterns.join(" / ")} ` +
+                  `finished without blocking: the interleaving under test did not happen`,
+              );
+            }
             if (Date.now() > deadline) {
-              throw new Error(`no backend blocked on ${patterns.join(" / ")}`);
+              throw new Error(
+                `fewer than ${waiters} backend(s) blocked on ${patterns.join(" / ")}`,
+              );
             }
             await new Promise((resolve) => setTimeout(resolve, 25));
           }
@@ -4765,58 +4783,88 @@ describe.skipIf(!url)("content e2e", () => {
       }, 20_000);
 
       /**
-       * TWO PRESSES THAT GENUINELY OVERLAP.
+       * TWO PRESSES THAT GENUINELY OVERLAP — BOTH OF THEM REAL REQUESTS.
        *
        * The unique index makes two rows impossible; it does not make the second
-       * transaction recover. Without the item lock both presses delete nothing
-       * — neither can see the other's uncommitted row — the second blocks on
-       * the index, and when the first commits it is answered `23505`, which is
-       * not `23503`, so it reached the reader as a 500 for a call they had
-       * already paid for.
+       * transaction recover. Two presses that hold a lock the other can hold
+       * too both delete nothing — neither can see the other's uncommitted row —
+       * the second blocks on the index, and when the first commits it is
+       * answered `23505`, which is not `23503`, so it reaches the reader as a
+       * 500 for a call they had already paid for. `FOR NO KEY UPDATE` is the
+       * weakest mode two holders cannot share, and that is the whole of what is
+       * under test here.
        *
-       * The peer is a hand-written copy of `insertProposal`'s own three
-       * statements, because that is what the other press is: another api
-       * replica running this code.
+       * IT USED TO BE HALF A TEST, and the half it was missing is the half that
+       * matters. The other press was hand-written on a connection of its own,
+       * ending `FOR NO KEY UPDATE` — so the mode being asserted was the PEER's,
+       * not the repository's. Weakening `insertProposal`'s own lock to
+       * `for("share")` survived that shape three runs out of three: a share
+       * lock still conflicts with the peer's `FOR NO KEY UPDATE`, so the press
+       * still queued and still answered 201, while two real presses at
+       * `FOR SHARE` would both have been granted at once and one of them lost
+       * to `23505`. A test that pins the counterparty pins nothing.
+       *
+       * So both presses are `POST /api/content/:id/refine`, and the only
+       * hand-written statement is a STARTING GATE: a third connection holds the
+       * item `FOR UPDATE` (which conflicts with every mode either press could
+       * take) until both are parked on it. Releasing it wakes them together —
+       * Postgres grants the whole compatible head of the queue — so under a
+       * shared mode the overlap is a fact rather than a scheduling hope, and
+       * under the real one they serialise.
        */
-      it("serialises a press that overlaps another, rather than losing it to a duplicate key", async () => {
+      it("serialises two presses that overlap, rather than losing one to a duplicate key", async () => {
         const { agent, itemId } = await refinableDraft();
+        // THE LEDGER ROW IS NOT PART OF THIS INTERLEAVING. Its insert takes
+        // `content_items FOR KEY SHARE` through its foreign key, so with the
+        // gate holding the item both presses would park THERE — on a statement
+        // neither pattern names, in a transaction holding nothing — and never
+        // reach the staging lock this case is about.
+        refineOutcome = { ...refineOutcome, usage: [] as RefineOutcome["usage"] };
 
         const { createDb } = await import("@pubrick/db");
         const { pool } = createDb(url as string);
-        const peer = await pool.connect();
-        let status = 0;
+        const gate = await pool.connect();
+        type Press = { status: number; id?: string; verb?: string };
+        let presses: Press[] = [];
         try {
-          await peer.query("BEGIN");
-          await peer.query("SELECT id FROM content_items WHERE id = $1 FOR NO KEY UPDATE", [
-            itemId,
-          ]);
-          await peer.query("DELETE FROM refine_proposals WHERE content_item_id = $1", [itemId]);
-          await peer.query(
-            `INSERT INTO refine_proposals
-               (org_id, content_item_id, verb, selected_text, start_offset, end_offset, proposal, reason)
-             SELECT org_id, id, 'shorten', $2, 0, 12, 'The other press.', 'r'
-               FROM content_items WHERE id = $1`,
-            [itemId, SELECTED_TEXT],
-          );
+          await gate.query("BEGIN");
+          await gate.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
 
-          const pressing = agent
-            .post(`/api/content/${itemId}/refine`)
-            .send({ verb: "punchier", ...SELECTION })
-            .then((res) => res.status);
-          await waitForLockWaiter(STAGING_WAITS_ON, pressing);
-          await peer.query("COMMIT");
-          status = await pressing;
+          const press = (verb: string): Promise<Press> =>
+            agent
+              .post(`/api/content/${itemId}/refine`)
+              .send({ verb, ...SELECTION })
+              .then((res) => ({
+                status: res.status,
+                id: res.body.id as string | undefined,
+                verb: res.body.verb as string | undefined,
+              }));
+          const pressing = [press("shorten"), press("punchier")];
+          // BOTH of them, not either: one waiter would let the case run with
+          // the second press still on its way to the lock, which is the shape
+          // that cannot see a mode two holders can share.
+          await waitForLockWaiter(STAGING_WAITS_ON, pressing, 2);
+          await gate.query("COMMIT");
+          presses = await Promise.all(pressing);
         } finally {
-          await peer.query("ROLLBACK").catch(() => {});
-          peer.release();
+          await gate.query("ROLLBACK").catch(() => {});
+          gate.release();
           await pool.end();
         }
 
-        expect(status, "the later press was answered a duplicate key as a 500").toBe(201);
+        expect(
+          presses.map((press) => press.status),
+          "a press was answered a duplicate key as a 500",
+        ).toEqual([201, 201]);
         const rows = await proposalRows(itemId);
         expect(rows).toHaveLength(1);
-        // The LATER press's proposal, superseding the one it overlapped — the
-        // same outcome two sequential presses already get.
+        // Which press won is the lock queue's business and is not asserted. What
+        // is asserted is that the survivor is ONE WHOLE proposal — the id and
+        // the verb of a single press's own 201 — rather than one press's row
+        // wearing another's identity.
+        const winner = presses.find((press) => press.id === rows[0]?.id);
+        expect(winner, "the staged row belongs to neither press's response").toBeDefined();
+        expect(rows[0]?.verb).toBe(winner?.verb);
         expect(rows[0]?.proposal).toBe(AI_REPLACEMENT);
       }, 20_000);
 
