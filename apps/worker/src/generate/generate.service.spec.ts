@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Logger } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1980,5 +1981,120 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(logged).toContain("UNRECORDED-CALL COUNTER FAILED");
       vi.restoreAllMocks();
     });
+  });
+
+  describe("the abandoned-run sweep", () => {
+    /**
+     * THE SAME TABLE, TWO TRANSACTIONS: the sweep walks `pipeline_runs` in
+     * ascending `id`, because `BrandsRepository.delete` does
+     * (`docs/lock-order.md`).
+     *
+     * That delete locks every run of the brand it is destroying with
+     * `ORDER BY id FOR UPDATE`. This sweep is one bulk `UPDATE` over every
+     * abandoned `running` run in the product — an overlapping set — and a bulk
+     * `UPDATE ... WHERE` cannot carry an `ORDER BY` of its own, so unordered it
+     * takes its row locks in scan order: heap order, which has nothing to do
+     * with id order and reverses freely. Two walkers, opposite directions, one
+     * cycle. The sweep losing is `ABANDONED-RUN SWEEP FAILED` on the one path
+     * that rescues stuck runs; the delete losing is a 500 on
+     * `DELETE /api/brands/:id`.
+     *
+     * The cycle forms INSIDE a single statement, so no interleaving of these
+     * two transactions' STATEMENTS can produce it — which is exactly why a pair
+     * matrix over statement prefixes reported this pair clean. The interleaving
+     * here is built inside the `UPDATE` instead: the delete holds the LOWEST id
+     * of the set and the sweep is launched, parking on a row lock. Ordered, the
+     * lowest id is the sweep's FIRST lock, so it parks holding nothing and the
+     * delete's ascending walk runs on unobstructed. Unordered, it reaches that
+     * row somewhere in the middle of its scan and is holding the rows it passed
+     * on the way — which is exactly what the delete asks for next, while it
+     * holds what the sweep wants.
+     *
+     * MANY runs, not two, and this is the part a smaller fixture gets wrong.
+     * The unordered scan order here is neither id order nor heap order: the
+     * planner hashes `pipeline_runs` against `pgboss.job` for the no-live-job
+     * anti-join, so the sub-select emits rows in hash-bucket order of the run
+     * id — arbitrary, and with two rows it is a coin toss whether the lowest id
+     * comes out first anyway. Over `RUNS` of them the unordered scan reaches the
+     * held row first only once in `RUNS`, so the cycle is built with probability
+     * `(RUNS - 1) / RUNS`; the ORDERED shape never builds it, at any count.
+     *
+     * Measured before this shape existed, racing the two real statements over
+     * 60 runs: 8 deadlocks in 40 concurrent rounds, against 0 in 40 with it.
+     *
+     * Both sides are asserted. Checking only that the sweep returned would pass
+     * a fix that merely moved the victim onto the api.
+     */
+    it("sweepAbandoned locks in id order, so a brand delete's ordered walk cannot deadlock it", async () => {
+      const seeded = await seed({ channels: 0 });
+      // The brand's own seeded run is `queued` and so outside the sweep's set,
+      // but INSIDE the delete's — which locks every run of the brand. Removing
+      // it keeps the two ids below the whole of both walks.
+      await db.execute(sql`DELETE FROM pipeline_runs WHERE id = ${seeded.runId}`);
+
+      const RUNS = 24;
+      const ids = Array.from({ length: RUNS }, () => randomUUID()).sort();
+      const low = ids[0] as string;
+      // Inserted in DESCENDING id order, so heap order is the reverse of id
+      // order too — the disagreement is the premise, and it costs nothing to
+      // make it hold for the plans that do scan the heap.
+      //
+      // Abandoned by the sweep's own three conditions: `running`, a lease that
+      // expired, and the grace period past on top of it. Arithmetic in SQL, not
+      // a JavaScript Date, for the reason `claimedByAnother` gives.
+      for (const id of [...ids].reverse()) {
+        await db.execute(
+          sql`INSERT INTO pipeline_runs (id, org_id, brand_id, input, status, active_job_id, lease_expires_at)
+              VALUES (${id}, ${seeded.orgId}, ${seeded.brandId},
+                      ${JSON.stringify({ kind: "brief", text: BRIEF, channelIds: [] })}::jsonb,
+                      'running', ${`job-sweep-${id}`}, now() - interval '1 day')`,
+        );
+      }
+
+      const repo = new Repository();
+      const deleting = await pool.connect();
+      let deleteError: string | null = null;
+      let sweeping: PromiseSettledResult<unknown>;
+      try {
+        // `BrandsRepository.delete`, mid-walk: the brand is taken and the first
+        // row of its ascending run set is held. Replayed as its statements
+        // rather than called — it lives in the api, and this file drives the
+        // worker.
+        await deleting.query("BEGIN");
+        const { rows } = await deleting.query("SELECT pg_backend_pid() AS pid");
+        const deletingPid = (rows[0] as { pid: number }).pid;
+        await deleting.query("SELECT id FROM brands WHERE id = $1 FOR UPDATE", [seeded.brandId]);
+        await deleting.query("SELECT id FROM pipeline_runs WHERE id = $1 FOR UPDATE", [low]);
+
+        const swept = repo.sweepAbandoned();
+        await waitForBlockedBy(deletingPid, swept);
+
+        // ...and now the delete walks on to the rest of its ordered set.
+        deleteError = await deleting
+          .query(
+            `SELECT id, status FROM pipeline_runs
+              WHERE org_id = $1 AND brand_id = $2 ORDER BY id FOR UPDATE`,
+            [seeded.orgId, seeded.brandId],
+          )
+          .then(
+            () => null,
+            (error: { code?: string }) => String(error.code),
+          );
+        await deleting.query("COMMIT");
+        [sweeping] = await Promise.allSettled([swept]);
+      } finally {
+        await deleting.query("ROLLBACK").catch(() => {});
+        deleting.release();
+      }
+
+      expect(
+        deleteError,
+        "DELETE /api/brands/:id was the deadlock victim (40P01 -> 500)",
+      ).toBeNull();
+      expect(sweeping.status, "the sweep was the deadlock victim").toBe("fulfilled");
+      // And every run was swept once the delete let go: it only READ them, so
+      // the sweep's re-check under the lock still finds them abandoned.
+      for (const id of ids) expect((await runRow(id))?.status).toBe("failed");
+    }, 20_000);
   });
 });

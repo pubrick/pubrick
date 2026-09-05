@@ -12,6 +12,7 @@ it never goes backwards.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
+`apps/api/src/ai-credentials/ai-credentials.repository.ts`,
 `apps/worker/src/publish/publish.repository.ts`,
 `apps/api/src/content/content.repository.ts` and
 `apps/worker/src/generate/generate.repository.ts`. If you add a lock, add it
@@ -68,6 +69,16 @@ channel — and the canonical order already puts every adaptation of a channel
 **`organization`** sits above everything (a tenant delete cascades into all of
 it) and is never taken together with anything else by application code.
 
+**`ai_credentials`** IS taken together with a table in the order, and is named
+here rather than left silent. `AiCredentialsRepository.delete` locks the key rows
+(the `DELETE ... RETURNING`) and then, in the same transaction, the org's queued
+`pipeline_runs`. It is left out of the order because nothing takes those two the
+other way round — the credential rows are only ever reached by that endpoint and
+by plain reads. That is the same standing the `channels`/`adaptations` edge had
+before it became the first cycle this file records, so if a second writer of
+`ai_credentials` ever appears, put it in the order rather than re-deriving this
+paragraph.
+
 ## `pipeline_runs`, and why it sits second
 
 It used to be in neither the list nor this document's silence about it — named
@@ -104,20 +115,91 @@ has nothing to do with id order and reverses freely as rows are updated. Two
 transactions walking the same set in opposite orders deadlock each other.
 
 So: **every multi-row lock over `adaptations` or `pipeline_runs` is taken in
-ascending `id`.** `BrandsRepository.delete` is the only statement that locks
-many runs at once, and it does so `ORDER BY id FOR UPDATE`; nothing else may
-walk that set in another order.
-`ContentRepository.lockAdaptations` does it with `ORDER BY id FOR UPDATE`. Both
-api deletes do. `PublishRepository.sweepAbandoned` is a bulk `UPDATE`, which
-cannot carry an `ORDER BY` of its own, so it takes its locks in a
-`WHERE id IN (SELECT ... ORDER BY id FOR UPDATE)` sub-select and repeats its
-predicate on the outer statement.
+ascending `id`.** All seven of them, and there is no eighth:
 
-That last part is load-bearing twice over. The sub-select's `FOR UPDATE`
-re-evaluates its own `WHERE` after acquiring each row lock, and the outer
-`UPDATE` re-evaluates the predicate again — so a row a live attempt has just
-renewed still fails the second look and is not swept, which is the property the
-sweep's safety rests on.
+| statement | how it orders |
+|---|---|
+| `BrandsRepository.delete`, the brand's runs | `ORDER BY id FOR UPDATE` |
+| `BrandsRepository.delete`, the doomed adaptations | `ORDER BY id FOR UPDATE` |
+| `ChannelsRepository.delete`, the channel's adaptations | `ORDER BY id FOR UPDATE` |
+| `ContentRepository.lockAdaptations` (`approve`, `reject`) | `ORDER BY id FOR UPDATE` |
+| `AiCredentialsRepository.delete`, the org's queued runs | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF r)` |
+| `PublishRepository.sweepAbandoned`, the abandoned adaptations | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF a)` |
+| `GenerateRepository.sweepAbandoned`, the abandoned runs | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF r)` |
+
+A bulk `UPDATE` cannot carry an `ORDER BY` of its own, which is why the last
+three take their locks in a sub-select and repeat their predicate on the outer
+statement. That repetition is load-bearing twice over: the sub-select's
+`FOR UPDATE` re-evaluates its own `WHERE` after acquiring each row lock, and the
+outer `UPDATE` re-evaluates the predicate again — so a row a live attempt has
+just renewed still fails the second look and is not swept, which is the property
+both sweeps' safety rests on.
+
+**A cascade does not need the treatment, because the pre-lock already gave it
+one.** `DELETE FROM brands` reaches `pipeline_runs`, `adaptations`,
+`channels` and `content_items` in its own scan order, unordered — but every row
+it will destroy is a row the same transaction has already locked, in the
+canonical order, statements earlier. It acquires nothing new, so it cannot be
+half of a cycle. That is the entire reason the rule above is stated as "lock
+everything the cascade will destroy, before you issue the delete" rather than
+"order the cascade", which is not something SQL lets you do.
+
+### The rule, and why the last two writers needed it
+
+**A multi-row write to a table anyone locks in ascending `id` must take its own
+rows in ascending `id` too.** Not only the `SELECT ... FOR UPDATE` walkers — a
+bulk `UPDATE ... WHERE` is a multi-row lock, and an unordered one against an
+ordered one is a cycle just as surely as two unordered ones.
+
+This was learned the second time. When `pipeline_runs` entered the order, its
+`BrandsRepository.delete` walk was given `ORDER BY id FOR UPDATE` and this file
+said, wrongly, that nothing else locked many runs at once. Two statements did:
+`AiCredentialsRepository.delete` failing the org's queued runs, and
+`GenerateRepository.sweepAbandoned` failing every abandoned one. Both were bulk
+`UPDATE`s with no ordering, both overlapped the delete's set, and both raced it
+into `40P01` — measured, on a real database, racing the real statements:
+
+| race | unordered | ordered |
+|---|---|---|
+| `brands.delete` × `ai-credentials.delete`, 3 queued runs (`MAX_CONCURRENT_RUNS`), 150 rounds | **30** (`DELETE /api/brands/:id` the victim 17×) | **0** |
+| `brands.delete` × generate sweep, 60 runs, 40 rounds | **8** (4× each side) | **0** |
+
+Note where that cycle lives: **inside one statement**. Two multi-row statements
+disagreeing about row order deadlock while each is still executing, so no
+interleaving of the two transactions' *statements* can produce it — a pair
+matrix over statement prefixes, which is how the rest of this file was verified,
+reports such a pair clean and always will. It is also why the runs' `ORDER BY id`
+was left with a SURVIVED mutation and a note saying no counterparty existed. Two
+did. Both regression tests now walk the set the other way:
+`ai-credentials.e2e.spec.ts`, "fails those runs in ascending id order", and
+`generate.service.spec.ts`, "sweepAbandoned locks in id order".
+
+### Two tables nobody orders, and why they are still not a cycle
+
+Both have more than one multi-row writer, and neither writer orders anything.
+Named here so the next reader does not have to re-derive it.
+
+**`publications`.** `PublishRepository.sweepOrphanedClaims` bulk-updates every
+stale `in_flight` claim whose adaptation is gone; the
+`publications_stamp_deleted_channel` trigger, inside `DELETE FROM channels`,
+updates every publication of the channel it is destroying. Nothing takes
+`publications` in `id` order, so there is no ordered walker for either of them to
+disagree with — and **their sets cannot overlap**: the sweep's set is
+`adaptation_id IS NULL`, and the only things that null that column are the two
+cascades, each of which destroys the channel in the same statement that orphans
+the claim. There is no state in which a publication has lost its adaptation and
+still has a channel left to delete. If a third writer of this table ever appears,
+or a caller starts walking it in `id` order, give both of these the sub-select
+shape rather than re-deriving this paragraph.
+
+**`channels`.** `GenerateRepository.finish` takes `FOR KEY SHARE` on every
+surviving channel of the run, unordered; `DELETE FROM brands`'s cascade takes
+every channel of the brand, unordered, and `FOR KEY SHARE` conflicts with that.
+They cannot meet: both transactions take the **brand** first — `finish` as
+`FOR KEY SHARE`, the delete as `FOR UPDATE` — and those conflict, so whichever
+arrives second is parked on the brand row holding no channel at all. The brand
+lock is what keeps this pair out of the cycle, which is one more reason the order
+starts there.
 
 ## The first two cycles this order closed
 

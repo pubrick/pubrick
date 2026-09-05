@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type INestApplication, Logger } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
@@ -128,6 +129,44 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       outcome: "completed",
       ...overrides,
     };
+  }
+
+  /**
+   * Waits until some backend is parked on a row lock held by `pid`.
+   *
+   * Scoped by BLOCKING PID (`pg_blocking_pids`), not by statement text: sibling
+   * spec files run against this same database at the same time, so "a backend
+   * is waiting on `pipeline_runs`" does not identify ours, while "a backend is
+   * waiting on a lock THIS transaction holds" does.
+   *
+   * `racing` is passed so that an operation which rejects instead of blocking
+   * says so here, rather than timing out ten seconds later as if the lock were
+   * merely slow.
+   */
+  async function waitForBlockedBy(pid: number, racing: Promise<unknown>): Promise<void> {
+    let settled = false;
+    const watched = racing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await direct.db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE wait_event_type = 'Lock' AND ${pid} = ANY(pg_blocking_pids(pid))`,
+      );
+      if ((rows[0] as { n: number }).n > 0) return;
+      if (settled) {
+        await watched;
+        return;
+      }
+      if (Date.now() > deadline) throw new Error(`no backend blocked by pid ${pid}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
 
   describe("secrecy", () => {
@@ -327,6 +366,104 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         .where(eq(schema.pipelineRuns.id, victimRun[0]?.id as string));
       expect(untouched[0]?.status).toBe("queued");
     });
+
+    /**
+     * THE SAME TABLE, TWO TRANSACTIONS: this UPDATE walks `pipeline_runs` in
+     * ascending `id`, because `BrandsRepository.delete` does (`docs/lock-order.md`).
+     *
+     * That delete locks every run of the brand it is destroying with
+     * `ORDER BY id FOR UPDATE`. This statement fails every queued run of the
+     * org — an overlapping set — and a bulk `UPDATE ... WHERE` with no ordering
+     * takes its row locks in scan order, which is heap order and reverses
+     * freely. Two walkers, opposite directions, one cycle. Both endpoints are
+     * ordinary user actions, and the victim is a 500 on one of them.
+     *
+     * The cycle forms INSIDE a single statement, which is why no interleaving
+     * of these two transactions' STATEMENTS can produce it and why a pair
+     * matrix over statement prefixes reported this pair clean. So the
+     * interleaving here is built inside the UPDATE instead: the delete holds
+     * the LOWEST id and this removal is launched, parking on a row lock. Ordered,
+     * it parks on `low` holding nothing, and the delete walks on to `high`
+     * unobstructed. Unordered, it has already taken `high` — heap order, since
+     * the rows are inserted high-id first — and the delete's ascending walk
+     * asks for exactly that row while holding the one the removal wants.
+     *
+     * Measured before this shape existed, racing the two real statements at the
+     * product's own three-run cap: 30 deadlocks in 150 concurrent rounds
+     * (`DELETE /api/brands/:id` the victim 17 times), against 0 in 150 with it.
+     *
+     * Both sides are asserted. Checking only that the removal succeeded would
+     * pass a fix that merely moved the victim onto the brand delete.
+     */
+    it("fails those runs in ascending id order, so a brand delete's ordered walk cannot deadlock it", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent).expect(200);
+      const brand = await agent.post("/api/brands").send({ name: "Ordered" }).expect(201);
+      const brandId = brand.body.id as string;
+
+      const [low, high] = [randomUUID(), randomUUID()].sort() as [string, string];
+      // HIGH inserted first, so heap order IS the reverse of id order. That
+      // disagreement is the whole premise: with the two orders agreeing, an
+      // unordered walk and an ordered one are indistinguishable.
+      for (const id of [high, low]) {
+        await direct.db.insert(schema.pipelineRuns).values({
+          id,
+          orgId,
+          brandId,
+          input: { kind: "brief", text: "a brief", channelIds: [] },
+        });
+      }
+
+      const deleting = await direct.pool.connect();
+      let deleteError: string | null = null;
+      let removal: PromiseSettledResult<unknown>;
+      try {
+        // `BrandsRepository.delete`, mid-walk: the brand is taken and the first
+        // row of its ascending run set is held. Replayed as its statements
+        // rather than called, because the point is the ORDER of the rows, and
+        // the endpoint would run the whole walk in one statement.
+        await deleting.query("BEGIN");
+        const { rows } = await deleting.query("SELECT pg_backend_pid() AS pid");
+        const pid = (rows[0] as { pid: number }).pid;
+        await deleting.query("SELECT id FROM brands WHERE id = $1 FOR UPDATE", [brandId]);
+        await deleting.query("SELECT id FROM pipeline_runs WHERE id = $1 FOR UPDATE", [low]);
+
+        const removing = repo.delete(orgId, "google");
+        await waitForBlockedBy(pid, removing);
+
+        // ...and now the delete walks on to the rest of its ordered set.
+        deleteError = await deleting
+          .query(
+            `SELECT id, status FROM pipeline_runs
+              WHERE org_id = $1 AND brand_id = $2 ORDER BY id FOR UPDATE`,
+            [orgId, brandId],
+          )
+          .then(
+            () => null,
+            (error: { code?: string }) => String(error.code),
+          );
+        await deleting.query("COMMIT");
+        [removal] = await Promise.allSettled([removing]);
+      } finally {
+        await deleting.query("ROLLBACK").catch(() => {});
+        deleting.release();
+      }
+
+      expect(
+        deleteError,
+        "DELETE /api/brands/:id was the deadlock victim (40P01 -> 500)",
+      ).toBeNull();
+      expect(removal.status, "DELETE /api/ai-credentials/:provider was the deadlock victim").toBe(
+        "fulfilled",
+      );
+      // And the removal still did its job on BOTH rows once the delete let go:
+      // the delete only READ them, so the re-check under the lock still finds
+      // them queued.
+      expect(removal.status === "fulfilled" && removal.value).toEqual({
+        deleted: true,
+        failedRuns: 2,
+      });
+    }, 20_000);
   });
 
   describe("the Test action", () => {

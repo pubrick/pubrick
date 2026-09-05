@@ -121,7 +121,44 @@ export class AiCredentialsRepository {
           status: "failed",
           error: `The ${provider} API key was removed while this run was queued. Add a key in Settings, then try again.`,
         })
-        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.status, "queued")))
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.status, "queued"),
+            // ASCENDING id, taken by a sub-select because an `UPDATE` cannot
+            // carry an `ORDER BY` of its own — the same shape
+            // `PublishRepository.sweepAbandoned` uses over `adaptations`, and
+            // for the same reason (`docs/lock-order.md`).
+            //
+            // This statement locks MANY rows of `pipeline_runs`, and
+            // `BrandsRepository.delete` walks an overlapping set — every run of
+            // the brand it is deleting — `ORDER BY id FOR UPDATE`. A bulk
+            // `UPDATE ... WHERE` with no ordering takes its row locks in heap
+            // order, which reverses freely as rows are updated, so the two
+            // statements can each hold a row the other wants. That cycle forms
+            // INSIDE one statement, which is why no interleaving of the two
+            // transactions' statements can expose it and why it survived the
+            // pair matrix that cleared this pair. Measured on a real database
+            // at the product's own three-run cap (`MAX_CONCURRENT_RUNS`):
+            // 30 deadlocks in 150 concurrent rounds without this sub-select
+            // (`DELETE /api/brands/:id` the victim 17 times — a 500 on the
+            // endpoint the run lock was added to stop 500-ing), 0 in 150 with
+            // it.
+            //
+            // The predicate is repeated on the outer statement, not replaced by
+            // this: the sub-select's `FOR UPDATE` re-evaluates its own `WHERE`
+            // after taking each row lock, and the outer `UPDATE` re-evaluates
+            // again, so a run some other transaction has just moved out of
+            // `queued` fails the second look instead of being failed twice.
+            sql`${schema.pipelineRuns.id} in (
+              select r.id from pipeline_runs r
+               where r.org_id = ${orgId}
+                 and r.status = 'queued'
+               order by r.id
+                 for update of r
+            )`,
+          ),
+        )
         .returning({ id: schema.pipelineRuns.id });
 
       return { deleted: true, failedRuns: failed.length };

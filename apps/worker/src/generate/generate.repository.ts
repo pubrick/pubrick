@@ -20,7 +20,7 @@ import {
   type RunStepCheckpoint,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, type SQL, type SQLWrapper, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -681,10 +681,16 @@ export class GenerateRepository {
    *
    * THE PRICE, since it is not free. This transaction now parks on the brand
    * row before it can even discover it has been fenced out, so a `lost` handler
-   * waits behind a concurrent brand rename (`UPDATE brands` takes `FOR UPDATE`)
-   * that it used to ignore. Both are short api transactions and this one makes
-   * no network calls, so the wait is bounded by them; the alternative was a
-   * `40P01` on a run somebody has already paid for.
+   * waits behind a concurrent `DELETE /api/brands/:id` that it used to ignore —
+   * which is the case where the run is doomed anyway, and is answered `gone` one
+   * statement later. It does NOT wait behind a brand RENAME, and an earlier
+   * draft of this comment said it did: `BrandsRepository.update` is a bare
+   * `UPDATE brands SET name = ...` on a non-key column, so it takes
+   * `FOR NO KEY UPDATE`, which is share-compatible with `FOR KEY SHARE`.
+   * Measured: with a rename holding the row, this pre-lock acquires
+   * immediately, while a `FOR UPDATE` probe on the same row gets `55P03`. The
+   * price is a short api transaction that makes no network calls; the
+   * alternative was a `40P01` on a run somebody has already paid for.
    *
    * AND A BRAND THAT IS ALREADY GONE NOW ENDS THE RUN CLEANLY. Parking on the
    * brand means a `DELETE /api/brands/:id` is committing, and its cascade takes
@@ -1020,6 +1026,16 @@ export class GenerateRepository {
    * out to anybody.
    */
   async sweepAbandoned(): Promise<SweptRun[]> {
+    // `state < 'completed'` is pg-boss's own spelling for "not terminal"
+    // (`created` < `retry` < `active` < `completed` in its enum), the same
+    // comparison `failJobsById` is guarded by. Cast explicitly: the literal has
+    // to resolve to pgboss's enum type, not to text.
+    const noLiveJob = (runId: SQL | SQLWrapper) => sql`not exists (
+      select 1
+      from ${sql.raw(PGBOSS_SCHEMA)}.job j
+      where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+        and j.data->>'runId' = ${runId}::text
+    )`;
     const rows = await db
       .update(schema.pipelineRuns)
       .set({ status: "failed", error: ABANDONED_FAILURE, updatedAt: nowSql() })
@@ -1028,15 +1044,42 @@ export class GenerateRepository {
           eq(schema.pipelineRuns.status, "running"),
           isNotNull(schema.pipelineRuns.leaseExpiresAt),
           sql`${schema.pipelineRuns.leaseExpiresAt} < now() - make_interval(secs => ${ABANDONED_GRACE_SECONDS})`,
-          // `state < 'completed'` is pg-boss's own spelling for "not terminal"
-          // (`created` < `retry` < `active` < `completed` in its enum), the same
-          // comparison `failJobsById` is guarded by. Cast explicitly: the
-          // literal has to resolve to pgboss's enum type, not to text.
-          sql`not exists (
-            select 1
-            from ${sql.raw(PGBOSS_SCHEMA)}.job j
-            where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-              and j.data->>'runId' = ${schema.pipelineRuns.id}::text
+          noLiveJob(schema.pipelineRuns.id),
+          // ASCENDING id, taken by a sub-select because an `UPDATE` cannot carry
+          // an `ORDER BY` of its own — the shape `PublishRepository.sweepAbandoned`
+          // uses over `adaptations`, for the identical reason
+          // (`docs/lock-order.md`).
+          //
+          // This is a bulk `UPDATE` over MANY rows of `pipeline_runs`, and
+          // `BrandsRepository.delete` walks an overlapping set — every run of
+          // the brand being deleted — `ORDER BY id FOR UPDATE`. Unordered, this
+          // statement takes its row locks in heap order, which has nothing to do
+          // with id order, so the two can each end up holding a row the other
+          // wants. The cycle forms INSIDE one statement, so no interleaving of
+          // the two transactions' statements can produce it — which is exactly
+          // why a pair matrix over statement prefixes reported this pair clean.
+          // Measured on a real database, 60 runs, 40 concurrent rounds: 8
+          // deadlocks unordered — 4 of them `ABANDONED-RUN SWEEP FAILED` on the
+          // one path that rescues stuck runs, and 4 a 500 on
+          // `DELETE /api/brands/:id` — against 0 ordered.
+          //
+          // The predicate is repeated on the outer statement rather than moved
+          // into the sub-select, and that repetition is what keeps the sweep's
+          // safety property (condition 3 above) intact: the sub-select's
+          // `FOR UPDATE` re-evaluates its own `WHERE` after taking each row
+          // lock, and the outer `UPDATE` re-evaluates again under that lock, so
+          // a run whose live handler renewed its lease in the gap fails BOTH
+          // looks and is not swept. The sweeper still loses that race by
+          // construction.
+          sql`${schema.pipelineRuns.id} in (
+            select r.id
+            from ${schema.pipelineRuns} r
+            where r.status = 'running'
+              and r.lease_expires_at is not null
+              and r.lease_expires_at < now() - make_interval(secs => ${ABANDONED_GRACE_SECONDS})
+              and ${noLiveJob(sql`r.id`)}
+            order by r.id
+              for update of r
           )`,
         ),
       )
