@@ -137,3 +137,21 @@ crypto envelope's version check was "tested" with an input whose key id was
 also unknown, so the version was never examined. Rule: the property under test
 must be the *only* thing wrong with the input, and the assertion must name the
 guard's own refusal, not merely that it threw.
+
+## 2026-09-05 — "restore with `git checkout`" wipes uncommitted work
+
+A task brief told the implementer to restore each mutated file with
+`git checkout -- <file>`. The task's own change was not yet committed, so the
+first restore reverted the implementation together with the mutation; the
+agent noticed only because the build hash came back identical to `main`. Rule:
+mutations run against a *committed* tree — commit the task (or a WIP) first —
+or restore from a `cp` backup taken after the change. The brief names which.
+
+## 2026-09-05 — a scratch directory shared between agents forges verdicts
+
+Two agents in different checkouts both wrote their mutation scripts to
+`/tmp/muts`. One overwrote the other's mid-run; the mutation never applied and
+the log recorded two SURVIVED verdicts for a mutation that had not happened.
+It was caught because the script crashed visibly, not because the verdict
+looked wrong. Rule: every agent's scratch lives in a directory named for its
+task; a mutation log states the path it ran from.
