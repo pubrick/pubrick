@@ -434,12 +434,14 @@ export type SourceRunInput = z.infer<typeof sourceRunInputSchema>;
 /**
  * Everything the column may hold — two members today.
  *
- * Kept as a separate name from `briefRunInputSchema` because the two answer
- * different questions the day a second `kind` exists: this one is "what may be
- * stored", and the brief member is "what THIS worker build can execute". The
- * worker parses with the member, so a `topic` run reaching a build that cannot
- * run one fails the run with a sentence instead of being accepted and then
- * crashing inside a step.
+ * Kept as a separate name from the members it is built from because the two
+ * answer different questions the day a `kind` exists that no worker can run
+ * yet: this one is "what may be stored", and a worker's own list is "what THAT
+ * build can execute". The worker never parses with this union — it parses with
+ * an explicit list of the members it can execute
+ * (`executableRunInputSchema`, `apps/worker/src/generate/generate.service.ts`),
+ * so a `topic` run reaching a build that cannot run one fails the run with a
+ * sentence instead of being accepted and then crashing inside a step.
  */
 export const runInputSchema = z.discriminatedUnion("kind", [
   briefRunInputSchema,

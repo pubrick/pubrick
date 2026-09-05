@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ScriptedModel, type StepRole, scriptedModel } from "../test/scripted-model";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -34,6 +34,12 @@ const EDITED = "EDITED_MARKER the autumn menu lands on Monday.";
 const MATERIAL = "SOURCE_MARKER The council approved the market hall on Tuesday.";
 const URL_MARKER = "SOURCEURLMARKER";
 const SOURCE_URL = `https://example.test/${URL_MARKER}/market-hall`;
+/**
+ * The brief of a run that carries BOTH — an instruction ABOUT the paste rather
+ * than a second thing to work from, which is why `runs.repository.create`
+ * stores that request as a SOURCE run with `text` set.
+ */
+const BOTH_BRIEF = "BRIEFMARKER Keep it to two sentences, for the neighbourhood.";
 
 /**
  * A generation run driven through the REAL machinery: a real pg-boss queue
@@ -61,6 +67,12 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   let UNREADABLE_CREDENTIALS_MESSAGE: string;
   let MALFORMED_STORED_AI_CREDENTIAL_MESSAGE: string;
   let runFailureOf: typeof import("@pubrick/ai").runFailureOf;
+  /**
+   * The real first step, held so a test can read the CONTEXT the real service
+   * built for it. Spied, never replaced: everything below still runs through
+   * the step it names.
+   */
+  let RESEARCHER: typeof import("@pubrick/ai").RESEARCHER;
   let sql: typeof import("drizzle-orm").sql;
   let queueOptions: typeof import("@pubrick/shared").GENERATE_QUEUE_OPTIONS;
   let graceSeconds: number;
@@ -90,7 +102,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
       GENERATE_QUEUE_OPTIONS: queueOptions,
     } = await import("@pubrick/shared"));
-    ({ runFailureOf } = await import("@pubrick/ai"));
+    ({ runFailureOf, RESEARCHER } = await import("@pubrick/ai"));
 
     const { PgBoss } = await import("pg-boss");
     boss = new (PgBoss as PgBossCtor)(url as string);
@@ -149,6 +161,15 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
 
     workerPool = ((await import("../db")) as { pool: Pool }).pool;
   }, 30_000);
+
+  /**
+   * A spy installed by one test must not still be watching the live consumer
+   * during the next one — the queue is registered once for the whole file, so a
+   * leaked spy would be recording another test's run.
+   */
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   afterAll(async () => {
     await boss?.stop({ graceful: false, timeout: 5_000 });
@@ -320,6 +341,16 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       editor: () => ({ body: EDITED, changes: ["Tightened the opening."] }),
     });
     active = script;
+    // THE CONTEXT, not only the prompts. `ctx.sourceUrl` has no reader today
+    // and the URL assertions below are all absences, which a builder that never
+    // carried the URL satisfies just as well as one that carried it and kept it
+    // out — `sourceUrl: null` on the source arm survives every other test in
+    // this repository for exactly that reason. Reading it back off the context
+    // the real service handed the real first step is what separates "carried
+    // and deliberately not emitted" from "never carried", so the day a receipt,
+    // an attribution line or a sixth step reads it, the stored URL is what is
+    // there. Spied rather than stubbed: the researcher still runs.
+    const researcher = vi.spyOn(RESEARCHER, "run");
 
     const jobId = await enqueue(seeded.runId, seeded.orgId);
     const job = await waitForJobState(jobId);
@@ -385,6 +416,71 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       expect(call.user, `${call.role}'s material carried the URL`).not.toContain(URL_MARKER);
       expect(call.system, `${call.role}'s instructions carried the URL`).not.toContain(URL_MARKER);
     }
+
+    // The URL reached the context of a step that emits none of it. Asserted as
+    // the whole call list rather than as `calls[0]`, so "the researcher never
+    // ran" cannot read as "the URL was carried".
+    expect(researcher.mock.calls.map((call) => call[0].sourceUrl)).toEqual([SOURCE_URL]);
+  }, 40_000);
+
+  it("gives a source run that also carries a brief BOTH blocks, brief first, to the three steps that read them", async () => {
+    // "OR BOTH" IS A STORED SHAPE, not a hypothesis: a request carrying a paste
+    // and a brief is written as `kind: "source"` with `text` set, because a
+    // brief is an instruction ABOUT the material rather than a second thing to
+    // work from (`runs.repository.create`, pinned by the api's own e2e). The
+    // arm is chosen on `kind` ALONE, and the one plausible edit here — choosing
+    // it on `input.text` as well — sends these runs down the brief arm, where
+    // `material` is `null`. The paste then reaches no step, and the run drafts
+    // from the brief alone and succeeds: nothing on the queue, the receipt or
+    // the draft says the person's article was dropped.
+    const seeded = await seed(2, (channelIds) => ({
+      kind: "source",
+      text: BOTH_BRIEF,
+      material: MATERIAL,
+      sourceUrl: SOURCE_URL,
+      channelIds,
+    }));
+    const script = scriptedModel({
+      editor: () => ({ body: EDITED, changes: ["Tightened the opening."] }),
+    });
+    active = script;
+
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+
+    const run = await runRow(seeded.runId);
+    expect(run?.error).toBeNull();
+    expect(run?.status).toBe("succeeded");
+
+    /** Where each block starts in a role's user half, per call, `-1` for absent. */
+    const seenBy = (role: StepRole) =>
+      script.calls
+        .filter((call) => call.role === role)
+        .map((call) => ({
+          brief: call.user.indexOf(BOTH_BRIEF),
+          source: call.user.indexOf(MATERIAL),
+        }));
+
+    for (const role of ["researcher", "writer", "editor"] as const) {
+      const calls = seenBy(role);
+      expect(calls, `${role} was not called exactly once`).toHaveLength(1);
+      const { brief, source } = calls[0] as { brief: number; source: number };
+      expect(brief, `${role} was given no BRIEF block`).toBeGreaterThanOrEqual(0);
+      expect(source, `${role} was given no SOURCE block`).toBeGreaterThanOrEqual(0);
+      // BRIEF BEFORE SOURCE: the person's own ask first, the stranger's words
+      // second. `steps.test.ts` pins that order from a context literal; this is
+      // the only place it is read off a row the worker parsed itself.
+      expect(brief, `${role} was given the SOURCE before the BRIEF`).toBeLessThan(source);
+    }
+
+    // And neither reaches the two that must see neither — as whole call lists,
+    // so "was never called" cannot pass for "was called and saw nothing".
+    expect(seenBy("factcheck")).toEqual([{ brief: -1, source: -1 }]);
+    expect(seenBy("adapter")).toEqual([
+      { brief: -1, source: -1 },
+      { brief: -1, source: -1 },
+    ]);
   }, 40_000);
 
   it("completes the job for a permanent failure instead of retrying a run that cannot succeed", async () => {
