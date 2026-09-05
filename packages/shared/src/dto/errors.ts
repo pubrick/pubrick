@@ -195,6 +195,47 @@ export const API_ERROR_CODES = [
    */
   "refine_too_long",
 
+  // ── content: the proposal is accepted, discarded, or refused ──────────────
+  /**
+   * There is no such staged proposal on this draft — it was accepted,
+   * discarded, or superseded by a later press, each of which deletes the row
+   * whole. Also the answer for a proposal id belonging to another org, and for
+   * one staged against a DIFFERENT draft of this org: the second is not
+   * pedantry, since that proposal's anchor and offsets were measured against
+   * another body and applying them here would splice the model's words into a
+   * post nobody asked it about.
+   *
+   * 404 rather than 403, this suite's tenancy convention throughout: a stranger
+   * learns nothing about what exists. And its own code rather than
+   * `content_not_found`, because the two send the reader to different places —
+   * the post is right there in front of them; it is the suggestion that is
+   * gone.
+   */
+  "refine_proposal_not_found",
+  /**
+   * Accepting would record words a PERSON wrote as the model's.
+   *
+   * A merged sentence can absorb characters from outside the replaced range — a
+   * human's `Note: ` prefix, a list marker, the sentence a proposal without a
+   * terminator fuses with. Where those came from text no model wrote, the
+   * `fragment` row this Accept would file says a model wrote them: the lens
+   * stops dimming them and the badge reads "AI-drafted" over the author's own
+   * line. Refused rather than approximated, and the recovery is one
+   * re-selection — selecting the WHOLE sentence is accepted, because then
+   * nothing of theirs survives into the merged unit.
+   */
+  "refine_would_launder",
+  /**
+   * The text the suggestion was written for is no longer anywhere in the
+   * draft, so there is nothing to splice it into.
+   *
+   * Only when there is NO occurrence left: the anchor is re-located at the
+   * occurrence nearest where it was, never by hashing the whole body, because
+   * an edit three paragraphs away leaves the selection exactly where it was and
+   * refusing there throws away a call somebody paid for.
+   */
+  "refine_anchor_lost",
+
   // ── channels named by a request ───────────────────────────────────────────
   /** One of the channel ids is not this brand's. Shared by content and runs. */
   "channels_not_in_brand",

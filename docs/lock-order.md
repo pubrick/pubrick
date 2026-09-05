@@ -131,9 +131,9 @@ Being last protects a transaction whose *other* locks are all in the order; a
 table **outside** it, taken **before** `content_items`, is a new acquisition
 sequence, which is exactly what the `usage_ledger` paragraph above says belongs
 in the order. And "the only transaction" was never true: the proposal row is
-reached by three.
+written by four transactions.
 
-The three, all of them taking `content_items` first:
+The three that lock more than it, all of them taking `content_items` first:
 
 - **`ContentRepository.insertProposal`** locks the item, deletes the draft's
   existing proposal row and inserts the new one. It takes the item explicitly,
@@ -144,8 +144,22 @@ The three, all of them taking `content_items` first:
   the `refine_proposals` rows of every draft it destroys. Structurally in that
   order: the child rows can only be reached by the statement that has already
   deleted — and so locked — the parent.
-- **Accept** (2b-2b Task 6) takes `content_items FOR UPDATE` through
-  `requireEditableItem` and reads and deletes the proposal row under it.
+- **`ContentRepository.acceptRefine`** takes `content_items FOR UPDATE` through
+  `requireEditableItem` and reads and deletes the proposal row under it. Every
+  other write it makes — the body `UPDATE`, and the `content_versions` insert
+  whose foreign key takes `FOR KEY SHARE` on that same item — touches a row it
+  already holds in a strictly stronger mode, and it files nothing against an
+  adaptation, which is the one thing `recordHumanVersion` warns would invert
+  this order.
+
+**`ContentRepository.discardRefine` is the exception, and it is safe to be
+one.** It is a single `DELETE` against `refine_proposals` and takes nothing
+else: deleting a child row acquires no lock on its foreign-key parent (only an
+insert or a key update does), so it never reaches `content_items` at all, in any
+order. It holds one row for the length of one statement and can be neither half
+of a cycle. It is also refused on no status, deliberately — a discard changes no
+text, so a post an approval has pinned is exactly where a person must still be
+able to clear a card whose Accept is refused.
 
 Both of the deadlocks the inverse order produced were reproduced as `40P01` on a
 real database, from both sides, and are regression-tested in

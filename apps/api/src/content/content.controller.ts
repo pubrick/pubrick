@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -113,6 +114,52 @@ export class ContentController {
     @Body(new ZodValidationPipe(refineRequestSchema)) body: RefineRequest,
   ) {
     return this.content.refine(orgId, id, userId, body);
+  }
+
+  /**
+   * ACCEPT THE STAGED PROPOSAL. 200 and the item, like every other mutation on
+   * this resource, so the screen that pressed it redraws the merged body, the
+   * recomputed badge and the emptied proposal slot from one response.
+   *
+   * The proposal is addressed by ITS OWN id, not merely by the draft's: a press
+   * that superseded it staged a different suggestion, with different text, a
+   * different verb and a different range, and an Accept aimed at the card
+   * somebody was reading must not apply the one that replaced it. A stale id is
+   * a 404, which is exactly what it should be.
+   *
+   * No body at all, and no `@UserId()`. Nothing a caller could send is read:
+   * the text, the range and the verb are the server's own row. The person is
+   * recorded on that row already, which is why the `content_versions` row this
+   * writes carries `created_by = NULL` and means it — the model wrote the
+   * fragment.
+   */
+  @Post(":id/refine/:proposalId/accept")
+  @HttpCode(200)
+  acceptRefine(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptRefine(orgId, id, proposalId);
+  }
+
+  /**
+   * THROW THE STAGED PROPOSAL AWAY. 204 — there is nothing to say back, and
+   * nothing for a client to have to parse.
+   *
+   * A DELETE, because it destroys a resource this API created and named. It is
+   * refused on no status: discarding a suggestion changes no text, so a post
+   * an approval has pinned is exactly where a person should still be allowed to
+   * clear a card they cannot accept.
+   */
+  @Delete(":id/refine/:proposalId")
+  @HttpCode(204)
+  async discardRefine(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardRefine(orgId, id, proposalId);
   }
 
   @Post(":id/approve")

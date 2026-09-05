@@ -555,6 +555,11 @@ describe.skipIf(!url)("content e2e", () => {
         title: schema.contentVersions.title,
         origin: schema.contentVersions.origin,
         scope: schema.contentVersions.scope,
+        // Read TOGETHER with `scope`, the way every production query that feeds
+        // the gate must (CLAUDE.md): a fixture that showed one without the
+        // other could assert a fragment exists while saying nothing about
+        // whether it can state what it replaced.
+        unitDelta: schema.contentVersions.unitDelta,
         createdBy: schema.contentVersions.createdBy,
       })
       .from(schema.contentVersions)
@@ -3587,6 +3592,9 @@ describe.skipIf(!url)("content e2e", () => {
           title: null,
           origin: "human",
           scope: "full",
+          // Null on a `full` row, and the CHECK requires it to be: a whole body
+          // anchors the deletion clause, it does not move it.
+          unitDelta: null,
           createdBy: userId,
         },
       ]);
@@ -3649,6 +3657,7 @@ describe.skipIf(!url)("content e2e", () => {
           title: null,
           origin: "human",
           scope: "full",
+          unitDelta: null,
           createdBy: userId,
         },
       ]);
@@ -3715,6 +3724,7 @@ describe.skipIf(!url)("content e2e", () => {
           title: null,
           origin: "human",
           scope: "full",
+          unitDelta: null,
           createdBy: userId,
         },
       ]);
@@ -4646,15 +4656,23 @@ describe.skipIf(!url)("content e2e", () => {
       const STAGING_WAITS_ON = ["%content_items%for %", '%insert into "refine_proposals"%'];
 
       /**
-       * TASK 6'S ACCEPT, WHICH DOES NOT EXIST YET AND MUST NOT HAVE TO BE
-       * WRITTEN AROUND THIS.
+       * ACCEPT'S OWN TWO STATEMENTS, HELD OPEN.
        *
-       * Its first two statements are specified: `requireEditableItem`
-       * (`content_items FOR UPDATE`), then the proposal row it reads and
-       * deletes under that lock. Held here on a connection of its own, that is
-       * the exact inverse of the order the staging transaction used to take,
-       * and the pair deadlocks: whichever side loses, a person loses either the
-       * refine they paid for or the Accept they pressed.
+       * `ContentRepository.acceptRefine` takes `content_items FOR UPDATE`
+       * through `requireEditableItem` and then reads and deletes the proposal
+       * row under it. That is the exact inverse of the order the staging
+       * transaction used to take, and the pair deadlocks: whichever side loses,
+       * a person loses either the refine they paid for or the Accept they
+       * pressed.
+       *
+       * The peer is hand-written even though the route now exists, and the
+       * reason is not the one N1 killed: what this case needs is a transaction
+       * PAUSED between those two statements, and a real request cannot be
+       * paused there. The peer's own lock mode is not what any assertion rests
+       * on here — it only has to hold the item — which is precisely the
+       * difference from the overlapping-press case below, where the mode WAS
+       * the question and a hand-written peer answered it wrongly. The two real
+       * requests meeting each other are the case after this one.
        */
       it("does not deadlock against an Accept holding the item and reaching for the proposal", async () => {
         const { agent, itemId } = await refinableDraft();
@@ -4692,7 +4710,12 @@ describe.skipIf(!url)("content e2e", () => {
           await waitForLockWaiter(STAGING_WAITS_ON, pressing);
 
           acceptError = await accept
-            .query("DELETE FROM refine_proposals WHERE content_item_id = $1", [itemId])
+            // The route's own two statements on this row, in its order: read it
+            // under the item lock, then consume it.
+            .query("SELECT id FROM refine_proposals WHERE content_item_id = $1", [itemId])
+            .then(() =>
+              accept.query("DELETE FROM refine_proposals WHERE content_item_id = $1", [itemId]),
+            )
             .then(
               () => null,
               (error: { code?: string }) => String(error.code),
@@ -4869,6 +4892,71 @@ describe.skipIf(!url)("content e2e", () => {
       }, 20_000);
 
       /**
+       * A REAL ACCEPT AND A REAL PRESS, RELEASED TOGETHER.
+       *
+       * The case above pauses a hand-written Accept where a request cannot be
+       * paused; this one gives up that control to gain the thing it cannot
+       * have — both sides running the shipped code, taking the locks the
+       * repository really takes, in whichever order the queue grants them.
+       * What it can still assert is the whole of what the lock order buys:
+       * neither side is a `40P01` (which reaches a reader as a 500, having
+       * already spent their money), and the two possible outcomes are the two
+       * stories a person could be told, with no third.
+       *
+       * Either the Accept got the item first — it applied the suggestion it
+       * named, and the press then staged a new one against the merged body — or
+       * the press got there first, superseded the row, and the Accept could
+       * only be a 404 for a suggestion that no longer exists. One proposal row
+       * either way, because that is what the unique index and the supersede
+       * mean.
+       */
+      it("serialises a real Accept against a real press, whichever wins", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+        // The ledger insert would park both requests on a statement neither
+        // pattern names; see the cases above.
+        refineOutcome = { ...refineOutcome, usage: [] as RefineOutcome["usage"] };
+
+        const { createDb } = await import("@pubrick/db");
+        const { pool } = createDb(url as string);
+        const gate = await pool.connect();
+        let press = 0;
+        let accept: { status: number; code?: string } = { status: 0 };
+        try {
+          await gate.query("BEGIN");
+          await gate.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
+
+          const pressing = agent
+            .post(`/api/content/${itemId}/refine`)
+            .send({ verb: "punchier", ...SELECTION })
+            .then((res) => res.status);
+          const accepting = agent
+            .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+            .then((res) => ({ status: res.status, code: res.body.code as string | undefined }));
+          await waitForLockWaiter(STAGING_WAITS_ON, [pressing, accepting], 2);
+          await gate.query("COMMIT");
+          [press, accept] = await Promise.all([pressing, accepting]);
+        } finally {
+          await gate.query("ROLLBACK").catch(() => {});
+          gate.release();
+          await pool.end();
+        }
+
+        expect(press, "the press was the deadlock victim (40P01 -> 500)").toBe(201);
+        expect([200, 404], "the Accept was the deadlock victim (40P01 -> 500)").toContain(
+          accept.status,
+        );
+        if (accept.status === 404) expect(accept.code).toBe("refine_proposal_not_found");
+        // The fragment row exists exactly when the Accept applied something.
+        expect(await masterVersionRows(itemId)).toHaveLength(accept.status === 200 ? 2 : 1);
+        // And the press's own proposal is staged either way.
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      }, 20_000);
+
+      /**
        * THE DELETE AND THE INSERT ARE ONE TRANSACTION, and this is the
        * assertion that can tell.
        *
@@ -4910,6 +4998,515 @@ describe.skipIf(!url)("content e2e", () => {
         );
         expect(rows[0]?.id).toBe(staged.body.id);
         expect(rows[0]?.proposal).toBe(AI_REPLACEMENT);
+      });
+    });
+
+    /**
+     * Rewrites the draft AND the `ai` `full` row that is the evidence for it,
+     * together — a draft the model wrote with different words, rather than a
+     * draft somebody edited.
+     *
+     * Both, never one: `setItemBody` alone leaves the body saying one thing and
+     * the model's own version row another, which is a HUMAN EDIT as far as
+     * every provenance read is concerned. A test that wanted "the model wrote
+     * these three sentences" and moved only the body would be testing the
+     * laundering refusal by accident.
+     */
+    async function setAiDraft(itemId: string, body: string): Promise<void> {
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.update(schema.contentItems).set({ body }).where(eq(schema.contentItems.id, itemId));
+      await db
+        .update(schema.contentVersions)
+        .set({ body })
+        .where(
+          and(
+            eq(schema.contentVersions.contentItemId, itemId),
+            isNull(schema.contentVersions.adaptationId),
+            eq(schema.contentVersions.origin, "ai"),
+            eq(schema.contentVersions.scope, "full"),
+          ),
+        );
+      await pool.end();
+    }
+
+    /**
+     * The version rows of the MASTER body — the level a refine acts on.
+     *
+     * `aiDraft` writes one `ai` row per channel too, and they are evidence
+     * about the ADAPTATIONS' text: counting them here would let a fragment
+     * filed against the wrong level pass for the right one.
+     */
+    async function masterVersionRows(itemId: string) {
+      return (await versionRows(itemId)).filter((row) => row.adaptationId === null);
+    }
+
+    /**
+     * A proposal row carrying a STRANGER's `org_id` while pointing at this
+     * draft. Returns its id.
+     *
+     * Written straight to the table: no endpoint will produce one, and it is
+     * the only shape the `org_id` predicate on Accept and Discard can be seen
+     * to refuse.
+     */
+    async function otherOrgProposalRow(itemId: string): Promise<string> {
+      const { orgId } = await strangerOrg();
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const rows = await db
+        .insert(schema.refineProposals)
+        .values({
+          orgId,
+          contentItemId: itemId,
+          verb: "shorten",
+          selectedText: SELECTED_TEXT,
+          startOffset: SELECTION.start,
+          endOffset: SELECTION.end,
+          proposal: AI_REPLACEMENT,
+          reason: AI_REASON,
+        })
+        .returning({ id: schema.refineProposals.id });
+      await pool.end();
+      return rows[0]?.id as string;
+    }
+
+    /** A refinable draft with one proposal staged against `range`. */
+    async function withProposal(range: { start: number; end: number } = SELECTION) {
+      const draft = await refinableDraft();
+      const staged = await draft.agent
+        .post(`/api/content/${draft.itemId}/refine`)
+        .send({ verb: "shorten", ...range })
+        .expect(201);
+      return { ...draft, proposalId: staged.body.id as string, staged: staged.body };
+    }
+
+    describe("accepting what was proposed", () => {
+      /**
+       * THE WHOLE INCREMENT IN ONE CASE, now through the real routes.
+       *
+       * Two of the model's sentences come back as one — the ordinary outcome of
+       * pressing Shorten once. Counted against the model's original draft alone
+       * that is a body a sentence shorter than the model wrote, which reads as a
+       * human deletion: the badge captions the model's own words "Human-edited"
+       * and the publish gate opens on a draft nobody has read. The `unit_delta`
+       * this Accept writes is what makes the count come out right, and it is
+       * written HERE, once, rather than re-derived from the fragment's text on
+       * every read.
+       */
+      it("records a shortened draft as still the model's, and the gate still holds", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: 0, end: AI_BODY.length })
+          .expect(201);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(AI_REPLACEMENT);
+        // The badge. Whole-body equality could never say this: a fragment never
+        // EQUALS a body, so an accepted proposal used to read "Human-edited".
+        expect(accepted.body.bodyIsAiVerbatim).toBe(true);
+        // Consumed: the card the person accepted is gone from the response that
+        // replaced it, so a screen redrawing from this cannot offer it twice.
+        expect(accepted.body.refineProposal).toBeNull();
+
+        const rows = await masterVersionRows(itemId);
+        expect(rows).toHaveLength(2);
+        expect(rows[1]).toEqual({
+          adaptationId: null,
+          // The MERGED body's own units, not the model's reply as it arrived:
+          // an unterminated proposal fuses with its neighbour, and a row holding
+          // the reply would leave the fused unit attributable to nobody.
+          body: AI_REPLACEMENT,
+          title: null,
+          origin: "ai",
+          scope: "fragment",
+          unitDelta: -1,
+          // The MODEL wrote this text. The person who asked for it is recorded
+          // on the proposal row, which is where a request belongs.
+          createdBy: null,
+        });
+        expect(await proposalRows(itemId)).toEqual([]);
+
+        // ...and the promise the whole increment is built around still holds:
+        // nobody has read this draft, so it cannot be published.
+        const refused = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(refused.body.code).toBe("unread_ai_draft");
+      });
+
+      /**
+       * THE OTHER DIRECTION OF DISHONESTY, refused. `Note: ` is the author's
+       * own; the merged sentence would swallow it, and the fragment row would
+       * then say a model wrote it — the lens stops dimming it, the badge reads
+       * "AI-drafted" over a person's words.
+       *
+       * The proposal SURVIVES the refusal. They paid for it, and re-selecting
+       * the whole sentence is one act away.
+       */
+      it("refuses to file a person's own words as the model's, and keeps the proposal", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const body = "Café ouvert. Note: passez demain.";
+        await setItemBody(itemId, body);
+        const start = body.indexOf("passez demain.");
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "warmer", start, end: body.length })
+          .expect(201);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_would_launder");
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.body).toBe(body);
+        // Not "no fragment row": no row at all, and no half-applied body. One
+        // transaction, and a refusal rolls the whole of it back.
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+        expect(item.body.refineProposal.id).toBe(staged.body.id);
+      });
+
+      /**
+       * A *shorten* on short copy routinely hands back the selection unchanged.
+       * There is no new version of anything, so nothing is written —
+       * `humanVersionBody`'s own rule for a save that changed no text, one
+       * origin over.
+       */
+      it("writes nothing for a proposal that reproduces the selection", async () => {
+        const { agent, itemId } = await refinableDraft();
+        refineOutcome = {
+          ok: true,
+          text: SELECTED_TEXT,
+          reason: AI_REASON,
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(AI_BODY);
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        // Consumed all the same: the person accepted it, and a card that stayed
+        // on the screen would invite them to accept it again.
+        expect(await proposalRows(itemId)).toEqual([]);
+      });
+
+      /**
+       * THE ANCHOR IS RE-LOCATED, NOT TRUSTED — and it is the occurrence
+       * NEAREST the offset the proposal stored, not the first one in the body.
+       * A repeated hook line is ordinary social copy; splicing into the first
+       * copy would rewrite a sentence the person never selected, three
+       * paragraphs from the one they did.
+       */
+      it("re-locates the selection nearest where it was, not at the first copy of it", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const body = `${AI_BODY} ${SELECTED_TEXT}`;
+        await setAiDraft(itemId, body);
+        const start = body.lastIndexOf(SELECTED_TEXT);
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start, end: start + SELECTED_TEXT.length })
+          .expect(201);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(`${AI_BODY} ${AI_REPLACEMENT}`);
+      });
+
+      /**
+       * THE STORED OFFSETS ARE NOT WHERE THE TEXT IS. They record where the
+       * selection SAT when the model was asked, and a person adding a line
+       * above it while they read the proposal — the commonest interaction
+       * there is — moves every offset after it. Splicing at the stored one
+       * would replace whatever now happens to occupy those characters, which
+       * here is the middle of the sentence they just typed.
+       *
+       * The offsets are still stored, and still used: they are what "nearest"
+       * is measured from.
+       */
+      it("splices where the selection is now, not where it was when the model was asked", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        // The same draft with a line added in front of it, model-written like
+        // the rest so nothing here turns on attribution.
+        const moved = `Bonjour à tous. ${AI_BODY}`;
+        await setAiDraft(itemId, moved);
+
+        const accepted = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(200);
+
+        expect(accepted.body.body).toBe(
+          `Bonjour à tous. ${AI_REPLACEMENT} ${AI_BODY.slice(SELECTION.end + 1)}`,
+        );
+      });
+
+      /**
+       * ...and refused only when there is NO occurrence left. Not a hash of the
+       * whole body: an edit three paragraphs away leaves the selection exactly
+       * where it was, and refusing there throws away a call somebody paid for.
+       */
+      it("refuses when the text the suggestion was written for is gone", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        const moved = "Nous sommes fermés aujourd'hui.";
+        await setItemBody(itemId, moved);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_anchor_lost");
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.body).toBe(moved);
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        // Kept: rejecting an edit and accepting the proposal loses nothing.
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * A CONSUMED PROPOSAL IS GONE, which is what makes Accept idempotent in
+       * the only sense that matters: the second press cannot apply the same
+       * suggestion twice.
+       */
+      it("answers the second accept 404, having consumed the row", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        await agent.post(`/api/content/${itemId}/refine/${proposalId}/accept`).expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+        expect(await masterVersionRows(itemId)).toHaveLength(2);
+      });
+
+      /**
+       * 404, NOT 403 — the tenancy convention of this whole suite: a stranger
+       * learns nothing about what exists.
+       */
+      it("refuses another org's proposal id", async () => {
+        const mine = await withProposal();
+        const theirs = await withProposal();
+
+        const refused = await mine.agent
+          .post(`/api/content/${mine.itemId}/refine/${theirs.proposalId}/accept`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+        expect(await proposalRows(theirs.itemId)).toHaveLength(1);
+      });
+
+      /**
+       * AND A PROPOSAL OF THIS ORG'S OTHER DRAFT, which is the dangerous half
+       * of the same predicate. Its offsets and its anchor were measured against
+       * a DIFFERENT body: applied here they would splice the model's words into
+       * a post nobody asked it about, and file a version row saying so.
+       */
+      it("refuses a proposal staged against another draft of the same org", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const other = await aiDraft(agent, brandId, [channelId]);
+        const staged = await agent
+          .post(`/api/content/${other.itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        expect(await proposalRows(other.itemId)).toHaveLength(1);
+      });
+
+      /**
+       * A ROW CARRYING ANOTHER ORG'S `org_id` WHILE POINTING AT THIS DRAFT —
+       * the shape a writer that passed the wrong orgId leaves behind, and the
+       * only thing the `org_id` predicate on these two routes actually defends
+       * against.
+       *
+       * A stranger's 404 cannot pin it: an item belongs to one org, so
+       * `content_item_id` alone already refuses every proposal a stranger could
+       * name. This row is the case that predicate cannot see, and it has to be
+       * planted from underneath the API because no endpoint will write it —
+       * `otherOrgVersionRow` exists one table over for exactly this reason.
+       */
+      it("refuses a proposal row written with another org's id", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const planted = await otherOrgProposalRow(itemId);
+
+        const refusedAccept = await agent
+          .post(`/api/content/${itemId}/refine/${planted}/accept`)
+          .expect(404);
+        const refusedDiscard = await agent
+          .delete(`/api/content/${itemId}/refine/${planted}`)
+          .expect(404);
+
+        expect(refusedAccept.body.code).toBe("refine_proposal_not_found");
+        expect(refusedDiscard.body.code).toBe("refine_proposal_not_found");
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+        // ...and it is not drawn on the screen either. A row written with the
+        // wrong `org_id` must not be served as this org's own suggestion — the
+        // same defence `aiVersionRows` carries one table over.
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.refineProposal).toBeNull();
+      });
+
+      /**
+       * The editability read at propose time is deliberately unlocked, so an
+       * approval can land under a proposal. Accept re-checks under the lock —
+       * and the proposal survives, because rejecting the post and accepting the
+       * suggestion they already paid for must lose nothing.
+       */
+      it("refuses an accept on a post approval has pinned, and keeps the proposal", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        await agent.post(`/api/content/${itemId}/opened`).expect(204);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine/${proposalId}/accept`)
+          .expect(409);
+
+        expect(refused.body.code).toBe("content_pinned_approved");
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+    });
+
+    describe("discarding what was proposed", () => {
+      it("removes the row, and says nothing back", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+
+        await agent.delete(`/api/content/${itemId}/refine/${proposalId}`).expect(204);
+
+        expect(await proposalRows(itemId)).toEqual([]);
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(item.body.refineProposal).toBeNull();
+        // A discard is not an edit: no version row, and the body is untouched.
+        expect(item.body.body).toBe(AI_BODY);
+        expect(await masterVersionRows(itemId)).toHaveLength(1);
+      });
+
+      it("answers a second discard 404", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        await agent.delete(`/api/content/${itemId}/refine/${proposalId}`).expect(204);
+
+        const refused = await agent
+          .delete(`/api/content/${itemId}/refine/${proposalId}`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+      });
+
+      /**
+       * NO EDITABILITY CHECK, and that is the decision rather than an
+       * oversight. Discarding a suggestion changes no text: refusing it on an
+       * approved post would leave a card on the screen that its own Accept
+       * refuses and nothing can clear.
+       */
+      it("is allowed on a post approval has pinned", async () => {
+        const { agent, itemId, proposalId } = await withProposal();
+        await agent.post(`/api/content/${itemId}/opened`).expect(204);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+        await agent.delete(`/api/content/${itemId}/refine/${proposalId}`).expect(204);
+
+        expect(await proposalRows(itemId)).toEqual([]);
+      });
+
+      /**
+       * The proposal is addressed on ONE draft, and the URL says which. A
+       * suggestion staged against another post of the same org is not this
+       * screen's to throw away: a card the person is reading elsewhere would
+       * disappear while they read it.
+       */
+      it("refuses a proposal staged against another draft of the same org", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const other = await aiDraft(agent, brandId, [channelId]);
+        const staged = await agent
+          .post(`/api/content/${other.itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        const refused = await agent
+          .delete(`/api/content/${itemId}/refine/${staged.body.id}`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+        expect(await proposalRows(other.itemId)).toHaveLength(1);
+      });
+
+      it("refuses another org's proposal id, and leaves it staged", async () => {
+        const mine = await withProposal();
+        const theirs = await withProposal();
+
+        const refused = await mine.agent
+          .delete(`/api/content/${mine.itemId}/refine/${theirs.proposalId}`)
+          .expect(404);
+
+        expect(refused.body.code).toBe("refine_proposal_not_found");
+        expect(await proposalRows(theirs.itemId)).toHaveLength(1);
+      });
+    });
+
+    /**
+     * THE PROPOSAL A RELOAD CAN FIND.
+     *
+     * A refine is paid for the moment it is staged, and until this field
+     * existed the only copy of it a person ever saw was the 201 in a browser
+     * tab: a reload, a crash or a second device stranded a row nothing could
+     * reach, on a screen showing a draft it was written against.
+     *
+     * On the ITEM's own response rather than behind a `GET …/refine`, for
+     * `runId`'s reason one field up: the item screen already reads and polls
+     * this endpoint, so a property costs no round trip, while a second endpoint
+     * would be either polled alongside it or left to go stale against the very
+     * body the proposal is measured against. One request, one answer, and the
+     * card and the draft cannot disagree.
+     */
+    describe("the proposal a reload can find", () => {
+      it("carries the staged proposal on the item, exactly as propose answered it", async () => {
+        const { agent, itemId, staged } = await withProposal();
+
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+        expect(item.body.refineProposal).toEqual(staged);
+      });
+
+      it("is null on a draft with nothing staged", async () => {
+        const { agent, itemId } = await refinableDraft();
+
+        const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+        expect(item.body.refineProposal).toBeNull();
+      });
+
+      /**
+       * ...and NOT on the list rows. A queue card has no use for a proposal's
+       * text, and a list that carried one would ship every staged suggestion in
+       * the org to draw cards that never mention them — the same argument that
+       * keeps the version bodies off the list.
+       */
+      it("stays off the list, which draws no proposal", async () => {
+        const { agent, itemId } = await withProposal();
+
+        const list = await agent.get("/api/content").expect(200);
+
+        const row = (list.body as { id: string }[]).find((item) => item.id === itemId);
+        expect(row).toBeDefined();
+        expect(row).not.toHaveProperty("refineProposal");
       });
     });
   });

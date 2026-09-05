@@ -20,6 +20,8 @@ import {
   normalizeForComparison,
   normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
+  planRefineAccept,
+  type RefineAcceptPlan,
   type RefineProposal,
   type RefineRequest,
   type RefineVerb,
@@ -221,6 +223,88 @@ const REFINE_FAILURE_MESSAGE: Record<RefineFailure, string> = {
   timed_out: "The model did not answer in time; nothing was changed",
   failed: "The model could not revise this selection; nothing was changed",
 };
+
+/**
+ * The columns a staged proposal is ever read or returned through — one
+ * allowlist, shared by the INSERT that stages one and the read that hands it
+ * back on the item.
+ *
+ * Shared rather than spelled twice because the two are the same object to
+ * everything downstream: the 201 of a press and the `refineProposal` a reload
+ * finds are the same card, and two column lists would be two shapes a screen
+ * could tell apart. `org_id`, `content_item_id` and `created_by` are
+ * deliberately absent — a caller who is being handed this row already knows
+ * which draft of theirs it belongs to, and who asked is the ledger's and the
+ * row's business, not the browser's.
+ */
+const PROPOSAL_COLUMNS = {
+  id: schema.refineProposals.id,
+  verb: schema.refineProposals.verb,
+  proposal: schema.refineProposals.proposal,
+  reason: schema.refineProposals.reason,
+  start: schema.refineProposals.startOffset,
+  end: schema.refineProposals.endOffset,
+  selectedText: schema.refineProposals.selectedText,
+};
+
+/**
+ * The two refusals `planRefineAccept` can answer with, as codes and sentences —
+ * a record total over its refusal reasons, exactly as `REFINE_FAILURE_CODE` is
+ * over the model's, so a third reason cannot be added there without deciding
+ * what the reader is told about it here.
+ *
+ * Both leave the staged proposal in place. The person paid for it, and each of
+ * these is recoverable by an act of theirs: re-select the whole sentence, or
+ * shorten the post.
+ */
+const REFINE_PLAN_REFUSAL: Record<
+  Extract<RefineAcceptPlan, { ok: false }>["reason"],
+  { code: ApiErrorCode; message: string }
+> = {
+  would_launder: {
+    code: "refine_would_launder",
+    message:
+      "Accepting this would record words a person wrote as the model's; " +
+      "select the whole sentence rather than part of it, and ask again",
+  },
+  too_long: {
+    code: "refine_too_long",
+    message: `Applying this suggestion would make the post longer than ${MAX_BODY_LENGTH} characters`,
+  },
+};
+
+/**
+ * WHERE THE SELECTION IS NOW — the occurrence of `selectedText` nearest the
+ * offset the proposal stored, or `null` when the draft no longer contains it
+ * anywhere.
+ *
+ * RE-LOCATED, NEVER TRUSTED. The stored offsets were measured against the body
+ * as it stood when the model was asked, and a person editing while they read
+ * the proposal is the commonest interaction there is; splicing at a stale
+ * offset would replace whatever happens to sit there now.
+ *
+ * NEAREST, and not the first match. A repeated hook line is ordinary social
+ * copy, and `indexOf` would rewrite a copy of the sentence three paragraphs
+ * from the one they selected — silently, since both splices succeed and only
+ * one of them is what they asked for.
+ *
+ * REFUSED ONLY WHEN THERE IS NONE, and not on "the body changed". Hashing the
+ * whole body would throw away a paid-for call for an edit somewhere else
+ * entirely, which is the opposite of what the proposal surviving its refusals
+ * is for. "Ambiguous" is not a refusal either, for the same reason.
+ *
+ * Steps by ONE character rather than by the match's length, so overlapping
+ * occurrences are all considered; on a tie the earlier one wins, because a
+ * total order that is arbitrary is still better than one that depends on scan
+ * direction.
+ */
+function nearestOccurrence(body: string, selectedText: string, storedStart: number): number | null {
+  let best: number | null = null;
+  for (let at = body.indexOf(selectedText); at !== -1; at = body.indexOf(selectedText, at + 1)) {
+    if (best === null || Math.abs(at - storedStart) < Math.abs(best - storedStart)) best = at;
+  }
+  return best;
+}
 
 /**
  * The text a refine request selected, sliced out of the body the SERVER holds.
@@ -775,10 +859,11 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions, runId] = await Promise.all([
+    const [adaptations, aiVersions, runId, refineProposal] = await Promise.all([
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
       this.runIdFor(orgId, item.id),
+      this.stagedProposal(orgId, item.id),
     ]);
     /**
      * The provenance lens's reference text. Returned rather than a
@@ -827,8 +912,65 @@ export class ContentRepository {
        * AI-drafted instead of over-claiming an edit nobody made.
        */
       bodyIsAiVerbatim: allSentencesAi(item.body, itemEvidence.rows, itemEvidence.firstFullBody),
+      /**
+       * THE SUGGESTION THIS DRAFT HAS STAGED, or `null` — the read path that
+       * makes a refine survive a reload.
+       *
+       * A press is paid for the moment its row is written, and without this
+       * field the only copy of it anyone ever saw was the 201 in one browser
+       * tab: a reload, a crash or a second device stranded a row nothing could
+       * reach, on a screen showing the very draft it was written against.
+       *
+       * HERE rather than behind a `GET /:id/refine`, for the reason `runId`
+       * gives one field up and with more force. This endpoint is the one the
+       * item screen already reads and polls, so a property costs no round trip,
+       * while a second endpoint would be either polled beside this one or left
+       * to go stale — and stale against exactly the body the proposal's anchor
+       * is re-located in. One request, one answer, and the card and the draft
+       * cannot disagree about which draft it is.
+       *
+       * Deliberately NOT on the list rows. A queue card never draws a
+       * suggestion, and a list that carried them would ship every staged
+       * proposal in the organisation to render cards that do not mention them —
+       * the same argument that keeps `aiVersionBodies` off the list.
+       */
+      refineProposal,
       aiVersionBodies,
     };
+  }
+
+  /**
+   * The one proposal staged for this draft, or `null`.
+   *
+   * `LIMIT 1` with no ordering is exact rather than lucky: `refine_proposals`
+   * is UNIQUE on `content_item_id`, so there is at most one row to find, and a
+   * second could not exist for an order to have to choose between.
+   *
+   * On the pool, not in a transaction, because its only caller is `get` — a
+   * read. Accept reads the row again, under its own lock, and never off this
+   * one: a proposal read outside the lock could be superseded between the read
+   * and the splice.
+   *
+   * `org_id` is in the predicate as defence in depth, exactly as
+   * `aiVersionRows` carries one: `get` has already 404'd another org's item
+   * before this runs, and what this predicate keeps out is a row written with
+   * the wrong `org_id` being served as this org's own.
+   */
+  private async stagedProposal(
+    orgId: string,
+    contentItemId: string,
+  ): Promise<RefineProposal | null> {
+    const rows = await db
+      .select(PROPOSAL_COLUMNS)
+      .from(schema.refineProposals)
+      .where(
+        and(
+          eq(schema.refineProposals.orgId, orgId),
+          eq(schema.refineProposals.contentItemId, contentItemId),
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   async create(orgId: string, data: ContentCreate) {
@@ -1508,17 +1650,226 @@ export class ContentRepository {
       await tx
         .delete(schema.refineProposals)
         .where(eq(schema.refineProposals.contentItemId, row.contentItemId));
-      const rows = await tx.insert(schema.refineProposals).values(row).returning({
-        id: schema.refineProposals.id,
-        verb: schema.refineProposals.verb,
-        proposal: schema.refineProposals.proposal,
-        reason: schema.refineProposals.reason,
-        start: schema.refineProposals.startOffset,
-        end: schema.refineProposals.endOffset,
-        selectedText: schema.refineProposals.selectedText,
-      });
+      // The same allowlist `get` reads the row back through, so the 201 of a
+      // press and the `refineProposal` a reload finds are the same shape.
+      const rows = await tx.insert(schema.refineProposals).values(row).returning(PROPOSAL_COLUMNS);
       return rows[0];
     });
+  }
+
+  /**
+   * APPLY A PROPOSAL THE ORGANISATION HAS ALREADY PAID FOR, and record that a
+   * MODEL wrote the sentences it introduced.
+   *
+   * One transaction, in the product's own lock order — `content_items`
+   * `FOR UPDATE` through `requireEditableItem`, then the proposal row under it
+   * — and every write in it or none:
+   *
+   * ```
+   * requireEditableItem      -- the lock, and the body to splice into
+   * read the proposal        -- org- AND item-scoped; 404 if it is gone
+   * re-locate the anchor     -- 409 refine_anchor_lost if the text moved away
+   * read the level's ai rows -- IN THIS TRANSACTION; see below
+   * planRefineAccept         -- 409, and the proposal SURVIVES, or:
+   *   unchanged -> delete the proposal, change nothing else
+   *   ok        -> update the body, file the fragment row, delete the proposal
+   * ```
+   *
+   * **THE `ai` ROWS ARE READ INSIDE THIS TRANSACTION**, never through
+   * `aiVersionRows`, which runs on the pool. The rows decide whether the
+   * characters a merged sentence absorbs came from text a model wrote; read
+   * outside the lock this transaction holds, that verdict would be computed
+   * against a body another transaction had already replaced — and the failure
+   * runs in the unsafe direction, since evidence read too late reads as
+   * attributable.
+   *
+   * The MASTER level only (`adaptation_id IS NULL`). This increment does not
+   * refine a per-channel override, and an adaptation's own `ai` rows say
+   * nothing about the body being spliced here — see `recordHumanVersion` on why
+   * a fragment filed against an adaptation this transaction never locked would
+   * be the product's documented lock inversion.
+   *
+   * ⚠ Moving that read to the pool SURVIVES the suite (measured, `--runs 3`),
+   * and the line stays as it is with the measurement written beside it, the way
+   * `requireHumanInvolvement`'s own `.for("update")` does. It survives for a
+   * reason that is itself a lock argument rather than a gap in the tests: every
+   * writer of these rows takes `content_items` first, and this transaction
+   * holds it `FOR UPDATE`, so while we are here there is no concurrent writer
+   * for the two reads to disagree about. That is a fact about the CURRENT lock
+   * discipline, not about this method — a future writer of `content_versions`
+   * that did not take the item would make the pool read wrong, silently and in
+   * the unsafe direction, and no test would have to change for it to happen.
+   *
+   * **A REFUSAL KEEPS THE PROPOSAL, and it costs no code to do it**: every
+   * refusal here is thrown from inside the transaction, so the delete that
+   * would have consumed the row is rolled back with everything else. A person
+   * whose post was approved underneath them, or whose selection now absorbs a
+   * sentence of their own, can reject the approval or re-select and use the
+   * call they already bought. `refine_proposal_not_found` is the one refusal
+   * that means the row really is gone.
+   *
+   * **`created_by` IS NULL** on the version row, unlike every human one: the
+   * model wrote that text. The person who asked for it is on the proposal row,
+   * which is where a request belongs, and `content_versions.created_by`'s own
+   * comment already says "Null for AI-written versions" — this is its second
+   * writer.
+   *
+   * Answers the ITEM, like every other mutation on this resource, so the screen
+   * that pressed Accept redraws from one response: the merged body, the badge
+   * recomputed over the new fragment row, and `refineProposal` back to `null`.
+   */
+  async acceptRefine(orgId: string, id: string, proposalId: string) {
+    await db.transaction(async (tx) => {
+      const item = await this.requireEditableItem(tx, orgId, id);
+      const proposal = await this.lockedProposal(tx, orgId, id, proposalId);
+
+      const start = nearestOccurrence(item.body, proposal.selectedText, proposal.start);
+      if (start === null) {
+        throw conflict(
+          "refine_anchor_lost",
+          "The text this suggestion was written for is no longer in this post",
+        );
+      }
+
+      const aiRows = await tx
+        .select({ body: schema.contentVersions.body })
+        .from(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.orgId, orgId),
+            eq(schema.contentVersions.contentItemId, id),
+            isNull(schema.contentVersions.adaptationId),
+            eq(schema.contentVersions.origin, "ai"),
+          ),
+        );
+
+      const plan = planRefineAccept({
+        body: item.body,
+        start,
+        // The range is derived from the RE-LOCATED anchor, never from the
+        // stored offsets: those describe where the selection was when the model
+        // was asked, and the body may have moved under it since.
+        end: start + proposal.selectedText.length,
+        proposal: proposal.proposal,
+        aiRows,
+      });
+      if (!plan.ok) {
+        const refusal = REFINE_PLAN_REFUSAL[plan.reason];
+        throw conflict(refusal.code, refusal.message);
+      }
+
+      if (!("unchanged" in plan)) {
+        await tx
+          .update(schema.contentItems)
+          .set({ body: plan.mergedBody })
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+        await tx.insert(schema.contentVersions).values({
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          // The MERGED body's own units, not the model's reply as it arrived: a
+          // proposal without a terminator fuses with its neighbour, and a row
+          // holding the raw reply would leave the fused unit in no version row
+          // at all — which reads as a human's sentence.
+          body: plan.fragmentBody,
+          origin: "ai",
+          scope: "fragment",
+          // Authored ONCE, here, and never recomputed from the fragment's text
+          // at read time: the whole point of storing the difference is that the
+          // gate adds up numbers rather than re-splitting bodies.
+          unitDelta: plan.unitDelta,
+          createdBy: null,
+        });
+      }
+
+      await tx.delete(schema.refineProposals).where(eq(schema.refineProposals.id, proposal.id));
+    });
+    return this.get(orgId, id);
+  }
+
+  /**
+   * The proposal this Accept is about, read under the item's lock.
+   *
+   * THREE PREDICATES, and the middle one is the load-bearing one. `org_id`
+   * keeps a stranger out; `id` is what the caller named; and
+   * `content_item_id` is what stops a proposal of ANOTHER draft of the same
+   * org from being applied here — its anchor and its offsets were measured
+   * against a different body, so accepting it would splice the model's words
+   * into a post nobody asked it about and file a version row saying a model
+   * wrote them.
+   *
+   * A plain `SELECT` with no lock of its own, and that is exact rather than
+   * lazy: every transaction that writes this row takes `content_items` first
+   * (`docs/lock-order.md`), and this one holds it `FOR UPDATE` — so no
+   * concurrent press can supersede the row between this read and the delete
+   * below. A `FOR UPDATE` here would order nothing that is not already ordered.
+   *
+   * 404 with its own code rather than `content_not_found`: the post is right
+   * there in front of the reader; it is the suggestion that is gone.
+   */
+  private async lockedProposal(
+    tx: Tx,
+    orgId: string,
+    contentItemId: string,
+    proposalId: string,
+  ): Promise<RefineProposal> {
+    const rows = await tx
+      .select(PROPOSAL_COLUMNS)
+      .from(schema.refineProposals)
+      .where(
+        and(
+          eq(schema.refineProposals.orgId, orgId),
+          eq(schema.refineProposals.contentItemId, contentItemId),
+          eq(schema.refineProposals.id, proposalId),
+        ),
+      )
+      .limit(1);
+    const proposal = rows[0];
+    if (!proposal) {
+      throw notFound(
+        "refine_proposal_not_found",
+        "That suggestion is no longer staged for this post",
+      );
+    }
+    return proposal;
+  }
+
+  /**
+   * THROW THE SUGGESTION AWAY. 204, because there is nothing to say back.
+   *
+   * NO EDITABILITY CHECK, and that is a decision rather than an omission: a
+   * discard changes no text, and refusing it on an approved post would leave a
+   * card on the screen whose Accept is refused and which nothing can clear.
+   *
+   * ONE STATEMENT, no transaction and no lock beyond the row's own: this takes
+   * `refine_proposals` and nothing else, so it holds nothing anybody could
+   * queue behind. Deleting a child row takes no lock on its parent, so it
+   * cannot arrive at `content_items` out of order — the reason it is safe to
+   * be the one transaction here that does not take the item first.
+   *
+   * 404 when the row is already gone — accepted, discarded, superseded, or
+   * another org's — which is the same code and the same sentence in each case,
+   * because they are the same fact about this request: there is no such
+   * suggestion to discard. A browser treats it as success, which is the honest
+   * reading of "the thing you asked to be rid of is not there".
+   */
+  async discardRefine(orgId: string, id: string, proposalId: string): Promise<void> {
+    const deleted = await db
+      .delete(schema.refineProposals)
+      .where(
+        and(
+          eq(schema.refineProposals.orgId, orgId),
+          eq(schema.refineProposals.contentItemId, id),
+          eq(schema.refineProposals.id, proposalId),
+        ),
+      )
+      .returning({ id: schema.refineProposals.id });
+    if (deleted.length === 0) {
+      throw notFound(
+        "refine_proposal_not_found",
+        "That suggestion is no longer staged for this post",
+      );
+    }
   }
 
   /**

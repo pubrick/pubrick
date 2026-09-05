@@ -328,6 +328,28 @@ export type RefineRequest = z.infer<typeof refineRequestSchema>;
  * of its output in that language, unconditionally. Showing it beside a
  * locale-translated verb label is the honest arrangement; translating it is a
  * later increment's problem.
+ *
+ * IT REACHES A SCREEN TWICE, and the second way is what makes a refine survive
+ * a reload: as this route's 201, and as `refineProposal` on
+ * `GET /api/content/:id`, which is `null` when the draft has nothing staged. A
+ * press is paid for the moment its row is written, so without the second the
+ * only copy of a proposal anyone ever saw was in one browser tab — a reload, a
+ * crash or a second device stranded a row nothing could reach.
+ *
+ * On the ITEM's own response rather than behind a `GET /:id/refine`, for
+ * `runId`'s reason: the item screen already reads and polls that endpoint, so
+ * this costs no round trip, while a second endpoint would be either polled
+ * beside it or left to go stale — stale against exactly the body the proposal's
+ * anchor is re-located in. It is deliberately NOT on the LIST rows: a queue
+ * card never draws a suggestion, and a list that carried them would ship every
+ * staged proposal in the organisation to render cards that do not mention them.
+ *
+ * The two routes that consume it take its OWN id, never merely the draft's:
+ * `POST /api/content/:id/refine/:proposalId/accept` (200, the item) and
+ * `DELETE /api/content/:id/refine/:proposalId` (204). A press that superseded
+ * this proposal staged a different one, and an Accept aimed at the card
+ * somebody was reading must not apply the one that replaced it — so a stale id
+ * is `refine_proposal_not_found`, which is the honest answer.
  */
 export type RefineProposal = {
   id: string;
