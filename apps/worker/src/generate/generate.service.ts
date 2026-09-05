@@ -17,12 +17,13 @@ import {
   withRunFailure,
 } from "@pubrick/ai";
 import {
-  type BriefRunInput,
   briefRunInputSchema,
   type GenerateJob,
   PermanentError,
   type RunFailure,
+  sourceRunInputSchema,
 } from "@pubrick/shared";
+import { z } from "zod";
 import {
   type ClaimedRun,
   type FenceOutcome,
@@ -52,6 +53,33 @@ export type { GenerateJob } from "@pubrick/shared";
  * nothing but pg-boss supplies one.
  */
 export type GenerateJobEnvelope = { id: string; data: GenerateJob; signal?: AbortSignal };
+
+/**
+ * THE MEMBERS OF `pipeline_runs.input` THIS BUILD CAN RUN — enumerated here,
+ * never aliased to `runInputSchema`.
+ *
+ * The two schemas answer different questions and the day they diverge is the
+ * day the alias becomes a bug: `runInputSchema` is *what may be stored*, and it
+ * will gain `"topic"` before any worker can execute one. A run of a kind this
+ * build does not understand must fail with a sentence rather than be admitted
+ * and then crash inside a step — so the list of executable members is written
+ * out, and adding one is a deliberate edit to this line rather than something a
+ * worker inherits from a DTO change made for the api's sake.
+ *
+ * `briefRunInputSchema` was this whole declaration until 3a, under a docstring
+ * promising exactly this. This is that promise being kept, not abandoned.
+ */
+const executableRunInputSchema = z.discriminatedUnion("kind", [
+  briefRunInputSchema,
+  sourceRunInputSchema,
+]);
+/**
+ * Inferred from the schema above, never hand-written as `BriefRunInput |
+ * SourceRunInput`: a hand-written alias is a second description of the same
+ * list, and the one that silently stops agreeing is always the one no parse
+ * runs against.
+ */
+type ExecutableRunInput = z.infer<typeof executableRunInputSchema>;
 
 /** How a step ended when it did not produce a value. */
 const STOPPED = Symbol("stopped");
@@ -322,15 +350,32 @@ export class GenerateService {
       // finish so the work it is already paying for gets checkpointed.
       ctx: {
         brand: context.brand,
-        brief: input.text,
-        // Nothing supplies these yet: `parseInput` still accepts the BRIEF
-        // member only, so every run reaching here was started from a brief.
-        // They are named rather than omitted because `RunStepContext` makes
-        // them required-and-nullable — the absence is stated by the builder
-        // instead of being inherited, which is what keeps the three steps from
-        // labelling a block with no text in it.
-        material: null,
-        sourceUrl: null,
+        // THE THREE TEXT FIELDS COME FROM THE ARM THE RUN WAS STORED AS, and
+        // each arm names all three: `RunStepContext` makes them
+        // required-and-nullable so that an absence is STATED by the builder
+        // rather than inherited, which is what keeps the three steps that read
+        // them from labelling a block with no text in it.
+        //
+        // `input.text` is passed THROUGH on both arms and never `?? ""`. On the
+        // source arm it is `string | null`, and `""` is the one value that
+        // survives every guard downstream while meaning the wrong thing: a
+        // labelled but empty BRIEF block tells the model the person wrote
+        // nothing USEFUL rather than that they wrote nothing, on three paid
+        // calls in a row. `sourceRunInputSchema.text` is `.min(1).nullable()`
+        // precisely so `null` is the only way to say "no brief".
+        ...(input.kind === "brief"
+          ? // A brief run has no material to work from and nothing to
+            // attribute; `text` is non-nullable on this arm.
+            { brief: input.text, material: null, sourceUrl: null }
+          : // A source run may also carry a brief — "or both" is a storable
+            // shape — so the brief is not assumed absent here.
+            //
+            // `sourceUrl` rides along because no later step should be able to
+            // receive the material without also being able to see that a URL
+            // was recorded. It is ATTRIBUTION, and no step emits it into a
+            // block: a URL in a prompt invites the model to write as though it
+            // had read the page, and nothing here ever fetched it.
+            { brief: input.text, material: input.material, sourceUrl: input.sourceUrl }),
         model: this.buildModel(credential),
         // The credential's provider, never a guess from the model id: it decides
         // which price table every ledger row of this run is costed against.
@@ -525,15 +570,15 @@ export class GenerateService {
    * not understand yet, must fail the run with a sentence rather than throw a
    * `TypeError` deep inside a step and be retried until the attempts run out.
    *
-   * The schema is `@pubrick/shared`'s — the same declaration `pipeline_runs.input`
-   * is typed from, so the column's shape and the parse cannot describe different
-   * things. Deliberately the BRIEF MEMBER (`briefRunInputSchema`) and not the
-   * column-wide `runInputSchema`: they are the same object while `brief` is the
-   * only kind, and the day a second one exists this must keep refusing what this
-   * build cannot execute.
+   * The schemas are `@pubrick/shared`'s — the same declarations
+   * `pipeline_runs.input` is typed from, so the column's shape and the parse
+   * cannot describe different things. Deliberately
+   * `executableRunInputSchema` — the `brief` and `source` MEMBERS, spelled out
+   * above — and not the column-wide `runInputSchema`: a stored kind this build
+   * cannot run is refused here, in one place, before a step is paid for.
    */
-  private parseInput(input: unknown): BriefRunInput {
-    const parsed = briefRunInputSchema.safeParse(input);
+  private parseInput(input: unknown): ExecutableRunInput {
+    const parsed = executableRunInputSchema.safeParse(input);
     if (parsed.success) return parsed.data;
     const detail = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)

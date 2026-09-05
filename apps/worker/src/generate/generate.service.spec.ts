@@ -1095,6 +1095,68 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(script.calls).toHaveLength(0);
       expect(await ledgerOf(seeded.orgId)).toHaveLength(0);
     }, 20_000);
+
+    /**
+     * FABRICATED, and deliberately so.
+     *
+     * After 3a every `kind` a writer can produce is one this build executes, so
+     * there is no reachable subject for this refusal — the row below is written
+     * by hand, past the drizzle `$type<RunInput>()` that would refuse it. It is
+     * here because the refusal is what makes the union in `parseInput` an
+     * enumeration of what this build CAN RUN rather than a restatement of what
+     * the column may hold: `runInputSchema` will gain `"topic"` before any
+     * worker can execute one, and the day it does this is the test that says
+     * what happens to the runs already in the queue.
+     *
+     * The weight sits on the two assertions the design's §18 standard asks for:
+     * the CODE the row carries, and that not one step was paid for. "It did not
+     * throw" would pass with the run stuck at `running` and five calls billed.
+     */
+    it("fails a run whose stored kind this build cannot execute, before any step is paid for", async () => {
+      const seeded = await seed({ channels: 1 });
+      await db.execute(
+        sql`UPDATE pipeline_runs SET input = ${JSON.stringify({
+          kind: "topic",
+          topic: "the autumn menu",
+          channelIds: seeded.channelIds,
+        })}::jsonb WHERE id = ${seeded.runId}`,
+      );
+      const script = scriptedModel();
+      const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation(() => {});
+
+      try {
+        await expect(
+          serviceFor(script).handle({
+            id: "job-unexecutable-kind",
+            data: { runId: seeded.runId, orgId: seeded.orgId },
+          }),
+        ).resolves.toBeUndefined();
+
+        const run = await runRow(seeded.runId);
+        expect(run?.status).toBe("failed");
+        // `internal`, not a code of its own: a row this build cannot parse was
+        // written by another build of OURS, and the reader of the strip can do
+        // nothing about it.
+        expect(run?.error).toBe("internal");
+        expect(script.calls).toHaveLength(0);
+        expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+        expect(await ledgerOf(seeded.orgId)).toHaveLength(0);
+
+        // AND FOR THE RIGHT REASON, which the code alone cannot say. Delete the
+        // parse and hand the row through as-is and every assertion above still
+        // passes: the context comes out with three undefined text fields, the
+        // researcher builds an empty block list, and `callStep`'s own refusal
+        // ends the run `failed`/`internal` with no call billed — the same row,
+        // one step later, for a reason that has nothing to do with the kind.
+        // `internal` covers both, so only the sentence tells them apart.
+        const logged = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+        expect(logged).toContain("this run's input cannot be executed by this worker");
+        expect(logged).toContain("kind");
+        expect(logged).not.toContain("was given no material to work on");
+      } finally {
+        vi.restoreAllMocks();
+      }
+    }, 20_000);
   });
 
   /**

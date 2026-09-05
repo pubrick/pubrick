@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type ScriptedModel, scriptedModel } from "../test/scripted-model";
+import { type ScriptedModel, type StepRole, scriptedModel } from "../test/scripted-model";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -12,6 +12,7 @@ type PublishServiceCtor = typeof import("../publish/publish.service").PublishSer
 type QueueServiceCtor = typeof import("../queue.service").QueueService;
 type PgBossCtor = typeof import("pg-boss").PgBoss;
 type PgBossInstance = InstanceType<PgBossCtor>;
+type RunInput = import("@pubrick/shared").RunInput;
 type Schema = typeof import("@pubrick/db").schema;
 type Db = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"];
 type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
@@ -29,6 +30,10 @@ const TEST_PUBLISH_QUEUE = "publish-generate-e2e";
 const TEST_PUBLISH_DLQ = "publish-generate-e2e-dlq";
 
 const EDITED = "EDITED_MARKER the autumn menu lands on Monday.";
+/** The text of a run stored as pasted material, and where it was said to come from. */
+const MATERIAL = "SOURCE_MARKER The council approved the market hall on Tuesday.";
+const URL_MARKER = "SOURCEURLMARKER";
+const SOURCE_URL = `https://example.test/${URL_MARKER}/market-hall`;
 
 /**
  * A generation run driven through the REAL machinery: a real pg-boss queue
@@ -151,7 +156,13 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     await workerPool?.end();
   });
 
-  async function seed(channels = 2) {
+  /**
+   * `input` is a parameter because the row IS the fixture here: the worker's
+   * own parse reads it back, so a run that was stored as pasted material has to
+   * be WRITTEN as one rather than handed to the service as a literal. Defaults
+   * to the brief member every other test in this file uses.
+   */
+  async function seed(channels = 2, input?: (channelIds: string[]) => RunInput) {
     seq += 1;
     const stamp = `gen-e2e-${Date.now()}-${seq}`;
     await db
@@ -196,7 +207,11 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .values({
         orgId: stamp,
         brandId,
-        input: { kind: "brief", text: "Announce the autumn menu", channelIds },
+        input: input?.(channelIds) ?? {
+          kind: "brief",
+          text: "Announce the autumn menu",
+          channelIds,
+        },
       })
       .returning({ id: schema.pipelineRuns.id });
 
@@ -285,6 +300,91 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.runId, seeded.runId));
     expect(ledger).toHaveLength(6);
+  }, 40_000);
+
+  it("drafts a stored source run from the pasted material, with no brief and no URL in any prompt", async () => {
+    // The row is written by the test and read back by the REAL parser, which is
+    // the whole point: until `parseInput` names the source member, every run
+    // seeded like this one fails `internal` before a single step runs.
+    const seeded = await seed(2, (channelIds) => ({
+      kind: "source",
+      // No brief at all. `sourceRunInputSchema.text` is `.min(1).nullable()`, so
+      // this is the only shape a brief-less paste can be stored as, and it is
+      // the shape the compose screen's blank brief becomes.
+      text: null,
+      material: MATERIAL,
+      sourceUrl: SOURCE_URL,
+      channelIds,
+    }));
+    const script = scriptedModel({
+      editor: () => ({ body: EDITED, changes: ["Tightened the opening."] }),
+    });
+    active = script;
+
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
+
+    const run = await runRow(seeded.runId);
+    // The code, not merely "it did not throw": a run that failed to parse ends
+    // `failed`/`internal` and would satisfy nothing below by accident.
+    expect(run?.error).toBeNull();
+    expect(run?.status).toBe("succeeded");
+    expect(run?.contentItemId).not.toBeNull();
+    expect(Object.keys(run?.steps ?? {}).sort()).toEqual(
+      [
+        "editor",
+        "factcheck",
+        "researcher",
+        "writer",
+        ...seeded.channelIds.map((id) => `adapter:${id}`),
+      ].sort(),
+    );
+
+    // The draft a source run produces is the model's own words exactly as a
+    // brief run's is — `origin: "ai"` is what the approval gate and the badge
+    // are computed from, and a source run that stored anything else would open
+    // the gate on text nobody read.
+    const [item] = await db
+      .select()
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, run?.contentItemId as string));
+    expect(item).toMatchObject({ body: EDITED, status: "draft", origin: "ai" });
+    const versions = await db
+      .select()
+      .from(schema.contentVersions)
+      .where(eq(schema.contentVersions.contentItemId, item?.id as string));
+    expect(versions).toHaveLength(3);
+    expect(versions.every((row) => row.origin === "ai" && row.runId === seeded.runId)).toBe(true);
+
+    // THE FAN-OUT, ON PROMPTS BUILT FROM A REAL ROW. `steps.test.ts` asserts the
+    // same thing from a context literal; this is the only place the row, the
+    // parse and the context builder are checked as one path. Per role rather
+    // than "somewhere": "the material reached a step" stays green with the
+    // editor's block deleted AND with the fact-checker's added, and those are
+    // the two mutations that matter most in opposite directions.
+    const sawMaterial = (role: StepRole) =>
+      script.calls.filter((call) => call.role === role).map((call) => call.user.includes(MATERIAL));
+    expect(sawMaterial("researcher")).toEqual([true]);
+    expect(sawMaterial("writer")).toEqual([true]);
+    expect(sawMaterial("editor")).toEqual([true]);
+    // §7.2 rests on this one: the fact-checker verifies nothing BECAUSE it
+    // cannot see the source, not because its wording says so.
+    expect(sawMaterial("factcheck")).toEqual([false]);
+    expect(sawMaterial("adapter")).toEqual([false, false]);
+
+    for (const call of script.calls) {
+      // NO `BRIEF` BLOCK ANYWHERE, on the real prompt builder. `text: null` is
+      // unstorable as `""` (Task 1) and a null block is omitted (Task 2); this
+      // is the only assertion that checks those two claims as one path, and it
+      // is what a `?? ""` in the context builder would have to get past.
+      expect(call.user, `${call.role} was given a BRIEF block`).not.toContain("BRIEF");
+      // The URL is attribution and never reaches the model: a URL in a prompt
+      // invites the model to write as though it had read the page, which
+      // nothing here ever did — the server does not fetch it.
+      expect(call.user, `${call.role}'s material carried the URL`).not.toContain(URL_MARKER);
+      expect(call.system, `${call.role}'s instructions carried the URL`).not.toContain(URL_MARKER);
+    }
   }, 40_000);
 
   it("completes the job for a permanent failure instead of retrying a run that cannot succeed", async () => {
