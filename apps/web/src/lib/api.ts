@@ -1,4 +1,9 @@
-import { type ApiErrorCode, isApiErrorCode, MAX_CONCURRENT_RUNS } from "@pubrick/shared";
+import {
+  type ApiErrorCode,
+  isApiErrorCode,
+  MAX_CONCURRENT_RUNS,
+  MAX_REFINE_CALLS_PER_HOUR,
+} from "@pubrick/shared";
 import { reportUnauthorized } from "./unauthorized";
 
 /**
@@ -89,6 +94,12 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   schedule_in_past: "schedule_in_past",
   schedule_already_queued: "schedule_already_queued",
   schedule_already_publishing: "schedule_already_publishing",
+  refine_limit_reached: "refine_limit_reached",
+  refine_needs_ai_draft: "refine_needs_ai_draft",
+  refine_no_credential: "refine_no_credential",
+  refine_timed_out: "refine_timed_out",
+  refine_failed: "refine_failed",
+  refine_too_long: "refine_too_long",
   channels_not_in_brand: "channels_not_in_brand",
   channel_not_found: "channel_not_found",
   unreadable_credentials: "unreadable_credentials",
@@ -118,6 +129,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
  */
 const ERROR_MESSAGE_VALUES: Partial<Record<ErrorCode, Record<string, string | number>>> = {
   run_limit_reached: { limit: MAX_CONCURRENT_RUNS },
+  refine_limit_reached: { limit: MAX_REFINE_CALLS_PER_HOUR },
 };
 
 /**

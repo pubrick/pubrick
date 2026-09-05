@@ -132,6 +132,50 @@ export type RefineVerb = (typeof REFINE_VERBS)[number];
  */
 export const refineVerbSchema = z.enum(REFINE_VERBS);
 
+/**
+ * How many BILLED model calls one organisation's refine verbs may make in a
+ * rolling hour.
+ *
+ * `MAX_TEST_CALLS_PER_HOUR`'s design, deliberately copied — including its
+ * mechanism, which is a rolling count of the `usage_ledger` rows the calls
+ * themselves wrote rather than a bucket in memory. What is NOT copied is the
+ * budget: that count is filtered `step = 'test'` and this one `step =
+ * 'refine'`, so neither allowance can be spent by the other button. A person
+ * who has just exhausted Settings' Test allowance can still refine a sentence,
+ * and a generation run's dozen calls do not lock the editor — which is the
+ * point of counting a step rather than an org's whole bill.
+ *
+ * WHY THERE IS A NUMBER HERE AT ALL. `POST /api/content/:id/refine` is the
+ * first route in this product that a person can make spend money REPEATEDLY,
+ * BY HAND, on content: press, read, Try again, press. It is guarded by
+ * membership and nothing else — the api still has no throttler of any kind —
+ * and it inherits nothing from the Test button, whose allowance names a step
+ * this call does not write.
+ *
+ * WHY 120, AND WHY COUNTED IN CALLS. The unit is the thing being protected. A
+ * refine sends at most a whole body plus its selection and gets a selection
+ * back, which is roughly $0.002–$0.005 a press at the two round trips
+ * `maxRetries: 0` allows (the call, and `generateStructured`'s repair retry
+ * for a schema violation). The ledger writes one row per PHYSICAL call, so a
+ * press that met the repair retry consumes two and the limit bounds money
+ * rather than clicks. 120 rows an hour is at worst around $0.5 an hour —
+ * two orders of magnitude below the unbounded hole a loop over this endpoint
+ * would otherwise be, and the same order as the Test button's own $0.24.
+ *
+ * The other half of the judgement, and the half that picks the number: honest
+ * use is a person editing one draft, and the dossier's staging loop makes them
+ * READ each proposal and decide — Accept, Try again, Discard. 120 calls is
+ * between 60 and 120 presses, a press every thirty seconds for a solid hour,
+ * which no read-and-judge loop approaches. Far above honest use, far below
+ * abuse, and the gap between them is wide enough that there is nothing to
+ * shave.
+ *
+ * NOT A DOLLAR CAP. `spend()` stays display-only and this bounds calls, which
+ * is the same honest approximation the Test button makes: the exact price of a
+ * call is the provider's to decide and is not known until after it is made.
+ */
+export const MAX_REFINE_CALLS_PER_HOUR = 120;
+
 export const MAX_BODY_LENGTH = 4096;
 
 /**
@@ -216,6 +260,76 @@ export const adaptationUpdateSchema = z.object({
   body: bodyText.nullable(),
 });
 export type AdaptationUpdate = z.infer<typeof adaptationUpdateSchema>;
+
+/**
+ * What the editor asks for when it asks the model to revise a selection: a
+ * verb, and where the selection is.
+ *
+ * NO TEXT CROSSES THE WIRE, and that is the decision this schema records. The
+ * caller names OFFSETS into the body the server already stores, and the server
+ * slices its own copy; the selection it actually sent to the model comes back
+ * on the 201 as `selectedText`, so a caller whose idea of the body had moved
+ * can see that it had rather than be quietly refined somewhere else.
+ *
+ * Sending the selected text instead — or as well — would be the same mistake
+ * the staged proposal exists to prevent, arriving one step earlier. A caller
+ * that supplies the text supplies what the model is asked about, and the row
+ * this call stages is the product's evidence about what a MODEL wrote; the
+ * shorter the distance between the stored body and the model's input, the less
+ * of that evidence a caller authors. It also removes a whole class of
+ * disagreement: with one string in play there is no second one to be stale.
+ *
+ * `end` is exclusive and `start < end`, so a collapsed caret cannot be
+ * refined — there would be nothing to replace, and the model's schema requires
+ * a non-empty replacement for it. `MAX_BODY_LENGTH` bounds both because a body
+ * cannot be longer; the range must also lie inside the CURRENT body, which
+ * only the repository can check and which it refuses as `invalid_request`.
+ *
+ * The offsets index the body in the one canonical form the DTO stores
+ * (`normalizeNewlines`, U+000A and nothing else) — which is why
+ * `DimmedTextarea`'s selection callback reports the exact string its offsets
+ * index rather than the `value` it was handed. UTF-16 code units, as every
+ * JavaScript string offset is; nothing in the database re-measures them
+ * (Postgres `length()` counts code POINTS, and the two disagree on every emoji
+ * in ordinary social copy).
+ */
+export const refineRequestSchema = z
+  .object({
+    verb: refineVerbSchema,
+    start: z.number().int().min(0).max(MAX_BODY_LENGTH),
+    end: z.number().int().min(1).max(MAX_BODY_LENGTH),
+  })
+  .refine((data) => data.start < data.end, {
+    message: "end must be greater than start",
+  });
+export type RefineRequest = z.infer<typeof refineRequestSchema>;
+
+/**
+ * The proposal a refine staged — `POST /api/content/:id/refine`'s 201, and the
+ * row Accept later reads back.
+ *
+ * Every field is the SERVER's: `proposal` and `reason` are the model's own
+ * words as this request received them, and `selectedText` is the slice of the
+ * stored body they were written against. The screen renders them beside the
+ * draft and hands `id` back to Accept, which reads the row rather than
+ * anything the browser echoes — a caller that could supply the text could make
+ * the product caption its own words "AI-drafted".
+ *
+ * `reason` comes back in the BRAND's content language, not the reader's UI
+ * locale: `instructionsFor` (`@pubrick/ai`) tells the model to write every word
+ * of its output in that language, unconditionally. Showing it beside a
+ * locale-translated verb label is the honest arrangement; translating it is a
+ * later increment's problem.
+ */
+export type RefineProposal = {
+  id: string;
+  verb: RefineVerb;
+  proposal: string;
+  reason: string;
+  start: number;
+  end: number;
+  selectedText: string;
+};
 
 export const contentApproveSchema = z.object({
   /**

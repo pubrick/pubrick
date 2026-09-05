@@ -367,3 +367,77 @@ describe("content_versions", () => {
     );
   });
 });
+
+/**
+ * The staged refine proposal — a table whose whole job is to be the one place
+ * a proposal's text can come from, and whose two constraints are what make
+ * that true of more than one press at a time.
+ *
+ * Read off the drizzle config, with no database: this is the DECLARATION half.
+ * `migrate.test.ts`'s "creates the refine proposal table..." holds the database
+ * half, by inserting the shapes these constraints exist to refuse.
+ */
+describe("refine_proposals", () => {
+  const config = getTableConfig(schema.refineProposals);
+
+  /**
+   * ONE PROPOSAL PER DRAFT. The supersede — delete the item's row, insert the
+   * new one, in one transaction — is what the screen's single proposal card
+   * rests on, and this index is what makes it a constraint rather than a
+   * convention two concurrent presses could break.
+   *
+   * On `content_item_id` ALONE. `(org_id, content_item_id)` would look
+   * stricter and be weaker: an item belongs to one org, so the wider key
+   * admits a second row for the same draft under a different org id — exactly
+   * the row a supersede scoped by item could not find, and a proposal nobody
+   * can see or discard.
+   */
+  it("admits one staged proposal per content item", () => {
+    const index = config.indexes.find(
+      (candidate) => candidate.config.name === "refine_proposals_content_item_id_idx",
+    );
+    expect(index, "the unique index is gone").toBeDefined();
+    expect(index?.config.unique, "the index is no longer unique").toBe(true);
+    expect(index?.config.columns.map((column) => (column as { name: string }).name)).toEqual([
+      "content_item_id",
+    ]);
+    // A partial index would admit a second row for whatever it excluded.
+    expect(index?.config.where).toBeUndefined();
+  });
+
+  /**
+   * A range that could have come from a real selection.
+   *
+   * `end > start` is the half that matters: a collapsed caret replaces
+   * nothing, so a row carrying one would stage a proposal against an empty
+   * selection — and Accept would splice the model's text in at a point nobody
+   * chose. The request schema refuses one too; this is the half a hand-written
+   * INSERT cannot skip.
+   */
+  it("refuses a range that is empty, backwards or negative", () => {
+    const sql = expressionOf("refine_proposals", "refine_proposals_range_check");
+    expect(sql, "the CHECK constraint is gone").not.toBeNull();
+    expect(sql).toContain('"start_offset"');
+    expect(sql).toContain('"end_offset"');
+    // The DIRECTION, not merely the columns: `>=` in place of `>` admits the
+    // collapsed caret, and a check that still named both columns would look
+    // exactly as enforced.
+    expect(sql, "end is strictly past start").toMatch(/"end_offset"\s*>\s*"[^"]*"\."start_offset"/);
+    expect(sql, "start is non-negative").toMatch(/"start_offset"\s*>=\s*0/);
+  });
+
+  /**
+   * The constraint deliberately NOT here, asserted so that removing this
+   * paragraph takes a test with it.
+   *
+   * `end_offset - start_offset = length(selected_text)` is the obvious way to
+   * tie the anchor to its range, and it is wrong: these offsets are UTF-16
+   * code units (every JavaScript string offset is), while Postgres `length()`
+   * counts code points. They disagree on every emoji — ordinary social copy —
+   * so the constraint would refuse exactly the posts this product is for.
+   */
+  it("does not try to re-derive the range from the anchor's length in SQL", () => {
+    const checks = config.checks.map((candidate) => dialect.sqlToQuery(candidate.value).sql);
+    expect(checks.join(" ")).not.toMatch(/length\s*\(/i);
+  });
+});

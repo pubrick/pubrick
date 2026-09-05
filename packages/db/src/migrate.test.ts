@@ -58,12 +58,21 @@ const ZONE_MIGRATION = "0014_scheduled_at_carries_its_zone";
 /** The migration that gives a refine fragment its `unit_delta`, proved additive below. */
 const UNIT_DELTA_MIGRATION = "0015_fragment_unit_delta";
 
+/** The migration that stages a refine proposal on the server, proved below. */
+const REFINE_PROPOSALS_MIGRATION = "0016_refine_proposals";
+
 /**
- * Every column 0014 gives a zone to, in the order `information_schema` sorts
- * them. Written out rather than derived from the schema: the point of the
- * assertion is that the DATABASE matches a decision somebody wrote down, and a
- * list computed from the same types the migration was generated from could only
- * ever agree with itself.
+ * Every timestamp column in the database that carries a zone, in the order
+ * `information_schema` sorts them. Written out rather than derived from the
+ * schema: the point of the assertion is that the DATABASE matches a decision
+ * somebody wrote down, and a list computed from the same types the migration
+ * was generated from could only ever agree with itself.
+ *
+ * The first twelve are the publishing path, converted by 0014. The last was
+ * born zoned: `refine_proposals` (0016) is a table the editor writes, and a new
+ * table has no reason to inherit the "naive means UTC" convention the
+ * conversion existed to end. It is deliberately NOT in `UNZONED_TABLES`, which
+ * is the list of tables somebody decided to LEAVE.
  */
 const ZONED_COLUMNS = [
   "adaptations.created_at",
@@ -78,6 +87,7 @@ const ZONED_COLUMNS = [
   "content_items.updated_at",
   "content_versions.created_at",
   "publications.created_at",
+  "refine_proposals.created_at",
 ];
 
 /**
@@ -133,22 +143,33 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
 ];
 
 /**
- * Every `%_check`-named constraint that is NOT one of `PINNED_COLUMNS` — a
- * value pinned into a relationship with another column rather than into a
- * value set, so it has no single `bogus` scalar the loop above could try. The
- * "adds the invariants to a database that already holds rows of every table"
- * test below counts every `_check` constraint as a proxy for "did the enum
- * constraints reach the database", and that proxy stops being exact the
- * moment a check exists that ISN'T an enum pin — this is where such a check
+ * Every `%_check`-named constraint the `PINNED_COLUMNS` loop above cannot
+ * drive, with the reason for each and a pointer to where it IS proved.
+ *
+ * The "adds the invariants to a database that already holds rows of every
+ * table" test below counts every `_check` constraint as a proxy for "did the
+ * enum constraints reach the database", and that proxy stops being exact the
+ * moment a check exists the loop does not cover — this is where such a check
  * declares itself, so the count stays a count of something rather than a
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
-  // 0015's: non-null exactly when `scope = 'fragment'`. Proved directly by
-  // `migrate.test.ts`'s "adds the fragment unit delta..." (both wrong shapes
-  // refused, both right ones accepted) — counted here only so THIS test's
-  // total stays meaningful rather than one short.
+  // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
+  // — it pins a value into a RELATIONSHIP with another column, so there is no
+  // single `bogus` scalar the loop could try. Proved directly by "adds the
+  // fragment unit delta..." (both wrong shapes refused, both right ones
+  // accepted).
   "content_versions_unit_delta_scope_check",
+  // 0016's two. `verb` IS an enum pin and would belong in `PINNED_COLUMNS`,
+  // except that the loop works by UPDATEing a row `seedEveryTable` wrote — and
+  // that seed runs at the PRE-0009 schema, where `refine_proposals` does not
+  // exist yet. An UPDATE over an empty table refuses nothing and would report
+  // the constraint as ACCEPTING the bogus value, which is the one answer worse
+  // than not checking. Both are proved directly instead, by "creates the refine
+  // proposal table..." — an off-list verb and an empty range each refused with
+  // 23514, against the real database.
+  "refine_proposals_verb_check",
+  "refine_proposals_range_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -1133,6 +1154,151 @@ describe.skipIf(!url)("runMigrations", () => {
         );
         expect(fragmentWithDelta).toBeNull();
         expect(fullNoDelta).toBeNull();
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * 0016 adds a table rather than a column, so "additive" is trivially true
+   * and the claims worth proving are the two CONSTRAINTS — the ones that make
+   * "one staged proposal per draft" and "a range a real selection could have
+   * produced" facts about the database rather than about the one repository
+   * that writes it today.
+   *
+   * And one constraint that is deliberately ABSENT, proved by writing the row
+   * it would have refused: the anchor's length is measured in UTF-16 code
+   * units by everything that produced it and in code points by Postgres
+   * `length()`, so tying the range to it in SQL would refuse every selection
+   * containing an emoji.
+   */
+  it("creates the refine proposal table with one row per draft, and no length arithmetic", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(REFINE_PROPOSALS_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seed: Awaited<ReturnType<typeof seedEveryTable>>;
+      let otherItemId: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the table were already here, everything below would be proving
+        // something about a schema this migration did not create.
+        const pre = await pool.query("SELECT to_regclass('public.refine_proposals') AS present");
+        expect(pre.rows[0].present).toBeNull();
+        seed = await seedEveryTable(pool, "org_refine_proposals");
+        const other = await pool.query(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('org_refine_proposals', $1, 'Another draft.') RETURNING id",
+          [seed.brandId],
+        );
+        otherItemId = other.rows[0].id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const insert =
+          "INSERT INTO refine_proposals (org_id, content_item_id, verb, selected_text, start_offset, end_offset, proposal, reason) VALUES ($1, $2, $3, $4, $5, $6, 'Passez nous voir.', 'Shorter, same meaning.')";
+        const first = await refusal(after, insert, [
+          "org_refine_proposals",
+          seed.itemId,
+          "shorten",
+          "Ship it.",
+          0,
+          8,
+        ]);
+        expect(first, "the first proposal for a draft").toBeNull();
+
+        // ONE PER DRAFT. The supersede — delete, then insert — is what the
+        // screen's single proposal card rests on; without this a second press
+        // arriving concurrently would leave a proposal nobody can see.
+        const second = await refusal(after, insert, [
+          "org_refine_proposals",
+          seed.itemId,
+          "warmer",
+          "Ship it.",
+          0,
+          8,
+        ]);
+        expect(second).toBe(UNIQUE_VIOLATION);
+
+        // A DIFFERENT draft is the ordinary case and must stay ordinary: the
+        // index is one per item, not one per org.
+        const otherDraft = await refusal(after, insert, [
+          "org_refine_proposals",
+          otherItemId,
+          "punchier",
+          "Another draft.",
+          0,
+          14,
+        ]);
+        expect(otherDraft).toBeNull();
+
+        const offListVerb = await refusal(after, insert, [
+          "org_refine_proposals",
+          otherItemId,
+          "translate",
+          "Another draft.",
+          0,
+          14,
+        ]);
+        expect(offListVerb, "a verb outside REFINE_VERBS").toBe(CHECK_VIOLATION);
+
+        // A collapsed caret replaces nothing; a negative start is not a
+        // position in a string. Both are refusals the request schema also
+        // makes, and this is the half a hand-written INSERT cannot skip.
+        const collapsed = await refusal(after, insert, [
+          "org_refine_proposals",
+          otherItemId,
+          "shorten",
+          "",
+          3,
+          3,
+        ]);
+        const negative = await refusal(after, insert, [
+          "org_refine_proposals",
+          otherItemId,
+          "shorten",
+          "x",
+          -1,
+          4,
+        ]);
+        expect(collapsed).toBe(CHECK_VIOLATION);
+        expect(negative).toBe(CHECK_VIOLATION);
+
+        // THE CONSTRAINT THAT IS NOT THERE. "🥐" is one code point and TWO
+        // UTF-16 code units, so this row's range is 4 while Postgres reads
+        // `length(selected_text)` as 3. A constraint tying the two would
+        // refuse it — and refuse a croissant emoji in a bakery's post.
+        await after.query("DELETE FROM refine_proposals WHERE content_item_id = $1", [otherItemId]);
+        const astral = await refusal(after, insert, [
+          "org_refine_proposals",
+          otherItemId,
+          "warmer",
+          "Un 🥐",
+          0,
+          5,
+        ]);
+        expect(astral, "a selection containing an emoji").toBeNull();
+        const stored = await after.query(
+          "SELECT selected_text, end_offset - start_offset AS span, length(selected_text) AS points FROM refine_proposals WHERE content_item_id = $1",
+          [otherItemId],
+        );
+        expect(stored.rows[0]).toMatchObject({ selected_text: "Un 🥐", span: 5, points: 4 });
+
+        // A proposal about a deleted draft is about nothing.
+        await after.query("DELETE FROM content_items WHERE id = $1", [otherItemId]);
+        const left = await after.query(
+          "SELECT count(*)::int AS n FROM refine_proposals WHERE content_item_id = $1",
+          [otherItemId],
+        );
+        expect(left.rows[0].n).toBe(0);
       } finally {
         await after.end();
       }

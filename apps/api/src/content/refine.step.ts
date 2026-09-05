@@ -201,6 +201,25 @@ export type RefineContext = StepContext & { maxRetries: number };
  * the base in the one direction this call needs it narrowed: `maxRetries` is
  * required, for the reasons on that type.
  */
+/**
+ * The ledger identity every refine call is attributed with — one string, read
+ * by the two places that must agree about it.
+ *
+ * `defineStep({ name })` writes it into `usage_ledger.step` through
+ * `StepAttribution`, and the hourly allowance counts the rows it wrote
+ * (`ContentRepository`, `WHERE step = 'refine'`). Spelled out at both ends
+ * those are two literals that must match for the limit to bound anything at
+ * all: a typo at either end leaves a limit that counts nothing, refuses
+ * nobody, and looks exactly like a limit. There is no test that could see it
+ * except one that ran a real call and then read the count — which is why the
+ * string is declared once and imported.
+ *
+ * NEVER `` `refine:${verb}` ``. Splitting the name by verb would give each
+ * button its own hourly allowance, so a person could spend three times the
+ * money by pressing a different one for the same work.
+ */
+export const REFINE_STEP = "refine";
+
 export function refineStep(verb: RefineVerb): Step<RefineInput, RefineOutput, RefineContext> {
   // Parsed, not trusted. `RefineVerb` is a compile-time guarantee and the
   // caller this step was built for reads its verb off an HTTP body, where the
@@ -219,7 +238,7 @@ export function refineStep(verb: RefineVerb): Step<RefineInput, RefineOutput, Re
   const role = ROLE_LINES[refineVerbSchema.parse(verb)];
 
   return defineStep({
-    name: "refine",
+    name: REFINE_STEP,
     schema: refineOutputSchema,
     role: [...role, "", ...COMMON_RULES],
     material: (_ctx: RefineContext, input: RefineInput) => [

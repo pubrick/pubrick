@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { MAX_BODY_LENGTH, MAX_REFINE_CALLS_PER_HOUR } from "@pubrick/shared";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { RefineCaller, type RefineOutcome } from "./refine.caller";
+import { REFINE_STEP } from "./refine.step";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -19,7 +22,25 @@ describe.skipIf(!url)("content e2e", () => {
     // same DB — that redundant per-file migration dance is what caused the
     // "beforeAll hook timed out" flake).
     const { AppModule } = await import("../app.module");
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      // The one seam in this file that would otherwise call Google or
+      // OpenRouter. `RefineCaller` owns every network line of a refine and
+      // nothing else, so replacing it leaves the whole of the endpoint under
+      // test — the guard, org scoping, the unlocked editability read, the
+      // `ai` draft check, the hourly allowance, the ledger write, the staged
+      // row and its supersede — running for real against a real database.
+      .overrideProvider(RefineCaller)
+      .useValue({
+        run: async (args: RefineCall): Promise<RefineOutcome> => {
+          refineCalls.push(args);
+          // The forty-five seconds this call really takes, as a hook: it is the
+          // one window in which the draft can be deleted underneath a refine,
+          // and the only way a test can be in it.
+          if (refineDuringCall) await refineDuringCall();
+          return refineOutcome;
+        },
+      })
+      .compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
@@ -160,6 +181,167 @@ describe.skipIf(!url)("content e2e", () => {
     await pool.end();
 
     return { itemId, adaptationIds: ordered.map((a) => a.id) };
+  }
+
+  /**
+   * WHAT THE MODEL WAS ASKED, recorded per call so a test can assert not only
+   * that the endpoint refused before spending but that nothing was spent at
+   * all — "the mock was never invoked" is the assertion; "the response was a
+   * 409" is not, since a 409 after a paid call looks identical from outside.
+   */
+  type RefineCall = {
+    credential: { provider: string; apiKey: string };
+    brand: { name: string; contentLanguage: string };
+    verb: string;
+    input: { selection: string; before: string; after: string };
+  };
+  const refineCalls: RefineCall[] = [];
+
+  /** One physical model call, in ledger shape. */
+  function refineUsage(overrides: Record<string, unknown> = {}) {
+    return {
+      record: {
+        provider: "google" as const,
+        modelId: "gemini-3.7-flash",
+        attempt: 1,
+        inputTokens: 120,
+        outputTokens: 24,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        costUsd: 0.0021,
+        costSource: "price_table" as const,
+        responseMs: 900,
+        status: "ok" as const,
+        outcome: "completed" as const,
+        ...overrides,
+      },
+      // The step's OWN attribution, exactly as `refineStep` supplies it: the
+      // hourly allowance counts rows by this string.
+      attribution: { step: REFINE_STEP },
+    };
+  }
+
+  const AI_REPLACEMENT = "Ouvert dès sept heures.";
+  const AI_REASON = "Deux phrases en une, sans perdre l'horaire.";
+
+  let refineOutcome: RefineOutcome;
+  /** Runs while the model is "answering" — see the override in `beforeAll`. */
+  let refineDuringCall: (() => Promise<void>) | null = null;
+
+  beforeEach(() => {
+    refineCalls.length = 0;
+    refineDuringCall = null;
+    refineOutcome = {
+      ok: true,
+      text: AI_REPLACEMENT,
+      reason: AI_REASON,
+      usage: [refineUsage()] as RefineOutcome["usage"],
+    };
+  });
+
+  /**
+   * A draft the model wrote, with a key stored to refine it against — the two
+   * things a refine needs before it can happen at all.
+   */
+  async function refinableDraft() {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const { itemId } = await aiDraft(agent, brandId, [channelId]);
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
+      .expect(200);
+    return { agent, itemId, orgId: await orgOf(itemId) };
+  }
+
+  /** The org an item belongs to, for the fixtures that write rows themselves. */
+  async function orgOf(itemId: string): Promise<string> {
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const [row] = (await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`))
+      .rows as { org_id: string }[];
+    await pool.end();
+    return row?.org_id as string;
+  }
+
+  /**
+   * Ledger rows the allowance will count — or, with a different `step`, an
+   * `orgId` or an age, exactly the rows it must NOT count.
+   *
+   * Written from underneath the API because the only other way to make one is
+   * to spend money, and because each of the three predicates the allowance
+   * carries has to be pinned by a row that fails it alone.
+   */
+  async function seedLedger(
+    orgId: string,
+    count: number,
+    options: { step?: string; ageHours?: number } = {},
+  ): Promise<void> {
+    if (count === 0) return;
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db.insert(schema.usageLedger).values(
+      Array.from({ length: count }, () => ({
+        orgId,
+        runId: null,
+        step: options.step ?? REFINE_STEP,
+        provider: "google" as const,
+        modelId: "gemini-3.7-flash",
+        costUsd: "0.002100",
+        costSource: "price_table" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+        // The column is `timestamp` WITHOUT time zone, written by the
+        // database's own `now()` in production; the window compares against
+        // `now()` in SQL, so the fixture backdates in SQL too.
+        ...(options.ageHours
+          ? { createdAt: sql`now() - interval '${sql.raw(String(options.ageHours))} hours'` }
+          : {}),
+      })),
+    );
+    await pool.end();
+  }
+
+  /** Every staged proposal for one item, whoever wrote it. */
+  async function proposalRows(itemId: string) {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db
+      .select({
+        id: schema.refineProposals.id,
+        orgId: schema.refineProposals.orgId,
+        createdBy: schema.refineProposals.createdBy,
+        verb: schema.refineProposals.verb,
+        selectedText: schema.refineProposals.selectedText,
+        startOffset: schema.refineProposals.startOffset,
+        endOffset: schema.refineProposals.endOffset,
+        proposal: schema.refineProposals.proposal,
+        reason: schema.refineProposals.reason,
+      })
+      .from(schema.refineProposals)
+      .where(eq(schema.refineProposals.contentItemId, itemId));
+    await pool.end();
+    return rows;
+  }
+
+  /** Every ledger row of one org, newest last. */
+  async function ledgerRows(orgId: string) {
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db
+      .select({
+        step: schema.usageLedger.step,
+        runId: schema.usageLedger.runId,
+        contentItemId: schema.usageLedger.contentItemId,
+        adaptationId: schema.usageLedger.adaptationId,
+        attempt: schema.usageLedger.attempt,
+        outcome: schema.usageLedger.outcome,
+      })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId))
+      .orderBy(asc(schema.usageLedger.createdAt), asc(schema.usageLedger.id));
+    await pool.end();
+    return rows;
   }
 
   /** The author's own words, typed into the create form. No model wrote this. */
@@ -3727,6 +3909,519 @@ describe.skipIf(!url)("content e2e", () => {
    * web build older than the code still shows the reader. A change that swapped
    * the sentence for the code would pass a code-only assertion.
    */
+
+  /**
+   * THE EDITOR ASKS THE MODEL TO REVISE A SELECTION.
+   *
+   * The first route in this product a person can make spend money repeatedly,
+   * by hand, so these tests are about three things in roughly that order: that
+   * the proposal is the SERVER's text and not a caller's, that nothing is spent
+   * before every free refusal has been made, and that the hourly allowance is
+   * a limit rather than a decoration.
+   */
+  describe("refine: the editor asks the model to revise a selection", () => {
+    /** `AI_BODY` is "Café ouvert. Passez nous voir." — this is its first sentence. */
+    const SELECTION = { start: 0, end: 12 };
+    const SELECTED_TEXT = "Café ouvert.";
+
+    it("stages the model's own words, and answers with what it actually refined", async () => {
+      const { agent, itemId } = await refinableDraft();
+
+      const staged = await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({ verb: "shorten", ...SELECTION })
+        .expect(201);
+
+      expect(staged.body).toMatchObject({
+        verb: "shorten",
+        proposal: AI_REPLACEMENT,
+        reason: AI_REASON,
+        start: SELECTION.start,
+        end: SELECTION.end,
+        // What the SERVER selected, so a caller whose idea of the body had
+        // moved can see that it had.
+        selectedText: SELECTED_TEXT,
+      });
+      expect(typeof staged.body.id).toBe("string");
+
+      // The model saw the body cut at the splice offsets, never overlapping:
+      // exactly one copy of the selection, under exactly one label.
+      expect(refineCalls).toHaveLength(1);
+      expect(refineCalls[0]?.verb).toBe("shorten");
+      expect(refineCalls[0]?.input).toEqual({
+        selection: SELECTED_TEXT,
+        before: "",
+        after: AI_BODY.slice(SELECTION.end),
+      });
+      // The brand's own voice and language reach the step; `instructionsFor`
+      // emits that language directive on every call, so a refine that skipped
+      // it would answer a French draft in English.
+      expect(refineCalls[0]?.brand.contentLanguage).toBe("en");
+
+      const rows = await proposalRows(itemId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: staged.body.id,
+        verb: "shorten",
+        selectedText: SELECTED_TEXT,
+        startOffset: SELECTION.start,
+        endOffset: SELECTION.end,
+        proposal: AI_REPLACEMENT,
+        reason: AI_REASON,
+      });
+      // The PERSON is recorded on the request, which is why the version row
+      // Accept writes can carry `created_by = NULL` and mean it.
+      expect(rows[0]?.createdBy).not.toBeNull();
+    });
+
+    /**
+     * THE PROPOSAL IS THE SERVER'S, FROM THE FIRST STEP.
+     *
+     * A caller that could supply the selected text could choose what the model
+     * is asked about — and the row this call stages is what Accept turns into
+     * evidence that a MODEL wrote a sentence. The request schema carries
+     * offsets and no text at all, so text sent anyway is stripped, and the
+     * anchor stored is the slice of the stored body.
+     */
+    it("ignores text a caller sends, and anchors on its own body", async () => {
+      const { agent, itemId } = await refinableDraft();
+
+      const staged = await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({
+          verb: "warmer",
+          ...SELECTION,
+          selectedText: "Words the caller made up.",
+          proposal: "Text the caller wants attributed to the model.",
+        })
+        .expect(201);
+
+      expect(staged.body.selectedText).toBe(SELECTED_TEXT);
+      expect(staged.body.proposal).toBe(AI_REPLACEMENT);
+      expect(refineCalls[0]?.input.selection).toBe(SELECTED_TEXT);
+      expect((await proposalRows(itemId))[0]?.selectedText).toBe(SELECTED_TEXT);
+    });
+
+    /**
+     * ONE PROPOSAL PER DRAFT. "Try again" is Discard-then-Propose, and a person
+     * who simply presses again must not end up with a proposal nobody can see:
+     * the later press supersedes the earlier row rather than joining it.
+     */
+    it("supersedes the proposal already staged rather than adding a second", async () => {
+      const { agent, itemId } = await refinableDraft();
+
+      const first = await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({ verb: "shorten", ...SELECTION })
+        .expect(201);
+
+      refineOutcome = {
+        ok: true,
+        text: "Encore ouvert.",
+        reason: "Plus court.",
+        usage: [refineUsage()] as RefineOutcome["usage"],
+      };
+      const second = await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({ verb: "punchier", ...SELECTION })
+        .expect(201);
+
+      const rows = await proposalRows(itemId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(second.body.id);
+      expect(rows[0]?.proposal).toBe("Encore ouvert.");
+      // A NEW id, not the old row edited: the two are different proposals with
+      // different text and a different verb, and giving them one identity
+      // would let an Accept aimed at the first apply the second.
+      expect(second.body.id).not.toBe(first.body.id);
+    });
+
+    it("records the spend against the draft, with no run to attribute it to", async () => {
+      const { agent, itemId, orgId } = await refinableDraft();
+
+      await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({ verb: "shorten", ...SELECTION })
+        .expect(201);
+
+      const rows = await ledgerRows(orgId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        step: REFINE_STEP,
+        // A refine belongs to no run, so `content_item_id` is the only answer
+        // to "what did refining this draft cost".
+        runId: null,
+        contentItemId: itemId,
+        // This increment does not refine a per-channel override.
+        adaptationId: null,
+      });
+    });
+
+    describe("what is refused before a cent is spent", () => {
+      it("refuses a draft the model never wrote", async () => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const { itemId } = await handTypedWithAiAdaptation(agent, brandId, [channelId]);
+        await agent
+          .put("/api/ai-credentials")
+          .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
+          .expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: 0, end: 20 })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_needs_ai_draft");
+        expect(refineCalls, "a hand-typed draft must cost nothing").toEqual([]);
+        expect(await proposalRows(itemId)).toEqual([]);
+      });
+
+      /**
+       * An adaptation's own `ai` row says nothing about the body being refined
+       * here — the item's text is still the author's. The fixture above has
+       * exactly that shape, so this is the assertion that the check reads the
+       * MASTER level rather than any `ai` row it can find.
+       */
+      it("refuses even when a CHANNEL's text was written by the model", async () => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const { itemId, adaptationIds } = await handTypedWithAiAdaptation(agent, brandId, [
+          channelId,
+        ]);
+        expect(adaptationIds).toHaveLength(1);
+        await agent
+          .put("/api/ai-credentials")
+          .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
+          .expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: 0, end: 20 })
+          .expect(409);
+        expect(refused.body.code).toBe("refine_needs_ai_draft");
+        expect(refineCalls).toEqual([]);
+      });
+
+      it("refuses a pinned item, and pays nothing to find out", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await agent.post(`/api/content/${itemId}/opened`).expect(204);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("content_pinned_approved");
+        expect(refineCalls, "an approved post must cost nothing").toEqual([]);
+      });
+
+      it("refuses an org with no key stored, and says which one it is", async () => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const { itemId } = await aiDraft(agent, brandId, [channelId]);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_no_credential");
+        expect(refineCalls).toEqual([]);
+      });
+
+      /**
+       * A range the body cannot hold means the caller is indexing a string this
+       * server does not have. The shipped editor cannot produce one — it reports
+       * its selection against the exact string it renders — and a request that
+       * does is the validation boundary's own kind of fault.
+       */
+      it("refuses a range that is outside the body", async () => {
+        const { agent, itemId } = await refinableDraft();
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: 0, end: AI_BODY.length + 1 })
+          .expect(400);
+
+        expect(refused.body.code).toBe("invalid_request");
+        expect(refineCalls).toEqual([]);
+      });
+
+      it("refuses a selection that is only whitespace", async () => {
+        const { agent, itemId } = await refinableDraft();
+        await setItemBody(itemId, "Café ouvert.\n\nPassez nous voir.");
+
+        // The two newlines between the sentences: a real range, over nothing
+        // to revise.
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", start: 12, end: 14 })
+          .expect(400);
+
+        expect(refused.body.code).toBe("invalid_request");
+        expect(refineCalls).toEqual([]);
+      });
+
+      it("refuses another org's draft as a 404, not a 403", async () => {
+        const { itemId } = await refinableDraft();
+        const stranger = await orgAgent();
+        await stranger
+          .put("/api/ai-credentials")
+          .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
+          .expect(200);
+
+        const refused = await stranger
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(404);
+
+        expect(refused.body.code).toBe("content_not_found");
+        expect(refineCalls).toEqual([]);
+        expect(await proposalRows(itemId)).toEqual([]);
+      });
+    });
+
+    /**
+     * THE HOURLY ALLOWANCE, and the four things that have to be true of it
+     * before it is a limit rather than a decoration: it admits the call at one
+     * below, it refuses at exactly the limit, it counts CALLS rather than
+     * presses, and each of its three predicates — the org, the step, the window
+     * — is doing work no other one does.
+     */
+    describe("the hourly allowance", () => {
+      it("admits the call that brings the hour to the limit, and refuses the next", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR - 1);
+
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+        expect(refineCalls).toHaveLength(1);
+
+        // That press wrote the row that reaches the limit.
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+        expect(refused.body.code).toBe("refine_limit_reached");
+        expect(refineCalls, "the refused press must not reach a provider").toHaveLength(1);
+        // And the proposal the first press paid for is untouched.
+        expect(await proposalRows(itemId)).toHaveLength(1);
+      });
+
+      /**
+       * ONE PRESS, TWO ROWS. A schema violation costs a second billed round
+       * trip, and the ledger writes one row per PHYSICAL call — so a press that
+       * met the repair retry consumes two of the allowance. That is the whole
+       * reason the limit counts rows: what is bounded is money, not clicks.
+       */
+      it("counts calls, not presses", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR - 2);
+        refineOutcome = {
+          ok: true,
+          text: AI_REPLACEMENT,
+          reason: AI_REASON,
+          usage: [refineUsage(), refineUsage({ attempt: 2 })] as RefineOutcome["usage"],
+        };
+
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+        expect(await ledgerRows(orgId)).toHaveLength(MAX_REFINE_CALLS_PER_HOUR);
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+        expect(refused.body.code).toBe("refine_limit_reached");
+      });
+
+      it("is one org's allowance, not the deployment's", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const { orgId: strangerOrgId } = await strangerOrg();
+        await seedLedger(strangerOrgId, MAX_REFINE_CALLS_PER_HOUR);
+
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+      });
+
+      /**
+       * A generation run's calls must not lock the editor, and a Test button's
+       * must not either: each allowance names its own step. The mirror of the
+       * Test button's own test, from the other side.
+       */
+      it("counts refines, and not a generation run's spend or a Test press", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR, { step: "writer" });
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR, { step: "test" });
+
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+      });
+
+      it("is a ROLLING hour, so yesterday's calls do not spend today's allowance", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        await seedLedger(orgId, MAX_REFINE_CALLS_PER_HOUR, { ageHours: 2 });
+
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+      });
+    });
+
+    /**
+     * WHEN THE CALL DOES NOT PRODUCE A PROPOSAL. Three refusals, and one rule
+     * underneath all of them: the money is recorded whatever happened, and
+     * whatever was staged before is left alone — a person whose Try again
+     * failed still has the proposal they already paid for.
+     */
+    describe("when the model produces nothing usable", () => {
+      it("reports a timeout as a timeout, and still records what it may have cost", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        refineOutcome = {
+          ok: false,
+          failure: "timed_out",
+          // A call lost after dispatch may have been generated and billed in
+          // full while we were hanging up: zero tokens, `outcome: 'unknown'`,
+          // which is what puts the "≥" on the org's total.
+          usage: [
+            refineUsage({ inputTokens: 0, outputTokens: 0, costUsd: null, outcome: "unknown" }),
+          ] as RefineOutcome["usage"],
+        };
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_timed_out");
+        expect(await proposalRows(itemId)).toEqual([]);
+        const ledger = await ledgerRows(orgId);
+        expect(ledger).toHaveLength(1);
+        expect(ledger[0]).toMatchObject({ step: REFINE_STEP, outcome: "unknown" });
+      });
+
+      it("reports every other model failure as one refusal, and never the provider's words", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        refineOutcome = {
+          ok: false,
+          failure: "failed",
+          usage: [refineUsage(), refineUsage({ attempt: 2 })] as RefineOutcome["usage"],
+        };
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_failed");
+        // The provider's own error text quotes the submitted API key back, so
+        // nothing of it may reach a browser.
+        expect(JSON.stringify(refused.body)).not.toContain("sk-live");
+        // A failed press still cost two round trips, and the allowance counts
+        // exactly the calls most worth counting.
+        expect(await ledgerRows(orgId)).toHaveLength(2);
+      });
+
+      it("leaves the proposal already staged alone when a Try again fails", async () => {
+        const { agent, itemId } = await refinableDraft();
+        const staged = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(201);
+
+        refineOutcome = {
+          ok: false,
+          failure: "failed",
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+        await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "punchier", ...SELECTION })
+          .expect(409);
+
+        const rows = await proposalRows(itemId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.id).toBe(staged.body.id);
+        expect(rows[0]?.proposal).toBe(AI_REPLACEMENT);
+      });
+
+      /**
+       * THE DRAFT DELETED WHILE THE MODEL WAS ANSWERING.
+       *
+       * A refine spends forty-five seconds outside any transaction, and
+       * `DELETE /api/brands/:id` cascades into `content_items`, so this
+       * interleaving is real rather than exotic. Two things must survive it,
+       * and neither does by default: the request must not be a 500 about a
+       * foreign key, and the MONEY must still be recorded — the ledger's
+       * `content_item_id` is `ON DELETE SET NULL` precisely so a tidy-up
+       * cannot erase spend history, and the org's total sums by `org_id`
+       * alone.
+       */
+      it("records the spend even when the draft is deleted mid-call, and refuses without a 500", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        refineDuringCall = async () => {
+          const { createDb, schema } = await import("@pubrick/db");
+          const { db, pool } = createDb(url as string);
+          await db.delete(schema.contentItems).where(eq(schema.contentItems.id, itemId));
+          await pool.end();
+        };
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(404);
+
+        expect(refused.body.code).toBe("content_not_found");
+        const ledger = await ledgerRows(orgId);
+        expect(ledger, "the money was spent and must still be counted").toHaveLength(1);
+        expect(ledger[0]).toMatchObject({ step: REFINE_STEP, contentItemId: null });
+      });
+
+      /**
+       * THE PROPOSE-TIME BOUND ON THE MERGED BODY.
+       *
+       * The model's schema bounds the REPLACEMENT by `MAX_BODY_LENGTH` and
+       * nothing bounds `before + replacement + after` — so a near-full body and
+       * a long reply pass every check upstream of this one. Without it the pair
+       * would be staged as a proposal a person reads, presses Accept on, and is
+       * refused by, after the call was paid for.
+       */
+      it("refuses a reply that would make the body too long, and stages nothing", async () => {
+        const { agent, itemId, orgId } = await refinableDraft();
+        const nearlyFull = `Café ouvert. ${"x".repeat(MAX_BODY_LENGTH - 20)}`;
+        await setItemBody(itemId, nearlyFull);
+        refineOutcome = {
+          ok: true,
+          text: "Ouvert dès sept heures, et jusqu'à dix-neuf heures tous les jours.",
+          reason: AI_REASON,
+          usage: [refineUsage()] as RefineOutcome["usage"],
+        };
+
+        const refused = await agent
+          .post(`/api/content/${itemId}/refine`)
+          .send({ verb: "shorten", ...SELECTION })
+          .expect(409);
+
+        expect(refused.body.code).toBe("refine_too_long");
+        expect(await proposalRows(itemId)).toEqual([]);
+        // The call happened, so the money is recorded: this refusal is about
+        // what the answer would do to the body, not about the answer failing.
+        expect(await ledgerRows(orgId)).toHaveLength(1);
+      });
+    });
+  });
+
   describe("coded refusals", () => {
     /** A post whose text is pinned, plus the ids to aim at it. */
     async function approvedPost(agent: request.Agent) {

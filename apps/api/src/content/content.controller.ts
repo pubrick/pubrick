@@ -19,6 +19,8 @@ import {
   contentApproveSchema,
   contentCreateSchema,
   contentUpdateSchema,
+  type RefineRequest,
+  refineRequestSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
@@ -85,6 +87,32 @@ export class ContentController {
   @HttpCode(204)
   async opened(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
     await this.content.markOpened(orgId, id);
+  }
+
+  /**
+   * ASK THE MODEL TO REVISE A SELECTION. 201, because it creates a resource —
+   * the staged proposal — which Accept later addresses by the `id` this
+   * returns.
+   *
+   * `@UserId()` because the proposal records WHO asked for it. That is also
+   * why the `content_versions` row Accept writes carries `created_by = NULL`:
+   * the model wrote the fragment, and the person who asked for it is recorded
+   * here, on the request, rather than on the text.
+   *
+   * The body carries a verb and a RANGE, never the selected text — the server
+   * slices its own copy of the draft, so no caller can choose what the model is
+   * asked about, and no caller can author the evidence that a model wrote a
+   * sentence. It answers with `selectedText`, so a caller whose idea of the
+   * body had moved can see that it had.
+   */
+  @Post(":id/refine")
+  refine(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(refineRequestSchema)) body: RefineRequest,
+  ) {
+    return this.content.refine(orgId, id, userId, body);
   }
 
   @Post(":id/approve")

@@ -106,6 +106,13 @@
       "when": 1788553257865,
       "tag": "0015_fragment_unit_delta",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788590574830,
+      "tag": "0016_refine_proposals",
+      "breakpoints": true
     }
   ]
 }

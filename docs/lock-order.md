@@ -58,7 +58,7 @@ of them has been overlooked in this codebase at least once:
   whatever that statement has already locked. `publications_stamp_deleted_channel`
   writes `publications` rows while holding the `channels` row.
 
-## Two tables the order does not name, and why
+## Four tables the order does not name, and why
 
 **`publications`** is not in the list because it is never taken on its own: a
 claim or a receipt is only ever written under the lock of the adaptation it
@@ -78,6 +78,36 @@ by plain reads. That is the same standing the `channels`/`adaptations` edge had
 before it became the first cycle this file records, so if a second writer of
 `ai_credentials` ever appears, put it in the order rather than re-deriving this
 paragraph.
+
+**`refine_proposals`** is not in the list because the only transaction that
+touches it takes nothing else in the order except the row its own foreign key
+reaches. `ContentRepository.refine` stages a proposal by deleting the item's
+existing row and inserting the new one, and the insert takes `FOR KEY SHARE` on
+`content_items` (and on `organization` and `user`, neither of which is ever
+taken with anything else). `content_items` is LAST in the canonical order and is
+the only one of the five held, so this transaction cannot invert anything.
+
+Two things about that transaction are load-bearing and easy to undo by
+accident. It opens **after** the model call has returned — the whole reason the
+editability read earlier in `refine` is a plain `SELECT` and not
+`requireEditableItem`'s `SELECT … FOR UPDATE` is that holding a row lock and a
+pool connection across a forty-five-second call is pool exhaustion at exactly
+the concurrency it is meant to permit. And the delete is keyed on
+`content_item_id` alone, the unique index's own column: adding `org_id` would
+leave a row the insert then collides with.
+
+**`usage_ledger`** is not in the list either, and its absence used to be
+unexplained rather than decided. Every ledger insert takes `FOR KEY SHARE`
+through its foreign keys — on `pipeline_runs`, `channels`, `content_items` and
+`adaptations`, three of which the order governs — but no transaction ever holds
+a ledger row while asking for anything else: the row is written in a
+transaction of its own, containing that one insert, both in the worker
+(`GenerateRepository.recordUsage`, deliberately outside the step's checkpoint so
+a dying run still records what it spent) and in the api
+(`ContentRepository.recordRefineUsage`, and `AiCredentialsRepository`'s Test).
+A transaction that took a ledger insert together with a lock on any of those
+four tables would be a new acquisition sequence and would belong in the order;
+none does today.
 
 ## `pipeline_runs`, and why it sits second
 

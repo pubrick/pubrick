@@ -139,6 +139,62 @@ export const API_ERROR_CODES = [
   "schedule_already_queued",
   "schedule_already_publishing",
 
+  // ── content: the model was asked to revise a selection ────────────────────
+  /**
+   * SIX REFUSALS FOR ONE ROUTE, and the split is not tidiness: this is the
+   * first route a person can make spend money repeatedly, by hand, and each of
+   * these tells them a different thing to do about it. Folding them into one
+   * sentence would be the "one honest sentence for four different faults"
+   * mistake this file's own comments argue against — and here the reader's
+   * next action differs every time: wait an hour, generate a draft first, go
+   * to Settings, press again, shorten the post, or nothing at all.
+   *
+   * All 409 rather than 429/503, because `refusalBody`'s status set is closed
+   * at 400/403/404/409 for its own documented reasons, and every one of these
+   * is the same kind of event: the request was well formed and the server will
+   * not do it in the state it is in.
+   */
+  /**
+   * The hour's allowance of billed refine calls is spent. Its number is
+   * `MAX_REFINE_CALLS_PER_HOUR`, not an argument — the same arrangement
+   * `run_limit_reached` has, and the same `ERROR_MESSAGE_VALUES` entry.
+   */
+  "refine_limit_reached",
+  /**
+   * The draft has no `ai` `full` version row at the item level: nobody has
+   * generated this text, so there is no anchor for the publish gate's deletion
+   * clause and no honest badge for a body a model has touched part of. Refined
+   * anyway, the product would either credit the model's sentence to the person
+   * or refuse the draft for ever; both re-open a settled surface for a use the
+   * flagship path does not need. Deliberately refused — see the increment's
+   * plan, §5.
+   */
+  "refine_needs_ai_draft",
+  /**
+   * The organisation has stored no API key at all, so there is nothing to make
+   * the call with. Separated from `refine_failed` because it is the one the
+   * reader can act on — it sends them to Settings — and a generic sentence
+   * would send them nowhere.
+   */
+  "refine_no_credential",
+  /** The call did not answer inside its budget. Nothing was staged. */
+  "refine_timed_out",
+  /**
+   * Every other classified model failure — a rejected key, a model that does
+   * not exist, a refusal, an answer that would not parse. The provider's own
+   * words are deliberately not forwarded: they quote the submitted API key
+   * back (see `AI_TEST_FAILURES`), and Settings' Test button is where a
+   * diagnosis of the key belongs.
+   */
+  "refine_failed",
+  /**
+   * The proposal is fine and the body it would make is not: spliced in, the
+   * result exceeds `MAX_BODY_LENGTH`. Checked at propose so a reply past the
+   * limit is not staged as a proposal that could never be accepted, and again
+   * at Accept, because the body can grow in between.
+   */
+  "refine_too_long",
+
   // ── channels named by a request ───────────────────────────────────────────
   /** One of the channel ids is not this brand's. Shared by content and runs. */
   "channels_not_in_brand",

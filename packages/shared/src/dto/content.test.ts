@@ -9,8 +9,10 @@ import {
   isDeliveryOutcome,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  MAX_REFINE_CALLS_PER_HOUR,
   OUTSTANDING_ADAPTATION_STATUSES,
   REFINE_VERBS,
+  refineRequestSchema,
 } from "./content.js";
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
@@ -136,6 +138,89 @@ describe("the draft and delivery lifecycles keep every status they had", () => {
 describe("the refine verb set", () => {
   it("is exactly three, and no more, until a later increment decides otherwise", () => {
     expect(REFINE_VERBS).toEqual(["shorten", "warmer", "punchier"]);
+  });
+});
+
+/**
+ * What a refine request may say, and what it may not.
+ *
+ * The shape rules only; "the range lies inside THIS body" is the repository's,
+ * because a schema cannot see the body. Pinned here because every one of these
+ * is a way to spend somebody's money on a selection that is not one.
+ */
+describe("the refine request", () => {
+  const ok = { verb: "shorten" as const, start: 0, end: 12 };
+
+  it("takes a verb and a half-open range, and nothing else", () => {
+    const parsed = refineRequestSchema.parse({ ...ok, selectedText: "Café ouvert." });
+    // The whole point of the schema: text a caller sent is not carried through.
+    // `z.object` strips it, so the repository can only ever read its own body.
+    expect(parsed).toEqual(ok);
+  });
+
+  it("refuses a collapsed caret — there is nothing to replace", () => {
+    expect(refineRequestSchema.safeParse({ ...ok, start: 7, end: 7 }).success).toBe(false);
+  });
+
+  it("refuses a backwards range", () => {
+    expect(refineRequestSchema.safeParse({ ...ok, start: 12, end: 7 }).success).toBe(false);
+  });
+
+  it("refuses a range no body could hold, and a fractional one", () => {
+    expect(
+      refineRequestSchema.safeParse({ ...ok, end: MAX_BODY_LENGTH + 1 }).success,
+      "an end past the longest body there can be",
+    ).toBe(false);
+    expect(refineRequestSchema.safeParse({ ...ok, start: -1 }).success).toBe(false);
+    expect(refineRequestSchema.safeParse({ ...ok, start: 0.5, end: 3 }).success).toBe(false);
+  });
+
+  it("refuses a verb outside the closed set", () => {
+    expect(refineRequestSchema.safeParse({ ...ok, verb: "translate" }).success).toBe(false);
+    // The prototype keys a `verb in ROLE_LINES` test would admit.
+    expect(refineRequestSchema.safeParse({ ...ok, verb: "constructor" }).success).toBe(false);
+  });
+});
+
+/**
+ * The refine allowance, pinned the way `MAX_TEST_CALLS_PER_HOUR` is: by
+ * re-deriving the promise its docstring makes, never by asserting the literal.
+ *
+ * `expect(...).toBe(120)` would fire on any edit, including a reasoned one,
+ * and would tell the next reader nothing about why 120. What must stay true is
+ * the ratio — whatever the number is, this endpoint must not be a way to spend
+ * somebody else's money.
+ */
+describe("MAX_REFINE_CALLS_PER_HOUR", () => {
+  /** The upper end of the constant's own per-CALL estimate. */
+  const MAX_COST_PER_REFINE_CALL_USD = 0.005;
+
+  /**
+   * What an unthrottled loop over this route could spend in an hour, taken
+   * from `MAX_TEST_CALLS_PER_HOUR`'s own anchor: the api has no throttler, so
+   * the hole is the same one, and a refine call is the more expensive of the
+   * two (it carries a whole body).
+   */
+  const UNBOUNDED_HOURLY_SPEND_ESTIMATE_USD = 140;
+
+  it("keeps worst-case hourly spend at least two orders of magnitude below an unbounded route", () => {
+    const worstCaseHourlySpend = MAX_REFINE_CALLS_PER_HOUR * MAX_COST_PER_REFINE_CALL_USD;
+    expect(worstCaseHourlySpend).toBeLessThan(UNBOUNDED_HOURLY_SPEND_ESTIMATE_USD / 100);
+  });
+
+  it("is a positive, finite number of calls — not disabled by 0, Infinity or a fraction", () => {
+    expect(MAX_REFINE_CALLS_PER_HOUR).toBeGreaterThan(0);
+    expect(Number.isInteger(MAX_REFINE_CALLS_PER_HOUR)).toBe(true);
+    expect(Number.isFinite(MAX_REFINE_CALLS_PER_HOUR)).toBe(true);
+  });
+
+  it("leaves room for a session of honest editing", () => {
+    // The other direction, and the one a limit gets wrong far more often: a
+    // person who reads each proposal before deciding cannot approach this.
+    // Two calls per press is the worst case (`maxRetries: 0` plus the repair
+    // retry), so this is the fewest presses the allowance can buy.
+    const pressesInAnHour = MAX_REFINE_CALLS_PER_HOUR / 2;
+    expect(pressesInAnHour).toBeGreaterThanOrEqual(30);
   });
 });
 

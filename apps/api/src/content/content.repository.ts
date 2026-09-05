@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import type { AiCredential, StepBrand } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   type AdaptationStatus,
@@ -11,13 +12,26 @@ import {
   type ContentStatus,
   type ContentUpdate,
   type DeliveryOutcome,
+  isMalformedStoredAiCredential,
   isSameText,
+  isUnreadableCiphertext,
+  MAX_BODY_LENGTH,
+  MAX_REFINE_CALLS_PER_HOUR,
+  normalizeForComparison,
+  normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
+  type RefineProposal,
+  type RefineRequest,
+  type RefineVerb,
+  toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
+import { REFINE_STEP } from "./refine.step";
 
 const ITEM_COLUMNS = {
   id: schema.contentItems.id,
@@ -133,6 +147,119 @@ const PINNED_ADAPTATION_CODE: Record<PinnedAdaptationStatus, ApiErrorCode> = {
   publishing: "adaptation_pinned_publishing",
   published: "adaptation_pinned_published",
 };
+
+/** Postgres foreign_key_violation. */
+const FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * Did this write fail because a row it referenced is gone?
+ *
+ * Checks the error AND its `cause`: drizzle wraps the driver's error, but the
+ * `code` belongs to node-postgres's `DatabaseError` underneath. A second copy
+ * of the worker's own predicate, and deliberately a copy — the two processes
+ * share no code and this one is four lines.
+ *
+ * It has one reachable cause on this route, and it is not exotic: a refine is a
+ * request that spends forty-five seconds outside any transaction, and
+ * `DELETE /api/brands/:id` cascades into `content_items`. A draft deleted while
+ * the model was answering is a real interleaving, not a hypothetical.
+ */
+function isForeignKeyViolation(error: unknown): boolean {
+  type PgLike = { code?: unknown; cause?: unknown };
+  return [error, (error as PgLike | undefined)?.cause].some(
+    (candidate) => (candidate as PgLike | undefined)?.code === FOREIGN_KEY_VIOLATION,
+  );
+}
+
+/**
+ * The refusal a pinned item earns, or `null` while its text is still the
+ * author's to change.
+ *
+ * ONE reading of "editable", shared by the two paths that ask: `update`, which
+ * asks under `SELECT … FOR UPDATE`, and `refine`, which deliberately asks
+ * without a lock. The predicate and the two records it indexes are the same
+ * either way — a refine admitted against text an approval has pinned is a
+ * refine whose Accept could only ever be refused, so the two must not be able
+ * to answer differently.
+ *
+ * Returns the exception rather than throwing it, so a caller that has a lock
+ * open can see the refusal as a value.
+ */
+function pinnedItemRefusal(status: ContentStatus) {
+  if (isEditableItemStatus(status)) return null;
+  return conflict(PINNED_ITEM_CODE[status], PINNED_ITEM_MESSAGE[status]);
+}
+
+/**
+ * The window `MAX_REFINE_CALLS_PER_HOUR` is counted over.
+ *
+ * A literal interval rather than a computed `Date`, for the reason
+ * `TEST_BUDGET_WINDOW` (`ai-credentials.repository.ts`) documents at length:
+ * the comparison happens in Postgres against `usage_ledger.created_at`, which
+ * is `timestamp` WITHOUT time zone and is written by the database's own
+ * `now()`. A JavaScript `Date` from an api replica in another zone shifts the
+ * window by the offset, which either waves every request through or refuses
+ * every one of them.
+ */
+const REFINE_BUDGET_WINDOW = sql`interval '1 hour'`;
+
+/**
+ * The two model failures a refine reports, as codes and as sentences — two
+ * records over one union, exactly as the pinned-status pair above, and total
+ * over `RefineFailure` so a third failure shape cannot be added without
+ * deciding what the reader is told about it.
+ *
+ * The provider's own words never appear in either: they quote the submitted
+ * API key back (see `AI_TEST_FAILURES`), and this value is handed to a browser.
+ */
+const REFINE_FAILURE_CODE: Record<RefineFailure, ApiErrorCode> = {
+  timed_out: "refine_timed_out",
+  failed: "refine_failed",
+};
+
+const REFINE_FAILURE_MESSAGE: Record<RefineFailure, string> = {
+  timed_out: "The model did not answer in time; nothing was changed",
+  failed: "The model could not revise this selection; nothing was changed",
+};
+
+/**
+ * The text a refine request selected, sliced out of the body the SERVER holds.
+ *
+ * The request names offsets and no text at all (`refineRequestSchema`), so this
+ * is the only place a selection comes from — which is what keeps the staged
+ * proposal's anchor a fact about the stored draft rather than a claim a caller
+ * made about it.
+ *
+ * TWO REFUSALS, both `invalid_request`, and the code is a judgement rather than
+ * a shrug. `API_ERROR_CODES` keeps one code for the whole validation boundary
+ * because the alternative is a translated sentence per field per rule; these
+ * two are that boundary's own kind of fault — a request describing a string the
+ * server does not have — and the schema cannot make them because it cannot see
+ * the body. The reader's sentence ("check what you entered") is true of both,
+ * and neither is reachable from the shipped editor, which reports its selection
+ * against the exact string it renders.
+ *
+ *  - A range past the end of the body. The caller is indexing text this server
+ *    does not hold: a draft that moved, or offsets taken against a string that
+ *    was never normalised.
+ *  - A blank selection. Whitespace has nothing to revise, the model's own
+ *    schema requires a non-empty replacement for it, and the blankness test is
+ *    this product's own class (`normalizeForComparison`, U+200B included) and
+ *    not `String.trim`'s.
+ */
+function selectionOf(body: string, request: RefineRequest): string {
+  if (request.end > body.length) {
+    throw badRequest(
+      "invalid_request",
+      `The selection (${request.start}-${request.end}) is outside this content's ${body.length}-character body`,
+    );
+  }
+  const selection = body.slice(request.start, request.end);
+  if (normalizeForComparison(selection) === "") {
+    throw badRequest("invalid_request", "The selection is blank; select some text to refine");
+  }
+  return selection;
+}
 
 /**
  * The 409 for the product's headline promise: nothing publishes that no human
@@ -457,7 +584,15 @@ function groupAiVersionBodies(adaptationIds: string[], rows: LensVersionRow[]): 
 
 @Injectable()
 export class ContentRepository {
-  constructor(private readonly queue: QueueService) {}
+  private readonly logger = new Logger(ContentRepository.name);
+
+  constructor(
+    private readonly queue: QueueService,
+    /** The org's key for a call that names no provider — see `refineCredential`. */
+    private readonly credentials: AiCredentialsRepository,
+    /** Every network line of a refine, and nothing else — see `RefineCaller`. */
+    private readonly refiner: RefineCaller,
+  ) {}
 
   private async adaptationsFor(orgId: string, contentItemId: string) {
     return db
@@ -754,8 +889,9 @@ export class ContentRepository {
       .for("update");
     const item = rows[0];
     if (!item) throw notFound("content_not_found", "Content item not found");
-    if (isEditableItemStatus(item.status)) return { body: item.body };
-    throw conflict(PINNED_ITEM_CODE[item.status], PINNED_ITEM_MESSAGE[item.status]);
+    const pinned = pinnedItemRefusal(item.status);
+    if (pinned) throw pinned;
+    return { body: item.body };
   }
 
   /**
@@ -841,6 +977,494 @@ export class ContentRepository {
       }
     });
     return this.get(orgId, id);
+  }
+
+  /**
+   * ASK THE MODEL TO REVISE ONE SELECTION, AND STAGE WHAT IT SAID.
+   *
+   * This is the first route in the product a person can make spend money
+   * REPEATEDLY, BY HAND, on content, so the order of what happens here is the
+   * design rather than an implementation detail:
+   *
+   *  1. **Everything that can refuse for free, first.** The item exists, is
+   *     still editable, the range is inside its body, a model wrote this draft,
+   *     the hour's allowance is not spent, and there is a key to spend it with.
+   *     Every one of these is checked before a provider is contacted, and the
+   *     e2e asserts the caller was never invoked rather than merely that the
+   *     response was a 409 — "refused after paying" is the failure that costs
+   *     somebody money.
+   *  2. **The call, with NO transaction open.** See below.
+   *  3. **The ledger, then the row.** The money is recorded before anything
+   *     decides whether the answer was usable, because it was spent either way.
+   *
+   * **NO LOCK IS HELD ACROSS THE CALL, and that is a deliberate deviation from
+   * increment 2b-1's "both Accept and the refine call itself take
+   * `requireEditableItem` first".** `requireEditableItem` takes
+   * `SELECT … FOR UPDATE`; holding it across a forty-five-second model call
+   * would hold a row lock AND a pool connection for forty-five seconds, which
+   * is pool exhaustion at exactly the concurrency it is meant to permit — the
+   * argument the product already makes about `pg_advisory_xact_lock`. So the
+   * editability read here is an ordinary `SELECT` with the same predicate and
+   * no lock.
+   *
+   * What that costs is stated rather than overlooked: the read can go stale, so
+   * a draft approved while the model was answering yields a proposal against an
+   * item that is now pinned. Accept re-checks under the lock and refuses, the
+   * proposal SURVIVES that refusal as a row, and rejecting the item and
+   * accepting the proposal loses nothing. The alternative — refusing to stage a
+   * paid-for proposal because the state moved — throws away money to avoid an
+   * inconvenience.
+   *
+   * **A DOUBLE PRESS.** Two presses on one draft are two calls and two ledger
+   * rows: the money is bounded by the allowance, not by press-deduplication,
+   * and pretending otherwise would need a lease whose expiry nothing can
+   * observe (see the table's own docstring). What they cannot do is leave two
+   * proposals — `refine_proposals` is unique on `content_item_id` and the stage
+   * below deletes before it inserts, so the later insert supersedes rather than
+   * accumulating. The screen shows one card because the database holds one row.
+   */
+  async refine(
+    orgId: string,
+    id: string,
+    userId: string,
+    request: RefineRequest,
+  ): Promise<RefineProposal> {
+    const item = await this.refinableItem(orgId, id);
+    const selection = selectionOf(item.body, request);
+    await this.requireAiDraft(orgId, id);
+    if (await this.overRefineBudget(orgId)) {
+      throw conflict(
+        "refine_limit_reached",
+        `This organization has already made ${MAX_REFINE_CALLS_PER_HOUR} refine calls in the last hour`,
+      );
+    }
+    const credential = await this.refineCredential(orgId);
+    const brand = await this.brandFor(orgId, item.brandId);
+
+    const outcome = await this.refiner.run({
+      credential,
+      brand,
+      verb: request.verb,
+      // The body, cut at the splice offsets and never overlapping: the model is
+      // shown every surrounding word and exactly one copy of the selection.
+      input: {
+        selection,
+        before: item.body.slice(0, request.start),
+        after: item.body.slice(request.end),
+      },
+    });
+
+    // BEFORE the verdict, and for the failed verdict too: the provider counts
+    // tokens before it knows whether we could parse the answer, so a refine
+    // that ends in a 409 can still have cost money. A ledger that recorded only
+    // the answers we liked would understate the org's spend AND hand this
+    // route's own allowance a count that misses the calls most worth counting.
+    await this.recordRefineUsage(orgId, id, outcome.usage);
+    if (!outcome.ok) {
+      throw conflict(REFINE_FAILURE_CODE[outcome.failure], REFINE_FAILURE_MESSAGE[outcome.failure]);
+    }
+
+    /**
+     * THE PROPOSE-TIME BOUND ON THE MERGED BODY, which nothing before this line
+     * applies. `refineOutputSchema.text` bounds the REPLACEMENT by
+     * `MAX_BODY_LENGTH` and says so: it never sees the body or the offsets, so
+     * a near-full body and a full-length reply both pass it. Without this check
+     * the pair would be staged as a proposal that `planRefineAccept` can only
+     * ever answer `too_long` to — a card the person reads, presses Accept on,
+     * and is refused by, after the call was paid for.
+     *
+     * Measured the way Accept measures it: `normalizeNewlines` first (the DTO's
+     * own rule — the limit bounds what gets STORED, and a model's CRLF is a
+     * character the product is about to drop), the splice second. Accept checks
+     * again rather than trusting this one, because the body can grow between
+     * propose and accept; this is the first line of defence and that is the
+     * second.
+     */
+    const proposal = normalizeNewlines(outcome.text);
+    const merged = item.body.slice(0, request.start) + proposal + item.body.slice(request.end);
+    if (merged.length > MAX_BODY_LENGTH) {
+      throw conflict(
+        "refine_too_long",
+        `Applying this suggestion would make the post longer than ${MAX_BODY_LENGTH} characters`,
+      );
+    }
+
+    return this.stageProposal({
+      orgId,
+      contentItemId: id,
+      createdBy: userId,
+      verb: request.verb,
+      selectedText: selection,
+      startOffset: request.start,
+      endOffset: request.end,
+      proposal,
+      reason: outcome.reason,
+    });
+  }
+
+  /**
+   * The item a refine is about — read WITHOUT a lock, and refused on exactly
+   * the same predicate `requireEditableItem` refuses on.
+   *
+   * The two share `pinnedItemRefusal` rather than each testing the status,
+   * because a refine that could be proposed against text an approval has
+   * pinned is a refine whose Accept can only ever be refused: one predicate,
+   * two readings of it, no room for them to answer differently.
+   *
+   * Returns the BRAND as well as the body: the model is told the brand's voice,
+   * audience and content language, and `instructionsFor` emits that language
+   * directive on every call — a refine that skipped it would answer a French
+   * draft in English.
+   */
+  private async refinableItem(
+    orgId: string,
+    id: string,
+  ): Promise<{ body: string; brandId: string }> {
+    const rows = await db
+      .select({
+        status: schema.contentItems.status,
+        body: schema.contentItems.body,
+        brandId: schema.contentItems.brandId,
+      })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    const item = rows[0];
+    if (!item) throw notFound("content_not_found", "Content item not found");
+    const pinned = pinnedItemRefusal(item.status);
+    if (pinned) throw pinned;
+    return { body: item.body, brandId: item.brandId };
+  }
+
+  /**
+   * REFUSE A DRAFT THE MODEL HAS NEVER WRITTEN, and this is a decision rather
+   * than an omission.
+   *
+   * A hand-typed post has no `ai` `full` version row, and refining one has no
+   * honest outcome available today. Leaving `origin = 'human'` makes the badge
+   * say "Human-written" over the model's sentence — `deriveOrigin` returns
+   * before `bodyIsAiVerbatim` is ever read on that branch. Flipping it to `ai`
+   * gives the level fragment-only evidence, which takes the missing-evidence
+   * branch and refuses the draft with `unread_ai_draft_open_only` until
+   * somebody opens it. And the deletion clause has no anchor at that level
+   * EVER, so the very clause this increment exists to fix cannot run there.
+   *
+   * Making it honest needs a fifth badge value — "a human wrote this and the
+   * model touched part of it" — plus an anchor for the count that is not an
+   * `ai` row. Both re-open increment 2b-1's settled surface for a use the
+   * flagship path does not need, so the refusal names the case instead.
+   *
+   * The MASTER level only (`adaptation_id IS NULL`): this increment does not
+   * refine a per-channel override, and an adaptation's own `ai` row would say
+   * nothing about the body being refined here.
+   */
+  private async requireAiDraft(orgId: string, id: string): Promise<void> {
+    const rows = await db
+      .select({ id: schema.contentVersions.id })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, id),
+          isNull(schema.contentVersions.adaptationId),
+          eq(schema.contentVersions.origin, "ai"),
+          eq(schema.contentVersions.scope, "full"),
+        ),
+      )
+      .limit(1);
+    if (rows.length === 0) {
+      throw conflict(
+        "refine_needs_ai_draft",
+        "This post was written by hand; the refine verbs work on a draft the model wrote",
+      );
+    }
+  }
+
+  /**
+   * Has this org used up its hourly allowance of billed refine calls?
+   *
+   * `AiCredentialsRepository.overTestBudget`'s design, deliberately, down to
+   * the reasons — and NOT its budget. That one counts `step = 'test'` and this
+   * one `step = 'refine'`, so neither button can spend the other's allowance:
+   * a person out of Test presses can still refine, and a generation run's dozen
+   * calls do not lock the editor. `REFINE_STEP` is imported rather than spelled
+   * out here, because the two ends of that filter — the step's own name and
+   * this predicate — must be the same string for the limit to bound anything
+   * at all.
+   *
+   * COUNTED FROM THE LEDGER the calls themselves wrote, so: the number is the
+   * same for every api replica and survives a restart (an in-process bucket is
+   * one budget per replica and a fresh one after each deploy, which is a limit
+   * an attacker waits out); a press that cost two physical calls consumes two,
+   * because the ledger wrote two, so what is bounded is money and not clicks;
+   * and a refine that spent nothing — refused before the provider — consumes
+   * nothing.
+   *
+   * A SQL-literal interval rather than a JavaScript `Date`, for the reason
+   * `TEST_BUDGET_WINDOW` documents: `usage_ledger.created_at` is `timestamp`
+   * WITHOUT time zone written by the database's own `now()`, and handing it a
+   * `Date` from a replica in another zone would shift the window by the offset
+   * — waving every request through, or refusing every one.
+   *
+   * NO LOCK. Two presses that read the count at the same instant can both pass;
+   * the overshoot is the concurrency, not a multiple of the limit, and that
+   * holds only because `maxRetries: 0` bounds a press at two rows. A
+   * `SELECT … FOR UPDATE` over the window would serialise every press in the
+   * deployment to save a call worth a fraction of a cent.
+   *
+   * `>=`, not `>`: the count is of calls ALREADY MADE, so a count that has
+   * reached the limit means the allowance is spent.
+   */
+  private async overRefineBudget(orgId: string): Promise<boolean> {
+    const rows = await db
+      .select({ calls: sql<string>`count(*)` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, REFINE_STEP),
+          sql`${schema.usageLedger.createdAt} > now() - ${REFINE_BUDGET_WINDOW}`,
+        ),
+      );
+    // `count(*)` over zero rows still returns one row holding 0; this guards
+    // the type, not a case Postgres produces.
+    return Number(rows[0]?.calls ?? 0) >= MAX_REFINE_CALLS_PER_HOUR;
+  }
+
+  /**
+   * The key this call will be billed to, or the refusal that says there is
+   * none.
+   *
+   * `refine_no_credential` is separated from `refine_failed` because it is the
+   * one the reader can act on — it sends them to Settings — and folding it into
+   * a generic sentence would be the "one honest sentence for four different
+   * faults" mistake `API_ERROR_CODES` argues against.
+   *
+   * A blob that will not DECRYPT is a different event and is answered
+   * `refine_failed`, with the operator's half in the log. It is not
+   * `no_credential` (there is a key; the row is right there on the Settings
+   * screen), it is not a 500 (nothing is broken about this request, and the
+   * cause is a real one — `APP_ENCRYPTION_KEY` rotated under a stored row), and
+   * this route has no member for it: a verdict about a stored key belongs to
+   * the Test button, which has one and can say `unreadable_key` in four
+   * languages. What this owes the reader is that their refine did not happen
+   * and nothing was charged for it.
+   */
+  private async refineCredential(orgId: string): Promise<AiCredential> {
+    let credential: AiCredential | undefined;
+    try {
+      credential = await this.credentials.credential(orgId);
+    } catch (error) {
+      if (!isUnreadableCiphertext(error) && !isMalformedStoredAiCredential(error)) throw error;
+      this.logger.error(
+        `Refine on content item of org ${orgId} could not read the stored API key: ` +
+          `${error instanceof Error ? error.message : String(error)}. ` +
+          "Test the key in Settings for a verdict about it.",
+      );
+      throw conflict(REFINE_FAILURE_CODE.failed, REFINE_FAILURE_MESSAGE.failed);
+    }
+    if (!credential) {
+      throw conflict(
+        "refine_no_credential",
+        "This organization has no AI provider key stored; add one in Settings",
+      );
+    }
+    return credential;
+  }
+
+  /** The brand's voice, audience and content language, in the shape a step takes. */
+  private async brandFor(orgId: string, brandId: string): Promise<StepBrand> {
+    const rows = await db
+      .select({
+        name: schema.brands.name,
+        voice: schema.brands.voice,
+        audience: schema.brands.audience,
+        contentLanguage: schema.brands.contentLanguage,
+      })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    const brand = rows[0];
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    return brand;
+  }
+
+  /**
+   * One ledger row per physical call, attributed to the DRAFT rather than to a
+   * run.
+   *
+   * `run_id` is null and `content_item_id` is set — the column migration 0006
+   * added for exactly this caller and that nothing has written since. Without
+   * it, "what did refining this draft cost" would have no answer at all, since
+   * a refine belongs to no run. `adaptation_id` stays null: this increment does
+   * not refine a per-channel override.
+   *
+   * `step` and `channel_id` come from the STEP's own attribution, never from
+   * this method — the same rule the worker's `recordUsage` follows, and here it
+   * is also what keeps the hourly allowance's filter honest, since the count
+   * reads the string the step wrote.
+   *
+   * A FAILED INSERT DOES NOT FAIL THE REQUEST. Losing the record of a billed
+   * call is bad; throwing away the answer already paid for as well is strictly
+   * worse, and a 500 here would do both. Same rule `AiCredentialsRepository`
+   * and `generateStructured`'s `onUsageError` follow: shout, keep the result.
+   * The message names what the org's total is now missing.
+   *
+   * ONE failure is narrowed rather than merely shouted about, because it is
+   * reachable rather than exotic: the draft can be deleted while the model is
+   * answering (a refine spends forty-five seconds outside any transaction, and
+   * a brand delete cascades into `content_items`), and the money was still
+   * spent. The rows are then written with `content_item_id` null — see below.
+   */
+  private async recordRefineUsage(
+    orgId: string,
+    contentItemId: string,
+    usage: readonly RefineUsage[],
+  ): Promise<void> {
+    if (usage.length === 0) return;
+    const rows = usage.map(({ record, attribution }) => ({
+      orgId,
+      runId: null,
+      step: attribution.step,
+      channelId: attribution.channelId ?? null,
+      contentItemId,
+      adaptationId: null,
+      attempt: record.attempt,
+      provider: record.provider,
+      modelId: record.modelId,
+      inputTokens: record.inputTokens,
+      outputTokens: record.outputTokens,
+      cachedInputTokens: record.cachedInputTokens,
+      reasoningTokens: record.reasoningTokens,
+      // `numeric(12,6)` is a string column in drizzle, and the conversion
+      // is not `String(cost)`: `toLedgerCostUsd` floors a real
+      // sub-micro-dollar cost so a billed call never stores 0.000000.
+      costUsd: toLedgerCostUsd(record.costUsd),
+      costSource: record.costSource,
+      status: record.status,
+      // What became of the round trip. A zero-token row is written by a 429
+      // AND by a call lost after dispatch; this is the only column that
+      // says which, and `spend()` reads it to decide whether the org's
+      // total is a floor.
+      outcome: record.outcome,
+      responseMs: record.responseMs,
+      keyOwnership: "byok" as const,
+    }));
+    try {
+      await db.insert(schema.usageLedger).values(rows);
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        // The DRAFT went while the model was answering — a deleted brand
+        // cascades into `content_items` — and the money was still spent.
+        // `content_item_id` is `ON DELETE SET NULL` precisely so a tidy-up
+        // cannot erase spend history, and the org's total sums by `org_id`
+        // ALONE, so the rows are written without the reference they can no
+        // longer satisfy rather than dropped on the floor. What is lost is the
+        // answer to "what did refining THAT draft cost", which no longer has a
+        // draft to be about; what is kept is the org's bill, and the allowance
+        // that bounds it.
+        this.logger.warn(
+          `Content item ${contentItemId} disappeared before its ${REFINE_STEP} ledger row(s) ` +
+            `could be written; recording the spend with content_item_id=null. orgId=${orgId}`,
+        );
+        try {
+          await db
+            .insert(schema.usageLedger)
+            .values(rows.map((row) => ({ ...row, contentItemId: null })));
+          return;
+        } catch (retryError) {
+          this.logger.error(
+            `USAGE RECORDING FAILED after narrowing: ${rows.length} billed call(s) are missing from this org's spend. ` +
+              `orgId=${orgId} error=${retryError instanceof Error ? retryError.message : String(retryError)}`,
+          );
+          return;
+        }
+      }
+      this.logger.error(
+        `USAGE RECORDING FAILED: ${usage.length} billed ${usage[0]?.record.provider} call(s) could not be written to the ledger — ` +
+          `this org's spend is understated by them, and its refine allowance will not count them. ` +
+          `orgId=${orgId} contentItemId=${contentItemId} step=${REFINE_STEP} ` +
+          `error=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Write the proposal down, superseding whatever was staged for this draft.
+   *
+   * DELETE THEN INSERT, in one transaction, rather than an upsert: the row a
+   * person is looking at and the row this call stages are different proposals,
+   * with different text, a different verb and a different range, and giving
+   * them one identity would let an Accept aimed at the first apply the second.
+   * A new `id` per proposal is what makes a stale Accept a 404 instead of a
+   * surprise.
+   *
+   * The delete is keyed on `content_item_id` ALONE — the unique index's own
+   * column. Adding `org_id` would look stricter and would in fact leave a row
+   * the insert then collides with, turning a supersede into a 500; the tenancy
+   * check has already happened, above, against the item.
+   *
+   * WHAT THIS TRANSACTION LOCKS, for `docs/lock-order.md`: the item's existing
+   * proposal row (`DELETE`), and `content_items` in `FOR KEY SHARE` through the
+   * insert's foreign key — plus `organization` and `user`, which no
+   * application transaction ever takes together with anything else.
+   * `content_items` is LAST in the canonical order and is the only one of the
+   * five taken here, so this cannot invert anything. The model call is already
+   * over by the time it opens.
+   */
+  private async stageProposal(row: {
+    orgId: string;
+    contentItemId: string;
+    createdBy: string;
+    verb: RefineVerb;
+    selectedText: string;
+    startOffset: number;
+    endOffset: number;
+    proposal: string;
+    reason: string;
+  }): Promise<RefineProposal> {
+    let staged: RefineProposal | undefined;
+    try {
+      staged = await this.insertProposal(row);
+    } catch (error) {
+      // The draft went while the model was answering. Not a 500: the request
+      // was well formed, the cause is nameable, and `content_not_found` is the
+      // sentence a reader can act on — the same one every other read of a
+      // deleted item gives them.
+      if (!isForeignKeyViolation(error)) throw error;
+      throw notFound("content_not_found", "Content item not found");
+    }
+    // `INSERT … RETURNING` of one row returns one row; this guards the type.
+    if (!staged) throw new Error("refine proposal was not staged");
+    return staged;
+  }
+
+  private async insertProposal(row: {
+    orgId: string;
+    contentItemId: string;
+    createdBy: string;
+    verb: RefineVerb;
+    selectedText: string;
+    startOffset: number;
+    endOffset: number;
+    proposal: string;
+    reason: string;
+  }): Promise<RefineProposal | undefined> {
+    return db.transaction(async (tx) => {
+      await tx
+        .delete(schema.refineProposals)
+        .where(eq(schema.refineProposals.contentItemId, row.contentItemId));
+      const rows = await tx.insert(schema.refineProposals).values(row).returning({
+        id: schema.refineProposals.id,
+        verb: schema.refineProposals.verb,
+        proposal: schema.refineProposals.proposal,
+        reason: schema.refineProposals.reason,
+        start: schema.refineProposals.startOffset,
+        end: schema.refineProposals.endOffset,
+        selectedText: schema.refineProposals.selectedText,
+      });
+      return rows[0];
+    });
   }
 
   /**
