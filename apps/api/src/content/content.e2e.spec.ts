@@ -4878,9 +4878,13 @@ describe.skipIf(!url)("content e2e", () => {
        * on the screen, which is worse than the refusal it answers.
        *
        * The failure injected is a NUL byte in the model's `reason`: a character
-       * a JSON string may carry, that no `text` column can, and that nothing
-       * upstream of the insert rejects. Any failed insert would do — this one
-       * is simply reachable from the seam a test can reach.
+       * a JSON string may carry and no `text` column can. In PRODUCTION it
+       * never gets this far — `refineOutputSchema` refuses it, so the model
+       * meets the repair retry and a second bad reply is `refine_failed` — and
+       * that is why it can be injected here at all: this file replaces
+       * `RefineCaller` whole, which is the seam BELOW the schema. Any failed
+       * insert would prove the same thing; this one is simply the failure a
+       * test can reach.
        */
       it("keeps the staged proposal when the row that would replace it cannot be written", async () => {
         const { agent, itemId } = await refinableDraft();

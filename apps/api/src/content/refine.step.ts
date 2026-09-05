@@ -48,9 +48,39 @@ import { z } from "zod";
  * writes and renders beside the draft is this raw string, so that caller
  * normalises before it stores.
  */
+/**
+ * The one character a model may legally return and this product can never
+ * store, refused where every other unusable reply is refused.
+ *
+ * `"\u0000"` is a valid JSON escape, so a reply carrying one parses, satisfies
+ * every length rule above, and reaches the database — where no `text` column
+ * can hold it (Postgres `22021`). Before this rule that was a `500` on a call
+ * the person had already paid for: no proposal, no sentence, and a supersede
+ * that had already deleted the card they were looking at.
+ *
+ * REFUSED RATHER THAN STRIPPED, and refused HERE. A reply this product cannot
+ * store is a reply it cannot use, which is exactly what `generateStructured`'s
+ * repair retry is for — the model is shown its own broken output, and a second
+ * failure is `refine_failed`, a coded refusal whose sentence is "press again",
+ * instead of a 500 nobody can act on. Stripping would cost a caller's memory at
+ * every place the model's words are stored — `refine_proposals.proposal`, its
+ * `reason`, and the fragment body an Accept files as the evidence that a model
+ * wrote those sentences — and a forgotten one is the same 500 again. This
+ * schema is the only door those words come through, so it is the only place the
+ * rule is total. It also keeps the staged proposal VERBATIM, which is what the
+ * row is evidence of; a silently edited proposal is a weaker claim than an
+ * honest refusal.
+ *
+ * The JSON schema sent to the provider cannot express this (no `zod` refinement
+ * can), and it does not need to: the check runs on the PARSE, which is what
+ * turns it into the schema violation the repair retry already handles.
+ */
+const noNulByte = (value: string) => !value.includes("\u0000");
+const NUL_BYTE_MESSAGE = "must not contain a NUL byte, which no text column can store";
+
 export const refineOutputSchema = z.object({
-  text: z.string().min(1).max(MAX_BODY_LENGTH),
-  reason: z.string().min(1).max(200),
+  text: z.string().min(1).max(MAX_BODY_LENGTH).refine(noNulByte, NUL_BYTE_MESSAGE),
+  reason: z.string().min(1).max(200).refine(noNulByte, NUL_BYTE_MESSAGE),
 });
 export type RefineOutput = z.infer<typeof refineOutputSchema>;
 

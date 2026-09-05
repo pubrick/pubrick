@@ -156,6 +156,42 @@ describe("the output schema", () => {
     ).toBe(false);
   });
 
+  /**
+   * A NUL BYTE IS OUTPUT THIS PRODUCT CANNOT USE, and the schema is where that
+   * is decided.
+   *
+   * `"\u0000"` is a legal JSON escape, so a model can return one and every
+   * length and emptiness rule here passes it. No Postgres `text` column can
+   * hold it (`22021`), so before this rule the character travelled from the
+   * provider through the parse and into the staging INSERT, which answered
+   * `500` — for a call the person had already paid for, with nothing on the
+   * screen to show for it and no sentence saying why.
+   *
+   * Refused HERE rather than stripped downstream, and both halves of that are
+   * the decision. Refused, because a reply this product cannot store is a reply
+   * it cannot use, which is the one thing `generateStructured`'s repair retry
+   * exists for: the model is shown its own broken output, and two failures in a
+   * row are `refine_failed` — a coded refusal whose sentence is "press again" —
+   * rather than a 500. Here, because this schema is the only door the model's
+   * words come through: a sanitiser instead would have to be remembered at
+   * every place they are stored (`proposal`, `reason`, and the fragment body an
+   * Accept files as evidence), and a forgotten one is the same 500 again. It
+   * also keeps the staged proposal the model's words VERBATIM, which is what
+   * the row it is written into is evidence of.
+   */
+  it("refuses a NUL byte in either field, because no text column can store one", () => {
+    expect(refineOutputSchema.safeParse({ text: "Ouvert\u0000", reason: "y" }).success).toBe(false);
+    expect(refineOutputSchema.safeParse({ text: "x", reason: "Plus court.\u0000" }).success).toBe(
+      false,
+    );
+    // The character, not the two that spell it: a reply mentioning `\u0000` as
+    // text is a reply about escapes, and refusing it would refuse a legitimate
+    // suggestion.
+    expect(refineOutputSchema.safeParse({ text: "x", reason: "the \\u0000 escape" }).success).toBe(
+      true,
+    );
+  });
+
   it("bounds reason at 200 characters, so a rambling reason cannot ship", () => {
     expect(refineOutputSchema.safeParse({ text: "x", reason: "y".repeat(200) }).success).toBe(true);
     expect(refineOutputSchema.safeParse({ text: "x", reason: "y".repeat(201) }).success).toBe(
@@ -524,6 +560,24 @@ describe("the rows one press writes", () => {
   it("writes TWO rows when the first reply broke the schema and the repair worked", async () => {
     const { rows, sink } = ledger();
     const model = jsonModel(BROKEN, reply("a shorter line"));
+
+    const output = await refineStep("shorten").run(contextFor(model, sink), input);
+
+    expect(output.text).toBe("a shorter line");
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(rows).toEqual([{ step: "refine" }, { step: "refine" }]);
+  });
+
+  /**
+   * THE REPAIR RETRY IS WHAT THE NUL RULE BUYS, and this is the case that shows
+   * it doing the work. A `.refine` that the JSON schema cannot express is still
+   * a validation failure to the parse, so the SDK raises the same
+   * `NoObjectGeneratedError` an empty `reason` raises and the repair fires —
+   * the person gets the suggestion the second call produced, instead of a 500.
+   */
+  it("repairs a reply carrying a NUL byte instead of handing it on to be stored", async () => {
+    const { rows, sink } = ledger();
+    const model = jsonModel(reply("a shorter\u0000 line"), reply("a shorter line"));
 
     const output = await refineStep("shorten").run(contextFor(model, sink), input);
 
