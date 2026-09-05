@@ -1,9 +1,15 @@
-import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
+import type {
+  AdaptationStatus,
+  ContentStatus,
+  DeliveryOutcome,
+  RefineProposal,
+} from "@pubrick/shared";
 import {
   adaptationUpdateSchema,
   allSentencesAi,
   contentApproveSchema,
   MAX_BODY_LENGTH,
+  refineRequestSchema,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +60,8 @@ type ContentItem = {
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
   /** The run that generated this item, or null for a hand-written one. */
   runId: string | null;
+  /** The one staged refine proposal, or null. The API returns the key either way. */
+  refineProposal: RefineProposal | null;
 };
 
 type Channel = { id: string; platform: string; name: string };
@@ -96,6 +104,9 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // the key either way, so a fixture that omitted it would be a payload the
     // API cannot produce.
     runId: null as string | null,
+    // Same rule for the staged proposal: `GET /api/content/:id` always carries
+    // the key, and `null` is what an item with nothing staged holds.
+    refineProposal: null as RefineProposal | null,
     ...overrides,
   };
   return {
@@ -850,6 +861,11 @@ describe("the provenance lens (provenance-lens design §5)", () => {
     expect(screen.queryByRole("button", { name: en.Publish.lensToggle })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
     expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeEnabled();
+    // ...and neither does Refine, the other control this card grew (Task 8).
+    // Extended here rather than asserted again next door: one question — "does
+    // a view or editing control ever claim the primary slot" — one test.
+    expect(screen.getByRole("button", { name: en.Publish.refine })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.refine })).not.toHaveClass("bg-accent");
   });
 
   it("reveals the overlay on the body when turned on, character for character", async () => {
@@ -1412,5 +1428,383 @@ describe("the way back to the run that made this", () => {
     await screen.findByRole("link", { name: en.Runs.viewRun });
     expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: en.Runs.viewRun })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * REFINE, ON THE SCREEN THAT REACHES IT (Task 8).
+ *
+ * Tasks 5–7 built a route that stages a proposal, a route that applies it, and
+ * an editor that reports what was selected. None of it is a feature until a
+ * person can press something, and the shapes below are the ones the api's own
+ * contract makes possible rather than the ones a browser-side model of it
+ * would:
+ *
+ * - **The api refines the SAVED body.** The screen holds a draft, so the
+ *   control is disabled while the two differ and says which of the two reasons
+ *   it is — an unsaved draft, or nothing selected. Sending the draft instead
+ *   would be two writers merging into one document.
+ * - **The request carries a verb and a RANGE, never the text.** The server
+ *   slices its own copy; a caller that supplied the text would be authoring the
+ *   product's evidence that a model wrote a sentence.
+ * - **What is rendered after Accept is the SERVER's item** — the merged body
+ *   and the badge it recomputed — never a merge this screen performed. The
+ *   fixture's merged body is deliberately not what splicing the proposal into
+ *   the draft would produce, so the two cannot look alike.
+ * - **A refusal re-reads the item.** A pinned post answers `content_pinned_*`
+ *   BEFORE `refine_proposal_not_found`, so a 409 is not evidence that the
+ *   proposal is still there: a screen that only reloaded on success would keep
+ *   a card whose row is gone, and offer it to be pressed again.
+ */
+describe("asking the model to revise a selection (Task 8)", () => {
+  const PROPOSAL_ID = "99999999-9999-4999-8999-999999999999";
+  const BODY = "The model wrote this line. And this second one too.";
+  const SELECTED = "The model wrote this line.";
+
+  const proposal: RefineProposal = {
+    id: PROPOSAL_ID,
+    verb: "shorten",
+    proposal: "The model wrote this.",
+    reason: "Two sentences became one.",
+    start: 0,
+    end: SELECTED.length,
+    selectedText: SELECTED,
+  };
+
+  const refinable = (overrides: Partial<ContentItem> = {}) =>
+    makeItem({
+      origin: "ai",
+      body: BODY,
+      aiVersionBodies: { item: [BODY], adaptations: {} },
+      ...overrides,
+    });
+
+  function bodyField(): HTMLTextAreaElement {
+    return screen.getByLabelText(en.Publish.bodyLabel) as HTMLTextAreaElement;
+  }
+
+  /**
+   * A selection reported the way the editor reports one: offsets on the
+   * element, then the `select` event `DimmedTextarea` listens to (Task 7).
+   * Never a hand-built call into the callback — that would test a shape this
+   * screen invented rather than the one the component emits.
+   */
+  function selectInBody(start: number, end: number): HTMLTextAreaElement {
+    const field = bodyField();
+    field.focus();
+    field.setSelectionRange(start, end);
+    fireEvent.select(field);
+    return field;
+  }
+
+  function refineControl(): HTMLElement {
+    return screen.getByRole("button", { name: en.Publish.refine });
+  }
+
+  async function chooseVerb(verb: keyof typeof en.Publish.refineVerb): Promise<void> {
+    const user = userEvent.setup();
+    await user.click(refineControl());
+    await user.click(screen.getByRole("menuitem", { name: en.Publish.refineVerb[verb] }));
+  }
+
+  function proposeCalls(calls: Call[]): Call[] {
+    return calls.filter((c) => c.method === "POST" && c.path === "/api/content/c1/refine");
+  }
+
+  it("keeps the control on screen and disabled, naming the missing selection", async () => {
+    installBaseHandlers({ current: refinable() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+
+    // Always mounted, never summoned by a selection: one control, one place.
+    expect(refineControl()).toBeDisabled();
+    expect(screen.getByText(en.Publish.refineNoSelection)).toBeInTheDocument();
+  });
+
+  it("refuses an unsaved draft and names the save, not the selection", async () => {
+    installBaseHandlers({ current: refinable() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+
+    // Dirty FIRST, then select: with a live selection in hand, the only thing
+    // standing between the reader and a refine is the unsaved draft — which is
+    // the reason that has to be named. Typing after selecting would collapse
+    // the caret and produce the other message, proving nothing.
+    fireEvent.change(bodyField(), { target: { value: `${BODY} And an unsaved one.` } });
+    selectInBody(0, SELECTED.length);
+
+    expect(refineControl()).toBeDisabled();
+    expect(screen.getByText(en.Publish.refineUnsaved)).toBeInTheDocument();
+    expect(screen.queryByText(en.Publish.refineNoSelection)).not.toBeInTheDocument();
+  });
+
+  it("sends the verb and the range, and no text at all", async () => {
+    const calls: Call[] = [];
+    installBaseHandlers({ current: refinable() }, calls, (path, method) =>
+      method === "POST" && path === "/api/content/c1/refine" ? proposal : undefined,
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+    selectInBody(0, SELECTED.length);
+    await chooseVerb("shorten");
+
+    await waitFor(() => expect(proposeCalls(calls)).toHaveLength(1));
+    const sent = JSON.parse(proposeCalls(calls)[0]?.body ?? "{}");
+    // A literal, so an extra `text`/`selectedText` field is a failure rather
+    // than a passing superset...
+    expect(sent).toEqual({ verb: "shorten", start: 0, end: SELECTED.length });
+    // ...and the round trip through the schema the api validates with, so a
+    // field renamed on the wire cannot stay green here.
+    expect(refineRequestSchema.parse(sent)).toEqual(sent);
+  });
+
+  it("renders the staged proposal beside the body, with the model's reason", async () => {
+    installBaseHandlers({ current: refinable() }, [], (path, method) =>
+      method === "POST" && path === "/api/content/c1/refine" ? proposal : undefined,
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+    selectInBody(0, SELECTED.length);
+    await chooseVerb("shorten");
+
+    expect(await screen.findByText(proposal.proposal)).toBeInTheDocument();
+    expect(screen.getByText(proposal.selectedText)).toBeInTheDocument();
+    // The one-line reason, under the suggestion (dossier anti-pattern 6).
+    expect(screen.getByText(proposal.reason)).toBeInTheDocument();
+    // BESIDE the draft, never spliced into it (dossier anti-pattern 8): AI text
+    // reaching the document without an explicit Accept is the thing the staging
+    // loop exists to prevent.
+    expect(bodyField()).toHaveValue(BODY);
+  });
+
+  it("fires once per press: a second press while one is in flight sends nothing", async () => {
+    let release: (value: RefineProposal) => void = () => {};
+    const inFlight = new Promise<RefineProposal>((resolve) => {
+      release = resolve;
+    });
+    const calls: Call[] = [];
+    installBaseHandlers({ current: refinable() }, calls, (path, method) =>
+      method === "POST" && path === "/api/content/c1/refine" ? inFlight : undefined,
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+    selectInBody(0, SELECTED.length);
+    await chooseVerb("shorten");
+
+    await waitFor(() => expect(refineControl()).toBeDisabled());
+    expect(screen.getByText(en.Publish.refineWorking)).toBeInTheDocument();
+    await userEvent.setup().click(refineControl());
+    // The server supersedes a second proposal rather than refusing it, so a
+    // double press costs money instead of failing loudly. The client is what
+    // stops it.
+    expect(proposeCalls(calls)).toHaveLength(1);
+
+    await act(async () => {
+      release(proposal);
+    });
+    expect(await screen.findByText(proposal.proposal)).toBeInTheDocument();
+  });
+
+  it("renders the item the SERVER returns after Accept — its body and its badge", async () => {
+    // Not what splicing `proposal.proposal` into the draft would produce. A
+    // screen performing its own merge would pass every other assertion here.
+    const merged = "Merged by the server, character for character.";
+    const served = {
+      current: refinable({ bodyIsAiVerbatim: false, refineProposal: proposal }),
+    };
+    const accepted = refinable({
+      body: merged,
+      // The api recomputes this over the new fragment row; the screen renders
+      // what it is told. Computed in the browser it would read the other way.
+      bodyIsAiVerbatim: true,
+      refineProposal: null,
+    });
+    installBaseHandlers(served, [], (path, method) => {
+      if (method === "POST" && path === `/api/content/c1/refine/${PROPOSAL_ID}/accept`) {
+        served.current = accepted;
+        return accepted;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Content.origin.humanEdited)).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineAccept }));
+
+    await waitFor(() => expect(bodyField()).toHaveValue(merged));
+    expect(await screen.findByText(en.Content.origin.ai)).toBeInTheDocument();
+    expect(screen.queryByText(en.Publish.refineProposalTitle)).not.toBeInTheDocument();
+  });
+
+  it("clears the card on Discard, through the endpoint that answers 204", async () => {
+    installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineDiscard }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(en.Publish.refineProposalTitle)).not.toBeInTheDocument(),
+    );
+    // Through apiVoid: the route answers 204, and res.json() on an empty body
+    // throws a SyntaxError that is not an ApiError at all.
+    expect(mockApiVoid).toHaveBeenCalledWith(`/api/content/c1/refine/${PROPOSAL_ID}`, {
+      method: "DELETE",
+    });
+    expect(bodyField()).toHaveValue(BODY);
+  });
+
+  /**
+   * The one a screen that reloads only on success cannot pass. A pinned post
+   * answers `content_pinned_approved` BEFORE it looks for the proposal, so the
+   * 409 says nothing about whether the row survived — and here it did not.
+   */
+  it("re-reads the item on a refusal, so a card whose row is gone goes with it", async () => {
+    const served = {
+      current: refinable({ status: "approved" as ContentStatus, refineProposal: proposal }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === `/api/content/c1/refine/${PROPOSAL_ID}/accept`) {
+        served.current = { ...served.current, refineProposal: null };
+        throw new ApiError(
+          409,
+          "Approved content cannot be edited; reject it first",
+          false,
+          "content_pinned_approved",
+        );
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineAccept }));
+
+    expect(await screen.findByText(en.Errors.content_pinned_approved)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(en.Publish.refineProposalTitle)).not.toBeInTheDocument(),
+    );
+    // ...and it went because the screen ASKED, not because it assumed: a read
+    // after the refusal is the only thing that can tell the two apart.
+    const refused = calls.findIndex((c) => c.method === "POST" && c.path.endsWith("/accept"));
+    expect(
+      calls.slice(refused + 1).some((c) => c.method === "GET" && c.path === "/api/content/c1"),
+    ).toBe(true);
+  });
+
+  it("renders a proposal the api already had, on the first read", async () => {
+    // The reload case: a press is paid for the moment its row is written, so a
+    // proposal that only ever lived in one tab's state would be money thrown
+    // away by a refresh.
+    installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(proposal.proposal)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
+  });
+
+  it("marks the card stale when the draft moves under it, and keeps Accept reachable", async () => {
+    installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+    expect(screen.queryByText(en.Publish.refineStale)).not.toBeInTheDocument();
+
+    fireEvent.change(bodyField(), { target: { value: `${BODY} A new sentence.` } });
+
+    expect(screen.getByText(en.Publish.refineStale)).toBeInTheDocument();
+    // Reachable, because the server's nearest-occurrence rule may well still
+    // find the anchor — discovering the drift after the click is the wrong
+    // moment, and refusing before it is the wrong answer.
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
+  });
+
+  it("asks again with the same verb and the same range on Try again", async () => {
+    const calls: Call[] = [];
+    installBaseHandlers(
+      { current: refinable({ refineProposal: proposal }) },
+      calls,
+      (path, method) =>
+        method === "POST" && path === "/api/content/c1/refine"
+          ? { ...proposal, id: "11111111-1111-4111-8111-111111111111", proposal: "Shorter still." }
+          : undefined,
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineRetry }));
+
+    await waitFor(() => expect(proposeCalls(calls)).toHaveLength(1));
+    // The proposal's OWN range, not a live selection — there is none: the
+    // reader has been reading a card, not the textarea.
+    expect(JSON.parse(proposeCalls(calls)[0]?.body ?? "{}")).toEqual({
+      verb: proposal.verb,
+      start: proposal.start,
+      end: proposal.end,
+    });
+    expect(await screen.findByText("Shorter still.")).toBeInTheDocument();
+  });
+
+  /**
+   * The shortcut, scoped twice: to the editor card, and to a selection. A
+   * `keydown` on `document` that ignored either would fire from the schedule
+   * field, or open a menu of verbs with nothing to apply them to.
+   */
+  describe("the ⌘K shortcut", () => {
+    async function renderRefinable(): Promise<void> {
+      installBaseHandlers({ current: refinable() }, []);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByLabelText(en.Publish.bodyLabel);
+    }
+
+    it("opens the verb menu when the editor holds focus and a selection", async () => {
+      await renderRefinable();
+      const field = selectInBody(0, SELECTED.length);
+
+      // `fireEvent` answers `false` for an event whose default was prevented —
+      // which is the assertion that says the browser does NOT also get to run
+      // its own ⌘K on the press this screen took.
+      expect(fireEvent.keyDown(field, { key: "k", metaKey: true })).toBe(false);
+
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(
+        screen.getByRole("menuitem", { name: en.Publish.refineVerb.shorten }),
+      ).toBeInTheDocument();
+    });
+
+    it("leaves the key to the browser with the editor focused and nothing selected", async () => {
+      await renderRefinable();
+      const field = bodyField();
+      field.focus();
+
+      // Not merely "no menu": a shortcut that swallowed the key and then did
+      // nothing would pass that half while quietly taking a browser command
+      // away on every press this screen has no answer for.
+      expect(fireEvent.keyDown(field, { key: "k", metaKey: true })).toBe(true);
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("does nothing when focus has left the editor, selection or no", async () => {
+      await renderRefinable();
+      selectInBody(0, SELECTED.length);
+      const elsewhere = screen.getByRole("button", { name: en.Publish.reject });
+      elsewhere.focus();
+
+      expect(fireEvent.keyDown(elsewhere, { key: "k", metaKey: true })).toBe(true);
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
   });
 });

@@ -1,9 +1,9 @@
-import { refusalBody } from "@pubrick/shared";
+import { MAX_REFINE_CALLS_PER_HOUR, refusalBody } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { render, renderAsync, screen, waitFor, within } from "@/test/render";
+import { fireEvent, render, renderAsync, screen, waitFor, within } from "@/test/render";
 import es from "../../../messages/es.json";
 import ru from "../../../messages/ru.json";
 import BrandPage from "./brands/[id]/page";
@@ -81,6 +81,7 @@ const item = {
   bodyIsAiVerbatim: true,
   aiVersionBodies: { item: ["Hello world"], adaptations: {} },
   runId: null,
+  refineProposal: null,
 };
 
 const run = {
@@ -171,6 +172,62 @@ describe("the post screen", () => {
     await userEvent.setup().click(await screen.findByRole("button", { name: ru.Publish.saveBody }));
 
     await expectShown(ru.Errors.content_pinned_approved, sentence);
+  });
+
+  /**
+   * A refine's own selection, made the way the editor makes one, so the verb
+   * menu is reachable at all: the control is disabled until the editor reports
+   * a range (Task 8).
+   */
+  async function askToRefine(locale: "es" | "ru"): Promise<void> {
+    const field = (await screen.findByLabelText(
+      locale === "es" ? es.Publish.bodyLabel : ru.Publish.bodyLabel,
+    )) as HTMLTextAreaElement;
+    field.focus();
+    field.setSelectionRange(0, 5);
+    fireEvent.select(field);
+    const user = userEvent.setup();
+    const labels = locale === "es" ? es.Publish : ru.Publish;
+    await user.click(screen.getByRole("button", { name: labels.refine }));
+    await user.click(screen.getByRole("menuitem", { name: labels.refineVerb.shorten }));
+  }
+
+  /**
+   * The refine refusal that carries an ARGUMENT. `{limit}` is not on the wire —
+   * `ERROR_MESSAGE_VALUES` reads `MAX_REFINE_CALLS_PER_HOUR` from
+   * `@pubrick/shared`, the same constant the api counts against — so this is
+   * the one refusal where a translated sentence and a missing interpolation
+   * look different, and the raw `{limit}` would ship to a Spanish reader.
+   */
+  it("says in Spanish that the hour's model-call allowance is spent, with the number", async () => {
+    const sentence = "Refine limit reached for this hour";
+    serve((url, method) =>
+      method === "POST" && url === `/api/content/${ITEM_ID}/refine`
+        ? jsonResponse(409, refusalBody(409, "refine_limit_reached", sentence))
+        : undefined,
+    );
+
+    await renderItem("es");
+    await askToRefine("es");
+
+    await expectShown(
+      es.Errors.refine_limit_reached.replace("{limit}", String(MAX_REFINE_CALLS_PER_HOUR)),
+      sentence,
+    );
+  });
+
+  it("says in Russian why a hand-written draft has no refine verbs", async () => {
+    const sentence = "Refine needs a draft the model wrote";
+    serve((url, method) =>
+      method === "POST" && url === `/api/content/${ITEM_ID}/refine`
+        ? jsonResponse(409, refusalBody(409, "refine_needs_ai_draft", sentence))
+        : undefined,
+    );
+
+    await renderItem("ru");
+    await askToRefine("ru");
+
+    await expectShown(ru.Errors.refine_needs_ai_draft, sentence);
   });
 
   /**

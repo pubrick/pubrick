@@ -1,16 +1,22 @@
 "use client";
 
-import { MAX_BODY_LENGTH } from "@pubrick/shared";
+import {
+  MAX_BODY_LENGTH,
+  REFINE_VERBS,
+  type RefineProposal,
+  type RefineVerb,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { OriginBadge } from "@/components/origin-badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
 import {
@@ -86,6 +92,16 @@ type ContentItem = {
    * cannot go stale against it.
    */
   runId: string | null;
+  /**
+   * The one refine proposal staged against this draft, or `null`.
+   *
+   * The SAME shape `POST /api/content/:id/refine` answers with, and the reason
+   * it rides on the item at all: a press is paid for the moment its row is
+   * written, so a proposal that lived only in one tab's state would be money
+   * thrown away by a reload, a crash or a second device. This is the read path
+   * after any of those — there is no separate GET.
+   */
+  refineProposal: RefineProposal | null;
 };
 
 /**
@@ -161,6 +177,34 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * the choice lives in the design document rather than buried in a default.
    */
   const [lens, setLens] = useState(false);
+  /**
+   * What the editor says is selected, and the exact string those offsets index
+   * (`DimmedTextarea.onSelectionChange`, Task 7) — `null` whenever there is no
+   * range to refine, which the component reports for a collapsed caret and for
+   * a `value` that changed under a live selection.
+   *
+   * The offsets are the whole of what a refine sends. The api slices its own
+   * saved body with them, which is why this screen may not send the text: the
+   * staged row is the product's evidence that a MODEL wrote a sentence, and
+   * evidence a caller can author is not evidence.
+   */
+  const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(
+    null,
+  );
+  /**
+   * A refine round trip is under way — a propose, an Accept or a Discard.
+   *
+   * One flag for all three because they are one conversation: none of them may
+   * overlap another, and the controls they belong to are the same card. It is
+   * also the whole of the double-press guard, and that is enough rather than
+   * merely convenient: a click is a DISCRETE event, so React flushes this state
+   * before the next click is dispatched, and every control it governs is
+   * `disabled` by the time a second press could land. The reason to care is
+   * that the api SUPERSEDES a second proposal rather than refusing it, so the
+   * cost of a double press is a second paid model call and no error anyone
+   * would see.
+   */
+  const [refineBusy, setRefineBusy] = useState(false);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -190,7 +234,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     () => api<ContentItem>(`/api/content/${id}`, { cache: "no-store" }),
     [id],
   );
-  const { data: item, error: pollError, refresh: reload } = usePoll(fetchItem, itemSettled);
+  const {
+    data: item,
+    error: pollError,
+    refresh: reload,
+    mutate: applyToItem,
+  } = usePoll(fetchItem, itemSettled);
 
   // An account with no active organization belongs in onboarding rather than
   // on an item it can never load. In an effect because this failure arrives
@@ -282,6 +331,74 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     apiVoid(`/api/content/${id}/opened`, { method: "POST" }).catch(() => {});
   }, [id]);
 
+  /**
+   * REFINE ACTS ON THE SAVED BODY, and the control says so when it cannot.
+   *
+   * `POST /api/content/:id/refine` slices `content_items.body`; this screen
+   * holds `bodyDraft`. Sending the draft instead would put two writers into one
+   * document — two version rows, and a merge against text the api has never
+   * seen — so the control is disabled while the two differ and NAMES which of
+   * the two reasons it is. One sentence of UI, and an entire class of
+   * divergence gone.
+   *
+   * The draft moving is also what makes a staged proposal stale: its offsets
+   * were measured in the saved body. The card says so rather than disappearing
+   * (the server's nearest-occurrence rule may well still find the anchor), and
+   * the two facts are one comparison so they cannot disagree.
+   */
+  const draftMoved = item !== null && bodyDraft !== item.body;
+  const proposal = item?.refineProposal ?? null;
+  const refineBlockedReason = refineBusy
+    ? t("refineWorking")
+    : draftMoved
+      ? t("refineUnsaved")
+      : selection === null
+        ? t("refineNoSelection")
+        : null;
+  const canRefine = item !== null && refineBlockedReason === null;
+
+  /**
+   * The editor card, for the one question the ⌘K listener has to ask: is the
+   * focus in here? A document-level listener that skipped it would fire from
+   * the schedule field, from an override, from anywhere on the screen.
+   */
+  const editorRef = useRef<HTMLDivElement>(null);
+  /**
+   * The verb menu's own subtree, so the shortcut can press the trigger the
+   * pointer presses rather than open a second copy of the menu's state.
+   *
+   * `Menu` owns whether it is open — deliberately, it is the app's only
+   * action-list primitive and its keyboard contract lives inside it — so a
+   * caller with another way in has exactly one honest move: press the same
+   * button. Adding a controlled `open` prop for this would give the primitive
+   * two sources of truth about one panel, for one caller.
+   */
+  const verbMenuRef = useRef<HTMLSpanElement>(null);
+
+  /**
+   * ⌘K (and Ctrl+K), scoped twice: to this card, and to a selection.
+   *
+   * Attached while the editor is mounted, and only ACTING when focus is inside
+   * it — the shortcut belongs to the editor, not to the screen. `preventDefault`
+   * only on the presses it takes: a browser whose own Ctrl+K is a search box
+   * should keep it everywhere this screen has nothing to do with the key.
+   *
+   * There is no collision to arbitrate. The app's only other `keydown`
+   * listeners belong to `Menu` and `Modal`, both attach while open and both
+   * handle Escape, and no `Modal` is mounted on this screen.
+   */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "k" || !(event.metaKey || event.ctrlKey)) return;
+      if (!editorRef.current?.contains(document.activeElement)) return;
+      if (!canRefine) return;
+      event.preventDefault();
+      verbMenuRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.click();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [canRefine]);
+
   async function saveBody() {
     setActionError(null);
     try {
@@ -348,6 +465,101 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
     } catch (err) {
       handleError(err);
+    }
+  }
+
+  /**
+   * The one thing every refine action does with a refusal: show it, and then
+   * ASK THE API WHAT IS STILL THERE.
+   *
+   * This is not defensive tidying, it is the only correct reading of the
+   * contract. A pinned post answers `content_pinned_*` BEFORE it looks for the
+   * proposal, so a 409 says nothing about whether the row survived — and the
+   * one case where it did not is the one that matters: a card left on screen
+   * for a proposal the api has already dropped is a button that can be pressed
+   * again, forever, on a post whose answer will never change. Only
+   * `refine_proposal_not_found` means the row is gone, and it is a 404 nobody
+   * can tell from a 409 without asking.
+   *
+   * Every other mutation on this screen reloads on SUCCESS only, which is right
+   * for them: their refusals say nothing about state the screen is rendering.
+   */
+  async function refineFailed(err: unknown) {
+    handleError(err);
+    await reload();
+  }
+
+  /**
+   * Ask for a suggestion. `verb` and a RANGE — never the text: the api slices
+   * its own saved copy of the body, which is what stops any caller (this screen
+   * included) from choosing what the model is asked about, or from authoring
+   * the product's evidence that a model wrote a sentence.
+   */
+  async function propose(verb: RefineVerb, range: { start: number; end: number }) {
+    setRefineBusy(true);
+    setActionError(null);
+    try {
+      const staged = await api<RefineProposal>(`/api/content/${id}/refine`, {
+        method: "POST",
+        body: JSON.stringify({ verb, start: range.start, end: range.end }),
+      });
+      // The SERVER's proposal, dropped into the item this screen is already
+      // polling — the same object a reload would find under `refineProposal`,
+      // so there is one shape on screen rather than two that must agree.
+      applyToItem((previous) => (previous ? { ...previous, refineProposal: staged } : previous));
+    } catch (err) {
+      await refineFailed(err);
+    } finally {
+      setRefineBusy(false);
+    }
+  }
+
+  /**
+   * Apply it — and render what comes BACK, never a merge computed here.
+   *
+   * The response is the whole item: the merged body, `bodyIsAiVerbatim`
+   * recomputed over the fragment row the api just wrote, and an emptied
+   * proposal slot. A screen that spliced `proposal` into its own draft would
+   * agree with the api most of the time and caption the model's own words
+   * "Human-edited" the rest of it — the exact inversion the fragment row
+   * exists to prevent.
+   *
+   * The draft is re-seeded from that body because Accept is only reachable
+   * while the draft equals the saved one; leaving it behind would leave the
+   * editor showing the text the api has just replaced.
+   */
+  async function acceptProposal(staged: RefineProposal) {
+    setRefineBusy(true);
+    setActionError(null);
+    try {
+      const merged = await api<ContentItem>(`/api/content/${id}/refine/${staged.id}/accept`, {
+        method: "POST",
+      });
+      applyToItem(() => merged);
+      setBodyDraft(merged.body);
+      setSelection(null);
+    } catch (err) {
+      await refineFailed(err);
+    } finally {
+      setRefineBusy(false);
+    }
+  }
+
+  /**
+   * Throw it away. 204, so `apiVoid` — `res.json()` on an empty body throws a
+   * raw `SyntaxError`, which is neither an `ApiError` nor anything
+   * `errorMessage` can translate.
+   */
+  async function discardProposal(staged: RefineProposal) {
+    setRefineBusy(true);
+    setActionError(null);
+    try {
+      await apiVoid(`/api/content/${id}/refine/${staged.id}`, { method: "DELETE" });
+      applyToItem((previous) => (previous ? { ...previous, refineProposal: null } : previous));
+    } catch (err) {
+      await refineFailed(err);
+    } finally {
+      setRefineBusy(false);
     }
   }
 
@@ -523,23 +735,150 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
 
       <Card className="mb-6">
-        <DimmedTextarea
-          id="body"
-          label={t("bodyLabel")}
-          value={bodyDraft}
-          onChange={setBodyDraft}
-          aiVersions={item.aiVersionBodies.item}
-          dimmed={lens}
-          maxLength={MAX_BODY_LENGTH}
-          showCount
-          rows={10}
-        />
-        <div className="mt-3">
-          <Button variant="secondary" onClick={saveBody}>
-            {t("saveBody")}
-          </Button>
+        <div ref={editorRef}>
+          {/*
+            ONE control, in the card's header, always mounted — never a toolbar
+            that appears out of a selection. A control that materialises where
+            the pointer happens to be has no fixed place (constitution: one
+            place), cannot be found by keyboard, and cannot say why it is
+            unavailable, which is exactly what this one has to do most of the
+            time. `secondary`, because the screen's one primary action is
+            Approve.
+
+            Disabled it is a plain `Button`; enabled it is the shared `Menu`'s
+            trigger, which wraps its child in a `<button>` of its own — so the
+            child borrows `buttonClasses` rather than being a `<Button>`, or the
+            two would nest and the markup would be invalid.
+          */}
+          <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+            {refineBlockedReason && (
+              <span className="text-sm text-fg-tertiary">{refineBlockedReason}</span>
+            )}
+            {canRefine ? (
+              <span ref={verbMenuRef}>
+                <Menu
+                  trigger={<span className={buttonClasses("secondary", "sm")}>{t("refine")}</span>}
+                  /*
+                   * The verbs come from `REFINE_VERBS`, the same array the
+                   * proposal table's CHECK constraint and the step's role lines
+                   * read. A fourth verb is one member there and four translated
+                   * labels here — never a fourth list to keep in step.
+                   */
+                  items={REFINE_VERBS.map((verb) => ({
+                    label: t(`refineVerb.${verb}`),
+                    onSelect: () => {
+                      if (!selection) return;
+                      void propose(verb, selection);
+                    },
+                  }))}
+                />
+              </span>
+            ) : (
+              <Button variant="secondary" size="sm" disabled>
+                {t("refine")}
+              </Button>
+            )}
+          </div>
+          <DimmedTextarea
+            id="body"
+            label={t("bodyLabel")}
+            value={bodyDraft}
+            onChange={setBodyDraft}
+            onSelectionChange={setSelection}
+            aiVersions={item.aiVersionBodies.item}
+            dimmed={lens}
+            maxLength={MAX_BODY_LENGTH}
+            showCount
+            rows={10}
+          />
+          <div className="mt-3">
+            <Button variant="secondary" onClick={saveBody}>
+              {t("saveBody")}
+            </Button>
+          </div>
         </div>
       </Card>
+
+      {/*
+        The proposal, BESIDE the draft and never in it (dossier anti-pattern 8):
+        splicing a preview into `bodyDraft` would be AI text reaching the
+        document without an explicit Accept, which is the whole of what the
+        staging loop exists to prevent. All three of the dossier's §5.2 verbs
+        ship — Accept, Try again, Discard — and the model's one-line reason is
+        under its suggestion (anti-pattern 6).
+
+        `selectedText` is what the api sliced out of its own saved body, not
+        what this screen thinks was selected: a reader whose idea of the draft
+        had moved can see that it had.
+      */}
+      {proposal && (
+        <Card className="mb-6">
+          <div className="mb-3 flex flex-wrap items-baseline gap-2">
+            <strong className="text-sm font-semibold text-fg">{t("refineProposalTitle")}</strong>
+            <span className="text-sm text-fg-secondary">{t(`refineVerb.${proposal.verb}`)}</span>
+          </div>
+          <p className="text-sm text-fg-tertiary">{t("refineSelectedTitle")}</p>
+          <blockquote className="mt-1 mb-3 border-l-2 border-border pl-3 text-sm text-fg-secondary">
+            {proposal.selectedText}
+          </blockquote>
+          <p className="text-sm text-fg-tertiary">{t("refineSuggestionTitle")}</p>
+          <blockquote className="mt-1 mb-3 border-l-2 border-accent pl-3 text-sm text-fg">
+            {proposal.proposal}
+          </blockquote>
+          {/*
+            In the BRAND's content language, not the reader's locale: the model
+            is told to write every word of its output in that language. Showing
+            it beside a translated verb label is the honest arrangement.
+          */}
+          <p className="mb-3 text-sm text-fg-secondary">{proposal.reason}</p>
+          {/*
+            Invalidated VISIBLY, the moment the draft diverges — not discovered
+            after the click, which is the wrong moment to find out. Accept stays
+            reachable because the api re-locates the anchor nearest its stored
+            offset and may well still find it; asking again is what cannot be
+            done against a body the api has not been given.
+          */}
+          {draftMoved && (
+            <p role="status" className="mb-3 text-sm text-[var(--status-review-fg)]">
+              {t("refineStale")}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => acceptProposal(proposal)}
+              disabled={refineBusy}
+            >
+              {t("refineAccept")}
+            </Button>
+            {/*
+              Try again is another PROPOSE with this proposal's own verb and
+              range — there is no live selection to read, the reader has been
+              looking at a card. It spends, and it is inside the hour's
+              allowance like any other press; the api supersedes the row rather
+              than refusing, so nothing is discarded first and a failed retry
+              leaves the suggestion already paid for on screen.
+            */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => propose(proposal.verb, proposal)}
+              disabled={refineBusy || draftMoved}
+            >
+              {t("refineRetry")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => discardProposal(proposal)}
+              disabled={refineBusy}
+            >
+              {t("refineDiscard")}
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("overridesTitle")}</h2>
       <div className="mb-6 flex flex-col gap-3">
