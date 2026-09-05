@@ -76,15 +76,51 @@ export type StepContext = ModelCallOptions & {
 };
 
 /**
- * What a pipeline run additionally has: the brief the run was started from.
+ * What a pipeline run additionally has: the words the run was started from —
+ * a brief someone typed, material someone pasted, or both.
  *
- * A step that needs a brief is typed against THIS, so it still cannot be built
- * or called without one — the guarantee the required field used to give, kept
- * for the steps it is true of and dropped for the ones it never was.
+ * A step that needs them is typed against THIS, so it still cannot be built or
+ * called without them — the guarantee the required field used to give, kept for
+ * the steps it is true of and dropped for the ones it never was.
+ *
+ * ALL THREE ARE REQUIRED AND NULLABLE, never optional, and the reason is the
+ * one `StepContext` gives above for leaving the brief off altogether: three
+ * steps read these as material text, `string | undefined` is a compile error in
+ * each of them, and the obvious repair is `?? ""` in three places. Required
+ * makes every builder of this context NAME a value, so a caller with no
+ * material says so rather than inheriting an absence.
+ *
+ * That is a compile-time guarantee only, and the three closures know it: vitest
+ * strips types, so a spec that was never updated runs with `undefined` here.
+ * The blocks are therefore emitted on `!= null` (loose), which covers both.
  */
 export type RunStepContext = StepContext & {
-  /** The human's brief. Untrusted input: it reaches the model as `prompt`, never as `instructions`. */
-  brief: string;
+  /**
+   * The human's brief, or `null` when they pasted material instead of writing
+   * one. Untrusted input: it reaches the model as `prompt`, never as
+   * `instructions`.
+   *
+   * `null` and never `""`. An empty labelled BRIEF block tells the model the
+   * person wrote nothing USEFUL rather than that they wrote nothing, and it
+   * says it on three paid calls in a row.
+   */
+  brief: string | null;
+  /**
+   * Article text a person pasted, or `null`. Untrusted for the reason the brief
+   * is and then some: these are a stranger's words, reaching the model as
+   * `prompt` and never as `instructions`.
+   */
+  material: string | null;
+  /**
+   * Where the material came from — recorded, never fetched, and NEVER emitted
+   * into a block by any step.
+   *
+   * It is on the context so that no step can be given the material without also
+   * being able to see that a URL was recorded; it is kept out of the prompt
+   * because a URL invites the model to write as though it had read the page,
+   * and nothing in this product ever did.
+   */
+  sourceUrl: string | null;
 };
 
 /**

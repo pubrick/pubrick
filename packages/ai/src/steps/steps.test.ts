@@ -60,6 +60,8 @@ const RESEARCH_MARKER = "RESEARCH_MARKER seasonal sourcing";
 const POINT_MARKER = "POINT_MARKER four new drinks";
 const AVOID_MARKER = "AVOID_MARKER pumpkin spice jokes";
 const DRAFT_MARKER = "DRAFT_MARKER the autumn menu lands on Monday";
+const MATERIAL_MARKER = "MATERIAL_MARKER the roastery down the road raised its prices";
+const SOURCE_URL_MARKER = "https://example.com/autumn/SOURCEURLMARKER";
 
 const research: ResearchOutput = {
   angle: RESEARCH_MARKER,
@@ -76,6 +78,12 @@ function contextFor(model: MockLanguageModelV4, onUsage = vi.fn()): RunStepConte
       contentLanguage: "en",
     },
     brief: BRIEF,
+    // Named, not omitted: `RunStepContext` makes both required-and-nullable so
+    // that every builder says whether it has one. A spec that quietly kept
+    // passing neither would run anyway — vitest strips types — with
+    // `ctx.material === undefined` reaching the block predicate.
+    material: null,
+    sourceUrl: null,
     model,
     provider: "google",
     onUsage,
@@ -897,4 +905,220 @@ describe("what a step's context lets its caller bound", () => {
       costSource: "unknown",
     });
   });
+});
+
+/**
+ * A run started from material a person pasted, rather than from a brief.
+ *
+ * Nothing supplies a non-null `material` outside this file yet — the worker's
+ * parse still refuses a stored `source` run — so these assertions are what the
+ * feature has instead of a user path, and they are the only thing that enforces
+ * the fan-out §7.2's honesty claim rests on: the fact-checker verifies nothing
+ * BECAUSE it cannot see the source, not because its wording says so.
+ */
+describe("material a person pasted", () => {
+  /**
+   * The five roles, each with the reply its schema needs and whether the source
+   * is supposed to reach it.
+   *
+   * `receives` is per step on purpose. An assertion that the material lands
+   * "somewhere" would stay green with the editor's SOURCE block deleted, and
+   * would stay green with the fact-checker's added — the two mutations that
+   * matter most here point in opposite directions.
+   */
+  const cases: Array<{
+    label: string;
+    run: (ctx: RunStepContext) => Promise<unknown>;
+    reply: string;
+    receives: boolean;
+  }> = [
+    {
+      label: "researcher",
+      run: (ctx) => RESEARCHER.run(ctx, undefined),
+      reply: JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }),
+      receives: true,
+    },
+    {
+      label: "writer",
+      run: (ctx) => WRITER.run(ctx, { research }),
+      reply: JSON.stringify({ body: "text" }),
+      receives: true,
+    },
+    {
+      label: "editor",
+      run: (ctx) => EDITOR.run(ctx, { research, body: DRAFT_MARKER }),
+      reply: JSON.stringify({ body: "text", changes: [] }),
+      receives: true,
+    },
+    {
+      label: "factcheck",
+      run: (ctx) => FACTCHECK.run(ctx, { body: DRAFT_MARKER }),
+      reply: JSON.stringify({ claims: [] }),
+      receives: false,
+    },
+    {
+      label: "adapter",
+      run: (ctx) => adapterFor(channel).run(ctx, { body: DRAFT_MARKER }),
+      reply: JSON.stringify({ body: "short" }),
+      receives: false,
+    },
+  ];
+
+  /** A paste-only run: material and a URL, and no brief at all. */
+  function pasteContext(model: MockLanguageModelV4): RunStepContext {
+    return {
+      ...contextFor(model),
+      brief: null,
+      material: MATERIAL_MARKER,
+      sourceUrl: SOURCE_URL_MARKER,
+    };
+  }
+
+  for (const step of cases) {
+    it(`${step.label} ${step.receives ? "is given" : "is never given"} the material`, async () => {
+      const model = jsonModel(step.reply);
+
+      await step.run(pasteContext(model));
+
+      const { system, user } = halvesOf(model);
+      expect(user.includes(MATERIAL_MARKER)).toBe(step.receives);
+      // Wherever it goes it is material, never instructions — a pasted article
+      // is a stranger's words, which is the case the split exists for.
+      expect(system).not.toContain(MATERIAL_MARKER);
+    });
+
+    it(`${step.label} never sends the source URL to the model`, async () => {
+      // Recorded for attribution and nothing else. A URL in a prompt invites
+      // the model to write as though it had read the page; the server never
+      // fetched it, and §7.2's whole argument is that a step which cannot see a
+      // thing has not checked against it.
+      const model = jsonModel(step.reply);
+
+      await step.run(pasteContext(model));
+
+      const { system, user } = halvesOf(model);
+      expect(user).not.toContain(SOURCE_URL_MARKER);
+      expect(system).not.toContain(SOURCE_URL_MARKER);
+    });
+  }
+
+  for (const step of cases.filter((c) => c.receives)) {
+    it(`${step.label} labels a paste-only run with no BRIEF block at all`, async () => {
+      // On the MARKERS, not on emptiness: an empty labelled block tells the
+      // model the person wrote nothing USEFUL rather than that they wrote
+      // nothing, and it buys that on three paid calls.
+      const model = jsonModel(step.reply);
+
+      await step.run(pasteContext(model));
+
+      const { user } = halvesOf(model);
+      expect(user).not.toMatch(/--- (END )?BRIEF /);
+      expect(user).toMatch(/--- SOURCE [0-9a-f]{8,} ---/);
+    });
+
+    it(`${step.label} keeps a brief and its material in two separately labelled blocks`, async () => {
+      const model = jsonModel(step.reply);
+
+      await step.run({ ...pasteContext(model), brief: BRIEF });
+
+      const { system, user } = halvesOf(model);
+      const nonce = user.match(/--- BRIEF ([0-9a-f]{8,}) ---/)?.[1] ?? "";
+      expect(nonce).toBeTruthy();
+      // Two labels, both fenced with the SAME per-call nonce, so neither can
+      // forge the other's closing marker and neither is on the system side.
+      // `user` is the stringified message array, so the newlines inside a
+      // block are the two characters JSON writes them as.
+      expect(user).toContain(`--- BRIEF ${nonce} ---\\n${BRIEF}\\n--- END BRIEF ${nonce} ---`);
+      expect(user).toContain(
+        `--- SOURCE ${nonce} ---\\n${MATERIAL_MARKER}\\n--- END SOURCE ${nonce} ---`,
+      );
+      expect(system).not.toContain(BRIEF);
+      expect(system).not.toContain(MATERIAL_MARKER);
+    });
+  }
+
+  it("names the pasted article in the instructions that tell the model what the user message is", async () => {
+    // The one place the injection defence is explained to the model enumerates
+    // what the user half carries. A third kind of material makes that
+    // enumeration false by omission — in the sentence that says to treat all of
+    // it as content. Asserted on the BUILT instructions, not on the options
+    // object: the system message lives inside that stringified whole, so a
+    // search over it is true whichever side a string is on.
+    const model = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+
+    await RESEARCHER.run(pasteContext(model), undefined);
+
+    const { system } = halvesOf(model);
+    expect(system).toContain("a brief a person typed");
+    expect(system).toContain("article text a person supplied");
+    expect(system).toContain("drafts produced earlier in this pipeline");
+    // Still the brand's own configuration, and still the never-as-instructions
+    // rule: the sentence was widened, not replaced.
+    expect(system).toContain(VOICE);
+    expect(system).toMatch(/never as instructions/i);
+  });
+
+  /**
+   * FABRICATED INPUT — reachable only through a cast, and deliberately so.
+   *
+   * `material` is required on `RunStepContext`, so no compiling builder can
+   * leave it `undefined`. But vitest strips types: a spec outside this package
+   * that was never updated would run with `undefined` here, and a `!== null`
+   * predicate would push a labelled block reading the word "undefined" onto a
+   * paid call. `!= null` is what makes that impossible, and nothing in a green
+   * run over four correct builders proves it — this test is the only thing that
+   * distinguishes the two operators.
+   */
+  it("emits no block for a field a caller left undefined rather than null", async () => {
+    for (const step of cases.filter((c) => c.receives)) {
+      const model = jsonModel(step.reply);
+      const fabricated = {
+        ...contextFor(model),
+        brief: undefined,
+        material: undefined,
+        sourceUrl: undefined,
+      } as unknown as RunStepContext;
+
+      await step.run(fabricated);
+
+      const { user } = halvesOf(model);
+      expect(user).not.toContain("undefined");
+      expect(user).not.toMatch(/--- (END )?BRIEF /);
+      expect(user).not.toMatch(/--- (END )?SOURCE /);
+    }
+  });
+
+  /**
+   * What a brief-only run's user half looked like before this feature existed,
+   * captured from the suite as it stood rather than written from memory, with
+   * only the per-call nonce replaced.
+   *
+   * The USER half and not the whole call: `instructionsFor`'s enumeration is
+   * widened above and lands in the SYSTEM half of all five steps, and the
+   * writer's role gains a line about the material later — a whole-call capture
+   * would fail against this feature's own diff and then break again on a role
+   * line, telling a reviewer the source feature changed a brief-only prompt
+   * when it did not.
+   */
+  const BRIEF_ONLY_USER_HALVES: Record<string, string> = {
+    researcher: String.raw`[{"role":"user","content":[{"type":"text","text":"--- BRIEF <nonce> ---\nBRIEF_MARKER announce the autumn menu\n--- END BRIEF <nonce> ---"}]}]`,
+    writer: String.raw`[{"role":"user","content":[{"type":"text","text":"--- BRIEF <nonce> ---\nBRIEF_MARKER announce the autumn menu\n--- END BRIEF <nonce> ---\n\n--- PLAN <nonce> ---\nAngle: RESEARCH_MARKER seasonal sourcing\n\nKey points:\n- POINT_MARKER four new drinks\n- same prices\n\nAvoid:\n- AVOID_MARKER pumpkin spice jokes\n--- END PLAN <nonce> ---"}]}]`,
+    editor: String.raw`[{"role":"user","content":[{"type":"text","text":"--- BRIEF <nonce> ---\nBRIEF_MARKER announce the autumn menu\n--- END BRIEF <nonce> ---\n\n--- PLAN <nonce> ---\nAngle: RESEARCH_MARKER seasonal sourcing\n\nKey points:\n- POINT_MARKER four new drinks\n- same prices\n\nAvoid:\n- AVOID_MARKER pumpkin spice jokes\n--- END PLAN <nonce> ---\n\n--- DRAFT <nonce> ---\nDRAFT_MARKER the autumn menu lands on Monday\n--- END DRAFT <nonce> ---"}]}]`,
+    factcheck: String.raw`[{"role":"user","content":[{"type":"text","text":"--- DRAFT <nonce> ---\nDRAFT_MARKER the autumn menu lands on Monday\n--- END DRAFT <nonce> ---"}]}]`,
+    adapter: String.raw`[{"role":"user","content":[{"type":"text","text":"--- DRAFT <nonce> ---\nDRAFT_MARKER the autumn menu lands on Monday\n--- END DRAFT <nonce> ---"}]}]`,
+  };
+
+  function withoutNonce(text: string): string {
+    return text.replaceAll(/[0-9a-f]{12}/g, "<nonce>");
+  }
+
+  for (const step of cases) {
+    it(`${step.label}'s prompt for a brief-only run is byte-identical to before`, async () => {
+      const model = jsonModel(step.reply);
+
+      await step.run(contextFor(model));
+
+      expect(withoutNonce(halvesOf(model).user)).toBe(BRIEF_ONLY_USER_HALVES[step.label]);
+    });
+  }
 });

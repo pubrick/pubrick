@@ -1,6 +1,6 @@
 import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
-import { defineStep } from "./prompt.js";
+import { defineStep, type Material } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
 import type { RunStepContext, Step } from "./types.js";
 
@@ -42,12 +42,17 @@ export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep
     "Make every point in the plan, in its order, and add nothing the brief or the plan does not support.",
     `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
   ],
-  material: (ctx: RunStepContext, input) => [
-    { label: "BRIEF", text: ctx.brief },
+  material: (ctx: RunStepContext, input) => {
+    // The person's words first, in whichever forms they exist — see the
+    // researcher for why the two predicates are loose — and then the plan.
+    const blocks: Material[] = [];
+    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
+    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
     // Not re-parsed here: a resumed run reads this from a jsonb checkpoint, and
     // the place to validate that is the run, which can classify the failure. A
     // ZodError thrown from inside a step would reach pg-boss unclassified and be
     // retried until the attempts ran out.
-    { label: "PLAN", text: planMaterial(input.research) },
-  ],
+    blocks.push({ label: "PLAN", text: planMaterial(input.research) });
+    return blocks;
+  },
 });

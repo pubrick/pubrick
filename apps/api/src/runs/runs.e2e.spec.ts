@@ -110,6 +110,11 @@ describe.skipIf(!url)("runs e2e", () => {
     return {
       brand: { name: "B", voice: null, audience: null, contentLanguage: "en" },
       brief: "Write about our new release",
+      // Required-and-nullable on `RunStepContext`: a builder that has no pasted
+      // material says so. Omitting them would still RUN here — vitest strips
+      // types — with `undefined` reaching the steps' block predicates.
+      material: null,
+      sourceUrl: null,
       model,
       provider: "google",
       onUsage: () => {},

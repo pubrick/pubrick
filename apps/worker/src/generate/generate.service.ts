@@ -323,6 +323,14 @@ export class GenerateService {
       ctx: {
         brand: context.brand,
         brief: input.text,
+        // Nothing supplies these yet: `parseInput` still accepts the BRIEF
+        // member only, so every run reaching here was started from a brief.
+        // They are named rather than omitted because `RunStepContext` makes
+        // them required-and-nullable — the absence is stated by the builder
+        // instead of being inherited, which is what keeps the three steps from
+        // labelling a block with no text in it.
+        material: null,
+        sourceUrl: null,
         model: this.buildModel(credential),
         // The credential's provider, never a guess from the model id: it decides
         // which price table every ledger row of this run is costed against.

@@ -171,6 +171,10 @@ describe.skipIf(!url)("brands e2e", () => {
         contentLanguage: stored.body.contentLanguage,
       },
       brief: "BRIEF_MARKER announce the autumn menu",
+      // Named rather than omitted: `RunStepContext` requires them, and this
+      // suite is one of the three builders outside `packages/ai`.
+      material: null,
+      sourceUrl: null,
       model,
       provider: "google",
       onUsage: (record) => {
@@ -218,6 +222,8 @@ describe.skipIf(!url)("brands e2e", () => {
           contentLanguage: stored.body.contentLanguage,
         },
         brief: "announce the autumn menu",
+        material: null,
+        sourceUrl: null,
         model,
         provider: "google",
         onUsage: () => undefined,

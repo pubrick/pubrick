@@ -1,6 +1,6 @@
 import { MAX_BODY_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
-import { defineStep } from "./prompt.js";
+import { defineStep, type Material } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
 import type { RunStepContext, Step } from "./types.js";
 import { planMaterial } from "./writer.js";
@@ -41,9 +41,15 @@ export const EDITOR: Step<EditorInput, EditOutput, RunStepContext> = defineStep(
     "- body: the edited post, complete, ready to read.",
     "- changes: what you changed, one short plain-language line each, for the human who approves this. If you changed nothing, return an empty list rather than inventing an edit.",
   ],
-  material: (ctx: RunStepContext, input) => [
-    { label: "BRIEF", text: ctx.brief },
-    { label: "PLAN", text: planMaterial(input.research) },
-    { label: "DRAFT", text: input.body },
-  ],
+  material: (ctx: RunStepContext, input) => {
+    // The editor keeps the person's ask in force at the edit, so it gets the
+    // material for the same reason it gets the brief — see the researcher for
+    // why the two predicates are loose.
+    const blocks: Material[] = [];
+    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
+    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
+    blocks.push({ label: "PLAN", text: planMaterial(input.research) });
+    blocks.push({ label: "DRAFT", text: input.body });
+    return blocks;
+  },
 });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineStep } from "./prompt.js";
+import { defineStep, type Material } from "./prompt.js";
 import type { RunStepContext, Step } from "./types.js";
 
 /**
@@ -41,5 +41,16 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
     "- keyPoints: the points the post must make, in the order they should be made.",
     "- avoid: what to leave out — what this audience already knows, claims you cannot support, and the clichés this subject attracts.",
   ],
-  material: (ctx: RunStepContext) => [{ label: "BRIEF", text: ctx.brief }],
+  material: (ctx: RunStepContext) => {
+    const blocks: Material[] = [];
+    // Each block is pushed only when it has text, so a paste-only run carries no
+    // BRIEF label at all and a brief-only run carries no SOURCE. `!= null` is
+    // loose on purpose: `undefined` is unreachable through the type but not
+    // through a spec that vitest stripped, and a strict check would interpolate
+    // the word "undefined" into a labelled block on a paid call.
+    if (ctx.brief != null) blocks.push({ label: "BRIEF", text: ctx.brief });
+    if (ctx.material != null) blocks.push({ label: "SOURCE", text: ctx.material });
+    // `ctx.sourceUrl` is deliberately absent: attribution, not material.
+    return blocks;
+  },
 });
