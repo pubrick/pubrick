@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeNewlines } from "../provenance.js";
 
 /**
  * GENERATION RUN LIFECYCLE — the one declaration, for every package that
@@ -102,6 +103,28 @@ void _everyRunStatusIsClassified;
 export const MAX_BRIEF_LENGTH = 2000;
 
 /**
+ * How much pasted material one run may be asked to work from —
+ * `runCreateSchema.material`, and nothing else.
+ *
+ * Above `MAX_BRIEF_LENGTH` and for a different reason: a brief is an
+ * instruction, this is the thing being worked from. Every character is paid for
+ * on each of the three steps that receive it, so a full-length paste costs on
+ * the order of 6000 input tokens per run — the bound is a bill, not a
+ * formality.
+ *
+ * It sits on the REQUEST schema and not on the stored member, exactly as
+ * `MAX_BRIEF_LENGTH` sits on `runCreateSchema.brief` beside an unbounded
+ * `briefRunInputSchema.text`. Put on the stored member instead, the API would
+ * admit an over-long paste, spend one of the org's three admission slots,
+ * create the run, and only then fail it in the worker's parse.
+ *
+ * Exported for the compose screen, which counts characters against it, so an
+ * over-long paste is an inline refusal the person can see rather than a
+ * provider-side context error they cannot.
+ */
+export const MAX_SOURCE_TEXT_LENGTH = 8000;
+
+/**
  * How many runs one org may have in `queued | running` at once.
  *
  * Exported rather than inlined in the 409 message because the web app names the
@@ -137,6 +160,20 @@ export const MAX_CONCURRENT_RUNS = 3;
 export const CLAIMS_TO_VERIFY_LABEL = "claims to verify";
 
 /**
+ * The article a run is asked to work from, in the canonical form it is stored
+ * in. Normalise first, bound second — `contentCreateSchema.body`'s rule, and
+ * the reason it applies here is the same mechanism: this value is bound to a
+ * `<textarea>`, which strips CR from its own API value, so a bound applied
+ * before the collapse would refuse a paste for characters the product is about
+ * to drop.
+ */
+const pastedMaterial = z
+  .string()
+  .transform(normalizeNewlines)
+  .pipe(z.string().min(1).max(MAX_SOURCE_TEXT_LENGTH))
+  .optional();
+
+/**
  * Starting a run. `channelIds` mirrors `contentCreateSchema` exactly —
  * `.min(1)`, `.max(20)` — and that lower bound is load-bearing rather than
  * defensive: a run with no channels reaches its terminal write and produces a
@@ -145,38 +182,87 @@ export const CLAIMS_TO_VERIFY_LABEL = "claims to verify";
  * instead, the same inline error the compose screen already enforces for
  * "Create post".
  */
-export const runCreateSchema = z.object({
-  brandId: z.string().uuid(),
-  brief: z.string().min(1).max(MAX_BRIEF_LENGTH),
-  channelIds: z
-    .array(z.string().uuid())
-    .min(1)
-    .max(20)
-    // Duplicates are rejected rather than quietly deduped, and NOT because a
-    // repeat would be billed twice — it would not. The worker re-reads the fan-
-    // out from the database (`GenerateRepository.context`, `id in (…)`), so a
-    // channel named twice is adapted once, paid for once, and produces one
-    // adaptation under one `adapter:<channelId>` checkpoint.
-    //
-    // What a duplicate corrupts is the run's own record of what it was asked
-    // for, which is not only decoration: the run screen counts the adapter
-    // step's progress out of `input.channelIds` (`runStepStates`), so a run
-    // admitted with three ids naming two channels reports "3 of 3 channels"
-    // over a draft that has two adaptations — a receipt that disagrees with
-    // what was produced, on the screen whose whole job is to say what happened.
-    // Refusing it here keeps the recorded list and the fan-out the same list.
-    //
-    // This schema is the only thing catching it on THIS path: `resolveChannels`
-    // checks that every id belongs to the brand (set membership), never how many
-    // there are. `contentCreateSchema` now carries the same refine — it used to
-    // rely on its repository comparing the resolved channel count against the
-    // requested one, which caught the duplicate by accident and then reported it
-    // as "one or more channels do not belong to this brand", naming the wrong
-    // fault.
-    .refine((ids) => new Set(ids).size === ids.length, {
-      message: "channelIds must not contain duplicates",
-    }),
-});
+export const runCreateSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /**
+     * No longer `.min(1)`: a run asked for from pasted material has nothing to
+     * put here, and the brief keeps its own meaning beside one — what to do
+     * with the material, in the person's words.
+     */
+    brief: z.string().max(MAX_BRIEF_LENGTH).optional(),
+    /**
+     * The article, pasted. Normalised first and bounded second — the rule
+     * `contentCreateSchema.body` follows for the same reason
+     * (`CLAUDE.md`, `normalizeNewlines`): a `<textarea>` strips CR from its own
+     * value, so `MAX_SOURCE_TEXT_LENGTH` has to measure what gets stored rather
+     * than characters the product is about to drop anyway.
+     *
+     * `runCreateSchema.brief` is deliberately NOT normalised here: it predates
+     * the rule, and normalising it would make `MAX_BRIEF_LENGTH` measure a
+     * different string than it measures today with no defect behind the change.
+     */
+    material: pastedMaterial,
+    /**
+     * Where the material came from. Recorded for the receipt and the draft; the
+     * server never fetches it, and it never reaches a model.
+     *
+     * `http`/`https` only. `z.url()` alone constrains no scheme in zod 4, and
+     * this value is rendered as an `<a href>` on two screens and read by the
+     * watched-sources gate as `split_part(input->>'sourceUrl','://',2)`, which
+     * yields `''` for a schemeless URL and is then dropped — an under-count
+     * nothing would report.
+     */
+    sourceUrl: z
+      .url({ protocol: /^https?$/ })
+      .max(2048)
+      .optional(),
+    channelIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(20)
+      // Duplicates are rejected rather than quietly deduped, and NOT because a
+      // repeat would be billed twice — it would not. The worker re-reads the fan-
+      // out from the database (`GenerateRepository.context`, `id in (…)`), so a
+      // channel named twice is adapted once, paid for once, and produces one
+      // adaptation under one `adapter:<channelId>` checkpoint.
+      //
+      // What a duplicate corrupts is the run's own record of what it was asked
+      // for, which is not only decoration: the run screen counts the adapter
+      // step's progress out of `input.channelIds` (`runStepStates`), so a run
+      // admitted with three ids naming two channels reports "3 of 3 channels"
+      // over a draft that has two adaptations — a receipt that disagrees with
+      // what was produced, on the screen whose whole job is to say what happened.
+      // Refusing it here keeps the recorded list and the fan-out the same list.
+      //
+      // This schema is the only thing catching it on THIS path: `resolveChannels`
+      // checks that every id belongs to the brand (set membership), never how many
+      // there are. `contentCreateSchema` now carries the same refine — it used to
+      // rely on its repository comparing the resolved channel count against the
+      // requested one, which caught the duplicate by accident and then reported it
+      // as "one or more channels do not belong to this brand", naming the wrong
+      // fault.
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "channelIds must not contain duplicates",
+      }),
+  })
+  // A run with neither a brief nor material has nothing to work from, and the
+  // failure it would otherwise take is five paid model calls producing a post
+  // about nothing. Refused here rather than normalised, for the reason
+  // `channelIds`' own refine spends twenty lines on: a quiet normalisation
+  // makes the run's receipt disagree with what was asked for.
+  //
+  // TRIMMED, and the repository's writer branches on the SAME two expressions
+  // (`RunsRepository.create`). `material: "   "` passes `z.string().min(1)`, so
+  // an untrimmed branch there would store `kind: "source"` with three spaces of
+  // material — and pay for a SOURCE block containing whitespace — while this
+  // refine had already admitted the request on the brief alone. Two predicates
+  // that disagree about what "has material" means is the defect; one predicate,
+  // written once and read twice, is the fix.
+  .refine((v) => (v.brief ?? "").trim() !== "" || (v.material ?? "").trim() !== "", {
+    message: "provide a brief, material, or both",
+    path: ["brief"],
+  });
 export type RunCreate = z.infer<typeof runCreateSchema>;
 
 /**
@@ -289,7 +375,62 @@ export const briefRunInputSchema = z.object({
 export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
 
 /**
- * Everything the column may hold — one member today.
+ * A run asked for from material a person pasted — the second thing this column
+ * may hold.
+ *
+ * The bounds mirror the brief member EXACTLY: `.min(1)` on the text a person
+ * wrote, no `.max()` anywhere. The length limit belongs to
+ * `runCreateSchema.material`, the boundary a request crosses, precisely as
+ * `MAX_BRIEF_LENGTH` sits on `runCreateSchema.brief` beside an unbounded
+ * `briefRunInputSchema.text`. A stored input is a receipt of what was asked
+ * for, not a request.
+ */
+export const sourceRunInputSchema = z.object({
+  kind: z.literal("source"),
+  /**
+   * What the person typed, if anything — instructions about the material, not a
+   * second thing to work from.
+   *
+   * `text` in BOTH arms, because the receipt branches on `kind` and must not
+   * also branch on a field name. `.min(1)` exactly as the brief member has it,
+   * so `null` and ONLY `null` means "no brief": a stored `""` would reach the
+   * three steps that read it as a labelled but empty BRIEF block, telling the
+   * model the person wrote nothing USEFUL rather than that they wrote nothing.
+   * Refusing it here makes a writer that produced one fail loudly — in the
+   * worker's own parse and in the api e2e's `runDtoSchema.parse` — instead of
+   * quietly buying that prompt three times.
+   */
+  text: z.string().min(1).nullable(),
+  /**
+   * Where the material came from. Recorded; never fetched, and never sent to a
+   * model in any step — a URL in a prompt invites the model to write as though
+   * it had read the page, which nothing here ever did.
+   *
+   * `http`/`https` only, for the reason `runCreateSchema.sourceUrl` gives, and
+   * TOP-LEVEL rather than nested under an attribution object: the gate that
+   * decides whether watched sources get built reads `input->>'sourceUrl'`, and
+   * a nested key would make that expression return NULL for every row while the
+   * query still ran. `null` rather than an absent key for the same reason —
+   * `jsonb ->> 'k'` yields SQL NULL for a JSON null and nothing at all for a
+   * missing key, and the gate's `count(distinct …)` depends on the first.
+   */
+  sourceUrl: z
+    .url({ protocol: /^https?$/ })
+    .max(2048)
+    .nullable(),
+  /**
+   * The material itself, carried BY VALUE so the receipt cannot dangle. There
+   * is no table to point at, and the rule outlives that: the run's `input` is
+   * what the run screen says happened, and a receipt resolved through a foreign
+   * key renders as a blank the day the row behind it goes.
+   */
+  material: z.string().min(1),
+  channelIds: z.array(z.string().uuid()).min(1),
+});
+export type SourceRunInput = z.infer<typeof sourceRunInputSchema>;
+
+/**
+ * Everything the column may hold — two members today.
  *
  * Kept as a separate name from `briefRunInputSchema` because the two answer
  * different questions the day a second `kind` exists: this one is "what may be
@@ -298,7 +439,10 @@ export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
  * run one fails the run with a sentence instead of being accepted and then
  * crashing inside a step.
  */
-export const runInputSchema = briefRunInputSchema;
+export const runInputSchema = z.discriminatedUnion("kind", [
+  briefRunInputSchema,
+  sourceRunInputSchema,
+]);
 export type RunInput = z.infer<typeof runInputSchema>;
 
 /**

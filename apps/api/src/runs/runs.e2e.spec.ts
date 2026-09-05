@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { EDITOR, editSchema, FACTCHECK, factcheckSchema, type RunStepContext } from "@pubrick/ai";
-import { MAX_CONCURRENT_RUNS, runDetailDtoSchema, runDtoSchema } from "@pubrick/shared";
+import {
+  MAX_CONCURRENT_RUNS,
+  MAX_SOURCE_TEXT_LENGTH,
+  runDetailDtoSchema,
+  runDtoSchema,
+} from "@pubrick/shared";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import request from "supertest";
@@ -301,6 +306,199 @@ describe.skipIf(!url)("runs e2e", () => {
 
     // ...and nothing was created by the refused request.
     expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
+  });
+
+  /**
+   * What a run asked for from pasted material actually STORES.
+   *
+   * `pipeline_runs.input` is a receipt: the run screen renders it, the retry
+   * rebuilds a request from it, and the gate that decides whether watched
+   * sources get built counts `input->>'sourceUrl'` out of it. Every assertion
+   * here is about the row the one writer produced, read back through
+   * `runDtoSchema` — the same declaration the browser parses — rather than
+   * about the 201.
+   */
+  describe("a run asked for from material a person pasted", () => {
+    const ARTICLE = "The autumn menu, as somebody else wrote it.";
+
+    it("stores the paste, the url at the top level, and no brief at all", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: `${ARTICLE}\r\nA second paragraph.`,
+          sourceUrl: "https://example.com/autumn-menu",
+          channelIds: [channelId],
+        })
+        .expect(201);
+
+      // The WIRE contract, not just the row: a browser parses this shape.
+      const run = runDtoSchema.parse(created.body);
+      expect(run.input).toEqual({
+        kind: "source",
+        // `null`, never `""`: a stored empty brief reaches the model as a
+        // labelled but empty BRIEF block.
+        text: null,
+        sourceUrl: "https://example.com/autumn-menu",
+        // Verbatim AFTER `normalizeNewlines`, which is what the schema stores.
+        material: `${ARTICLE}\nA second paragraph.`,
+        channelIds: [channelId],
+      });
+
+      // Top-level, because that is the expression the 3b gate reads. A nested
+      // key would leave this NULL for every row while the query still ran.
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const rows = await db.execute(
+        `SELECT input->>'kind' AS kind, input->>'sourceUrl' AS source_url
+           FROM pipeline_runs WHERE id = '${run.id}'`,
+      );
+      await pool.end();
+      expect(rows.rows[0]).toMatchObject({
+        kind: "source",
+        source_url: "https://example.com/autumn-menu",
+      });
+    });
+
+    /**
+     * The case the compose screen actually sends. `brief` is `useState("")` and
+     * goes on the body unconditionally, so an ordinary paste-only run arrives as
+     * `{brief: "", material: "…"}` — and `data.brief ?? null` is `""`. An
+     * assertion written as "a source create stores `text: null`" passes without
+     * exercising this, because a body that simply OMITS `brief` satisfies it
+     * too. The empty string is sent on purpose.
+     */
+    it("stores no brief for the empty string the compose screen sends", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      for (const brief of ["", "   \n  "]) {
+        const created = await agent
+          .post("/api/runs")
+          .send({ brandId, brief, material: ARTICLE, channelIds: [channelId] })
+          .expect(201);
+        expect(runDtoSchema.parse(created.body).input).toMatchObject({
+          kind: "source",
+          text: null,
+        });
+      }
+    });
+
+    it("keeps a real brief beside the paste, as instructions about it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      const created = await agent
+        .post("/api/runs")
+        .send({ brandId, brief: "Shorten it", material: ARTICLE, channelIds: [channelId] })
+        .expect(201);
+      expect(runDtoSchema.parse(created.body).input).toMatchObject({
+        kind: "source",
+        text: "Shorten it",
+        material: ARTICLE,
+      });
+    });
+
+    /**
+     * Material decides the kind. A url with nothing to attribute is not a source
+     * run — it is dropped — and whitespace is not material, which is the one
+     * place the writer's trim and the schema's refine have to agree.
+     */
+    it("stores a brief run when there is no material to work from", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      const withUrl = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Announce the autumn menu",
+          sourceUrl: "https://example.com/autumn-menu",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      expect(runDtoSchema.parse(withUrl.body).input).toEqual({
+        kind: "brief",
+        text: "Announce the autumn menu",
+        channelIds: [channelId],
+      });
+
+      const blankMaterial = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Announce the autumn menu",
+          material: "   \n  ",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      expect(runDtoSchema.parse(blankMaterial.body).input).toEqual({
+        kind: "brief",
+        text: "Announce the autumn menu",
+        channelIds: [channelId],
+      });
+    });
+
+    /**
+     * The property is "refused before an admission slot is spent", not "returned
+     * 400": the bound is on the create schema precisely so the API does not
+     * create the run and then fail it in the worker's parse, having spent one of
+     * the org's three slots. So the run COUNT is what this asserts.
+     */
+    it("refuses an over-long paste before it costs an admission slot", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      await startRun(agent, brandId, [channelId]);
+      const before = (await agent.get("/api/runs").expect(200)).body.length;
+
+      const denied = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: "x".repeat(MAX_SOURCE_TEXT_LENGTH + 1),
+          channelIds: [channelId],
+        })
+        .expect(400);
+      expect(JSON.stringify(denied.body.message)).toContain("material:");
+
+      expect((await agent.get("/api/runs").expect(200)).body.length).toBe(before);
+    });
+
+    it("refuses a request with neither a brief nor material, naming both", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      const denied = await agent
+        .post("/api/runs")
+        .send({ brandId, channelIds: [channelId] })
+        .expect(400);
+      expect(denied.body.message).toEqual(["brief: provide a brief, material, or both"]);
+      expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
+    });
+
+    /**
+     * The url is rendered as an `<a href>` on two screens, so a scheme that is
+     * not http(s) is refused at the boundary rather than stored and drawn.
+     */
+    it("refuses a source url that is not http or https, and creates nothing", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+
+      const denied = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: ARTICLE,
+          sourceUrl: "javascript:alert(1)",
+          channelIds: [channelId],
+        })
+        .expect(400);
+      expect(JSON.stringify(denied.body.message)).toContain("sourceUrl:");
+      expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
+    });
   });
 
   it("refuses a fourth concurrent run (409) and names the limit", async () => {

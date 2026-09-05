@@ -4,9 +4,13 @@ import {
   DISMISSABLE_RUN_STATUSES,
   isLiveRunStatus,
   LIVE_RUN_STATUSES,
+  MAX_SOURCE_TEXT_LENGTH,
   RUN_STATUSES,
+  runCreateSchema,
+  runInputSchema,
   runStepCheckpointSchema,
   runStepsSchema,
+  sourceRunInputSchema,
 } from "./runs.js";
 
 /**
@@ -85,6 +89,195 @@ describe("what a run was asked to produce", () => {
 
   it("refuses a kind this build cannot execute rather than crashing inside a step", () => {
     expect(briefRunInputSchema.safeParse({ ...valid, kind: "topic" }).success).toBe(false);
+  });
+});
+
+/**
+ * The second member of `pipeline_runs.input`, and the union that holds both.
+ *
+ * The bounds here mirror the brief member exactly — `.min(1)`, no `.max()` —
+ * because the two arms describe the same column and the length limit lives on
+ * `runCreateSchema`, the boundary a request crosses.
+ */
+describe("a run asked for from material a person pasted", () => {
+  const channelIds = ["11111111-1111-4111-8111-111111111111"];
+  const pasted = {
+    kind: "source",
+    text: null,
+    sourceUrl: "https://example.com/autumn-menu",
+    material: "The article, pasted in full.",
+    channelIds,
+  };
+
+  it("accepts the shape the api writes for a paste with no brief", () => {
+    expect(sourceRunInputSchema.parse(pasted)).toEqual(pasted);
+  });
+
+  it("accepts a paste with instructions, and a paste with no url", () => {
+    const withBrief = { ...pasted, text: "Shorten it for our audience" };
+    expect(sourceRunInputSchema.parse(withBrief)).toEqual(withBrief);
+    const noUrl = { ...pasted, sourceUrl: null };
+    expect(sourceRunInputSchema.parse(noUrl)).toEqual(noUrl);
+  });
+
+  /**
+   * `null` and only `null` means "no brief". A stored `""` would reach the
+   * worker as a labelled but empty BRIEF block — telling the model the person
+   * wrote nothing USEFUL rather than that they wrote nothing — so it is not a
+   * value this column may hold, and the writer's trim has this behind it.
+   */
+  it("refuses a stored empty brief, so blank can only be spelled null", () => {
+    const denied = sourceRunInputSchema.safeParse({ ...pasted, text: "" });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["text"]]);
+  });
+
+  it("refuses material that is not there, exactly as the brief member does", () => {
+    const denied = sourceRunInputSchema.safeParse({ ...pasted, material: "" });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["material"]]);
+  });
+
+  /**
+   * The value is rendered as an `<a href>` on two screens and counted by 3b's
+   * gate through `split_part(input->>'sourceUrl','://',2)`, which yields `''`
+   * for a schemeless URL and is then dropped by `nullif` — an under-count
+   * nothing would report. `z.url()` alone constrains no scheme in zod 4.
+   */
+  it("refuses a url whose scheme is not http or https", () => {
+    for (const sourceUrl of ["javascript:alert(1)", "mailto:someone@example.com"]) {
+      const denied = sourceRunInputSchema.safeParse({ ...pasted, sourceUrl });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
+    }
+    expect(
+      sourceRunInputSchema.parse({ ...pasted, sourceUrl: "http://example.com" }).sourceUrl,
+    ).toBe("http://example.com");
+  });
+
+  it("stores the paste unbounded: the length limit is the request's, not the column's", () => {
+    const long = "x".repeat(MAX_SOURCE_TEXT_LENGTH + 1);
+    expect(sourceRunInputSchema.parse({ ...pasted, material: long }).material).toBe(long);
+  });
+
+  it("reads both arms of the column, and refuses a kind no build has written", () => {
+    const brief = { kind: "brief", text: "Announce the autumn menu", channelIds };
+    expect(runInputSchema.parse(brief)).toEqual(brief);
+    expect(runInputSchema.parse(pasted)).toEqual(pasted);
+    expect(runInputSchema.safeParse({ ...brief, kind: "topic" }).success).toBe(false);
+  });
+});
+
+/**
+ * `POST /api/runs`' body. The bound and the cross-field refine live here, on the
+ * boundary a request crosses: put on the stored member instead, the API would
+ * admit an over-long paste, spend an admission slot, create the run and fail it
+ * in the worker's parse.
+ */
+describe("what a run may be asked for", () => {
+  const channelIds = ["11111111-1111-4111-8111-111111111111"];
+  const brandId = "22222222-2222-4222-8222-222222222222";
+  const base = { brandId, channelIds };
+
+  it("accepts a brief alone, exactly as it did before material existed", () => {
+    const body = { ...base, brief: "Announce the autumn menu" };
+    expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  it("accepts material alone: a paste-only run has no brief to send", () => {
+    const body = { ...base, material: "The article, pasted in full." };
+    expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  it("accepts both, and the brief keeps its own meaning beside the paste", () => {
+    const body = { ...base, brief: "Shorten it", material: "The article." };
+    expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  /**
+   * The bound is the create schema's and nothing else's: the same string the
+   * request is refused for is a string the COLUMN may hold, because a stored
+   * paste is a receipt of what was asked for rather than a request.
+   */
+  it("refuses a paste over the bound here, while the stored member takes it", () => {
+    const long = "x".repeat(MAX_SOURCE_TEXT_LENGTH + 1);
+    const denied = runCreateSchema.safeParse({ ...base, material: long });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["material"]]);
+    expect(denied.error?.issues[0]?.code).toBe("too_big");
+    expect(
+      sourceRunInputSchema.parse({
+        kind: "source",
+        text: null,
+        sourceUrl: null,
+        material: long,
+        channelIds,
+      }).material,
+    ).toBe(long);
+  });
+
+  it("accepts a paste of exactly the bound", () => {
+    const atBound = "x".repeat(MAX_SOURCE_TEXT_LENGTH);
+    expect(runCreateSchema.parse({ ...base, material: atBound }).material).toBe(atBound);
+  });
+
+  it("refuses a request with neither, naming both in one sentence", () => {
+    const denied = runCreateSchema.safeParse(base);
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([
+      [["brief"], "provide a brief, material, or both"],
+    ]);
+  });
+
+  /**
+   * The refine reads TRIMMED values, and the repository's writer branches on the
+   * same two expressions. Two predicates that disagree about what "has material"
+   * means is the defect; one, written once and read twice, is the fix.
+   */
+  it("reads both fields trimmed, so whitespace is not a thing to work from", () => {
+    expect(
+      runCreateSchema.parse({ ...base, brief: "   ", material: "The article." }).material,
+    ).toBe("The article.");
+    expect(runCreateSchema.parse({ ...base, brief: "A brief", material: "   " }).brief).toBe(
+      "A brief",
+    );
+    const denied = runCreateSchema.safeParse({ ...base, brief: "   ", material: " \n " });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues[0]?.message).toBe("provide a brief, material, or both");
+  });
+
+  it("refuses a source url whose scheme is not http or https", () => {
+    for (const sourceUrl of ["javascript:alert(1)", "mailto:someone@example.com"]) {
+      const denied = runCreateSchema.safeParse({ ...base, material: "The article.", sourceUrl });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
+    }
+    expect(
+      runCreateSchema.parse({
+        ...base,
+        material: "The article.",
+        sourceUrl: "https://example.com/a",
+      }).sourceUrl,
+    ).toBe("https://example.com/a");
+  });
+
+  /**
+   * Normalise first, bound second — the rule `contentCreateSchema.body` already
+   * follows, and the only pair of assertions that can tell the two orders apart:
+   * a paste that fits once its CRLFs collapse must not be refused for characters
+   * the product is about to drop anyway.
+   */
+  it("stores a paste's newlines as U+000A, and bounds what it stores", () => {
+    expect(runCreateSchema.parse({ ...base, material: "One.\r\nTwo.\rThree." }).material).toBe(
+      "One.\nTwo.\nThree.",
+    );
+
+    const crlf = Array(MAX_SOURCE_TEXT_LENGTH / 2)
+      .fill("x")
+      .join("\r\n");
+    expect(crlf.length).toBe(MAX_SOURCE_TEXT_LENGTH + 3998);
+    const accepted = runCreateSchema.parse({ ...base, material: crlf });
+    expect(accepted.material?.length).toBe(MAX_SOURCE_TEXT_LENGTH - 1);
   });
 });
 

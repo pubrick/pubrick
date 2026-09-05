@@ -295,6 +295,24 @@ export class RunsRepository {
   async create(orgId: string, data: RunCreate) {
     await this.resolveChannels(orgId, data);
 
+    // The SAME two expressions `runCreateSchema`'s cross-field refine uses, read
+    // once each here. Trimmed, because `material: "   "` passes
+    // `z.string().min(1)`: branching untrimmed would store `kind: "source"` with
+    // three spaces of material — and pay for a SOURCE block of whitespace on
+    // three model calls — over a request the refine had already admitted on the
+    // brief alone.
+    //
+    // The brief's trim is what makes a blank one `null` rather than `""`, and
+    // `?? null` alone would not: the compose screen sends `brief` unconditionally
+    // from an empty-string default, so an ordinary paste-only run arrives as
+    // `{brief: "", material: "…"}` and `"" ?? null` is `""`. A stored `""` buys a
+    // labelled but EMPTY brief block on three paid calls, which tells the model
+    // the person wrote nothing USEFUL rather than that they wrote nothing.
+    // `sourceRunInputSchema.text`'s `.min(1)` is the guard behind this line;
+    // never reach for `?? ""` anywhere on this path.
+    const brief = (data.brief ?? "").trim() === "" ? null : (data.brief as string);
+    const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
+
     const id = await db.transaction(async (tx) => {
       await this.admit(tx, orgId);
       const inserted = await tx
@@ -302,9 +320,24 @@ export class RunsRepository {
         .values({
           orgId,
           brandId: data.brandId,
-          // `kind` is discriminated from the start so increment 3's watched
-          // sources add "topic" without a migration.
-          input: { kind: "brief", text: data.brief, channelIds: data.channelIds },
+          // MATERIAL decides the kind: a brief is an instruction ABOUT the
+          // material, not a second thing to work from, so a request carrying
+          // both is a source run with `text` set. A `sourceUrl` with no material
+          // has nothing to attribute and is dropped — the belt behind the
+          // compose screen's own inline refusal.
+          input:
+            material === null
+              ? // The refine guarantees at least one of the two is non-blank, so
+                // with no material the brief is non-null. This is the one place
+                // that guarantee is invisible to the compiler.
+                { kind: "brief", text: brief as string, channelIds: data.channelIds }
+              : {
+                  kind: "source",
+                  text: brief,
+                  sourceUrl: data.sourceUrl ?? null,
+                  material,
+                  channelIds: data.channelIds,
+                },
         })
         .returning({ id: schema.pipelineRuns.id });
       const runId = inserted[0]?.id as string;
