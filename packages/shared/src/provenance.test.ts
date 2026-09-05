@@ -1139,6 +1139,23 @@ describe("allSentencesAi", () => {
     expect(allSentencesAi("Alpha one. Gamma three.", [full, restored], full)).toBe(false);
   });
 
+  it("reads the restored body as the model's when the ANCHOR carries CRs", () => {
+    // The worker writes the model's reply verbatim into both the item body
+    // and the `ai` `full` row, and the reply's newlines are whatever the
+    // model sent — CRLF is a real row, not a hypothesis. Every later write
+    // (the DTO, Accept's own merge) stores the canonical form, so after one
+    // human edit the body is CR-free and the anchor is not. Comparing the
+    // anchor raw would make the equality clause never fire on such a draft,
+    // clause 3 would read a deletion, and the gate would open on the model's
+    // own words. The anchor side of the normalisation is the one this case
+    // pins; the current side is pinned by the DTO tests.
+    const crFull = "Alpha one.\r\nBeta two.\r\nGamma three.";
+    const restored = fragment("Beta two.\nGamma three.", +1);
+    expect(allSentencesAi("Alpha one.\nBeta two.\nGamma three.", [crFull, restored], crFull)).toBe(
+      true,
+    );
+  });
+
   it("refuses a fragment that cannot say what it replaced, ahead of every other clause", () => {
     // Unreachable while the database's CHECK stands (`unit_delta` is non-null
     // exactly when `scope = 'fragment'`), and handled anyway: a fail-safe must

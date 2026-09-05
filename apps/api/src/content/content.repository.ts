@@ -297,6 +297,12 @@ const REFINE_PLAN_REFUSAL: Record<
  * occurrences are all considered; on a tie the earlier one wins, because a
  * total order that is arbitrary is still better than one that depends on scan
  * direction.
+ *
+ * Measured survivor (`docs/mutation-testing.md`): stepping by the match's
+ * length instead SURVIVES 3/3. A selection that overlaps its own next
+ * occurrence ("abab" in "ababab") is the only input the two steps tell apart,
+ * and no test builds one; the tie rule beside it is pinned. Recorded rather
+ * than pinned because the case is contrived and the line is argued for above.
  */
 function nearestOccurrence(body: string, selectedText: string, storedStart: number): number | null {
   let best: number | null = null;

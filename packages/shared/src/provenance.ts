@@ -540,9 +540,13 @@ const evidenceBody = (row: string | AiVersionRow): string =>
  * equality answered `true` for exactly this body, and the theorem below
  * promises that `new = false ∧ old = true` is unsatisfiable — a promise that
  * held only for the fragment-free shape, because a fragment's delta could make
- * clause 3 refuse a body the old rule called untouched. Equality restores it
- * for every shape, in the direction this module's header names as the safe one:
- * a body no human word appears in is credited to the model.
+ * clause 3 refuse a body the old rule called untouched. Equality restores the
+ * invariant AGAINST WHOLE-BODY EQUALITY for every shape (a body equal to the
+ * anchor is never refused) — not against `isUntouchedAi` in full, which the
+ * theorem names: reorder the sentences and add a `+1` fragment and the old rule
+ * still says untouched where clause 3 refuses. That gap is in the safe
+ * direction this module's header names: a body no human word appears in is
+ * credited to the model.
  *
  * Byte-identity and not `isUntouchedAi`, which is the old rule in full: the
  * narrowest closure that answers the measured case is the one to take when the

@@ -68,7 +68,11 @@ channel — and the canonical order already puts every adaptation of a channel
 *before* that channel, so the two can never wait on each other.
 
 **`organization`** sits above everything (a tenant delete cascades into all of
-it) and is never taken together with anything else by application code.
+it). Application code never takes it EXPLICITLY together with anything else;
+it is taken implicitly, `FOR KEY SHARE`, by every insert carrying an `org_id`
+foreign key (a version row, a ledger row, a proposal). That mode conflicts only
+with a delete or a key update of the organization row itself — the tenant
+delete — which holds nothing else first, so the edge cannot close a cycle.
 
 **`ai_credentials`** IS taken together with a table in the order, and is named
 here rather than left silent. `AiCredentialsRepository.delete` locks the key rows
@@ -154,9 +158,9 @@ The three that lock more than it, all of them taking `content_items` first:
   statement* is what this file's own preamble says builds cycles: that version
   insert also takes `FOR KEY SHARE` on **`organization`** through `org_id`
   (`packages/db/src/schema/generation.ts`), which this transaction does not
-  already hold. Nothing is wrong — `organization` is exempted above, never
-  taken together with anything else by application code — but the sentence is
-  now complete.
+  already hold. Nothing is wrong — the exemption above says why an implicit
+  `FOR KEY SHARE` on `organization` closes no cycle — but the sentence is now
+  complete.
 
 **`ContentRepository.discardRefine` is the exception, and it is safe to be
 one.** It is a single `DELETE` against `refine_proposals` and takes nothing
