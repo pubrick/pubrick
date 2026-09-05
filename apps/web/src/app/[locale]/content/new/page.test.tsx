@@ -3,6 +3,7 @@ import {
   contentCreateSchema,
   MAX_BODY_LENGTH,
   MAX_CONCURRENT_RUNS,
+  MAX_SOURCE_TEXT_LENGTH,
   runCreateSchema,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
@@ -339,7 +340,7 @@ describe("Generate (Task 10)", () => {
   it.each([
     ["no brand", false, false, en.ContentNew.noBrandSelected],
     ["no channel", true, false, en.ContentNew.noChannelsSelected],
-    ["no brief", true, true, en.ContentNew.briefRequired],
+    ["neither a brief nor material", true, true, en.ContentNew.briefOrMaterialRequired],
   ])(
     "refuses with %s, inline, and starts no run",
     async (_label, withBrand, withChannel, message) => {
@@ -442,6 +443,473 @@ describe("Generate (Task 10)", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
+  });
+});
+
+/**
+ * TASK 5 — THE FIELD THIS WHOLE INCREMENT EXISTS FOR.
+ *
+ * The material is 8 000 characters that can sit inside a collapsed section, so
+ * two things are pinned here and not only implied: it lives in the SHARED
+ * `Advanced` (constitution rule 2, never a bespoke "show more"), and the dot
+ * that says "there is something in here" uses the SAME trimmed predicate as
+ * the request body and as the primary action's refusal. Those five sites are
+ * one expression on purpose — a dot that lights for a single pasted space
+ * while the request omits the field is exactly how "Create post" comes to
+ * refuse over material nobody can see.
+ */
+describe("the Source disclosure (Task 5 Step 1)", () => {
+  const open = (user: ReturnType<typeof userEvent.setup>) =>
+    user.click(screen.getByText(en.ContentNew.sourceTitle));
+
+  it("hides the paste behind the shared Advanced, and says what happens to the link", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+
+    // Present but collapsed: the fields exist in the DOM (so `Advanced` is the
+    // native <details> the constitution names, not a conditional render).
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).not.toBeVisible();
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).not.toBeVisible();
+
+    await open(userEvent.setup());
+
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toBeVisible();
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toBeVisible();
+    // The two promises the product makes about this field, in the open: the
+    // text is used as pasted, and the link is recorded rather than fetched.
+    expect(screen.getByText(en.ContentNew.sourceHelp)).toBeVisible();
+    // A URL keyboard, and deliberately NOT `type="url"` — see the test named
+    // "does not kill the primary action" below, and the comment on the field.
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toHaveAttribute("inputmode", "url");
+    expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).not.toHaveAttribute("type", "url");
+  });
+
+  it("counts the paste against MAX_SOURCE_TEXT_LENGTH as it is typed", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+
+    expect(screen.getByText(`0 / ${MAX_SOURCE_TEXT_LENGTH}`)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(en.ContentNew.materialLabel), "Pasted article");
+
+    expect(screen.getByText(`14 / ${MAX_SOURCE_TEXT_LENGTH}`)).toBeInTheDocument();
+  });
+
+  it("stops accepting characters at MAX_SOURCE_TEXT_LENGTH, which is why the API's over-the-bound refusal is unreachable", async () => {
+    // §2.6: no new `API_ERROR_CODES` member was added for "material over the
+    // bound" because this attribute makes that refusal unreachable from the
+    // screen — the browser applies `maxLength` to a paste as well as to
+    // typing. That argument is only as good as the attribute, so it is pinned
+    // here, through real keystrokes, exactly as the body's bound is.
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+
+    const material = screen.getByLabelText(en.ContentNew.materialLabel);
+    fireEvent.change(material, { target: { value: "a".repeat(MAX_SOURCE_TEXT_LENGTH - 3) } });
+    expect(
+      screen.getByText(`${MAX_SOURCE_TEXT_LENGTH - 3} / ${MAX_SOURCE_TEXT_LENGTH}`),
+    ).toBeInTheDocument();
+
+    await user.type(material, "XYZW"); // 4 more offered, only 3 fit
+
+    expect((material as HTMLTextAreaElement).value.length).toBe(MAX_SOURCE_TEXT_LENGTH);
+    expect((material as HTMLTextAreaElement).value.endsWith("XYZ")).toBe(true);
+    expect(
+      screen.getByText(`${MAX_SOURCE_TEXT_LENGTH} / ${MAX_SOURCE_TEXT_LENGTH}`),
+    ).toBeInTheDocument();
+  });
+
+  it("lights the dirty dot for a value, and NOT for whitespace, in either field", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+
+    const material = screen.getByLabelText(en.ContentNew.materialLabel);
+    const url = screen.getByLabelText(en.ContentNew.sourceUrlLabel);
+
+    expect(screen.queryByTestId("advanced-dirty-dot")).not.toBeInTheDocument();
+
+    await user.type(material, "   ");
+    expect(screen.queryByTestId("advanced-dirty-dot")).not.toBeInTheDocument();
+
+    await user.type(material, "An article");
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+
+    await user.clear(material);
+    expect(screen.queryByTestId("advanced-dirty-dot")).not.toBeInTheDocument();
+
+    // The URL alone is enough to be worth a dot — it is a value the person
+    // typed, and Generate is about to refuse over it (§2.4).
+    await user.type(url, " ");
+    expect(screen.queryByTestId("advanced-dirty-dot")).not.toBeInTheDocument();
+
+    await user.clear(url);
+    await user.type(url, "https://example.com/article");
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+  });
+});
+
+/**
+ * WHAT THE SCREEN ASKS FOR, AND WHAT IT REFUSES (Task 5 Steps 2-4).
+ *
+ * Every body below is pinned twice — the literal this screen sends, and a
+ * round trip through `runCreateSchema`, the schema the API validates with — so
+ * a body the API would 400 fails here instead of in production. The key-set
+ * assertion is the one that carries this increment: a paste-only run must
+ * carry NO `brief` key, not `brief: ""`. An empty string is a value the schema
+ * treats as absent and the writer then has to undo, and it is a lie about what
+ * the person did.
+ */
+describe("what Generate sends (Task 5 Steps 2 and 4)", () => {
+  const ARTICLE = "The regulator published its ruling this morning.";
+
+  async function generateWith(
+    user: ReturnType<typeof userEvent.setup>,
+    fields: { brief?: string; material?: string; url?: string },
+  ) {
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    if (fields.brief !== undefined) {
+      await user.type(screen.getByLabelText(en.ContentNew.briefLabel), fields.brief);
+    }
+    if (fields.material !== undefined || fields.url !== undefined) {
+      await user.click(screen.getByText(en.ContentNew.sourceTitle));
+      if (fields.material !== undefined) {
+        await user.type(screen.getByLabelText(en.ContentNew.materialLabel), fields.material);
+      }
+      if (fields.url !== undefined) {
+        await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), fields.url);
+      }
+    }
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+  }
+
+  const CASES = [
+    {
+      name: "a brief alone, byte-identical to what it sent before this increment",
+      fields: { brief: "Announce the new pricing" },
+      body: { brandId: B1, channelIds: [CH1], brief: "Announce the new pricing" },
+    },
+    {
+      name: "material alone, with no `brief` key at all",
+      fields: { material: ARTICLE },
+      body: { brandId: B1, channelIds: [CH1], material: ARTICLE },
+    },
+    {
+      name: "both, because a brief beside a paste is what to DO with it",
+      fields: { brief: "Two paragraphs, no jargon", material: ARTICLE },
+      body: {
+        brandId: B1,
+        channelIds: [CH1],
+        brief: "Two paragraphs, no jargon",
+        material: ARTICLE,
+      },
+    },
+    {
+      name: "material with the URL it came from",
+      fields: { material: ARTICLE, url: "https://example.com/ruling" },
+      body: {
+        brandId: B1,
+        channelIds: [CH1],
+        material: ARTICLE,
+        sourceUrl: "https://example.com/ruling",
+      },
+    },
+    {
+      name: "a whitespace-only brief as no brief at all",
+      fields: { brief: "   ", material: ARTICLE },
+      body: { brandId: B1, channelIds: [CH1], material: ARTICLE },
+    },
+    {
+      name: "a whitespace-only paste as no material at all",
+      fields: { brief: "Announce the new pricing", material: "   " },
+      body: { brandId: B1, channelIds: [CH1], brief: "Announce the new pricing" },
+    },
+    {
+      name: "a whitespace-only link as no link at all",
+      fields: { material: ARTICLE, url: "  " },
+      body: { brandId: B1, channelIds: [CH1], material: ARTICLE },
+    },
+    {
+      // The trim decides PRESENCE and nothing else. Trimming the value on the
+      // way out would silently edit what someone pasted — and the stored input
+      // is a receipt of what was asked for.
+      name: "the values exactly as they were typed, untrimmed",
+      fields: { brief: " make it short ", material: `  ${ARTICLE}  ` },
+      body: {
+        brandId: B1,
+        channelIds: [CH1],
+        brief: " make it short ",
+        material: `  ${ARTICLE}  `,
+      },
+    },
+  ];
+
+  it.each(CASES)("posts $name", async ({ fields, body }) => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "run-5" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await generateWith(userEvent.setup(), fields);
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/run-5"));
+    const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
+    const sent = parsedBody(post);
+    expect(sent).toEqual(body);
+    // `toEqual` alone cannot see a key whose value is `undefined`, and the
+    // whole point of the spreads is that ABSENT means absent.
+    expect(Object.keys(sent).sort()).toEqual(Object.keys(body).sort());
+    expect(runCreateSchema.parse(sent)).toEqual(sent);
+  });
+
+  it("sends no `brief` key whatsoever for a paste-only run", async () => {
+    // Stated on its own because it is the assertion this increment turns on:
+    // `brief` used to go out unconditionally from a `""` default, and `""` is
+    // exactly the value that reaches three paid model calls as a labelled but
+    // empty BRIEF block.
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "run-6" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await generateWith(userEvent.setup(), { material: ARTICLE });
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalled());
+    const sent = parsedBody(calls.find((c) => c.method === "POST" && c.path === "/api/runs"));
+    expect("brief" in sent).toBe(false);
+  });
+
+  it.each([
+    ["neither a brief nor material", {}, en.ContentNew.briefOrMaterialRequired],
+    [
+      "a brief and a paste that are both only whitespace",
+      { brief: "  ", material: "   " },
+      en.ContentNew.briefOrMaterialRequired,
+    ],
+    [
+      // §2.4. The repository drops a material-less `sourceUrl` as the belt;
+      // this is the screen refusing to drop it silently, on the one screen
+      // where the person can still fix it. Reachable exactly as written: with
+      // a brief, the API would ACCEPT this request and store a brief run with
+      // the link gone.
+      "a link with nothing pasted beside it",
+      { brief: "Announce the new pricing", url: "https://example.com/ruling" },
+      en.ContentNew.sourceUrlNeedsMaterial,
+    ],
+    [
+      // §2.7. `ftp://` is a URL the browser's own `type="url"` validity
+      // accepts, so this pins OUR check and not the browser's.
+      "a link that is neither http nor https",
+      { material: "The regulator published its ruling.", url: "ftp://example.com/ruling.txt" },
+      en.ContentNew.sourceUrlNotHttp,
+    ],
+  ])("refuses %s inline, and starts no run", async (_name, fields, message) => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await generateWith(userEvent.setup(), fields);
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "CREATE POST" WITH AN ARTICLE PASTED (Task 5 Step 3).
+ *
+ * `contentCreateSchema` has no `material` and no `sourceUrl`, so this path
+ * would create a post from the typed body and drop the paste with no undo.
+ *
+ * EVERY TEST HERE TYPES A BODY, and that is the whole point of the step. The
+ * body `Textarea` is `required` and the header button is a real
+ * `type="submit" form={FORM_ID}`, so native constraint validation runs FIRST:
+ * a test that pastes material and submits an empty form passes without ever
+ * reaching the guard, and would keep passing after the guard was deleted.
+ */
+describe("'Create post' while the Source section holds material (Task 5 Step 3)", () => {
+  async function compose(user: ReturnType<typeof userEvent.setup>, material: string | undefined) {
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.type(screen.getByLabelText(en.ContentNew.body), "Text I typed myself");
+    if (material !== undefined) {
+      await user.click(screen.getByText(en.ContentNew.sourceTitle));
+      await user.type(screen.getByLabelText(en.ContentNew.materialLabel), material);
+    }
+  }
+
+  it("refuses, creates nothing, and leaves the paste where it is", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, "The regulator published its ruling this morning.");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    expect(await screen.findByText(en.ContentNew.materialBlocksCreate)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    // Refused, not consumed: both texts are still on screen to act on.
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
+      "The regulator published its ruling this morning.",
+    );
+    expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
+  });
+
+  it("refuses on the form's own submit event too, not only on the header button", async () => {
+    // The screen has ONE create path and two ways into it: the header button
+    // (`type="submit" form={FORM_ID}`) and Enter in a field, which fires the
+    // form's submit. The guard therefore lives in the submit handler, not on
+    // the button's onClick — asserted by firing the event itself, because
+    // jsdom/user-event does not model implicit submission for a submit button
+    // associated with the form by id rather than by containment.
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, "The regulator published its ruling this morning.");
+
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    expect(await screen.findByText(en.ContentNew.materialBlocksCreate)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("creates the post exactly as before when there is no material", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content") return { id: "new-item-3" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await compose(userEvent.setup(), undefined);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/new-item-3"));
+    const post = calls.find((c) => c.method === "POST" && c.path === "/api/content");
+    expect(parsedBody(post)).toEqual({
+      brandId: B1,
+      body: "Text I typed myself",
+      channelIds: [CH1],
+    });
+  });
+
+  it("a link the browser would call invalid does not kill the primary action", async () => {
+    /**
+     * THE FIELD IS NOT `type="url"`, AND THIS IS WHY.
+     *
+     * A constrained control that is invalid while it cannot be focused — which
+     * is what every field in a COLLAPSED `Advanced` is — makes the browser
+     * refuse the form's submit and report nothing: no bubble, no inline error,
+     * no request. The person typed "example.com" into a link field an hour
+     * ago, collapsed the section, wrote a post, and now the one primary action
+     * on the screen does nothing at all, forever, with no sentence anywhere.
+     * The constitution's rule about a primary action naming its refusal is the
+     * rule that forbids it, and jsdom reproduces the whole sequence.
+     */
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content") return { id: "new-item-5" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), "example.com");
+    await user.click(screen.getByText(en.ContentNew.sourceTitle)); // collapsed again
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(false);
+    await user.type(screen.getByLabelText(en.ContentNew.body), "Text I typed myself");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/new-item-5"));
+    // The value is still not a URL anything would accept — Generate refuses it
+    // with `sourceUrlNotHttp` — so what is asserted here is only that the
+    // browser's own validity is not standing silently in the way.
+    expect((container.querySelector("#sourceUrl") as HTMLInputElement).validity.valid).toBe(true);
+  });
+
+  it("creates the post when the Source section holds only whitespace", async () => {
+    // The same trimmed predicate as the dot and the request body. Untrimmed,
+    // a single stray space would block the screen's primary action outright,
+    // over material nobody can see and the request would not have sent.
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content") return { id: "new-item-4" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, "   ");
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/new-item-4"));
+    expect(screen.queryByText(en.ContentNew.materialBlocksCreate)).not.toBeInTheDocument();
   });
 });
 

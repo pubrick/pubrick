@@ -9,6 +9,7 @@ import ru from "../../../messages/ru.json";
 import BrandPage from "./brands/[id]/page";
 import BrandsPage from "./brands/page";
 import ContentItemPage from "./content/[id]/page";
+import NewContentPage from "./content/new/page";
 import RunPage from "./content/runs/[id]/page";
 
 /**
@@ -223,6 +224,53 @@ describe("the run receipt", () => {
     await renderRun("ru");
 
     await expectShown(ru.Errors.run_not_found, sentence);
+  });
+});
+
+/**
+ * THE COMPOSE SCREEN — the only screen that starts a run, and since 3a the
+ * only one that can send a paste the boundary refuses. Its inline refusals
+ * (no brief and no material, a link with no material, a link that is not
+ * http/https) are the page's own sentences and live in its own test file;
+ * this is the other half — what a Russian reader is told when the refusal
+ * came back over the wire.
+ */
+describe("the compose screen", () => {
+  const GOOGLE_KEY = [
+    { provider: "google", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+  ];
+
+  it("says in Russian that a run was refused, without naming a wire field", async () => {
+    // `ValidationPipe`'s shape for a body `runCreateSchema` rejects: one code
+    // for the whole boundary, the field-qualified array kept in `message` for
+    // the network tab. Unreachable from this screen by design — the paste
+    // carries the bound as `maxLength` and the guards refuse the rest before
+    // any request (§2.6, why no new error code was added) — which is exactly
+    // why the sentence a reader gets if the two ends ever drift must not be
+    // the server's English.
+    const issues = ["material: Too big: expected string to have <=8000 characters"];
+    serve((url, method) => {
+      if (url === "/api/ai-credentials") return jsonResponse(200, GOOGLE_KEY);
+      if (url === "/api/brands") return jsonResponse(200, [{ id: BRAND_ID, name: "Acme" }]);
+      if (method === "POST" && url === "/api/runs") {
+        return jsonResponse(400, refusalBody(400, "invalid_request", issues));
+      }
+      return undefined;
+    });
+
+    render(<NewContentPage />, { locale: "ru" });
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText(ru.ContentNew.brand), BRAND_ID);
+    await user.click(await screen.findByLabelText(/Main/));
+    await user.click(screen.getByText(ru.ContentNew.sourceTitle));
+    await user.type(
+      screen.getByLabelText(ru.ContentNew.materialLabel),
+      "Регулятор опубликовал решение сегодня утром.",
+    );
+    await user.click(screen.getByRole("button", { name: ru.ContentNew.generate }));
+
+    await expectShown(ru.Errors.invalid_request, issues[0] as string);
+    expect(screen.queryByText(/material:/)).not.toBeInTheDocument();
   });
 });
 

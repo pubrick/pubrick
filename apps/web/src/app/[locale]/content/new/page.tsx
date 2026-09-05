@@ -1,11 +1,18 @@
 "use client";
 
-import { type AiCredentialPublic, MAX_BODY_LENGTH, MAX_BRIEF_LENGTH } from "@pubrick/shared";
+import {
+  type AiCredentialPublic,
+  MAX_BODY_LENGTH,
+  MAX_BRIEF_LENGTH,
+  MAX_SOURCE_TEXT_LENGTH,
+  runCreateSchema,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -37,6 +44,8 @@ export default function NewContentPage() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [brief, setBrief] = useState("");
+  const [material, setMaterial] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
   // `null` until the first answer: neither Generate nor the "add a key" hint
   // should flash while we still do not know which of the two is true.
   const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
@@ -44,6 +53,22 @@ export default function NewContentPage() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * "IS THERE ANYTHING HERE" — asked once, read everywhere.
+   *
+   * Five places on this path decide whether a field counts as present: the
+   * request body's three spreads, the disclosure's dirty dot, the primary
+   * action's refusal, `runCreateSchema`'s refine and the repository's writer.
+   * The last two live in `@pubrick/shared` and `apps/api` and are trimmed
+   * (`runs.ts`, `RunsRepository.create`); these are trimmed here, once, for the
+   * reason the refine's own comment gives — two predicates that disagree about
+   * whitespace is how a single pasted space lights the dot and makes "Create
+   * post" refuse over material the request then omits.
+   */
+  const hasBrief = brief.trim() !== "";
+  const hasMaterial = material.trim() !== "";
+  const hasSourceUrl = sourceUrl.trim() !== "";
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -102,6 +127,16 @@ export default function NewContentPage() {
   // before onFormSubmit fires, exactly as if the button sat inside the form.
   async function createContent() {
     setError(null);
+    // THE PASTE IS NOT PART OF A MANUAL POST. `contentCreateSchema` has no
+    // `material` and no `sourceUrl`, so this path would create a post from the
+    // typed body, drop the article the person pasted, and navigate away — with
+    // no undo and nothing on screen to say it happened. Refused rather than
+    // confirmed: the opposite direction (Generate discarding a typed body) is
+    // something a person might actually want, and this never is.
+    if (hasMaterial) {
+      setError(t("materialBlocksCreate"));
+      return;
+    }
     if (channelIds.size === 0) {
       setError(t("noChannelsSelected"));
       return;
@@ -150,8 +185,26 @@ export default function NewContentPage() {
       setError(t("noChannelsSelected"));
       return;
     }
-    if (brief.trim() === "") {
-      setError(t("briefRequired"));
+    // The refine's own rule, in the refine's own words: a run needs something
+    // to work from, and either of the two will do (`runCreateSchema`).
+    if (!hasBrief && !hasMaterial) {
+      setError(t("briefOrMaterialRequired"));
+      return;
+    }
+    // A URL with no material is attribution for nothing. The repository drops
+    // it (a source run needs material), and a silent drop on the screen where
+    // the person typed it is the defect this refusal exists to prevent.
+    if (hasSourceUrl && !hasMaterial) {
+      setError(t("sourceUrlNeedsMaterial"));
+      return;
+    }
+    // The scheme check is the API's own member, not a second copy of it: this
+    // value is about to be sent as `runCreateSchema.sourceUrl`, so that is what
+    // judges it. `z.url()` alone constrains no scheme — `javascript:` and
+    // `mailto:` both parse — and the member carries `{ protocol: /^https?$/ }`
+    // because the value is rendered as an `<a href>` on two screens.
+    if (hasSourceUrl && !runCreateSchema.shape.sourceUrl.safeParse(sourceUrl).success) {
+      setError(t("sourceUrlNotHttp"));
       return;
     }
     if (body.trim() !== "") {
@@ -167,7 +220,20 @@ export default function NewContentPage() {
     try {
       const run = await api<Run>("/api/runs", {
         method: "POST",
-        body: JSON.stringify({ brandId, brief, channelIds: [...channelIds] }),
+        // Each field is sent only when there is one. `brief` used to go out
+        // unconditionally from a `""` default, which after the DTO became a
+        // union meant every paste-only run posted `brief: ""` — a value the
+        // schema treats as absent and a lie about what the person did.
+        //
+        // The values themselves go UNTRIMMED: the trim decides presence, it
+        // does not silently edit what someone pasted.
+        body: JSON.stringify({
+          brandId,
+          channelIds: [...channelIds],
+          ...(hasBrief && { brief }),
+          ...(hasMaterial && { material }),
+          ...(hasSourceUrl && { sourceUrl }),
+        }),
       });
       router.push(`/${locale}/content/runs/${run.id}`);
     } catch (err) {
@@ -277,6 +343,56 @@ export default function NewContentPage() {
                 </p>
               ))}
           </div>
+
+          {/*
+            Constitution rule 2: the paste lives behind THE shared disclosure,
+            never loose on the form and never behind a bespoke "show more". The
+            dot matters more here than anywhere else it is used — this section
+            can hold 8 000 characters while collapsed, and the screen's primary
+            action refuses over them.
+          */}
+          <Advanced label={t("sourceTitle")} dirty={hasMaterial || hasSourceUrl}>
+            <div className="flex flex-col gap-4">
+              <Textarea
+                id="material"
+                label={t("materialLabel")}
+                value={material}
+                onChange={(e) => setMaterial(e.target.value)}
+                placeholder={t("materialPlaceholder")}
+                maxLength={MAX_SOURCE_TEXT_LENGTH}
+                showCount
+                rows={6}
+              />
+              {/*
+                `inputMode` and NOT `type="url"`, which is what this plan asked
+                for and is the one instruction in it that does not survive
+                contact with `Advanced`. A `type="url"` control holding an
+                unparseable value — "example.com", the most natural thing to
+                type — is invalid AND unfocusable while this section is
+                collapsed, so the browser refuses the form's submit and reports
+                nothing at all: "Create post" becomes a dead button with no
+                sentence anywhere, which is precisely what the constitution
+                says a primary action may never be. (Reproduced in jsdom; the
+                regression is pinned in this screen's tests.) The URL keyboard
+                is kept, and the scheme rule stays where §2.7 puts it — on
+                `runCreateSchema.sourceUrl`, refused inline below in the
+                reader's own language rather than by a browser bubble in the
+                browser's.
+              */}
+              <Input
+                id="sourceUrl"
+                inputMode="url"
+                label={t("sourceUrlLabel")}
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
+                placeholder={t("sourceUrlPlaceholder")}
+                maxLength={2048}
+              />
+              {/* Both promises in one line, where the fields are: nothing
+                  rewrites the paste, and nothing opens the link. */}
+              <p className="text-sm text-fg-tertiary">{t("sourceHelp")}</p>
+            </div>
+          </Advanced>
 
           <Textarea
             id="body"
