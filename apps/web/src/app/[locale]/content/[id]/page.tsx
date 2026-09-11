@@ -608,17 +608,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * for them: their refusals say nothing about state the screen is rendering.
    */
   /**
-   * WHY `applyToItem` IS SAFE HERE, and what would make it unsafe.
+   * WHY `applyToItem` IS SAFE HERE: `usePoll`'s generation counter, and nothing
+   * about this screen.
    *
    * All three refine handlers write their result straight into the rendered
-   * item instead of awaiting a re-read. That is a race in general: a poll tick
-   * issued BEFORE the mutation can land after it, and `setData` from the poll
+   * item instead of awaiting a re-read. That is a race: a poll tick issued
+   * BEFORE the mutation can land after it, and `setData` from the poll
    * overwrites what the mutation just applied — resurrecting a discarded
    * proposal, or dropping a staged one, with no error and no way for the reader
-   * to tell.
+   * to tell. `usePoll.mutate` drops any response that left before it, which is
+   * what closes it; this comment used to argue instead that the race could not
+   * arise on this screen, and that argument was wrong.
    *
-   * It cannot happen on this screen today, and the reason is a coincidence
-   * between three files rather than anything this component enforces:
+   * It was wrong because it reasoned about STARTING a refine, not about a
+   * proposal already staged. The three files it cited do say a press cannot be
+   * ACCEPTED while the poll ticks:
    *
    * - `lib/adaptations.ts` — the poll runs only while some adaptation is
    *   `queued` or `publishing` (`IN_FLIGHT_ADAPTATION_STATUSES`, via
@@ -632,11 +636,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    *   item back into that set (`failed`) only when EVERY adaptation has failed,
    *   which is to say when none is in flight.
    *
-   * So "the poll is ticking" and "a refine is possible" are disjoint. If any of
-   * those three ever changes — a refine allowed on an `approved` item, a fourth
-   * in-flight status, a partial-failure rollup — this needs a real guard
-   * (a generation counter on the poll, or awaiting `reload()` instead), not a
-   * bigger comment.
+   * But `refinableItem` reads WITHOUT a lock and deliberately so (a row lock
+   * across a forty-five-second model call is pool exhaustion), so a press that
+   * queues behind an approve stages its proposal on the now-approved item — a
+   * 201, measured through the real routes. The card renders on any status and
+   * Discard is allowed on a pinned post on purpose. An approved item with
+   * `queued` adaptations is exactly when the 2 s poll ticks, and a tick in
+   * flight across that DELETE would have written the proposal back. If it were
+   * also the terminal tick, polling would stop with the ghost card still there
+   * and the next Discard would answer 404.
    */
   async function refineFailed(err: unknown) {
     handleError(err);

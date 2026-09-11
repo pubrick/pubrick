@@ -14,19 +14,23 @@ function Probe({
   fetcher,
   terminal = isTerminal,
   onReady,
+  onMutateReady,
 }: {
   fetcher: () => Promise<Value>;
   terminal?: (value: Value) => boolean;
   /** Called once with `refresh`, so a test can await the promise it returns. */
   onReady?: (refresh: () => Promise<void>) => void;
+  /** Called once with `mutate`, so a test can apply a local change mid-flight. */
+  onMutateReady?: (mutate: (update: (previous: Value | null) => Value | null) => void) => void;
 }) {
-  const { data, error, refresh } = usePoll(fetcher, terminal);
+  const { data, error, refresh, mutate } = usePoll(fetcher, terminal);
   const fired = useRef(false);
   useEffect(() => {
-    if (fired.current || !onReady) return;
+    if (fired.current) return;
     fired.current = true;
-    onReady(refresh);
-  }, [onReady, refresh]);
+    onReady?.(refresh);
+    onMutateReady?.(mutate);
+  }, [onReady, onMutateReady, refresh, mutate]);
   return (
     <div>
       <span data-testid="status">{data?.status ?? "—"}</span>
@@ -207,5 +211,97 @@ describe("usePoll", () => {
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("status")).toHaveTextContent("succeeded");
+  });
+
+  /**
+   * THE RACE `mutate`'s CONTRACT DEPENDS ON, released deterministically.
+   *
+   * A caller mutates because it already knows what the server now holds — a
+   * proposal discarded, a run dismissed. A tick issued BEFORE that write
+   * describes the world as it was, so writing it back resurrects the thing the
+   * reader just got rid of. The interleaving is the whole test: the fetch is
+   * held open, `mutate` runs while it is in flight, and only then is the stale
+   * response released.
+   *
+   * Nothing about this is hypothetical on the content screen — a refine staged
+   * on an item an approve pinned first leaves a card on a post whose
+   * adaptations are queued, which is precisely when the 2 s poll ticks.
+   */
+  it("drops a response that left before the last mutate, and keeps polling", async () => {
+    let release: (value: Value) => void = () => {};
+    const fetcher = vi
+      .fn<() => Promise<Value>>()
+      .mockResolvedValueOnce({ status: "running" })
+      .mockImplementationOnce(
+        () =>
+          new Promise<Value>((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValue({ status: "running" });
+
+    let mutate: (update: (previous: Value | null) => Value | null) => void = () => {};
+    await renderProbe(
+      <Probe fetcher={fetcher} terminal={never} onMutateReady={(m) => (mutate = m)} />,
+    );
+    expect(screen.getByTestId("status")).toHaveTextContent("running");
+
+    // The second tick leaves, and is still in flight.
+    await advance(POLL_INTERVAL_MS);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    // The local write lands first...
+    act(() => mutate(() => ({ status: "succeeded" })));
+    expect(screen.getByTestId("status")).toHaveTextContent("succeeded");
+
+    // ...and the answer that left before it must not undo it.
+    await act(async () => {
+      release({ status: "running" });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("status")).toHaveTextContent("succeeded");
+
+    // Dropped, not stopped: the NEXT answer left after the mutation, so it is
+    // the server's word and it is rendered. A guard that stopped the poll
+    // instead would freeze the screen on the local value forever.
+    await advance(POLL_INTERVAL_MS);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("status")).toHaveTextContent("running");
+  });
+
+  /**
+   * ...and the case that made it permanent rather than momentary: a stale tick
+   * that is ALSO the terminal one. Written unconditionally it both resurrects
+   * the value and stops the poll, so nothing ever corrects it and the reader
+   * has no way to tell short of a manual reload.
+   */
+  it("does not let a stale terminal response stop the poll on the value it revived", async () => {
+    let release: (value: Value) => void = () => {};
+    const fetcher = vi
+      .fn<() => Promise<Value>>()
+      .mockResolvedValueOnce({ status: "running" })
+      .mockImplementationOnce(
+        () =>
+          new Promise<Value>((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValue({ status: "running" });
+
+    let mutate: (update: (previous: Value | null) => Value | null) => void = () => {};
+    await renderProbe(<Probe fetcher={fetcher} onMutateReady={(m) => (mutate = m)} />);
+
+    await advance(POLL_INTERVAL_MS);
+    act(() => mutate((previous) => (previous ? { ...previous, status: "running" } : previous)));
+
+    await act(async () => {
+      release({ status: "succeeded" });
+      await Promise.resolve();
+    });
+
+    // Still ticking, and still showing what the caller wrote.
+    expect(screen.getByTestId("status")).toHaveTextContent("running");
+    await advance(POLL_INTERVAL_MS);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });

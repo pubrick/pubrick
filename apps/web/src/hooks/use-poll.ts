@@ -36,6 +36,17 @@ export type PollResult<T> = {
    * run leaving the strip is something the caller knows the moment its write
    * succeeded, and making the user's own action wait on a request that might
    * fail is how a screen ends up frozen rather than merely stale.
+   *
+   * **A RESPONSE THAT LEFT BEFORE THE MUTATION IS DROPPED**, and that is the
+   * half without which the paragraph above is wrong. A tick issued before the
+   * caller's DELETE landed carries the state as it was BEFORE it — so writing
+   * it unconditionally puts the deleted thing back on screen, with no error and
+   * nothing for the reader to press. Permanently, if that tick is also the
+   * terminal one: the poll stops and the ghost survives until a manual reload.
+   * "The next poll overwrites it" is only true of polls that started after.
+   *
+   * Counted rather than timestamped: two mutations in the same millisecond are
+   * ordinary, and a monotonic counter has no clock to be wrong about.
    */
   mutate: (update: (previous: T | null) => T | null) => void;
 };
@@ -69,6 +80,8 @@ function isPermanent(err: unknown): boolean {
  *   scheduling the next tick, and keep one rule ("a stopped instance writes
  *   nothing") instead of two.
  * - A transient failure does NOT stop the poll; a 4xx does. See `isPermanent`.
+ * - A response that left before the last `mutate()` is dropped, terminal or
+ *   not. See `mutate`.
  *
  * `refresh()` calls THIS instance's fetch directly rather than restarting the
  * effect through a state key. The indirect version shipped first and was wrong
@@ -100,7 +113,16 @@ export function usePoll<T>(
   // a dead poll or write state after the component is gone.
   const pollNowRef = useRef<() => Promise<void>>(NOOP);
   const refresh = useCallback(() => pollNowRef.current(), []);
-  const mutate = useCallback((update: (previous: T | null) => T | null) => setData(update), []);
+
+  // Bumped by every local mutation; a fetch captures it before it leaves and
+  // drops its own answer if the number moved while it was away. A ref rather
+  // than state: it must not restart the effect, and the poll in flight has to
+  // read the value as of NOW, not as of the render it was scheduled in.
+  const generation = useRef(0);
+  const mutate = useCallback((update: (previous: T | null) => T | null) => {
+    generation.current += 1;
+    setData(update);
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -120,9 +142,18 @@ export function usePoll<T>(
     }
 
     async function poll() {
+      const startedAt = generation.current;
       try {
         const value = await fetcher();
         if (stopped) return;
+        // Older than the last local mutation: this answer describes a world
+        // the caller has already changed. Dropped, not merged — and the poll
+        // keeps ticking, so the next answer (which left after the mutation)
+        // is the one that resynchronises the screen with the server.
+        if (generation.current !== startedAt) {
+          schedule();
+          return;
+        }
         setData(value);
         setError(null);
         if (isTerminal(value)) {
