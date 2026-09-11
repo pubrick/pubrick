@@ -105,6 +105,7 @@ type ContentItem = {
    * after any of those — there is no separate GET.
    */
   refineProposal: RefineProposal | null;
+  /**
    * What that run was asked for — the source strip's whole input, or `null`
    * for a hand-written draft. `RunInput` is the column's own schema, so this
    * screen and the api describe one shape rather than two.
