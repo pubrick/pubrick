@@ -54,6 +54,7 @@ describe("checkBrowserOrigin", () => {
       kind: "mismatch",
       browserOrigin: "http://localhost:3080",
       configuredOrigin: "http://localhost:3000",
+      acceptedOrigins: ["http://localhost:3000"],
     });
   });
 
@@ -62,6 +63,7 @@ describe("checkBrowserOrigin", () => {
       kind: "mismatch",
       browserOrigin: "http://127.0.0.1:3000",
       configuredOrigin: "http://localhost:3000",
+      acceptedOrigins: ["http://localhost:3000"],
     });
   });
 
@@ -70,6 +72,7 @@ describe("checkBrowserOrigin", () => {
       kind: "mismatch",
       browserOrigin: "http://pubrick.example",
       configuredOrigin: "https://pubrick.example",
+      acceptedOrigins: ["https://pubrick.example"],
     });
   });
 
@@ -93,6 +96,63 @@ describe("checkBrowserOrigin", () => {
       kind: "unverifiable",
     });
   });
+
+  // THE ALLOW-LIST IS BETTER-AUTH'S, NOT `PUBLIC_ORIGIN` ALONE. better-auth
+  // trusts `new URL(BETTER_AUTH_URL).origin`, every entry of `trustedOrigins`
+  // and everything in `BETTER_AUTH_TRUSTED_ORIGINS`; a check that knew only the
+  // one value would hard-refuse, ahead of the boundary, requests better-auth
+  // itself allows — and tell their operator to change the variable that is not
+  // the problem.
+  it("accepts an origin that is trusted without being the configured one", () => {
+    expect(
+      checkBrowserOrigin("https://second.example", "https://web.example", [
+        "https://web.example",
+        "https://second.example",
+      ]),
+    ).toEqual({ kind: "match" });
+  });
+
+  // The hand-configured install: BETTER_AUTH_URL names one origin, WEB_ORIGIN
+  // another. better-auth trusts its own base URL, so the api answers there.
+  it("accepts the base URL's origin when it differs from the configured one", () => {
+    expect(
+      checkBrowserOrigin("http://localhost:34103", "https://web.example", [
+        "http://localhost:34103",
+        "https://web.example",
+      ]),
+    ).toEqual({ kind: "match" });
+  });
+
+  it("still refuses an origin that is in neither the configured value nor the list", () => {
+    expect(
+      checkBrowserOrigin("https://evil.example", "https://web.example", [
+        "https://web.example",
+        "https://second.example",
+      ]),
+    ).toEqual({
+      kind: "mismatch",
+      browserOrigin: "https://evil.example",
+      configuredOrigin: "https://web.example",
+      acceptedOrigins: ["https://web.example", "https://second.example"],
+    });
+  });
+
+  // An entry this cannot parse is dropped rather than widening or narrowing the
+  // set: better-auth matches its patterns literally, and guessing at one here is
+  // how the two lists start to disagree again.
+  it("ignores list entries that are not absolute origins", () => {
+    const verdict = checkBrowserOrigin("https://evil.example", "https://web.example", [
+      "*.web.example",
+      "",
+      "https://web.example/",
+    ]);
+    expect(verdict).toEqual({
+      kind: "mismatch",
+      browserOrigin: "https://evil.example",
+      configuredOrigin: "https://web.example",
+      acceptedOrigins: ["https://web.example"],
+    });
+  });
 });
 
 describe("originMismatchMessage", () => {
@@ -111,6 +171,40 @@ describe("originMismatchMessage", () => {
   it("names the variable to change", () => {
     expect(message).toContain("PUBLIC_ORIGIN");
   });
+
+  // An instance that accepts more than one origin has an operator who wrote a
+  // trusted-origins list, and "PUBLIC_ORIGIN is X" read as the whole allow-list
+  // would be a lie to exactly that reader. The variable is still named, because
+  // setting it is still the fix in the common case.
+  it("does not claim the configured origin is the only one when a list exists", () => {
+    const many = originMismatchMessage("https://evil.example", "https://web.example", [
+      "https://web.example",
+      "https://second.example",
+    ]);
+    expect(many).toContain("is not one of the origins this instance accepts");
+    expect(many).toContain("PUBLIC_ORIGIN: https://web.example");
+    expect(many).toContain("https://evil.example");
+  });
+
+  // …and it never lists the others: the body answers an unauthenticated caller,
+  // and `PUBLIC_ORIGIN` is public by definition in a way an internal origin an
+  // operator added by hand is not.
+  it("does not disclose the other accepted origins", () => {
+    expect(
+      originMismatchMessage("https://evil.example", "https://web.example", [
+        "https://web.example",
+        "https://internal.corp",
+      ]),
+    ).not.toContain("internal.corp");
+  });
+
+  it("keeps the single-origin sentence when the instance accepts one origin", () => {
+    expect(
+      originMismatchMessage("http://localhost:3080", "http://localhost:3000", [
+        "http://localhost:3000",
+      ]),
+    ).toBe(message);
+  });
 });
 
 describe("originMismatchBody", () => {
@@ -122,6 +216,13 @@ describe("originMismatchBody", () => {
       code: ORIGIN_MISMATCH_CODE,
       expectedOrigin: "http://localhost:3000",
     });
+  });
+
+  it("carries the sentence for an instance that accepts several origins", () => {
+    const accepted = ["https://web.example", "https://second.example"];
+    expect(
+      originMismatchBody("https://evil.example", "https://web.example", accepted).message,
+    ).toBe(originMismatchMessage("https://evil.example", "https://web.example", accepted));
   });
 
   // The web reads this field and interpolates it into the reader's own language;

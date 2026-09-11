@@ -228,8 +228,8 @@ describe.skipIf(!url)("compiled api, outside test mode", () => {
     // package can observe this at all. If someone sets `advanced.disableOriginCheck` —
     // or the process starts identifying as test again — this is the check that notices.
     //
-    // The refusal is now OURS (auth-origin.middleware.ts runs ahead of better-auth's
-    // router), and it is the sentence that matters: an operator whose PUBLIC_ORIGIN
+    // The refusal is now OURS (auth-origin.plugin.ts runs ahead of better-auth's
+    // origin check), and it is the sentence that matters: an operator whose PUBLIC_ORIGIN
     // does not match the address bar used to get `Invalid origin`, which names
     // neither value and is unreadable as a configuration error.
     // On /sign-up/email, like the two probes below: better-auth's limiter keys a
@@ -267,9 +267,9 @@ describe.skipIf(!url)("compiled api, outside test mode", () => {
       expect(body.message).toContain(api.trustedOrigin);
     });
 
-    // better-auth's own origin check, which this middleware must NOT replace —
-    // and structurally cannot mask, because a request with no Origin at all is
-    // exactly what the middleware passes through as unverifiable. A cookie makes
+    // better-auth's own origin check, which this plugin must NOT replace — and
+    // structurally cannot mask, because a request with no Origin at all is
+    // exactly what the plugin passes through as unverifiable. A cookie makes
     // better-auth validate the (absent) origin rather than skip the check.
     // On /change-password rather than /sign-in/email: better-auth's limiter keys a
     // bucket per path and runs BEFORE the origin check, so borrowing the sign-in
@@ -326,6 +326,65 @@ describe.skipIf(!url)("compiled api, outside test mode", () => {
     it("names the accepted origin at boot", () => {
       expect(api.output()).toContain(`accepts sign-ins from ${api.trustedOrigin}`);
       expect(api.output()).toContain("PUBLIC_ORIGIN");
+    });
+  });
+
+  /**
+   * AN INSTANCE THAT ACCEPTS MORE THAN ONE ORIGIN — the two configurations the
+   * first version of this plugin locked out, measured on the shipped binary.
+   * `BETTER_AUTH_TRUSTED_ORIGINS` is better-auth's own environment variable
+   * (nothing in this repository reads it), and `BETTER_AUTH_URL` here names an
+   * origin `WEB_ORIGIN` does not. Both answered 401 with no plugin at all and
+   * 403 `ORIGIN_MISMATCH` with the first version of it, advising the operator to
+   * change `PUBLIC_ORIGIN` — which was not their problem.
+   */
+  describe("more origins than PUBLIC_ORIGIN", () => {
+    let api: Api;
+    const SECOND = "https://second.example";
+    const WEB = "https://web.example";
+
+    beforeAll(async () => {
+      // BETTER_AUTH_URL stays on the loopback port bootApi picked; WEB_ORIGIN
+      // deliberately names something else, which is the hand-configured install.
+      api = await bootApi({ WEB_ORIGIN: WEB, BETTER_AUTH_TRUSTED_ORIGINS: SECOND });
+    }, 120_000);
+
+    afterAll(() => api?.stop());
+
+    it("does not refuse an origin trusted through BETTER_AUTH_TRUSTED_ORIGINS", async () => {
+      const response = await fetch(`${api.origin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: SECOND },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      // Wrong credentials, which is better-auth answering — not our 403.
+      expect(response.status).toBe(401);
+    });
+
+    it("does not refuse the BETTER_AUTH_URL origin when WEB_ORIGIN names another", async () => {
+      const response = await fetch(`${api.origin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: api.trustedOrigin },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      expect(response.status).toBe(401);
+    });
+
+    // Still refused, and still named — but the sentence no longer says
+    // PUBLIC_ORIGIN is the whole allow-list, and it does not read the operator's
+    // other origins out to an unauthenticated caller.
+    it("refuses an origin no entry accepts, without claiming there is only one", async () => {
+      const response = await fetch(`${api.origin}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://evil.example" },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { code?: string; message?: string };
+      expect(body.code).toBe("ORIGIN_MISMATCH");
+      expect(body.message).toContain("is not one of the origins this instance accepts");
+      expect(body.message).toContain(`PUBLIC_ORIGIN: ${WEB}`);
+      expect(body.message).not.toContain("second.example");
     });
   });
 

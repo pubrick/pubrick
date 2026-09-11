@@ -71,7 +71,19 @@ export type OriginMismatchBody = {
 export type OriginVerdict =
   | { kind: "match" }
   | { kind: "unverifiable" }
-  | { kind: "mismatch"; browserOrigin: string; configuredOrigin: string };
+  | {
+      kind: "mismatch";
+      browserOrigin: string;
+      configuredOrigin: string;
+      /**
+       * Every origin this instance accepts, normalised and de-duplicated — the
+       * configured one first. Only its LENGTH reaches the reader (see
+       * `originMismatchMessage`): the sentence must not claim `PUBLIC_ORIGIN` is
+       * the whole allow-list when it is not, and must not read an operator's
+       * internal origins out to an unauthenticated caller either.
+       */
+      acceptedOrigins: string[];
+    };
 
 /**
  * `scheme://host[:port]`, or null for anything that is not an absolute origin.
@@ -100,7 +112,24 @@ export function normalizeOrigin(raw: string | null | undefined): string | null {
 }
 
 /**
- * Does the document that made this request come from the configured origin?
+ * Does the document that made this request come from an origin this instance
+ * accepts?
+ *
+ * `alsoAccepted` IS THE POINT, and it is not an extra. better-auth's own
+ * allow-list is `{new URL(BETTER_AUTH_URL).origin} ∪ trustedOrigins ∪
+ * BETTER_AUTH_TRUSTED_ORIGINS`, and a check that compared `PUBLIC_ORIGIN` alone
+ * would hard-refuse — ahead of that boundary, so the boundary never gets to
+ * disagree — two configurations better-auth allows: an operator who declared a
+ * second trusted origin, and an install whose `BETTER_AUTH_URL` and
+ * `WEB_ORIGIN` name different origins. Both were measured returning 403 where
+ * better-auth alone returned 401. The caller passes better-auth's live list
+ * (`ctx.trustedOrigins`) so the two sets cannot drift apart; `configuredOrigin`
+ * stays a separate argument because it is the one the SENTENCE names.
+ *
+ * Entries that are not absolute origins are dropped rather than guessed at:
+ * better-auth matches a pattern like `*.web.example` with its own wildcard
+ * rules, which this module does not reimplement — the plugin asks better-auth
+ * itself about those (see `auth-origin.plugin.ts`).
  *
  * Unparseable on either side is `unverifiable`, not `mismatch`: a caller that
  * sent `Origin: null` (a sandboxed iframe, a `file://` page) has told us nothing
@@ -110,12 +139,23 @@ export function normalizeOrigin(raw: string | null | undefined): string | null {
 export function checkBrowserOrigin(
   browserOrigin: string | null | undefined,
   configuredOrigin: string,
+  alsoAccepted: readonly string[] = [],
 ): OriginVerdict {
   const actual = normalizeOrigin(browserOrigin);
   const expected = normalizeOrigin(configuredOrigin);
   if (actual === null || expected === null) return { kind: "unverifiable" };
-  if (actual === expected) return { kind: "match" };
-  return { kind: "mismatch", browserOrigin: actual, configuredOrigin: expected };
+  const accepted = [expected];
+  for (const entry of alsoAccepted) {
+    const normalised = normalizeOrigin(entry);
+    if (normalised !== null && !accepted.includes(normalised)) accepted.push(normalised);
+  }
+  if (accepted.includes(actual)) return { kind: "match" };
+  return {
+    kind: "mismatch",
+    browserOrigin: actual,
+    configuredOrigin: expected,
+    acceptedOrigins: accepted,
+  };
 }
 
 /**
@@ -130,23 +170,39 @@ export function checkBrowserOrigin(
  * the code — the same division of labour every other refusal in this repository
  * uses. The reader's own language comes from `Auth.originMismatch` in the web.
  */
-export function originMismatchMessage(browserOrigin: string, configuredOrigin: string): string {
-  return (
-    `You opened ${browserOrigin} but PUBLIC_ORIGIN is ${configuredOrigin}. ` +
+export function originMismatchMessage(
+  browserOrigin: string,
+  configuredOrigin: string,
+  acceptedOrigins: readonly string[] = [configuredOrigin],
+): string {
+  const tail =
     "Sign-in cookies are issued for PUBLIC_ORIGIN only, so set PUBLIC_ORIGIN in .env to the " +
-    `origin you type in the browser and restart — or open ${configuredOrigin} instead.`
-  );
+    `origin you type in the browser and restart — or open ${configuredOrigin} instead.`;
+  // An instance that accepts several origins has an operator who wrote a
+  // trusted-origins list (or an install whose BETTER_AUTH_URL disagrees with
+  // WEB_ORIGIN), and to that reader "PUBLIC_ORIGIN is X" read as the whole
+  // allow-list is false. The other origins are NOT listed: this body answers an
+  // unauthenticated caller, and `PUBLIC_ORIGIN` is the address people type in a
+  // way an internal origin somebody added by hand is not.
+  if (acceptedOrigins.length > 1) {
+    return (
+      `You opened ${browserOrigin} but it is not one of the origins this instance accepts ` +
+      `(PUBLIC_ORIGIN: ${configuredOrigin}). ${tail}`
+    );
+  }
+  return `You opened ${browserOrigin} but PUBLIC_ORIGIN is ${configuredOrigin}. ${tail}`;
 }
 
 /** The whole 403, assembled once so the api cannot say one thing and mean another. */
 export function originMismatchBody(
   browserOrigin: string,
   configuredOrigin: string,
+  acceptedOrigins: readonly string[] = [configuredOrigin],
 ): OriginMismatchBody {
   return {
     statusCode: 403,
     error: "Forbidden",
-    message: originMismatchMessage(browserOrigin, configuredOrigin),
+    message: originMismatchMessage(browserOrigin, configuredOrigin, acceptedOrigins),
     code: ORIGIN_MISMATCH_CODE,
     expectedOrigin: configuredOrigin,
   };

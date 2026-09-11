@@ -16,7 +16,7 @@ async function bootstrap(): Promise<void> {
   // anything has gone wrong: `docker compose logs api` now says which origin
   // this instance will accept, next to the port it came up on. The expensive
   // half — naming both values to the person staring at the login form — is
-  // auth-origin.middleware.ts.
+  // auth-origin.plugin.ts.
   for (const line of originDoctorLines(env.WEB_ORIGIN, env.BETTER_AUTH_URL)) console.log(line);
 
   // Mirrors apps/worker/src/main.ts. Without this, `docker compose up -d
