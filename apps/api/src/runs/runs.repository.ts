@@ -9,12 +9,15 @@ import {
   RUN_LIST_STATES,
   type RunCreate,
   type RunStatus,
+  runCreateSchema,
+  runInputSchema,
   type SettledRunStatus,
 } from "@pubrick/shared";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { ZodValidationPipe } from "../validation.pipe";
 
 /**
  * Explicit allowlist, per the house rule. Two columns are deliberately absent:
@@ -148,6 +151,27 @@ function isCancellable(status: RunStatus): status is CancellableStatus {
  * however their keys hash.
  */
 const ADMISSION_LOCK_NAMESPACE = 0x7a11;
+
+/**
+ * The two schemas `retry` validates with, through the SAME pipe the HTTP
+ * boundary uses — so a refusal reads `invalid_request` with zod's own
+ * field-qualified issues, exactly as it would had the browser sent the body.
+ *
+ * A retry is a request like any other; the only difference is that its body
+ * comes out of `pipeline_runs.input` instead of off the wire. Writing a second
+ * mapping from zod issues to a refusal here would be a second answer to "how
+ * does this API say a body is malformed", for the one caller whose body nobody
+ * typed.
+ *
+ * The STORED input is parsed first, and not merely read through the drizzle
+ * `$type<RunInput>()` that types it: jsonb has no shape the database checks, so
+ * that type is a claim about what the last writer did, not a fact. A row
+ * carrying a `kind` this build cannot rebuild a request for — the `topic` the
+ * union is discriminated for — must be refused rather than quietly retried as
+ * whichever member its remaining fields happen to satisfy.
+ */
+const parseStoredInput = new ZodValidationPipe(runInputSchema);
+const parseRunCreate = new ZodValidationPipe(runCreateSchema);
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -346,6 +370,62 @@ export class RunsRepository {
     });
 
     return this.get(orgId, id);
+  }
+
+  /**
+   * Asks for the same run again, from what the API already stores.
+   *
+   * THE BODY NEVER LEAVES THE SERVER. Try again used to be `POST /api/runs`
+   * with a request the queue screen rebuilt out of `run.input`, which is why
+   * the open-runs list had to carry every open run's whole pasted article on a
+   * five-second poll, unbounded in the number of runs (measured: 122 265 bytes
+   * for eight open runs, ~85 MB/hour per tab). Nothing in a browser needs 8 000
+   * characters of somebody else's article to press a button, so it is no longer
+   * sent one.
+   *
+   * It re-admits through `create` rather than inserting a row of its own, and
+   * that is the whole design: the cross-field refine, the admission cap under
+   * its advisory lock, the brand-and-channel resolution and the
+   * enqueue-in-the-same-transaction rule are ONE path. A retry that wrote its
+   * own insert would be a second way into `pipeline_runs` and the one the spend
+   * guard does not cover — a run per click, past the cap, with no job behind it.
+   * It takes no lock of its own either, so `docs/lock-order.md` is unchanged:
+   * this is one org-scoped SELECT followed by `create`'s own transaction.
+   *
+   * Any status may be retried. The queue screen only offers the button on a
+   * terminal run, but "is this worth asking again" is the reader's judgement,
+   * and a retry of a live run is bounded by the same cap as any other create.
+   * Nothing about the run being retried changes — dismissing it is a separate
+   * act, done by the screen once the new run is known to exist.
+   */
+  async retry(orgId: string, id: string) {
+    const rows = await db
+      .select({ brandId: schema.pipelineRuns.brandId, input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, id)))
+      .limit(1);
+    const row = rows[0];
+    // The same 404 an id that never existed gets: a caller asking about another
+    // org's run learns nothing from the answer, least of all that it is there.
+    if (!row) throw notFound("run_not_found", "Run not found");
+
+    const stored = parseStoredInput.transform(row.input);
+    // `?? undefined` on both nullable members, and it is the same defect twice:
+    // the STORED shape spells "absent" as `null` while the REQUEST spells it as
+    // an omitted key, and `z.string().optional()` refuses `null` on the type
+    // check before any refine runs. The brand comes off the ROW rather than out
+    // of the input, which does not carry it.
+    return this.create(
+      orgId,
+      parseRunCreate.transform({
+        brandId: row.brandId,
+        brief: stored.text ?? undefined,
+        ...(stored.kind === "source"
+          ? { material: stored.material, sourceUrl: stored.sourceUrl ?? undefined }
+          : {}),
+        channelIds: stored.channelIds,
+      }),
+    );
   }
 
   /**

@@ -631,6 +631,189 @@ describe.skipIf(!url)("runs e2e", () => {
     });
   });
 
+  /**
+   * ASKING FOR THE SAME RUN AGAIN, without the browser carrying what it was.
+   *
+   * Try again used to be `POST /api/runs` with a body the queue screen rebuilt
+   * out of `run.input` — which is why the list had to ship every open run's
+   * whole pasted article, five seconds apart, for ever (measured: 122 265 bytes
+   * for eight open runs). The material now never leaves the server: this route
+   * re-reads the stored input under the caller's org and hands it back to
+   * `create`, so the admission cap, the channel resolution and the
+   * enqueue-in-the-same-transaction rule are the SAME code, not a second
+   * spelling of it.
+   */
+  describe("retrying a run the API already has", () => {
+    const ARTICLE = "The autumn menu, as somebody else wrote it.";
+
+    async function pastedRun(agent: request.Agent, brandId: string, channelIds: string[]) {
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Shorten it",
+          material: ARTICLE,
+          sourceUrl: "https://example.com/autumn-menu",
+          channelIds,
+        })
+        .expect(201);
+      return runDetailDtoSchema.parse(created.body);
+    }
+
+    /**
+     * The whole point: the retry carries the paste even though the request
+     * carried nothing at all. `toEqual` rather than `toMatchObject`, because a
+     * retry that dropped `sourceUrl` or invented a brief would satisfy the
+     * looser assertion.
+     */
+    it("re-admits the stored input from an empty request body", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await pastedRun(agent, brandId, [channelId]);
+      await setRunStatus(first.id, "failed", "internal");
+
+      const retried = await agent.post(`/api/runs/${first.id}/retry`).expect(201);
+      const run = runDetailDtoSchema.parse(retried.body);
+
+      expect(run.id).not.toBe(first.id);
+      expect(run.status).toBe("queued");
+      expect(run.input).toEqual(first.input);
+
+      // The same answer `POST /api/runs` gives, down to the enqueued job: a run
+      // row with no job behind it is a stall nobody can see.
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const jobs = await db.execute(
+        `SELECT count(*)::int AS n FROM pgboss.job
+           WHERE name = 'generate' AND data->>'runId' = '${run.id}'`,
+      );
+      await pool.end();
+      expect((jobs.rows[0] as { n: number }).n).toBe(1);
+    });
+
+    /** The other arm of the union, which has no material and must not grow one. */
+    it("re-admits a brief run as a brief run", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await startRun(agent, brandId, [channelId]);
+      await setRunStatus(first.id, "failed", "internal");
+
+      const run = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(run.input).toEqual({
+        kind: "brief",
+        text: "Write about our new release",
+        channelIds: [channelId],
+      });
+    });
+
+    /**
+     * The run stays exactly where it was: dismissing is a separate act, and the
+     * queue screen does it only once the retry is known to have been admitted.
+     */
+    it("leaves the run it was asked about untouched", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await pastedRun(agent, brandId, [channelId]);
+      await setRunStatus(first.id, "failed", "internal");
+
+      await agent.post(`/api/runs/${first.id}/retry`).expect(201);
+
+      const before = runDetailDtoSchema.parse((await agent.get(`/api/runs/${first.id}`)).body);
+      expect(before).toMatchObject({ status: "failed", dismissedAt: null });
+    });
+
+    /**
+     * TENANCY, and the only shape that can show it: the stranger asks by the
+     * real id of a run they do not own. A 404 is the same answer they get for an
+     * id that does not exist, so the row's existence is not reported either —
+     * and, crucially, nothing of the owner's article is copied into a run the
+     * stranger can then read.
+     */
+    it("never retries another org's run, and creates nothing while refusing", async () => {
+      const owner = await orgAgent();
+      const ownerBrand = await brandWithChannel(owner);
+      const theirs = await pastedRun(owner, ownerBrand.brandId, [ownerBrand.channelId]);
+
+      const stranger = await orgAgent();
+      await brandWithChannel(stranger);
+
+      const denied = await stranger.post(`/api/runs/${theirs.id}/retry`).expect(404);
+      expect(denied.body.code).toBe("run_not_found");
+      expect((await stranger.get("/api/runs").expect(200)).body).toEqual([]);
+      // And the owner's list is unchanged: nothing was created on their side
+      // either.
+      expect((await owner.get("/api/runs").expect(200)).body).toHaveLength(1);
+    });
+
+    it("answers 404 for a run id that never existed", async () => {
+      const agent = await orgAgent();
+      const denied = await agent.post(`/api/runs/${randomUUID()}/retry`).expect(404);
+      expect(denied.body.code).toBe("run_not_found");
+    });
+
+    /**
+     * The refusals are `create`'s own, because the retry IS a create. A channel
+     * deleted since the run is the reachable case — deleting the BRAND cascades
+     * the run row away, so that one answers `run_not_found` instead.
+     */
+    it("refuses with a code, not a 500, when the channels are gone", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await pastedRun(agent, brandId, [channelId]);
+      await setRunStatus(first.id, "failed", "internal");
+      await agent.delete(`/api/channels/${channelId}`).expect(200);
+
+      const denied = await agent.post(`/api/runs/${first.id}/retry`).expect(400);
+      expect(denied.body.code).toBe("brand_has_no_channels");
+    });
+
+    /**
+     * The cap is the reason this goes through `create` at all. A retry that
+     * inserted the row itself would be a fourth way into `pipeline_runs` and the
+     * one the spend guard does not cover.
+     */
+    it("is refused by the admission cap exactly as a create is", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await startRun(agent, brandId, [channelId]);
+      await setRunStatus(first.id, "failed", "internal");
+      for (let i = 1; i < MAX_CONCURRENT_RUNS; i++) await startRun(agent, brandId, [channelId]);
+      // The cap counts queued|running, so the failed run above is not one of
+      // them: the org is at the cap and the retry would be the fourth.
+      await startRun(agent, brandId, [channelId]);
+
+      const denied = await agent.post(`/api/runs/${first.id}/retry`).expect(409);
+      expect(denied.body.code).toBe("run_limit_reached");
+      expect(denied.body.message).toContain(String(MAX_CONCURRENT_RUNS));
+    });
+
+    /**
+     * A stored row the request schema would refuse today — written by hand, past
+     * the drizzle `$type`, with material longer than `MAX_SOURCE_TEXT_LENGTH`.
+     * The retry is a REQUEST like any other and is refused at the same boundary,
+     * with the same code, rather than admitted because it came from inside.
+     */
+    it("refuses a stored input the create schema would not accept, coded", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const first = await pastedRun(agent, brandId, [channelId]);
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        sql`UPDATE pipeline_runs
+              SET input = jsonb_set(input, '{material}', to_jsonb(${"x".repeat(MAX_SOURCE_TEXT_LENGTH + 1)}::text))
+            WHERE id = ${first.id}`,
+      );
+      await pool.end();
+
+      const denied = await agent.post(`/api/runs/${first.id}/retry`).expect(400);
+      expect(denied.body.code).toBe("invalid_request");
+      expect(JSON.stringify(denied.body.message)).toContain("material:");
+    });
+  });
+
   it("refuses a fourth concurrent run (409) and names the limit", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

@@ -41,6 +41,20 @@ export class RunsController {
     return this.runs.get(orgId, id);
   }
 
+  /**
+   * The retry carries NO body: what the run was asked for is read back out of
+   * the row, org-scoped, and re-admitted through the same path `create` uses.
+   * The queue screen therefore never has to hold the pasted article it would
+   * otherwise have to post back — see `RunsRepository.retry`.
+   *
+   * 201, like `POST /api/runs`, and for the same reason: what it answers IS a
+   * newly created run.
+   */
+  @Post(":id/retry")
+  retry(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.runs.retry(orgId, id);
+  }
+
   @Post(":id/cancel")
   @HttpCode(200)
   cancel(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
