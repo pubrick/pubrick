@@ -21,7 +21,7 @@ import ru from "../../messages/ru.json";
  * ONE allowed hit: the fact-check step's own label, "Claims to verify", which
  * names what is NOT done and is itself pinned to the model's instructions.
  */
-const CLAIM_WORDS: Record<string, RegExp> = {
+const CLAIM_WORDS: Record<"en" | "es" | "ru" | "pt", RegExp> = {
   en: /\b(original(ity)?|plagiari[sz]\w*|verified|verifies|verify|fact-?checked)\b/i,
   es: /\b(original(idad)?|plagi\w*|verificad\w*|comprobad\w*)\b/i,
   ru: /(оригинал\w*|плагиат\w*|проверен\w*|проверил\w*|верифицир\w*)/i,
