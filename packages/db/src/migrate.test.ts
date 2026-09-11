@@ -1790,6 +1790,62 @@ describe.skipIf(!url)("runMigrations", () => {
   });
 
   /**
+   * THE JOURNAL'S `when` INCREASES WITH ITS ORDER — the ratchet against a
+   * migration that lands and is never applied.
+   *
+   * drizzle applies an entry only when
+   * `Number(lastDbMigration.created_at) < migration.folderMillis`
+   * (`drizzle-orm/pg-core/dialect.js`), where `lastDbMigration` is the row with
+   * the LARGEST `created_at` already in `drizzle.__drizzle_migrations`. `when`
+   * is the only thing it compares: not `idx`, not the tag. So an entry appended
+   * to the journal with a `when` SMALLER than one already applied is skipped —
+   * silently, with exit code 0, no warning, and for ever, because the maximum
+   * only grows. The repair is a hand-run of the skipped SQL plus a manual
+   * insert into that table.
+   *
+   * That is not hypothetical here: 0020 was generated as 0017 and renumbered by
+   * hand to dodge a tag collision with two designs on unlanded branches. The
+   * TAG moved forward; the `when` did not — and a branch carrying the real 0017
+   * has a `when` 55 minutes older. Landing it after 0020 would create its
+   * tables on no database that already had 0020, and nothing would say so
+   * (reproduced end to end by the review of this branch).
+   *
+   * Hence the rule this test is the enforcement of: **a migration may land only
+   * if its `when` is strictly greater than every `when` already in the journal;
+   * tag order is cosmetic and must be kept in agreement with `when` order,
+   * never relied on instead of it.** On a rebase that carries a migration, both
+   * are refreshed — the tag to the next free number, the `when` to the moment
+   * of landing.
+   *
+   * Gaps in the tag numbers are fine (0010 was never written); what is not fine
+   * is two entries whose tag order and `when` order disagree.
+   */
+  it("keeps the journal's `when` strictly increasing, in tag order", async () => {
+    const journal = JSON.parse(
+      await fs.readFile(
+        path.join(
+          path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations"),
+          "meta",
+          "_journal.json",
+        ),
+        "utf8",
+      ),
+    ) as { entries: { idx: number; when: number; tag: string }[] };
+
+    const whens = journal.entries.map((entry) => entry.when);
+    const tags = journal.entries.map((entry) => entry.tag);
+    expect(whens, "the journal's `when` values are not in ascending order").toEqual(
+      [...whens].sort((a, b) => a - b),
+    );
+    // Two entries stamped the same millisecond make "strictly greater" false
+    // for the second of them, which is the same skip by another route.
+    expect(new Set(whens).size, "two entries share a `when`").toBe(whens.length);
+    // Tag order is what a human reads the folder in. It carries no weight with
+    // the migrator, so the only way it stays trustworthy is by agreeing.
+    expect(tags, "tag order and journal order disagree").toEqual([...tags].sort());
+  });
+
+  /**
    * The same end state reached from EVERY version this product has ever been
    * at, not only from the one immediately before 0014.
    *

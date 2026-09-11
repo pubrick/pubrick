@@ -406,6 +406,17 @@ package's own `test` script sets that, and without it 8 tests fail on Node ≥24
 - **`rm -rf` on a directory in a repository.** Twice, tracked files went with
   the scratch. **Rule:** `git status` first; `git clean -n` before any deletion
   wider than a file you created.
+- **Trusting a migration's NUMBER to decide when it runs.** drizzle applies an
+  entry only when its `when` in `meta/_journal.json` is strictly greater than
+  the largest `created_at` already in `drizzle.__drizzle_migrations` — it never
+  reads `idx` and never reads the tag. A branch that renumbers its tag forward
+  (to dodge a collision) without moving its `when`, or a branch whose migration
+  was generated earlier and lands later, is SKIPPED: exit code 0, no warning,
+  and unrecoverable by the migrator, because that maximum only grows. **Rule:** a
+  migration may land only if its `when` is strictly greater than every `when`
+  already in the journal. On every rebase that carries a migration, refresh both
+  — the tag to the next free number, the `when` to `Date.now()` at the moment of
+  landing — and land in `when` order. `migrate.test.ts` ratchets the agreement.
 - **An agent ending its turn on a background wait.** Dozens of "Waiting…"
   wake-ups, each a full model turn. **Rule:** verification runs in the
   foreground with a timeout; a background process is for something the agent
