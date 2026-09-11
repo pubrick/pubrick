@@ -7,7 +7,8 @@
     "password": "Senha",
     "loginAction": "Entrar",
     "signupAction": "Cadastrar",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "originMismatch": "Você abriu {opened}, mas o PUBLIC_ORIGIN desta instância é {configured}. Os cookies de sessão só são emitidos para o PUBLIC_ORIGIN: defina no .env o endereço que você digita no navegador e reinicie, ou abra {configured}."
   },
   "Onboarding": {
     "title": "Crie sua organização",

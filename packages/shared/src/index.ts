@@ -29,6 +29,16 @@ export {
   UNREADABLE_CREDENTIALS_MESSAGE,
   UnreadableCiphertextError,
 } from "./crypto.js";
+export {
+  checkBrowserOrigin,
+  normalizeOrigin,
+  ORIGIN_MISMATCH_CODE,
+  type OriginMismatchBody,
+  type OriginVerdict,
+  originDoctorLines,
+  originMismatchBody,
+  originMismatchMessage,
+} from "./deploy-origin.js";
 export * from "./dto/ai-credentials.js";
 export * from "./dto/brands.js";
 export * from "./dto/channels.js";

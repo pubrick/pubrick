@@ -7,7 +7,8 @@
     "password": "Пароль",
     "loginAction": "Войти",
     "signupAction": "Зарегистрироваться",
-    "genericError": "Что-то пошло не так. Попробуйте ещё раз."
+    "genericError": "Что-то пошло не так. Попробуйте ещё раз.",
+    "originMismatch": "Вы открыли {opened}, но PUBLIC_ORIGIN этого сервера — {configured}. Куки входа выдаются только для PUBLIC_ORIGIN: укажите в .env тот адрес, который вы набираете в браузере, и перезапустите — или откройте {configured}."
   },
   "Onboarding": {
     "title": "Создайте организацию",

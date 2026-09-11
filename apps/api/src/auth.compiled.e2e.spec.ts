@@ -227,14 +227,67 @@ describe.skipIf(!url)("compiled api, outside test mode", () => {
     // Under NODE_ENV=test better-auth sets skipOriginCheck, so no other spec in this
     // package can observe this at all. If someone sets `advanced.disableOriginCheck` —
     // or the process starts identifying as test again — this is the check that notices.
-    it("refuses an auth POST from a foreign origin", async () => {
-      const response = await fetch(`${api.origin}/api/auth/sign-in/email`, {
+    //
+    // The refusal is now OURS (auth-origin.middleware.ts runs ahead of better-auth's
+    // router), and it is the sentence that matters: an operator whose PUBLIC_ORIGIN
+    // does not match the address bar used to get `Invalid origin`, which names
+    // neither value and is unreadable as a configuration error.
+    // On /sign-up/email, like the two probes below: better-auth's limiter keys a
+    // bucket per path and runs BEFORE the plugin, so a refusal borrowed from
+    // /sign-in/email would spend part of that endpoint's 3-per-10s allowance on a
+    // request that never reaches sign-in at all.
+    it("refuses an auth POST from a foreign origin, naming both origins", async () => {
+      const response = await fetch(`${api.origin}/api/auth/sign-up/email`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: "https://evil.example" },
         body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
       });
       expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({ code: "INVALID_ORIGIN" });
+      const body = (await response.json()) as { code?: string; message?: string };
+      expect(body.code).toBe("ORIGIN_MISMATCH");
+      expect(body.message).toContain("https://evil.example");
+      expect(body.message).toContain(api.trustedOrigin);
+      expect(body.message).toContain("PUBLIC_ORIGIN");
+    });
+
+    // The first-run trap itself, in the shape an operator actually hits it:
+    // WEB_PORT changed, PUBLIC_ORIGIN left behind. Same host, same scheme, one
+    // digit of difference — and a browser treats it as a different origin.
+    it("refuses the same instance opened on a different port", async () => {
+      const wrongPort = api.trustedOrigin.replace(/:(\d+)$/, (_, port) => `:${Number(port) + 1}`);
+      const response = await fetch(`${api.origin}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: wrongPort },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { code?: string; message?: string };
+      expect(body.code).toBe("ORIGIN_MISMATCH");
+      expect(body.message).toContain(wrongPort);
+      expect(body.message).toContain(api.trustedOrigin);
+    });
+
+    // better-auth's own origin check, which this middleware must NOT replace —
+    // and structurally cannot mask, because a request with no Origin at all is
+    // exactly what the middleware passes through as unverifiable. A cookie makes
+    // better-auth validate the (absent) origin rather than skip the check.
+    // On /change-password rather than /sign-in/email: better-auth's limiter keys a
+    // bucket per path and runs BEFORE the origin check, so borrowing the sign-in
+    // path here would spend a third of that endpoint's 3-per-10s allowance on a
+    // request that never reaches sign-in at all.
+    it("still lets better-auth refuse a cookie-bearing request with no origin", async () => {
+      const response = await fetch(`${api.origin}/api/auth/change-password`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "better-auth.session_token=nope",
+        },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { code?: string };
+      expect(body.code).not.toBe("ORIGIN_MISMATCH");
+      expect(body.code).toMatch(/ORIGIN/);
     });
 
     it("accepts the same POST from the origin it was configured with", async () => {
@@ -245,6 +298,34 @@ describe.skipIf(!url)("compiled api, outside test mode", () => {
       });
       // Wrong credentials, but it got past the origin check — which is the point.
       expect(response.status).toBe(401);
+    });
+
+    // THE FALSE REFUSAL THIS MUST NOT PRODUCE. Behind a TLS terminator the api's
+    // Host is the compose service name and X-Forwarded-Host is the public name;
+    // neither resembles PUBLIC_ORIGIN as the browser knows it. Only `Origin`
+    // survives the hops, so only `Origin` may be compared — swap the comparison
+    // onto either forwarded header and this test goes red while every other test
+    // in this file stays green.
+    it("does not refuse a correctly proxied request whose Host is not the public name", async () => {
+      const response = await fetch(`${api.origin}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: api.trustedOrigin,
+          "x-forwarded-host": "pubrick.example",
+          "x-forwarded-proto": "https",
+          "x-forwarded-for": "203.0.113.9",
+        },
+        body: JSON.stringify({ email: "foreign@example.com", password: "password1234" }),
+      });
+      expect(response.status).toBe(401);
+    });
+
+    // The boot half: an operator reading `docker compose logs api` sees the
+    // origin this instance accepts before anybody tries to log in.
+    it("names the accepted origin at boot", () => {
+      expect(api.output()).toContain(`accepts sign-ins from ${api.trustedOrigin}`);
+      expect(api.output()).toContain("PUBLIC_ORIGIN");
     });
   });
 

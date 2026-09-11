@@ -1,5 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { runMigrations } from "@pubrick/db";
+import { originDoctorLines } from "@pubrick/shared";
 import { AppModule } from "./app.module";
 import { pool } from "./db";
 import { env } from "./env";
@@ -11,6 +12,12 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix("api");
   await app.listen(env.API_PORT);
   console.log(`api listening on :${env.API_PORT}`);
+  // The cheap half of the PUBLIC_ORIGIN fix, and the only half visible before
+  // anything has gone wrong: `docker compose logs api` now says which origin
+  // this instance will accept, next to the port it came up on. The expensive
+  // half — naming both values to the person staring at the login form — is
+  // auth-origin.middleware.ts.
+  for (const line of originDoctorLines(env.WEB_ORIGIN, env.BETTER_AUTH_URL)) console.log(line);
 
   // Mirrors apps/worker/src/main.ts. Without this, `docker compose up -d
   // --build` — the self-hosting doc's own upgrade command — sends SIGTERM to

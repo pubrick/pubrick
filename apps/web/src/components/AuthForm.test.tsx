@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor } from "@/test/render";
 import en from "../../messages/en.json";
+import ru from "../../messages/ru.json";
 import { AuthForm } from "./AuthForm";
 
 vi.mock("@/lib/auth-client", () => ({
@@ -67,6 +68,52 @@ describe("AuthForm — login mode", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Invalid credentials");
     expect(routerMock.push).not.toHaveBeenCalled();
+  });
+
+  // The first-run trap: WEB_PORT changed, PUBLIC_ORIGIN left behind, and the
+  // login form silently reloading. The sentence has to name BOTH values — the
+  // one in the address bar is read locally, the one in .env travels on the wire.
+  it("names both origins when the api refuses the browser's origin", async () => {
+    mockAuthClient.signIn.email.mockResolvedValue({
+      data: null,
+      error: {
+        message: "You opened … but PUBLIC_ORIGIN is …",
+        code: "ORIGIN_MISMATCH",
+        expectedOrigin: "https://pubrick.example",
+      },
+    });
+    render(<AuthForm mode="login" />);
+    const user = userEvent.setup();
+    await fillLogin(user);
+    await user.click(screen.getByRole("button", { name: en.Auth.loginAction }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("https://pubrick.example");
+    expect(alert).toHaveTextContent(window.location.origin);
+    expect(alert).toHaveTextContent("PUBLIC_ORIGIN");
+    expect(routerMock.push).not.toHaveBeenCalled();
+  });
+
+  // …and in the reader's language, not the api's English. A refusal nobody can
+  // read is the defect this whole path exists to remove.
+  it("says it in Russian on a Russian screen", async () => {
+    mockAuthClient.signIn.email.mockResolvedValue({
+      data: null,
+      error: {
+        message: "You opened … but PUBLIC_ORIGIN is …",
+        code: "ORIGIN_MISMATCH",
+        expectedOrigin: "https://pubrick.example",
+      },
+    });
+    render(<AuthForm mode="login" />, { locale: "ru" });
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(ru.Auth.email), "ann@example.com");
+    await user.type(screen.getByLabelText(ru.Auth.password), "hunter22222");
+    await user.click(screen.getByRole("button", { name: ru.Auth.loginAction }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("https://pubrick.example");
+    expect(alert).toHaveTextContent(/PUBLIC_ORIGIN этого сервера/);
   });
 
   it("disables the submit button while the request is in flight, and re-enables it after", async () => {

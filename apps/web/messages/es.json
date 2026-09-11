@@ -7,7 +7,8 @@
     "password": "Contraseña",
     "loginAction": "Iniciar sesión",
     "signupAction": "Registrarse",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "originMismatch": "Ha abierto {opened}, pero el PUBLIC_ORIGIN de esta instancia es {configured}. Las cookies de sesión solo se emiten para PUBLIC_ORIGIN: ponga en .env la dirección que escribe en el navegador y reinicie, o abra {configured}."
   },
   "Onboarding": {
     "title": "Crea tu organización",

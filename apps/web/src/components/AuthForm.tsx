@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
+import { authErrorMessage, browserOrigin } from "@/lib/auth-error";
 import { safeNextPath } from "@/lib/auth-routes";
 
 // The auth card is a sanctioned exception to the top-right-action rule: its
@@ -38,7 +39,11 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
         : await authClient.signIn.email({ email, password });
     setBusy(false);
     if (result.error) {
-      setError(result.error.message ?? t("genericError"));
+      // The one refusal a first-run install hits before it has an account: the
+      // browser is on an origin PUBLIC_ORIGIN does not name, so no session cookie
+      // it issues would ever come back. `authErrorMessage` names both origins in
+      // the reader's language; every other refusal keeps better-auth's sentence.
+      setError(authErrorMessage(result.error, browserOrigin(), t));
       return;
     }
     // A brand-new account has no organization yet, so signup always goes to

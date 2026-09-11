@@ -4,6 +4,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, ownerAc } from "better-auth/plugins/organization/access";
+import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";
 import { signupGate } from "./auth-signup-gate";
 import { db } from "./db";
@@ -124,5 +125,9 @@ export const auth = betterAuth({
   // Registration posture, enforced before the sign-up endpoint runs so a refusal
   // cannot leak whether the address is already registered.
   hooks: { before: signupGate },
-  plugins: [organization(ORGANIZATION_OPTIONS)],
+  // originMismatchPlugin FIRST, and the order is the point: its `onRequest` runs
+  // before better-auth's own origin check, which is the only way an operator whose
+  // PUBLIC_ORIGIN does not match the address bar gets a sentence naming both
+  // values instead of `Invalid origin`. See auth-origin.plugin.ts.
+  plugins: [originMismatchPlugin(env.WEB_ORIGIN), organization(ORGANIZATION_OPTIONS)],
 });

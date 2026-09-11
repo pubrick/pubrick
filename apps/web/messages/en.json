@@ -7,7 +7,8 @@
     "password": "Password",
     "loginAction": "Log in",
     "signupAction": "Sign up",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "originMismatch": "You opened {opened} but this instance's PUBLIC_ORIGIN is {configured}. Sign-in cookies are issued for PUBLIC_ORIGIN only — set PUBLIC_ORIGIN in .env to the address you type in the browser and restart, or open {configured} instead."
   },
   "Onboarding": {
     "title": "Create your organization",

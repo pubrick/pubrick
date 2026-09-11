@@ -36,9 +36,33 @@ never edited passes it, because every variable in the block below is set to
   [Rotating `APP_ENCRYPTION_KEY`](#rotating-app_encryption_key).
 - `PUBLIC_ORIGIN` is the origin a browser types, scheme included
   (`https://your-domain.example`). Auth cookies, redirects and the trusted-origin
-  list all come from it: an install that leaves it wrong signs people out with a
-  403 `Invalid origin`, and one left on `http://` behind TLS serves session
+  list all come from it, and one left on `http://` behind TLS serves session
   cookies without the `Secure` attribute.
+
+**Change `WEB_PORT` and `PUBLIC_ORIGIN` has to follow.** Nothing derives one
+from the other. `WEB_PORT=3080` with `PUBLIC_ORIGIN` left at
+`http://localhost:3000` is the single most common first-run failure: the site
+loads at `http://localhost:3080`, and every sign-in is refused, because the
+session cookie would be issued for an origin the browser is not on. Typing
+`127.0.0.1` where the variable says `localhost` does the same thing — to a
+browser those are two different origins, and a cookie set for one is never sent
+to the other — and so does putting a reverse proxy in front on a name
+`PUBLIC_ORIGIN` has never heard of.
+
+Pubrick now says which two values disagree rather than leaving you to guess:
+
+- the login screen's refusal names **both** — the origin you opened and the one
+  `PUBLIC_ORIGIN` is set to — in your own language, and says which to change;
+- `docker compose logs api` prints the origin this instance accepts at every
+  boot, next to the port it came up on, so the answer is available before
+  anybody tries to log in.
+
+Behind a reverse proxy this check costs nothing and refuses nothing: it compares
+the browser's `Origin` header, which every hop passes through untouched, never
+`Host` or `X-Forwarded-Host` (both of which name the proxy's next hop, not the
+address anybody typed). A request that carries no `Origin` at all — `curl`, a
+script, the MCP server — cannot be checked and is passed straight through to
+better-auth's own origin check, unchanged.
 
 **Leaving either secret as the shipped placeholder does not fail the way the
 paragraph above does.** `docker compose up` accepts it — the value is set, just
@@ -238,6 +262,31 @@ docker compose up -d --build
 ```
 
 Migrations apply on boot; back up the `pgdata` volume before major upgrades.
+
+### Variables added since August 2026
+
+`docker compose up` refuses to start when a **required** variable is missing,
+naming it — but an optional one added after your `.env` was written simply takes
+its default, silently. If your `.env` predates 2026-08-24, it is missing every
+variable below. Diff it against [.env.example](../.env.example), which documents
+each one in full.
+
+| Added | Variable | Required? | What it decides |
+| --- | --- | --- | --- |
+| 2026-08-24 | `BETTER_AUTH_SECRET` | **yes** | signs session cookies |
+| 2026-08-24 | `APP_ENCRYPTION_KEY` | **yes** | encrypts stored credentials; now a comma-separated key ring, newest first ([rotating](#rotating-app_encryption_key)) |
+| 2026-08-24 | `PUBLIC_ORIGIN` | **yes** | the origin browsers type; auth cookies and the trusted-origin list come from it |
+| 2026-09-02 | `SIGNUP_MODE` | no | who may register; unset means open until the first account exists, then invite-only ([who can register](#who-can-register)) |
+| 2026-09-02 | `TRUSTED_PROXIES` | no | whose `X-Forwarded-For` is believed; empty means none, and rate limiting shares one bucket ([client IPs](#auth-rate-limiting-and-client-ips)) |
+| 2026-09-02 | `AUTH_RATE_LIMIT_ENABLED` | no | defaults to on; only turn it off if something in front already limits `/api/auth` |
+| 2026-09-04 | `WEB_PORT` | no | host port for the web app (default `3000`) — **set it and `PUBLIC_ORIGIN` must match** |
+| 2026-09-04 | `API_HOST_PORT` | no | localhost-only debug mapping for the api (default `3001`) |
+| 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
+
+The three required ones stop `docker compose up` outright, so an upgrade cannot
+miss them. The six optional ones are the ones worth reading: an `.env` written
+in August leaves registration on its self-closing default and the shipped ports
+unchanged, which is a sane instance — but not necessarily the one you meant.
 
 **Deploy the worker before the api, or both at once.** `docker compose up -d
 --build` rebuilds both together and needs no further care. If you roll services

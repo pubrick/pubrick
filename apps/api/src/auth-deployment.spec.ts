@@ -173,4 +173,56 @@ describe(".env.example", () => {
       expect(example).toContain(name);
     }
   });
+
+  // The first-run trap: nothing derives PUBLIC_ORIGIN from WEB_PORT, and the two
+  // disagreeing refuses every sign-in. The api now names both values at the
+  // refusal and at boot, but the person editing this file has not started the
+  // stack yet — the coupling has to be stated where they are looking.
+  it("says PUBLIC_ORIGIN must follow WEB_PORT, beside WEB_PORT itself", () => {
+    const ports = /# --- Ports \(optional\) ---([\s\S]*?)\n# ---/.exec(example)?.[1] ?? "";
+    expect(ports).toContain("WEB_PORT");
+    expect(ports).toContain("PUBLIC_ORIGIN");
+  });
+});
+
+/**
+ * The two things an operator has to read that no runtime can tell them: that
+ * PUBLIC_ORIGIN is coupled to WEB_PORT, and which variables their `.env` is
+ * missing because it predates them. Compose refuses a missing REQUIRED variable
+ * by name; an optional one added later takes its default in silence, which is
+ * why the list has to exist at all.
+ */
+describe("docs/self-hosting.md", () => {
+  const doc = read("docs/self-hosting.md");
+
+  it("couples WEB_PORT to PUBLIC_ORIGIN in prose, not only in .env.example", () => {
+    expect(doc).toMatch(/Change `WEB_PORT` and `PUBLIC_ORIGIN` has to follow/);
+  });
+
+  // Reading Origin rather than Host is what keeps a correctly proxied install
+  // from being refused; an operator behind nginx deserves to be told that
+  // outright rather than discovering it.
+  it("says the check reads Origin, and refuses nothing behind a proxy", () => {
+    const section = doc.slice(doc.indexOf("Change `WEB_PORT`"));
+    expect(section).toContain("`Origin`");
+    expect(section).toContain("X-Forwarded-Host");
+  });
+
+  it("lists every variable added since the August .env", () => {
+    const upgrading = doc.slice(doc.indexOf("### Variables added since August 2026"));
+    expect(upgrading.length).toBeGreaterThan(0);
+    for (const name of [
+      "BETTER_AUTH_SECRET",
+      "APP_ENCRYPTION_KEY",
+      "PUBLIC_ORIGIN",
+      "SIGNUP_MODE",
+      "TRUSTED_PROXIES",
+      "AUTH_RATE_LIMIT_ENABLED",
+      "WEB_PORT",
+      "API_HOST_PORT",
+      "POSTGRES_PORT",
+    ]) {
+      expect(upgrading, `${name} missing from the upgrade list`).toContain(`\`${name}\``);
+    }
+  });
 });
