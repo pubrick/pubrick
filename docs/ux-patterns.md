@@ -224,6 +224,9 @@ Lex shows the calm alternative: AI summoned by explicit command only
 ("Refine…") and `⌘K`. Refine verbs are domain-specific: shorten, adapt tone
 to brand, tighten hook, translate. No hover sparkles, no spacebar hijack.
 
+*(This paragraph describes the original intent; the shipped decision below
+supersedes "the selection toolbar" and the four example verbs.)*
+
 **Amendment — whole-draft generation (2026-08-28, generation engine
 increment 1).** This pattern governs the **refinement of existing text**. What
 it rejects is ambient solicitation while a person is writing, which is why its
@@ -245,6 +248,40 @@ So AI now appears in three places, not two: the selection toolbar, `⌘K`, and
 the compose brief. Inside the editor it is still the two. §5.2's staging rule is
 untouched by this: a run lands a `draft`, and approval remains the explicit
 human act.
+
+**Shipped decision — refine verbs (2026-09-11, increment 2b-2).** What shipped
+is a **stationary control**, not a selection toolbar: one "Refine" button, always
+mounted in the editor card's header, never a menu that materialises where the
+pointer happens to be (`apps/web/src/app/[locale]/content/[id]/page.tsx`). `⌘K`
+opens the same verb menu, scoped twice — to focus inside the editor card, and to
+a live, non-collapsed selection (`hasPlatformAccelerator`,
+`apps/web/src/lib/hotkey.ts`; the platform's own accelerator only, so macOS
+keeps `Ctrl+K`'s kill-line inside the textarea this feature exists to refine).
+
+The floating selection toolbar this pattern originally named is **deferred, not
+shipped**, and the dossier is amended rather than quietly contradicted, per
+increment 2b-2's own "deliberately not in this increment" record. The
+engineering reason: nothing in this codebase is a portal
+or an anchored-popover primitive — `Menu` (`apps/web/src/components/ui/menu.tsx`)
+renders inline next to its own trigger and has no notion of "anchor to an
+arbitrary selection rectangle." The one element that already sits over the
+selected text — `DimmedTextarea`'s mirrored overlay — is not available to anchor
+one either: it mounts only while the provenance lens is on
+(`apps/web/src/components/ui/dimmed-textarea.tsx`, `lensOn = dimmed &&
+!composing`), and its whole safety property is that its `textContent` matches
+the textarea's value character for character (the trailing-newline marker is a
+CSS `::after`, deliberately not a text node, for exactly this reason) — a
+toolbar node injected into it would break that invariant. A later increment
+that wants the floating toolbar needs an anchored-popover primitive first, not
+a special case bolted onto the lens.
+
+The verb set shipped is **three fixed verbs — shorten, warmer, punchier**
+(`REFINE_VERBS`, `packages/shared/src/dto/content.ts`), not the four
+illustrative ones above. It is closed by decision: a free-text instruction
+field and a translate verb are both named in "deliberately not in this
+increment" (translate needs an output-language parameter the current
+`instructionsFor` system prompt doesn't carry, and free text is untrusted
+input with no settled boundary yet).
 
 ### 5.2 The staging loop: Accept / Try again / Discard (Notion AI) — `ADOPT-NOW`
 
@@ -496,7 +533,7 @@ one internal approval + one optional client approval covers the 90% case.
 | 4.2 | Drag-reschedule + Ready rail | Later/Postiz | adopt-now | Calendar |
 | 4.3 | Minimal status-chip density | Planable/Notion | adopt-now | Calendar |
 | 4.4 | IG grid preview | Later | **rejected** (until IG) | — |
-| 5.1 | AI via selection + ⌘K (refinement only — see the §5.1 amendment) | Notion (mechanic), Lex (trigger) | adopt-now | Compose |
+| 5.1 | AI via stationary control + ⌘K (refinement only; toolbar deferred — see the §5.1 amendments) | Notion (mechanic), Lex (trigger) | adopt-now | Compose |
 | 5.2 | Accept/Try-again/Discard staging | Notion AI | adopt-now | Compose/Review |
 | 5.3 | AI authorship provenance | iA Writer | adopt-now (signature) | Everywhere |
 | 5.4 | Per-brand voice & knowledge object | Jasper | adopt-with-feature | Brand knowledge |

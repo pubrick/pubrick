@@ -103,6 +103,7 @@ enforcer — the project's history is a list of holes opened by changing one cop
 | Nothing publishes that no human opened or touched | `ContentRepository.requireHumanInvolvement`, over `adaptations.body ?? content_items.body` | `content.e2e.spec.ts` gate tests; mutation |
 | Is every sentence still the model's — one question, two grains | `shared/provenance.ts`: `allSentencesAi` (gate + badge), `aiSentenceMaskAny`/`dimSpans` (lens) | `provenance.test.ts`; the gate's ordering tests |
 | A fragment records what it replaced (`unit_delta`) | written once by `planRefineAccept`, CHECK in db | `refine-merge.test.ts`; `schema-invariants.test.ts` |
+| The refine verb set is closed and declared once (`REFINE_VERBS`) | the CHECK on `refine_proposals.verb` (`packages/db/src/schema/refine.ts`), the step's `Record<RefineVerb, …>` role lines (`refine.step.ts`), the web's verb `Menu` | `content.test.ts` (shared); `refine.step.spec.ts`; `messages-parity.test.ts`; `migrate.test.ts` |
 | One row in `usage_ledger` per physical model call, with an honest outcome | `ai/usage.ts` inside the SDK's retry loop; `outcome` column | `generate.test.ts`; ledger experiments in `ai-credentials.e2e.spec.ts` |
 | The spend figure is exact, estimated, or "at least N unpriced" — same rule in SQL and TS | `AiCredentialsRepository.spend()` and `shared/cost-display.ts` | a test runs both over the same rows |
 | Every model call runs under the run's fence, re-taken before the call | `GenerateRepository.beginStep` / `claim` | `generate.service.spec.ts` (40 cases counting model calls) |
