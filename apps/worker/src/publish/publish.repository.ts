@@ -489,8 +489,31 @@ export class PublishRepository {
    * `loaded.attemptCount + 1`, because a derived value is a guess and it is
    * wrong in exactly the case the fence exists for: a concurrent delivery that
    * bumped the count first.
+   *
+   * AND IT IS FENCED ON THE SLOT THE CALLER READ, which the status condition
+   * above cannot stand in for. `PublishService.handle` decides the slot has
+   * been moved into the FUTURE — and returns having touched nothing — from
+   * `load()`'s snapshot, and a re-approve committing between that read and this
+   * claim leaves the old job holding a snapshot that says the post is merely
+   * overdue. The row is still `scheduled`, which is claimable, so on status
+   * alone the old job would claim the row the NEW time lives on and post it
+   * hours early: the same injury the arm exists to prevent, through a narrower
+   * door. `scheduled_at` is the value the decision was made about, so it is the
+   * value the claim is fenced on.
+   *
+   * `is not distinct from`, not `=`: "publish now" is a NULL slot, and a claim
+   * that silently refused every such row would stop the product's commonest
+   * send. And the comparison is made at MILLISECONDS because that is the
+   * precision the caller's snapshot can carry — it came back through a
+   * JavaScript `Date` — so a `scheduled_at` ever written from a Postgres
+   * expression rather than from a bound parameter would otherwise refuse its
+   * own reader's claim for a microsecond nobody can see.
    */
-  async markPublishing(orgId: string, adaptationId: string): Promise<number | null> {
+  async markPublishing(
+    orgId: string,
+    adaptationId: string,
+    scheduledAt: Date | null,
+  ): Promise<number | null> {
     const rows = await db
       .update(schema.adaptations)
       .set({
@@ -509,6 +532,7 @@ export class PublishRepository {
           eq(schema.adaptations.orgId, orgId),
           eq(schema.adaptations.id, adaptationId),
           inArray(schema.adaptations.status, [...CLAIMABLE_STATUSES]),
+          sql`date_trunc('milliseconds', ${schema.adaptations.scheduledAt}) is not distinct from ${scheduledAt}`,
         ),
       )
       .returning({ attemptCount: schema.adaptations.attemptCount });

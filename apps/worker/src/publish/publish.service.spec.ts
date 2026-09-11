@@ -769,6 +769,30 @@ describe("PublishService.handle and a schedule that came and went", () => {
     expect(message).toContain(`${(env.PUBLISH_MAX_LATENESS_HOURS).toFixed(1)} h limit`);
   });
 
+  /**
+   * THE SENTENCE MUST NOT CONTRADICT ITSELF. One decimal on both numbers of the
+   * comparison used to print "6.0 h later, past the 6.0 h limit" for a post
+   * 6.04 h late — a refusal whose own two numbers say the post was inside the
+   * limit. The lateness now rounds up and the limit down, which keeps both
+   * claims true and makes the two numbers impossible to equalise.
+   */
+  it("never prints a lateness equal to the limit it is past", async () => {
+    for (const overshoot of [1, 60, 0.04 * 3600, 0.09 * 3600]) {
+      const { repo } = fixture(late(MAX_SECONDS + overshoot));
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(vi.fn()),
+        "https://api",
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      const message = (repo.markFailed as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as string;
+      const printed = message.match(/until ([\d.]+) h later, past the ([\d.]+) h limit/);
+      expect(printed, `overshoot ${overshoot}s: ${message}`).not.toBeNull();
+      const [, lateness, limit] = printed as RegExpMatchArray;
+      expect(Number(lateness), `overshoot ${overshoot}s`).toBeGreaterThan(Number(limit));
+    }
+  });
+
   it("publishes a post that is late by less than the bound", async () => {
     const { repo } = fixture(late(3600));
     const publish = vi.fn().mockResolvedValue({ externalId: "1", externalUrl: null });

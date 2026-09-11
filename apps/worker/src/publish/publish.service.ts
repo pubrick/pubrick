@@ -93,14 +93,24 @@ export const PUBLISH_STOP_TIMEOUT_MS =
   TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS + 10_000;
 
 /**
- * Seconds as hours, to one decimal, for a sentence a person reads.
+ * Seconds as hours, to one decimal, for a sentence a person reads — ROUNDED IN
+ * THE DIRECTION THAT KEEPS THE SENTENCE TRUE.
  *
- * One decimal rather than none because the bound itself can be fractional
- * (`PUBLISH_MAX_LATENESS_HOURS` admits 0.25), and "late by 0 h, past the 0 h
- * limit" is not a sentence anybody can act on.
+ * One decimal rather than none because the bound itself can be fractional, and
+ * "late by 0 h, past the 0 h limit" is not a sentence anybody can act on. But
+ * one decimal on both numbers of a comparison can print a refusal that
+ * contradicts itself: a post 6.04 h late against a 6 h bound read "6.0 h later,
+ * past the 6.0 h limit", which says the post was inside the limit it was
+ * refused for.
+ *
+ * So the refusal rounds the LATENESS up and the LIMIT down. Both directions
+ * keep the claim honest — the post really was later than the printed number,
+ * and the limit really was under it — and the two printed numbers can then
+ * never be equal, because equality would require the lateness not to exceed the
+ * limit, which is the case that never reaches this sentence.
  */
-function formatHours(seconds: number): string {
-  return (seconds / 3600).toFixed(1);
+function formatHours(seconds: number, round: (tenths: number) => number = Math.round): string {
+  return (round((seconds / 3600) * 10) / 10).toFixed(1);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -236,6 +246,14 @@ export class PublishService {
     // claim left standing would make the NEW job report an unknown outcome
     // about a post nobody sent.
     //
+    // AND THIS ARM ANSWERS FROM A SNAPSHOT, which on its own would narrow the
+    // window rather than close it: a re-approve that commits AFTER `load()` and
+    // before the claim leaves this job reading a slot that is merely overdue,
+    // and claiming the row the new time lives on. The claim is therefore fenced
+    // on `scheduled_at` being the value read here, not on status alone — see
+    // `markPublishing`. So the pair is complete: this arm catches the move that
+    // is already visible, the fence catches the one that lands underneath it.
+    //
     // No tolerance on the comparison, and none is needed: both sides are one
     // Postgres clock (`load`'s `lateBySeconds`), and pg-boss delivers only at
     // `start_after <= now()`, so a negative value means a human moved the slot.
@@ -266,14 +284,25 @@ export class PublishService {
       return;
     }
 
-    // Claiming is conditional on the adaptation still being publishable. A
-    // lost claim means the api changed the row (rejected, re-approved) between
-    // load() and here, under the row lock — do not send, and do not fail the
-    // adaptation either: its new status is the truth now.
-    const attempt = await this.repo.markPublishing(job.orgId, job.adaptationId);
+    // Claiming is conditional on the adaptation still being publishable AND on
+    // its slot still being the one read above. A lost claim means the api
+    // changed the row (rejected, re-approved) between load() and here, under
+    // the row lock — do not send, and do not fail the adaptation either: its
+    // new status, or its new time, is the truth now.
+    //
+    // The slot half of that condition is what closes the residual window in the
+    // future-slot arm above: that arm answers from `load()`'s snapshot, and a
+    // re-approve landing after the read would otherwise leave this job claiming
+    // the row the new time lives on. See `markPublishing`.
+    const attempt = await this.repo.markPublishing(
+      job.orgId,
+      job.adaptationId,
+      adaptation.scheduledAt ?? null,
+    );
     if (attempt === null) {
       this.logger.log(
-        `Skipping publish for adaptation ${job.adaptationId}: no longer in a publishable status`,
+        `Skipping publish for adaptation ${job.adaptationId}: it is no longer in a publishable ` +
+          "status, or its slot has been moved since it was read",
       );
       return;
     }
@@ -327,13 +356,22 @@ export class PublishService {
     // out. `scheduled_at` is never cleared on failure, so a reader that
     // recomputed the lateness later would watch it grow for ever and disagree
     // with the very row it is printed next to.
+    //
+    // THE SLOT IS A RAW UTC ISO STRING, deliberately and not by omission. This
+    // text is `last_error`, which every screen prints VERBATIM, and a worker
+    // that formatted a date would be picking one locale and one zone for four
+    // locales' readers — a worse lie than an unambiguous instant. The reader's
+    // own rendering of the slot belongs to the screen, which has the row's
+    // `scheduled_at` and the viewer's locale; what the screen needs from the
+    // worker in order to caption this row at all is the CODE below
+    // (`schedule_missed`), not this prose.
     const maxLatenessSeconds = env.PUBLISH_MAX_LATENESS_HOURS * 3600;
     if (adaptation.lateBySeconds !== null && adaptation.lateBySeconds > maxLatenessSeconds) {
       const missed =
         `Missed its scheduled slot: this post was due at ${adaptation.scheduledAt?.toISOString()} ` +
-        `and nothing could deliver it until ${formatHours(adaptation.lateBySeconds)} h later, past ` +
-        `the ${formatHours(maxLatenessSeconds)} h limit. Nothing was sent — publish it now if it is ` +
-        "still worth sending.";
+        `and nothing could deliver it until ${formatHours(adaptation.lateBySeconds, Math.ceil)} h ` +
+        `later, past the ${formatHours(maxLatenessSeconds, Math.floor)} h limit. Nothing was sent — ` +
+        "publish it now if it is still worth sending.";
       this.logger.warn(`${missed} orgId=${job.orgId} adaptationId=${job.adaptationId}`);
       await this.safeMarkFailed(
         job.orgId,

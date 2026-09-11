@@ -1,4 +1,11 @@
-import { PUBLISH_MAX_LATENESS_HOURS_DEFAULT, parseEnv, parseKeyRing } from "@pubrick/shared";
+import {
+  PUBLISH_ABANDONED_AFTER_SECONDS,
+  PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
+  PUBLISH_QUEUE_OPTIONS,
+  parseEnv,
+  parseKeyRing,
+  worstCaseSelfInflictedSeconds,
+} from "@pubrick/shared";
 import { z } from "zod";
 
 export const env = parseEnv({
@@ -30,14 +37,23 @@ export const env = parseEnv({
    *
    * NO OFF SWITCH, deliberately. A fail-open `0` would restore exactly the
    * silence this bound exists to end (a post from yesterday going out today
-   * with nothing anywhere saying so), and `Infinity` would reach Postgres's
-   * `make_interval` as a runtime surprise that "fails at boot" does not cover.
-   * "Effectively unbounded" is spelled `8760` — one year — and is still a
-   * number the comparison can hold. The floor is not arbitrary either: fifteen
-   * minutes is already under the queue's own worst-case retry chain
-   * (`worstCaseSelfInflictedSeconds`), so anything lower would fail posts that
-   * were merely retried, and `docs/self-hosting.md` says so where an operator
-   * will read it.
+   * with nothing anywhere saying so). "Effectively unbounded" is spelled `8760`
+   * — one year — and is still a finite number the comparison can hold, which is
+   * what `.finite()` below refuses `Infinity` for.
+   *
+   * THE FLOOR IS DERIVED AND IT IS ENFORCED HERE, not described in a paragraph.
+   * `packages/shared/src/jobs.test.ts` pins the queue's worst case against the
+   * DEFAULT, so tuning `retryLimit` past the bound is a red test — but that
+   * assertion knows nothing about the number a deployment actually sets, and an
+   * operator who sets `0.5` gets a bound INSIDE the queue's own retry chain:
+   * a post that merely exhausted its retries is then recorded
+   * `schedule_missed`, having sent nothing, which is the injury this whole
+   * branch exists to prevent. So the refinement below recomputes the same sum
+   * from the same exported constants — `worstCaseSelfInflictedSeconds(
+   * PUBLISH_QUEUE_OPTIONS) + PUBLISH_ABANDONED_AFTER_SECONDS`, 7 020 s ≈ 1.95 h
+   * today — and refuses anything at or under it at BOOT. `.env.example` and
+   * `docs/self-hosting.md` quote the derived number rather than a round one, so
+   * that the document and the schema cannot drift apart.
    *
    * NOT PER-ORG, yet: no settings table or column exists, so per-org means a
    * table, a repository, a route, a screen and an org-scoped read on the
@@ -46,7 +62,23 @@ export const env = parseEnv({
   PUBLISH_MAX_LATENESS_HOURS: z.coerce
     .number()
     .finite()
-    .min(0.25)
     .max(8760)
+    // The floor, and the only check on this variable that is not a plain range:
+    // it is a SUM of two queue constants, so it moves when the queue is tuned
+    // and a literal minimum here would be a copy that silently stops matching.
+    .superRefine((hours, ctx) => {
+      const floorSeconds =
+        worstCaseSelfInflictedSeconds(PUBLISH_QUEUE_OPTIONS) + PUBLISH_ABANDONED_AFTER_SECONDS;
+      if (hours * 3600 > floorSeconds) return;
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `PUBLISH_MAX_LATENESS_HOURS must be above ${(floorSeconds / 3600).toFixed(2)} h — the ` +
+          "queue's whole retry chain plus the sweep that ends an abandoned attempt, every " +
+          "second of which one post can legitimately spend with nothing wrong. A bound at or " +
+          "under that floor fails posts that were merely retried. There is no off switch; " +
+          '"effectively never" is 8760',
+      });
+    })
     .default(PUBLISH_MAX_LATENESS_HOURS_DEFAULT),
 });

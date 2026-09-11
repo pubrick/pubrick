@@ -374,7 +374,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("a call carrying another org's id moves nothing: every writer is a no-op", async () => {
     const adaptationId = await seedAdaptation("queued");
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
     const claim = await repo.claimSend(orgId, adaptationId);
     expect(claim).not.toBeNull();
 
@@ -403,7 +403,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // it: `org_id` is still in the predicate.
     expect(await repo.releaseSend(strangerOrgId, claim as SendClaim)).toBe(false);
     // The two that answer rather than write: a claim another org cannot take.
-    expect(await repo.markPublishing(strangerOrgId, adaptationId)).toBeNull();
+    expect(await repo.markPublishing(strangerOrgId, adaptationId, null)).toBeNull();
     expect(await repo.claimSend(strangerOrgId, adaptationId)).toBeNull();
 
     expect({
@@ -540,7 +540,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
 
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await failureReasonOf(adaptationId)).toBeNull();
   });
 
@@ -684,7 +684,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("markFailed is fenced: the verdict of an attempt the row has moved on from does not land", async () => {
     const adaptationId = await seedAdaptation("queued");
-    const attempt = await repo.markPublishing(orgId, adaptationId);
+    const attempt = await repo.markPublishing(orgId, adaptationId, null);
     expect(attempt).toBe(1);
     const fence = { status: "publishing", attemptCount: attempt as number } as const;
 
@@ -749,7 +749,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("markFailed is fenced on the STATUS too, not just the count", async () => {
     const adaptationId = await seedAdaptation("queued");
-    const attempt = await repo.markPublishing(orgId, adaptationId);
+    const attempt = await repo.markPublishing(orgId, adaptationId, null);
     await repo.claimSend(orgId, adaptationId);
     await repo.markPublished(orgId, adaptationId, {
       externalId: "4242",
@@ -780,7 +780,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("recordTransient is fenced: it cannot re-stamp an error a reject has just cleared", async () => {
     const adaptationId = await seedAdaptation("queued");
-    const attempt = await repo.markPublishing(orgId, adaptationId);
+    const attempt = await repo.markPublishing(orgId, adaptationId, null);
     const fence = { status: "publishing", attemptCount: attempt as number } as const;
 
     await db
@@ -798,7 +798,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   /** The same write, offered to the row it does belong to, still lands. */
   it("recordTransient lands on the attempt that owns the row, and renews its updated_at", async () => {
     const adaptationId = await seedAdaptation("queued");
-    const attempt = await repo.markPublishing(orgId, adaptationId);
+    const attempt = await repo.markPublishing(orgId, adaptationId, null);
     await db
       .update(schema.adaptations)
       .set({ updatedAt: sql`now() - interval '1 hour'` })
@@ -825,7 +825,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markFailed on a row already 'publishing' (markPublishing already bumped it): attempt_count does NOT bump a second time", async () => {
     const adaptationId = await seedAdaptation("queued");
 
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     {
       const [row] = await db
         .select()
@@ -856,7 +856,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("the database itself refuses a second published publications row for one adaptation", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.markPublished(orgId, adaptationId, { externalId: "1", externalUrl: "https://x/1" });
 
     // "Never post twice" must not depend on the application getting every
@@ -923,7 +923,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // publications row exists, but markPublished's transaction rolled back on
     // the unique violation, so the adaptation itself is still "publishing".
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.markPublished(orgId, adaptationId, { externalId: "5", externalUrl: "https://x/5" });
     await db
       .update(schema.adaptations)
@@ -1045,7 +1045,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // This is what stops a reject that commits between load() and the claim
     // from being published anyway: both sides take the same row lock.
     const rejected = await seedAdaptation("pending");
-    expect(await repo.markPublishing(orgId, rejected)).toBeNull();
+    expect(await repo.markPublishing(orgId, rejected, null)).toBeNull();
     {
       const [row] = await db
         .select()
@@ -1056,7 +1056,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     }
 
     const alreadyDone = await seedAdaptation("published");
-    expect(await repo.markPublishing(orgId, alreadyDone)).toBeNull();
+    expect(await repo.markPublishing(orgId, alreadyDone, null)).toBeNull();
 
     // Claimable: freshly queued, scheduled, and a pg-boss retry of a
     // transiently failed attempt (which leaves the row at "publishing").
@@ -1064,17 +1064,94 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       const adaptationId = await seedAdaptation(status);
       // The answer is the attempt's own number, which is what every later
       // write of it is fenced on — not a bare true.
-      expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+      expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
     }
 
     // Org-scoped: another org cannot claim this org's row.
     const mine = await seedAdaptation("queued");
-    expect(await repo.markPublishing("some-other-org", mine)).toBeNull();
+    expect(await repo.markPublishing("some-other-org", mine, null)).toBeNull();
+  });
+
+  /**
+   * THE `load()` → CLAIM WINDOW, which is the one the future-slot arm cannot
+   * close by itself.
+   *
+   * `PublishService.handle` decides "this slot has been moved into the future,
+   * touch nothing" from `load()`'s snapshot, and then claims. A re-approve that
+   * commits in between leaves the old job holding a snapshot that says the post
+   * is merely overdue — and `scheduled` is claimable, so without this predicate
+   * the old job would claim the row the new time lives on and post it HOURS
+   * EARLY, which is the same injury the arm exists to prevent.
+   *
+   * So the claim is fenced on the slot the decision was made about. Two
+   * connections, interleaved by hand in the order the race puts them: the
+   * worker reads, the api writes and commits, the worker claims.
+   */
+  it("markPublishing refuses the claim when the slot moved between the read and it", async () => {
+    const adaptationId = await seedAdaptation("scheduled");
+    await db
+      .update(schema.adaptations)
+      .set({ scheduledAt: new Date(Date.now() - 26 * 3600 * 1000) })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    // The worker's snapshot, taken through the same statement the handler uses.
+    const loaded = await repo.load(orgId, adaptationId);
+    expect(loaded?.scheduledAt).toBeInstanceOf(Date);
+
+    // The api, on a connection of its own, moving the slot into the future and
+    // committing — the re-approve this window is about.
+    const moved = new Date(Date.now() + 3600 * 1000);
+    const api = await pool.connect();
+    try {
+      await api.query("update adaptations set scheduled_at = $1 where id = $2", [
+        moved,
+        adaptationId,
+      ]);
+    } finally {
+      api.release();
+    }
+
+    expect(await repo.markPublishing(orgId, adaptationId, loaded?.scheduledAt ?? null)).toBeNull();
+
+    const [row] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(row?.status).toBe("scheduled");
+    expect(row?.attemptCount).toBe(0);
+    expect(row?.scheduledAt?.getTime()).toBe(moved.getTime());
+
+    // And the job that DOES hold the new time claims it, on the same snapshot
+    // its own load() would take — the fence bounds the stale job, not every job.
+    const fresh = await repo.load(orgId, adaptationId);
+    expect(await repo.markPublishing(orgId, adaptationId, fresh?.scheduledAt ?? null)).toBe(1);
+  });
+
+  /**
+   * The other half of the same predicate: a slot that did NOT move must not
+   * cost the claim. `null` (a "publish now" row) and a real timestamp both have
+   * to compare equal to themselves — which is why the predicate is
+   * `is not distinct from` rather than `=`, and why the comparison is made at
+   * the precision the worker's snapshot actually carries.
+   */
+  it("markPublishing claims a row whose slot is exactly what was read", async () => {
+    const unscheduled = await seedAdaptation("queued");
+    const loadedNull = await repo.load(orgId, unscheduled);
+    expect(loadedNull?.scheduledAt).toBeNull();
+    expect(await repo.markPublishing(orgId, unscheduled, null)).toBe(1);
+
+    const scheduled = await seedAdaptation("scheduled");
+    await db
+      .update(schema.adaptations)
+      .set({ scheduledAt: sql`now() - interval '3 hours'` })
+      .where(eq(schema.adaptations.id, scheduled));
+    const loaded = await repo.load(orgId, scheduled);
+    expect(await repo.markPublishing(orgId, scheduled, loaded?.scheduledAt ?? null)).toBe(1);
   });
 
   it("markExhausted: marks failed with a retries-exhausted reason, writes the publications row, and is idempotent on a second delivery", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId); // simulate an in-flight attempt before the DLQ fires
+    await repo.markPublishing(orgId, adaptationId, null); // simulate an in-flight attempt before the DLQ fires
 
     await service.markExhausted({ adaptationId, orgId });
 
@@ -1184,7 +1261,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("claimSend writes an in-flight row carrying the attempt that markPublishing just bumped", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
 
     const claim = await repo.claimSend(orgId, adaptationId);
 
@@ -1205,10 +1282,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   // redelivered one, and it must find the claim rather than an empty table.
   it("claimSend refuses a second claim while one is unresolved, and writes nothing", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
 
-    await repo.markPublishing(orgId, adaptationId); // the redelivery re-claims the attempt
+    await repo.markPublishing(orgId, adaptationId, null); // the redelivery re-claims the attempt
     expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
 
     expect(await publicationsFor(adaptationId)).toHaveLength(1);
@@ -1222,13 +1299,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("releaseSend hands the claim back so an honest retry can take it again", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
     expect(await repo.releaseSend(orgId, claim)).toBe(true);
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
 
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
   });
 
@@ -1242,7 +1319,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
     expect(await repo.releaseSend(orgId, claim)).toBe(true);
@@ -1254,7 +1331,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("markPublished resolves the claim in place: one row, not a claim plus a delivery", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.claimSend(orgId, adaptationId);
 
     await repo.markPublished(orgId, adaptationId, {
@@ -1277,13 +1354,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
   });
 
   it("markFailed resolves the claim to failed rather than leaving one behind", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.claimSend(orgId, adaptationId);
 
     await repo.markFailed(orgId, adaptationId, "Forbidden", "platform_rejected", {
@@ -1302,7 +1379,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   // between "never went out" and "may be live" is kept.
   it("markFailed with the unknown outcome: adaptation failed, publication unknown", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.claimSend(orgId, adaptationId);
 
     await repo.markFailed(
@@ -1339,7 +1416,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   // once each is resolved.
   it("the database itself refuses a second in-flight claim for one adaptation", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     await repo.claimSend(orgId, adaptationId);
 
     const error = await db
@@ -1367,7 +1444,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(2);
@@ -1389,7 +1466,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("releaseSend gives back only THIS attempt's claim, never the one that overtook it", async () => {
     const adaptationId = await seedAdaptation("queued");
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
     const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
     // The redelivered attempt B: refused the claim, records an unknown outcome,
@@ -1410,7 +1487,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(2);
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(2);
     const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
     expect(live.id).not.toBe(hung.id);
 
@@ -1428,7 +1505,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
   });
 
@@ -1445,7 +1522,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    */
   it("markPublished resolves its OWN claim, never a successor's, when it comes back late", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
     // The redelivery reports an unknown outcome, resolving the hung claim.
     await repo.markFailed(
@@ -1463,7 +1540,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
     await repo.markPublished(
@@ -1496,7 +1573,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markPublished still records the delivery when the channel — and so the adaptation — was deleted mid-send", async () => {
     const disposable = await seedDisposableChannel("Deleted mid-send");
     const adaptationId = await seedAdaptation("queued", disposable);
-    await repo.markPublishing(orgId, adaptationId);
+    await repo.markPublishing(orgId, adaptationId, null);
     const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
 
     // The user deletes the channel while the request is in flight. The cascade
@@ -1534,11 +1611,11 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("sweepOrphanedClaims resolves a claim whose adaptation was deleted, and leaves a fresh one alone", async () => {
     const stale = await seedDisposableChannel("Long gone");
     const staleAdaptation = await seedAdaptation("queued", stale);
-    await repo.markPublishing(orgId, staleAdaptation);
+    await repo.markPublishing(orgId, staleAdaptation, null);
     const staleClaim = (await repo.claimSend(orgId, staleAdaptation)) as SendClaim;
     const fresh = await seedDisposableChannel("Just now");
     const freshAdaptation = await seedAdaptation("queued", fresh);
-    await repo.markPublishing(orgId, freshAdaptation);
+    await repo.markPublishing(orgId, freshAdaptation, null);
     const freshClaim = (await repo.claimSend(orgId, freshAdaptation)) as SendClaim;
     await db.delete(schema.channels).where(eq(schema.channels.id, stale));
     await db.delete(schema.channels).where(eq(schema.channels.id, fresh));
@@ -1561,7 +1638,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // including its check that no pg-boss job could still finish the attempt.
     // This pass is only for the rows that side can never see.
     const reachable = await seedAdaptation("queued");
-    await repo.markPublishing(orgId, reachable);
+    await repo.markPublishing(orgId, reachable, null);
     const reachableClaim = (await repo.claimSend(orgId, reachable)) as SendClaim;
     await db.execute(
       `UPDATE publications SET created_at = now() - interval '1 day' WHERE id = '${reachableClaim.id}'`,

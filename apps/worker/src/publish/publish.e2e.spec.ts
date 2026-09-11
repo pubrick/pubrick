@@ -521,7 +521,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
 
     // The state a killed attempt leaves behind, written through the real
     // repository: the attempt claimed, sent, and never came back.
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
@@ -576,7 +576,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
 
     // The attempt whose retries ran out: every one of them transient, so the
     // row is `publishing` and the dead-letter copy is on its way.
-    expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
 
     const { PublishRepository } = (await import("./publish.repository")) as {
       PublishRepository: PublishRepositoryCtor;
@@ -936,7 +936,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       seq += 1;
       const chatId = `-100${Date.now()}${seq}`;
       const { adaptationId } = await seedQueuedAdaptation(chatId);
-      expect(await repo.markPublishing(orgId, adaptationId)).toBe(1);
+      expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
       if (claim) expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
       await db
         .update(schema.adaptations)
