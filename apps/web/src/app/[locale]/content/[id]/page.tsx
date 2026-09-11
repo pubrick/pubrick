@@ -715,6 +715,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * Throw it away. 204, so `apiVoid` — `res.json()` on an empty body throws a
    * raw `SyntaxError`, which is neither an `ApiError` nor anything
    * `errorMessage` can translate.
+   *
+   * `refine_proposal_not_found` IS SUCCESS HERE, and only here. The row is gone
+   * either way, which is the entire end state Discard was pressed for, so
+   * rendering the api's honest 404 as a red `role="alert"` would report a
+   * failure for an act that has already happened — a second press after a slow
+   * first one, a card the reader left open while another tab discarded it, a
+   * proposal a later press superseded. Not generalised to the other two
+   * handlers: Accept's 404 means the merge did NOT happen, and Try again's
+   * means nothing was staged, both of which the reader has to be told.
+   *
+   * The reload still runs, because "the proposal is gone" is the only thing
+   * this answer establishes — the item's status, its adaptations and its badge
+   * may all have moved while the card sat there.
    */
   async function discardProposal(staged: RefineProposal) {
     setRefineBusy("discard");
@@ -723,7 +736,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await apiVoid(`/api/content/${id}/refine/${staged.id}`, { method: "DELETE" });
       applyToItem((previous) => (previous ? { ...previous, refineProposal: null } : previous));
     } catch (err) {
-      await refineFailed(err);
+      if (err instanceof ApiError && err.code === "refine_proposal_not_found") {
+        applyToItem((previous) => (previous ? { ...previous, refineProposal: null } : previous));
+        await reload();
+      } else {
+        await refineFailed(err);
+      }
     } finally {
       setRefineBusy(null);
     }

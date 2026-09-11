@@ -1700,6 +1700,82 @@ describe("asking the model to revise a selection (Task 8)", () => {
   });
 
   /**
+   * A DISCARD OF A ROW THAT IS ALREADY GONE IS A DISCARD THAT WORKED.
+   *
+   * The api's 404 is honest — it really has no such proposal — but the reader
+   * pressed a button whose whole end state is "this is not there any more", and
+   * that end state holds. Rendering it as a red alert reports a failure for
+   * something that has happened: a second press after a slow first one, a card
+   * left open in one tab while another discarded it, a proposal a later press
+   * superseded. The `role="alert"` is asserted absent rather than the sentence,
+   * so a re-worded message cannot make this pass by accident.
+   *
+   * It stays a refusal everywhere else — Accept's 404 means the merge did NOT
+   * happen — and the re-read still runs, because the item's status, its
+   * adaptations and its badge may all have moved while the card sat there.
+   */
+  it("treats a Discard of an already-gone proposal as done, not as a failure", async () => {
+    const served = { current: refinable({ refineProposal: proposal }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    mockApiVoid.mockRejectedValue(
+      new ApiError(
+        404,
+        "This suggestion is no longer staged for this post",
+        false,
+        "refine_proposal_not_found",
+      ),
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+    // The api has it no longer, which is the state that produces the 404.
+    served.current = { ...served.current, refineProposal: null };
+
+    const before = calls.length;
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineDiscard }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(en.Publish.refineProposalTitle)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // ...and it still asked what else had moved while that card sat there.
+    await waitFor(() =>
+      expect(
+        calls.slice(before).some((c) => c.method === "GET" && c.path === "/api/content/c1"),
+      ).toBe(true),
+    );
+  });
+
+  /**
+   * The complement, so the clause above cannot quietly swallow the refusals
+   * that matter: the same 404 from ACCEPT means the merge did not happen, and
+   * the reader has to be told.
+   */
+  it("still reports a 404 from Accept, where it means the merge did not happen", async () => {
+    const served = { current: refinable({ refineProposal: proposal }) };
+    installBaseHandlers(served, [], (path, method) => {
+      if (method === "POST" && path === `/api/content/c1/refine/${PROPOSAL_ID}/accept`) {
+        served.current = { ...served.current, refineProposal: null };
+        throw new ApiError(
+          404,
+          "This suggestion is no longer staged for this post",
+          false,
+          "refine_proposal_not_found",
+        );
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineAccept }));
+
+    expect(await screen.findByText(en.Errors.refine_proposal_not_found)).toBeInTheDocument();
+  });
+
+  /**
    * The one a screen that reloads only on success cannot pass. A pinned post
    * answers `content_pinned_approved` BEFORE it looks for the proposal, so the
    * 409 says nothing about whether the row survived — and here it did not.
