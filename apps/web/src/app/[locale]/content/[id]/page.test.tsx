@@ -367,6 +367,34 @@ describe("rendering by adaptation status (Step 1)", () => {
     expect(alert).toHaveTextContent("Telegram: chat not found");
   });
 
+  /**
+   * THE NUMBER IS RENDERED, NOT CONCATENATED — and what it counts is said
+   * honestly.
+   *
+   * "The platform did not answer after {attempts} attempts" was wrong three
+   * ways: two of the three transient classes are the platform's own envelope
+   * saying "not now", so it usually DID answer; `attempt_count` is a lifetime
+   * counter no writer resets, so it includes attempts that ended in a
+   * credential failure or a refusal; and "1 attempts" is what a one-attempt row
+   * reads, in every language. The sentence now says what is true of all of them
+   * — it never ACCEPTED the post — counts "so far", and pluralises through ICU.
+   */
+  it("pluralises a single attempt, and does not claim the platform stayed silent", async () => {
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({ status: "failed", failureReason: "retries_exhausted", attemptCount: 1 }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("1 attempt so far");
+    expect(alert).not.toHaveTextContent("1 attempts");
+    expect(alert).not.toHaveTextContent("did not answer");
+  });
+
   it("falls back to lastError for a row that failed before the column existed", async () => {
     const item = makeItem({
       adaptations: [

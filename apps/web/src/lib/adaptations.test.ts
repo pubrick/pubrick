@@ -172,12 +172,39 @@ describe("every failure reason has a sentence", () => {
     ["credentials_missing", "no longer connected"],
     ["credentials_invalid", "not what the platform expects"],
     ["platform_rejected", "The platform refused"],
-    ["retries_exhausted", "did not answer"],
+    ["retries_exhausted", "did not accept this post"],
     ["send_abandoned", "stopped before it reached the platform"],
     ["outcome_unknown", "never confirmed it"],
   ] as const)("%s reads about %s", (reason, fragment) => {
     const text = messageAt(en.Content, failureReasonKey(reason));
     expect(text).toContain(fragment);
+  });
+});
+
+/**
+ * THE ATTEMPT COUNT IS PLURALISED BY ICU, IN EVERY LANGUAGE.
+ *
+ * The sentence was "after {attempts} attempts" in all four, which reads "after
+ * 1 attempts" in English — `markExhausted` guards on `publishing` alone, so a
+ * one-attempt row is renderable — and is ungrammatical in Russian for anything
+ * ending in 2, 3 or 4 ("за 2 попыток"). The number is interpolated, so this is
+ * `plural` or it is a copy of the bug in each locale.
+ */
+describe("the attempts in a give-up sentence", () => {
+  it.each(["en", "ru", "es", "pt"] as const)("%s pluralises them with ICU", (name) => {
+    const messages = { en, ru, es, pt }[name];
+    const sentence = messageAt(messages.Content, "failureReason.retriesExhausted");
+    expect(sentence).toContain("{attempts, plural,");
+  });
+
+  /**
+   * Russian needs all three forms plus `other`; a `one`/`other` pair copied
+   * from English is wrong for 2-4 and for the decimal `other`.
+   */
+  it("gives Russian its few and many forms", () => {
+    const sentence = messageAt(ru.Content, "failureReason.retriesExhausted") ?? "";
+    expect(sentence).toContain("few {");
+    expect(sentence).toContain("many {");
   });
 });
 

@@ -135,7 +135,7 @@
       "credentialsInvalid": "No se envió nada: las credenciales guardadas de {channel} no son las que la plataforma espera. Vuelve a conectarlo en la página de la marca, en Marcas.",
       "platformRejected": "La plataforma rechazó esta publicación: {error}",
       "platformRejectedNoText": "La plataforma rechazó esta publicación y no dijo por qué.",
-      "retriesExhausted": "La plataforma no respondió tras {attempts} intentos. No se confirmó ningún envío: publica ahora para volver a intentarlo.",
+      "retriesExhausted": "La plataforma no aceptó esta publicación tras {attempts, plural, one {# intento} other {# intentos}} hasta ahora. No se confirmó ningún envío: publica ahora para volver a intentarlo.",
       "sendAbandoned": "El envío a {channel} se detuvo antes de llegar a la plataforma y no queda ningún reintento. No se envió nada: publica ahora para volver a intentarlo."
     },
     "channelsUnavailable": "No se pudieron cargar los nombres de los canales, así que se muestran por ID.",

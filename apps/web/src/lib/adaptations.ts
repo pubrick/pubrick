@@ -227,6 +227,13 @@ export function failureSentence(
         ? t(FAILURE_REASON_KEYS.platform_rejected, { error: lastError })
         : t("failureReason.platformRejectedNoText");
     case "retries_exhausted":
+      // "SO FAR", because this is a LIFETIME counter. `attempt_count` is never
+      // reset — `approve` carries it forward and increments, the delivery
+      // resolver increments, `markFailed` bumps it once per attempt — so a post
+      // approved three times over a week reads the total, including attempts
+      // that ended in a credential failure or a platform refusal. The sentence
+      // counts attempts on this post rather than attempts in this run, and says
+      // so; a number scoped to one approval would need a column nothing writes.
       return t(FAILURE_REASON_KEYS.retries_exhausted, { attempts: attemptCount });
     case "credentials_missing":
       return t(FAILURE_REASON_KEYS.credentials_missing);
