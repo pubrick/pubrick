@@ -1259,12 +1259,23 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
    * "never sent" is the invitation to re-approve into a duplicate.
    */
   describe("stranded-schedule sweep (no job left anywhere)", () => {
-    /** A queue with no registered consumer, so a job parked here stays parked. */
+    /**
+     * A queue with no registered consumer, so a job parked here stays parked in
+     * whichever state this block puts it. `retryLimit` and `retryDelay: 0` are
+     * the only production values changed, and neither is under test: what the
+     * sweep reads is the job's STATE, and a failed job needs retries left to
+     * land in `retry` rather than in `failed`.
+     */
     const STRANDED_QUEUE = "publish-stranded-e2e";
     let seq = 0;
 
     beforeAll(async () => {
-      await boss.createQueue(STRANDED_QUEUE);
+      const options = { retryLimit: 5, retryDelay: 0 };
+      await boss.createQueue(STRANDED_QUEUE, options);
+      // The queue survives between runs in a shared database, so a queue
+      // created by an older version of this block is updated rather than left
+      // with its old (retry-less) options.
+      await boss.updateQueue(STRANDED_QUEUE, options);
       await db.execute(sql`delete from pgboss.job where name = ${STRANDED_QUEUE}`);
     });
 
@@ -1290,10 +1301,36 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
        * approve.
        */
       silentForSeconds = ageSeconds,
+      /**
+       * Whether an EARLIER attempt already ended on this row, leaving its
+       * resolved `failed` receipt behind. The ordinary shape of the population
+       * — `approve` targets `failed` rows, so a re-approved delivery carries
+       * the receipt of the one before it — and the shape that tells the
+       * claimed fork's `p.status = 'in_flight'` apart from "this row has any
+       * publications at all".
+       */
+      priorFailure = false,
     ): Promise<{ adaptationId: string; itemId: string; chatId: string }> {
       seq += 1;
       const chatId = `-200${Date.now()}${seq}`;
       const { adaptationId } = await seedQueuedAdaptation(chatId);
+      if (priorFailure) {
+        const attemptCount = await repo.markPublishing(orgId, adaptationId, null);
+        expect(attemptCount).not.toBeNull();
+        const priorClaim = await repo.claimSend(orgId, adaptationId);
+        expect(priorClaim).not.toBeNull();
+        expect(
+          await repo.markFailed(
+            orgId,
+            adaptationId,
+            "the platform refused the first attempt",
+            "platform_rejected",
+            { status: "publishing", attemptCount: attemptCount as number },
+            "failed",
+            priorClaim ?? undefined,
+          ),
+        ).toBe(true);
+      }
       if (claim) {
         expect(await repo.markPublishing(orgId, adaptationId, null)).not.toBeNull();
         expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
@@ -1495,5 +1532,67 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       // blocks `claimSend` for ever.
       expect(pubs[0]?.status).not.toBe("in_flight");
     });
+
+    /**
+     * THE OTHER SIDE OF THAT FORK, and the one every other fixture here leaves
+     * unsaid: a stranded row whose publications are all TERMINAL. It is the
+     * ordinary shape of the population rather than an edge — `approve` targets
+     * `failed` rows, so a re-approved delivery arrives carrying the receipt of
+     * the attempt before it — and with the claimed arm keyed on "has any
+     * publications row" instead of on `p.status = 'in_flight'` this row is
+     * recorded `outcome_unknown`. That is not a cosmetic mislabel: `approve`
+     * skips a delivery with an unknown outcome and refuses a timed approve
+     * outright, so the post becomes unsendable except through the manual
+     * delivery resolver.
+     */
+    it("says schedule_missed for a stranded row carrying only a PRIOR failed receipt", async () => {
+      const { adaptationId } = await stranded("scheduled", 26 * 3600, false, 26 * 3600, true);
+      const before = await publicationsOf(adaptationId);
+      expect(before).toHaveLength(1);
+      expect(before[0]?.status).toBe("failed");
+
+      await service.sweepAbandoned();
+
+      const row = await rowOf(adaptationId);
+      expect(row?.status).toBe("failed");
+      // The old receipt says nothing about THIS delivery: no attempt claimed
+      // the send this time, so nothing can have reached the platform.
+      expect(row?.failureReason).toBe("schedule_missed");
+      expect(row?.lastError).toContain("nothing was delivered");
+      expect(row?.lastError).not.toContain("check the channel before re-approving");
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs).toHaveLength(2);
+      expect(pubs.map((pub) => pub.status).sort()).toEqual(["failed", "failed"]);
+    });
+
+    /**
+     * The predicate that decides whether a row is stranded AT ALL, on the two
+     * states no fixture in this block reaches on its own: a job waiting out its
+     * retry backoff (up to an hour of it on the publish queue) and a job a
+     * worker is holding right now. `created` is covered by the waiting-job case
+     * above; these two are the difference between "not terminal" and "not yet
+     * started", and they are reachable exactly in the outage this feature is
+     * about, where a woken worker's first attempt fails transiently before it
+     * can write anything.
+     */
+    it.each(["active", "retry"] as const)(
+      "leaves a stranded-looking row whose job is in %s",
+      async (state) => {
+        const { adaptationId } = await stranded("scheduled", 26 * 3600);
+        const jobId = await boss.send(STRANDED_QUEUE, { adaptationId, orgId });
+        if (!jobId) throw new Error("boss.send returned null");
+        const [job] = await boss.fetch(STRANDED_QUEUE);
+        expect(job?.id).toBe(jobId);
+        if (state === "retry") await boss.fail(STRANDED_QUEUE, jobId, { message: "transient" });
+        expect((await boss.getJobById(STRANDED_QUEUE, jobId))?.state).toBe(state);
+
+        try {
+          await service.sweepAbandoned();
+          expect((await rowOf(adaptationId))?.status).toBe("scheduled");
+        } finally {
+          await boss.cancel(STRANDED_QUEUE, jobId);
+        }
+      },
+    );
   });
 });

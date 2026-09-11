@@ -12,7 +12,7 @@ import {
   PUBLISH_ABANDONED_GRACE_SECONDS,
   type PublishFailureReason,
 } from "@pubrick/shared";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, type SQLWrapper, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -286,6 +286,40 @@ async function resolveClaim(
 const PGBOSS_SCHEMA = "pgboss";
 
 /**
+ * IS ANY JOB STILL GOING TO MOVE THIS ROW? — the predicate both sweeps are
+ * built on, written ONCE and called from all four of their statements.
+ *
+ * `state < 'completed'` is pg-boss's own spelling for "not terminal": its
+ * `job_state` enum is declared `created, retry, active, completed, cancelled,
+ * failed` and the order is load-bearing because the base type is numeric, so
+ * the comparison is exactly {`created`, `retry`, `active`} — the same one
+ * `failJobsById` is guarded by. `data->>'adaptationId'` is the payload the api
+ * enqueues (`QueueService.enqueuePublish`) and finds jobs by when it cancels
+ * one. The cast is explicit because the literal has to resolve to pgboss's enum
+ * type rather than to text.
+ *
+ * ONE expression rather than the four copies this started as, because a copy is
+ * a guard with no test of its own: narrowing the comparison to `created` alone
+ * in `sweepStranded`'s two copies left the whole worker suite green, while the
+ * same edit here fails both sweeps' "leaves a row a retry/active job still
+ * names" cases. What a silent copy could lose is precisely the case the
+ * staleness feature is about — a row whose job is waiting out its retry backoff
+ * (up to an hour), in the outage that strands rows in the first place.
+ *
+ * Takes the adaptation id as a FRAGMENT rather than reading a fixed column,
+ * because the two callers name it differently: the outer statement by column,
+ * the locking sub-select by its alias `a.id`.
+ */
+function noLiveJobFor(adaptationId: SQLWrapper) {
+  return sql`not exists (
+      select 1
+        from ${sql.raw(PGBOSS_SCHEMA)}.job j
+       where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+         and j.data->>'adaptationId' = ${adaptationId}::text
+    )`;
+}
+
+/**
  * THE SWEEP'S TWO WINDOWS, re-exported from the rule book rather than declared
  * here.
  *
@@ -332,11 +366,30 @@ export type SweptAdaptation = { id: string; orgId: string; outcome: "failed" | "
  * with NO JOB has been stranded rather than merely waiting.
  *
  * `PUBLISH_MAX_LATENESS_HOURS`, the bound the worker already checks at send
- * time, and deliberately not a grace of this sweep's own. The two are one
- * question asked from two sides: past that bound a delivery is refused as
- * `schedule_missed` whether the job arrives or not, so a row that has reached
- * it has nothing left to wait for and a second number would only be a second
- * thing to get wrong.
+ * time, and deliberately not a grace of this sweep's own — but it is the same
+ * number for two different reasons, and only the `scheduled` one is the
+ * send-time bound being asked again.
+ *
+ * FOR A `scheduled` ROW the two are one question asked from two sides: past
+ * that bound a delivery is refused as `schedule_missed` whether the job arrives
+ * or not, so a row that has reached it has nothing left to wait for.
+ *
+ * FOR A `queued` ROW THEY ARE NOT. "Publish now" writes `scheduled_at = null`
+ * (`ContentRepository.approve`), `load` computes `lateBySeconds` as
+ * `extract(epoch from now() - scheduled_at)`, and both lateness arms of the
+ * send-time check are gated on that being non-null (`PublishService`) — so a
+ * Publish-now delivery is NEVER refused for lateness: if its job turned up at
+ * hour seven it would publish normally. What makes this row safe to fail is not
+ * a refusal but an absence. On every non-operational path its job can only be
+ * missing because pg-boss's retention DELETED it, which is fourteen days after
+ * the approve, and nothing can ever enqueue another one for a row that already
+ * exists (next paragraph). So here the bound is margin against a clock on a
+ * condition that has been true for days — not the arrival of a deadline. It is
+ * the same constant as the other arm because a second number would be a second
+ * thing to get wrong, and for no stronger reason than that.
+ *
+ * Read the two arms of `stranded` in `sweepStranded` with this in mind: the
+ * `queued` one cannot fire at the bound, only long past it.
  *
  * IT CANNOT RACE A NORMAL ENQUEUE, and that is a property of the schema rather
  * than of the number. `approve` inserts the job in the SAME TRANSACTION as the
@@ -1072,16 +1125,9 @@ export class PublishRepository {
        where p.adaptation_id = ${schema.adaptations.id}
          and p.status = 'in_flight'
     )`;
-    // `state < 'completed'` is pg-boss's own spelling for "not terminal"
-    // (`created` < `retry` < `active` < `completed` in its enum), the same
-    // comparison `failJobsById` is guarded by. Cast explicitly: the literal has
-    // to resolve to pgboss's enum type, not to text.
-    const noLiveJob = sql`not exists (
-      select 1
-        from ${sql.raw(PGBOSS_SCHEMA)}.job j
-       where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-         and j.data->>'adaptationId' = ${schema.adaptations.id}::text
-    )`;
+    // The shared predicate (`noLiveJobFor`), not a copy of it: this is one of
+    // the four sites that must agree about what a live job is.
+    const noLiveJob = noLiveJobFor(schema.adaptations.id);
     const abandoned = and(
       eq(schema.adaptations.status, "publishing"),
       sql`${schema.adaptations.updatedAt} < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})`,
@@ -1111,12 +1157,7 @@ export class PublishRepository {
               select a.id from adaptations a
                where a.status = 'publishing'
                  and a.updated_at < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})
-                 and not exists (
-                   select 1
-                     from ${sql.raw(PGBOSS_SCHEMA)}.job j
-                    where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-                      and j.data->>'adaptationId' = a.id::text
-                 )
+                 and ${noLiveJobFor(sql`a.id`)}
                order by a.id
                  for update of a
             )`,
@@ -1236,17 +1277,9 @@ export class PublishRepository {
        where p.adaptation_id = ${schema.adaptations.id}
          and p.status = 'in_flight'
     )`;
-    // `state < 'completed'` is pg-boss's own spelling for "not terminal", and
-    // `data->>'adaptationId'` is the payload the api enqueues
-    // (`QueueService.enqueuePublish`) and finds jobs by when it cancels one.
-    // The same two columns `sweepAbandoned` has read since it shipped; pinned
-    // against a real boss instance in `publish.e2e.spec.ts`.
-    const noLiveJob = sql`not exists (
-      select 1
-        from ${sql.raw(PGBOSS_SCHEMA)}.job j
-       where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-         and j.data->>'adaptationId' = ${schema.adaptations.id}::text
-    )`;
+    // The same shared predicate `sweepAbandoned` uses, and the same two pgboss
+    // columns pinned against a real boss instance in `publish.e2e.spec.ts`.
+    const noLiveJob = noLiveJobFor(schema.adaptations.id);
     // A `scheduled` row is measured by its SLOT and a `queued` row by its
     // silence, because those are the two clocks the api actually sets. Reading
     // `updated_at` for both would sweep a row scheduled for next month the
@@ -1295,12 +1328,7 @@ export class PublishRepository {
                   or (a.status = 'queued'
                        and a.updated_at < now() - make_interval(secs => ${seconds}))
                  )
-                 and not exists (
-                   select 1
-                     from ${sql.raw(PGBOSS_SCHEMA)}.job j
-                    where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
-                      and j.data->>'adaptationId' = a.id::text
-                 )
+                 and ${noLiveJobFor(sql`a.id`)}
                order by a.id
                  for update of a
             )`,

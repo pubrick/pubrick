@@ -256,11 +256,23 @@ ascending `id`.** All eight of them, and there is no ninth:
 
 A bulk `UPDATE` cannot carry an `ORDER BY` of its own, which is why the last
 four take their locks in a sub-select and repeat their predicate on the outer
-statement. That repetition is load-bearing twice over: the sub-select's
-`FOR UPDATE` re-evaluates its own `WHERE` after acquiring each row lock, and the
-outer `UPDATE` re-evaluates the predicate again — so a row a live attempt has
-just renewed still fails the second look and is not swept, which is the property
-both sweeps' safety rests on.
+statement. **The half that holds is the sub-select's**: its `FOR UPDATE`
+re-evaluates its own `WHERE` against the new row version after acquiring each
+row lock, so a row a live attempt — or a person's `reject` — renewed while the
+sweep was parked on its lock drops out of the locked set and is never touched.
+That is the property both sweeps' safety rests on. The outer `UPDATE`'s copy of
+the predicate is belt, not the defence: removing it leaves the guarantee intact
+(measured — the worker suite and a drive in which a `reject` commits under the
+held lock both stayed green without it), and it is kept only because a statement
+whose outer `WHERE` does not say what it writes is one the next reader has to
+reconstruct out of a sub-select.
+
+The sub-select can afford to be evaluated twice because it plans as an
+anti-join, not as a per-row probe into the queue: `EXPLAIN ANALYZE` over a
+seeded 2 000 live jobs gives `LockRows -> Sort -> Hash Right Anti Join` (a
+sequential scan of `pgboss.job_common` filtered by `state < 'completed'`, hashed
+against a scan of `adaptations`), 0.2-0.5 ms — measured twice, on the review's
+seeded set and again here.
 
 **A cascade does not need the treatment, because the pre-lock already gave it
 one.** `DELETE FROM brands` reaches `pipeline_runs`, `adaptations`,
