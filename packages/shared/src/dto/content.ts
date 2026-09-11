@@ -673,8 +673,26 @@ export const adaptationDtoSchema = z.strictObject({
   scheduledAt: z.string().nullable(),
   attemptCount: z.number().int().nonnegative(),
   lastError: z.string().nullable(),
+  /**
+   * THE FOUR FIELDS THE DELIVERY RECEIPT CONTRIBUTES, all nullable, all of
+   * them `ADAPTATION_COLUMNS` members like the rest of this schema.
+   *
+   * `failureReason` is the closed code the screens say a failure from, and
+   * `lateBySeconds` the number its missed-slot sentence names; `assertedByName`
+   * and `assertedAt` are whose word a delivery is when no platform answered for
+   * it. They are declared here for the reason the docstring above gives: a
+   * field on this schema is a field the api MUST return, and one that stops
+   * being selected fails a parse rather than arriving in a browser as
+   * `undefined` — which for these four is precisely how the screens go back to
+   * printing a worker's English log line, or claiming a platform confirmation
+   * nobody ever got.
+   */
+  failureReason: z.enum(PUBLISH_FAILURE_REASONS).nullable(),
+  lateBySeconds: z.number().nullable(),
   externalUrl: z.string().nullable(),
   deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
+  assertedByName: z.string().nullable(),
+  assertedAt: z.string().nullable(),
 });
 export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
 

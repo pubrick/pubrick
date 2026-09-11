@@ -322,7 +322,20 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     // were 47 % of it. The bound is round and above the measurement, so that a
     // column added to a card costs a decision rather than a test edit, while
     // putting `body` back fails outright.
-    expect(Buffer.byteLength(response.text)).toBeLessThan(200_000);
+    //
+    // AND A COLUMN DID COST ONE. Rebasing onto main brought four more fields
+    // per adaptation — `failureReason`, `lateBySeconds`, `assertedByName`,
+    // `assertedAt`, all null on this seed — which is 82 bytes on each of the
+    // 400 adaptations here and 204 308 for the page, over the 200 000 the bound
+    // was set at. Paid rather than trimmed: they are what lets a failed channel
+    // say WHICH failure in the reader's own language instead of printing the
+    // worker's English log line, and whose word a delivery is when no platform
+    // answered for it — both of them things the queue's own cards render. The
+    // bound moves once, to the next round number above the new measurement; it
+    // is still a third under the 324 108 this file exists to have ended, and
+    // `body` back on a card still fails outright — this seed's body is 753
+    // bytes, so 200 of them put the page past 350 000.
+    expect(Buffer.byteLength(response.text)).toBeLessThan(220_000);
     expect(response.text).not.toContain(BODY.slice(0, 40));
   });
 
