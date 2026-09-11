@@ -1880,6 +1880,76 @@ describe.skipIf(!url)("content e2e", () => {
     });
 
     /**
+     * THREE FIELDS, ONE RECEIPT — asserted, not merely promised in a docstring.
+     *
+     * `lateBySeconds`, `deliveryOutcome`, `assertedByName` and `assertedAt` are
+     * four subqueries over `publications` that must all pick the SAME row: the
+     * last FINISHED attempt. The docstrings say so; nothing proved it, because
+     * every other case in this file seeds exactly ONE receipt, and with one
+     * receipt every predicate agrees. Changing the lateness subquery alone to
+     * `p.status = 'failed'` left the suite green — three fields captioning one
+     * row off different attempts is exactly how a screen tells a story about a
+     * delivery that never happened.
+     *
+     * TWO finished receipts, and the newer one deliberately NOT `failed`, which
+     * is what makes each predicate answer differently when it drifts: the older
+     * attempt's refusal is 20 h past the slot, the newer receipt is 24 h past
+     * it and carries a person's name. Any of the four reading the older row
+     * reports the wrong number, or nobody's name, instead of agreeing.
+     *
+     * Assembled directly rather than driven through the resolver: what is under
+     * test is the predicate these fields share, and the sharpest fixture for it
+     * is one no single API call produces.
+     */
+    it("answers the lateness, the outcome and the asserter off ONE receipt — the newest finished", async () => {
+      const agent = await orgAgent();
+      const userId = await sessionUserId(agent);
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Two receipts");
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [row] = (
+          await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+        ).rows as { org_id: string }[];
+        await db.execute(
+          `UPDATE adaptations SET status = 'failed', failure_reason = 'schedule_missed',
+             last_error = 'Missed its scheduled slot: ...',
+             scheduled_at = now() - interval '26 hours' WHERE id = '${adaptationId}'`,
+        );
+        // The OLDER attempt: refused 6 h ago, i.e. 20 h past the slot, and
+        // nobody's word.
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at)
+           VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'failed', NULL, NULL, 1, now() - interval '6 hours')`,
+        );
+        // The NEWER one: 2 h ago, 24 h past the slot, settled by a person.
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at, asserted_by, asserted_at)
+           VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'published', NULL, NULL, 2, now() - interval '2 hours', '${userId}', now() - interval '2 hours')`,
+        );
+      } finally {
+        await pool.end();
+      }
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      const adaptation = fetched.body.adaptations[0];
+      // A window, not an equality: the seed and the read are separate
+      // statements and `now()` moved between them.
+      expect(adaptation.lateBySeconds).toBeGreaterThan(24 * 3600 - 60);
+      expect(adaptation.lateBySeconds).toBeLessThan(24 * 3600 + 60);
+      // 20 h is the OLDER attempt's answer — the one a drifted predicate gives.
+      expect(adaptation.lateBySeconds).toBeGreaterThan(20 * 3600 + 60);
+      expect(adaptation.assertedByName).toBe("U");
+      expect(typeof adaptation.assertedAt).toBe("string");
+      // The newest finished receipt is not `unknown`, so the outcome is the
+      // adaptation's own status — and reading the older receipt would not
+      // change that, which is why this is the field the other three are
+      // anchored to rather than the field that catches the drift.
+      expect(adaptation.deliveryOutcome).toBe("failed");
+    });
+
+    /**
      * NULL WHERE THERE IS NOTHING TO MEASURE, and that is what the screen's
      * "no hours" sentence is for. A "publish now" delivery has no slot it could
      * have missed — the worker's own bound answers null for exactly this row —
