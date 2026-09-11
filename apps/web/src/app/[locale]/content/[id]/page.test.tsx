@@ -1451,6 +1451,64 @@ describe("settling a delivery nobody can speak for", () => {
   });
 
   /**
+   * ONE PRESS, ONE VERDICT — the buttons close while the answer is in flight.
+   *
+   * Both of them, not only the one pressed: the two are contradictory answers
+   * to one question, and the second press of either would reach an api that has
+   * already been told. The server is right to refuse it
+   * (`delivery_outcome_already_known`), but being shown a refusal for a
+   * double-click is being blamed for the screen's own gap.
+   */
+  it("closes both verdict buttons while a verdict is in flight", async () => {
+    const served = { current: unknownRow() };
+    const calls: Call[] = [];
+    let release: (() => void) | undefined;
+    installBaseHandlers(served, calls, async (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/delivery") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        served.current = makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              deliveryOutcome: "published",
+              assertedByName: ASSERTER,
+              assertedAt: ASSERTED_AT,
+            }),
+          ],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.markDelivered }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled(),
+    );
+    // The OTHER verdict too, which is the half a "disable the button you
+    // pressed" fix would miss.
+    expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
+
+    // And the second press sends nothing, which is the whole point of the
+    // disabled state rather than a property of it.
+    await user.click(screen.getByRole("button", { name: en.Publish.markNotDelivered }));
+    release?.();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: en.Publish.markDelivered })).toBeNull(),
+    );
+    expect(calls.filter((c) => c.path === "/api/content/c1/adaptations/a1/delivery")).toHaveLength(
+      1,
+    );
+  });
+
+  /**
    * WHOSE WORD IT IS, and the sentence it replaces.
    *
    * A `published` adaptation with no link renders `linkUnavailable` —
@@ -1489,6 +1547,49 @@ describe("settling a delivery nobody can speak for", () => {
         en.Publish.assertedDelivery
           .replace("{name}", ASSERTER)
           .replace("{date}", new Date(ASSERTED_AT).toLocaleString("en")),
+      ),
+    ).toBeInTheDocument();
+    expect(within(results).queryByText(en.Publish.linkUnavailable)).toBeNull();
+  });
+
+  /**
+   * AND WHEN THE PERSON IS GONE, THEIR WORD IS NOT.
+   *
+   * The receipt's `asserted_by` is `ON DELETE SET NULL`, so a delivery somebody
+   * settled reaches this screen with no name and a date once their account is
+   * deleted. Falling back to `linkUnavailable` there would claim a
+   * platform-confirmed delivery — the very sentence the receipt exists to keep
+   * off this row — arrived at by removing a member.
+   */
+  it("says a removed member settled the delivery, rather than claiming a lost link", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              deliveryOutcome: "published",
+              externalUrl: null,
+              assertedByName: null,
+              assertedAt: ASSERTED_AT,
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const results = resultsList();
+    expect(
+      within(results).getByText(
+        en.Publish.assertedDeliveryByRemovedMember.replace(
+          "{date}",
+          new Date(ASSERTED_AT).toLocaleString("en"),
+        ),
       ),
     ).toBeInTheDocument();
     expect(within(results).queryByText(en.Publish.linkUnavailable)).toBeNull();
@@ -1555,6 +1656,44 @@ describe("settling a delivery nobody can speak for", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  /** And so does the one for a delivery whose asserter has since been removed. */
+  it.each(["en", "es", "ru", "pt"] as const)(
+    "says a removed member settled it in %s",
+    async (locale) => {
+      const messages = (await import(`../../../../../messages/${locale}.json`)).default as {
+        Publish: { assertedDeliveryByRemovedMember: string; resultsTitle: string };
+      };
+      installBaseHandlers(
+        {
+          current: makeItem({
+            status: "published",
+            adaptations: [
+              makeAdaptation({
+                status: "published",
+                deliveryOutcome: "published",
+                assertedByName: null,
+                assertedAt: ASSERTED_AT,
+              }),
+            ],
+          }),
+        },
+        [],
+      );
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, { locale });
+      await screen.findByRole("heading", { name: messages.Publish.resultsTitle });
+
+      expect(
+        screen.getByText(
+          messages.Publish.assertedDeliveryByRemovedMember.replace(
+            "{date}",
+            new Date(ASSERTED_AT).toLocaleString(locale),
+          ),
+        ),
+      ).toBeInTheDocument();
+    },
+  );
 });
 
 describe("the rest of the review's web findings", () => {

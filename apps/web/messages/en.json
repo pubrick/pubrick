@@ -201,6 +201,7 @@
     "markNotDelivered": "Mark as not delivered",
     "assertDeliveryHint": "Open {channel} and look before you choose. Marking it delivered records, under your name, that you saw the post there.",
     "assertedDelivery": "Marked as delivered by {name} on {date}",
+    "assertedDeliveryByRemovedMember": "Marked as delivered by a removed member on {date}",
     "viewPost": "View post",
     "scheduledFor": "Scheduled for",
     "genericError": "Something went wrong. Please try again.",

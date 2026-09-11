@@ -6339,6 +6339,32 @@ describe.skipIf(!url)("content e2e", () => {
       return rows as { status: string; external_url: string | null; asserted_by: string | null }[];
     }
 
+    /** The organisation a post belongs to, for a read that has no session. */
+    async function orgOf(itemId: string): Promise<string> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const { rows } = await db.execute(`SELECT org_id FROM content_items WHERE id = '${itemId}'`);
+      await pool.end();
+      return (rows[0] as { org_id: string }).org_id;
+    }
+
+    /**
+     * The person who settled this delivery, deleted — through the foreign keys
+     * rather than around them, which is the whole point: `ON DELETE SET NULL`
+     * is what the receipt is then left holding.
+     */
+    async function deleteAsserter(adaptationId: string): Promise<void> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const { rowCount } = await db.execute(
+        `DELETE FROM "user" WHERE id IN (
+           SELECT asserted_by FROM publications
+            WHERE adaptation_id = '${adaptationId}' AND asserted_by IS NOT NULL)`,
+      );
+      await pool.end();
+      if (rowCount !== 1) throw new Error(`expected one asserter to delete, deleted ${rowCount}`);
+    }
+
     async function itemStatus(itemId: string): Promise<string> {
       const { createDb } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
@@ -6409,6 +6435,38 @@ describe.skipIf(!url)("content e2e", () => {
     });
 
     /**
+     * A TIMED APPROVE IS NOT ALLOWED TO SKIP A CHANNEL AT ALL.
+     *
+     * "Publish now" skipping one row is honest: the other rows go now, the
+     * skipped one is reported as it was, and nothing was promised about it. A
+     * request that names a TIME is a different promise — it is the one
+     * `requireScheduleReachesEveryChannel` exists to keep, and the reader is
+     * told the post goes out, whole, at that moment. Skipping a row behind a
+     * 200 there says the schedule reaches every channel when it does not, which
+     * is the standard that guard sets (and the standard `requireAdaptations`
+     * and the refusal below set): no success for work that was not done.
+     *
+     * Refused rather than half-scheduled, and asserted through the queue: a
+     * mutation that answers 200 leaves the unknown row unqueued either way, so
+     * only the OTHER channel's job count tells the two apart.
+     */
+    it("refuses to schedule a post one of whose channels it would skip", async () => {
+      const agent = await orgAgent();
+      const { itemId, inDoubt, refused } = await fanOut(agent);
+      await seedDelivery(inDoubt, "unknown");
+      await seedDelivery(refused, "failed");
+
+      const refusal = await agent
+        .post(`/api/content/${itemId}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+        .expect(409);
+      expect(refusal.body.code).toBe("delivery_outcome_unknown");
+      expect(await publishJobCount(refused)).toBe(0);
+      expect(await publishJobCount(inDoubt)).toBe(0);
+      expect(await itemStatus(itemId)).toBe("draft");
+    });
+
+    /**
      * AND WHEN THE SKIP LEAVES NOTHING, IT REFUSES rather than answering 200.
      *
      * This project's own named defect class — an early exit reporting the same
@@ -6469,6 +6527,50 @@ describe.skipIf(!url)("content e2e", () => {
 
       // The item follows the fold, exactly as a landing delivery would.
       expect(await itemStatus(itemId)).toBe("published");
+    });
+
+    /**
+     * AND THE FACT OUTLIVES THE ACCOUNT THAT VOUCHED FOR IT.
+     *
+     * `asserted_by` is `ON DELETE SET NULL` on purpose — the receipt outlives
+     * what it points at — and the migration's own argument is that what a
+     * departure costs is the NAME, not the fact. That argument is only true if
+     * the fact is recorded somewhere the delete cannot reach, which is why
+     * `asserted_at` is its own column rather than `created_at` read through the
+     * pointer: gated on `asserted_by`, the timestamp dies with the account and
+     * the screen falls back to "published — link unavailable" — the
+     * platform-confirmed delivery this whole column exists to stop the product
+     * claiming.
+     *
+     * Read through the repository rather than over HTTP for a reason that is
+     * the test's own subject: deleting the person cascades their session away,
+     * so there is no cookie left to read with. It is the same method the
+     * controller calls.
+     */
+    it("still says a person settled the delivery once their account is deleted", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+      await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(200);
+
+      const orgId = await orgOf(itemId);
+      await deleteAsserter(adaptationId);
+      expect((await receipts(adaptationId))[1]?.asserted_by).toBeNull();
+
+      const { ContentRepository } = await import("./content.repository");
+      const item = await app.get(ContentRepository).get(orgId, itemId);
+      const adaptation = item.adaptations[0];
+
+      // The name is gone, as `SET NULL` says it should be.
+      expect(adaptation?.assertedByName).toBeNull();
+      // The fact is not: a person said this post is live, on this date, and the
+      // screen says so instead of claiming a platform confirmed it.
+      expect(adaptation?.assertedAt).not.toBeNull();
+      expect(adaptation?.externalUrl).toBeNull();
+      expect(adaptation?.deliveryOutcome).toBe("published");
     });
 
     /**

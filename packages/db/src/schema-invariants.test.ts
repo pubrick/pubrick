@@ -299,6 +299,38 @@ describe("publications", () => {
     expect(columns).toEqual(["adaptation_id"]);
     expect(where).toContain("= 'published'");
   });
+
+  /**
+   * THE FACT IS OUT OF REACH OF THE POINTER, and that is a schema decision
+   * rather than a query one.
+   *
+   * `asserted_by` is `ON DELETE SET NULL` on purpose: the receipt outlives what
+   * it points at, and deleting the account costs the NAME. It costs the FACT as
+   * well the moment anything the screen needs is derived from that pointer —
+   * which is what `asserted_at` is for, and why it must stay a column no
+   * foreign key can reach. Put a reference on it, or take the column away and
+   * let the api gate the date on `asserted_by` again, and a delivery a person
+   * settled reads as "published — link unavailable": a platform-confirmed
+   * delivery, the one claim this pair of columns exists to prevent.
+   */
+  it("keeps the moment a person settled a delivery out of the asserter's delete", () => {
+    const columns = getTableColumns(schema.publications);
+    expect(columns.assertedAt?.getSQLType()).toBe("timestamp with time zone");
+    expect(columns.assertedAt?.notNull).toBe(false);
+
+    const referencing = config.foreignKeys.flatMap((key) =>
+      key.reference().columns.map((column) => column.name),
+    );
+    // Non-vacuity: the pointer IS reached by one, and `SET NULL` is what makes
+    // the question worth asking.
+    expect(referencing).toContain("asserted_by");
+    expect(
+      config.foreignKeys.find((key) =>
+        key.reference().columns.some((column) => column.name === "asserted_by"),
+      )?.onDelete,
+    ).toBe("set null");
+    expect(referencing).not.toContain("asserted_at");
+  });
 });
 
 describe("content_versions", () => {

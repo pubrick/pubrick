@@ -1321,6 +1321,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "asserted_at": {
+          "name": "asserted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "attempt": {
           "name": "attempt",
           "type": "integer",

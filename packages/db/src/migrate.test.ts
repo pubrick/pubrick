@@ -68,11 +68,12 @@ const REFINE_PROPOSALS_MIGRATION = "0016_refine_proposals";
  * somebody wrote down, and a list computed from the same types the migration
  * was generated from could only ever agree with itself.
  *
- * The first twelve are the publishing path, converted by 0014. The last was
- * born zoned: `refine_proposals` (0016) is a table the editor writes, and a new
- * table has no reason to inherit the "naive means UTC" convention the
- * conversion existed to end. It is deliberately NOT in `UNZONED_TABLES`, which
- * is the list of tables somebody decided to LEAVE.
+ * Twelve of them are the publishing path, converted by 0014. The last two were
+ * born zoned: `refine_proposals` (0016) is a table the editor writes, and
+ * `publications.asserted_at` (0017) is the moment a person settled a delivery
+ * nobody else could — and neither has any reason to inherit the "naive means
+ * UTC" convention the conversion existed to end. They are deliberately NOT in
+ * `UNZONED_TABLES`, which is the list of tables somebody decided to LEAVE.
  */
 const ZONED_COLUMNS = [
   "adaptations.created_at",
@@ -86,6 +87,7 @@ const ZONED_COLUMNS = [
   "content_items.first_opened_at",
   "content_items.updated_at",
   "content_versions.created_at",
+  "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
 ];

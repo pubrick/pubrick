@@ -247,6 +247,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * every press the reader is being asked to think of as paid.
    */
   const [refineBusy, setRefineBusy] = useState<RefineAction | null>(null);
+  /** The adaptation whose verdict is in flight, if any — see `assertDelivery`. */
+  const [deliveryBusy, setDeliveryBusy] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -621,6 +623,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    */
   async function assertDelivery(adaptationId: string, delivered: boolean) {
     setActionError(null);
+    // BOTH VERDICTS CLOSE WHILE ONE IS IN FLIGHT, per row. They are
+    // contradictory answers to one question, so a second press of EITHER is a
+    // second answer to a delivery the api has already been told about — which
+    // it refuses (`delivery_outcome_already_known`), correctly, and the reader
+    // is then shown a refusal for a double-click the screen could have
+    // prevented. Per row rather than per screen: one channel's answer says
+    // nothing about another's.
+    setDeliveryBusy(adaptationId);
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}/delivery`, {
         method: "POST",
@@ -629,6 +639,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
     } catch (err) {
       handleError(err);
+    } finally {
+      // In `finally`, so a refusal gives the buttons back: the row is still
+      // unknown after one, and the reader must be able to answer again.
+      setDeliveryBusy(null);
     }
   }
 
@@ -1289,6 +1303,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   settled it by opening the channel and looking. Printing the
                   platform's sentence over their word would be the screen
                   claiming a confirmation nobody ever got.
+
+                  THREE, ONCE THE ASSERTER LEAVES. `asserted_by` is
+                  `ON DELETE SET NULL`, so a delivery a person settled can
+                  arrive here with no name and a date — and the fallback to the
+                  platform's sentence would then be that same false claim,
+                  reached by deleting an account. It is still a person's word,
+                  and this says so without naming one.
                 */
                 <span className="text-sm text-fg-tertiary">
                   {a.assertedByName
@@ -1296,7 +1317,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                         name: a.assertedByName,
                         date: new Date(a.assertedAt ?? "").toLocaleString(locale),
                       })
-                    : t("linkUnavailable")}
+                    : a.assertedAt
+                      ? t("assertedDeliveryByRemovedMember", {
+                          date: new Date(a.assertedAt).toLocaleString(locale),
+                        })
+                      : t("linkUnavailable")}
                 </span>
               ))}
             {/*
@@ -1338,10 +1363,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   {t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={() => assertDelivery(a.id, true)}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => assertDelivery(a.id, true)}
+                    disabled={deliveryBusy === a.id}
+                  >
                     {t("markDelivered")}
                   </Button>
-                  <Button variant="secondary" onClick={() => assertDelivery(a.id, false)}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => assertDelivery(a.id, false)}
+                    disabled={deliveryBusy === a.id}
+                  >
                     {t("markNotDelivered")}
                   </Button>
                 </div>

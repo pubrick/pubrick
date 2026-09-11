@@ -27,11 +27,23 @@
 -- because the person who vouched for it left the organisation. What their
 -- departure costs is the NAME, not the fact.
 --
--- ADDITIVE. One nullable column and one foreign key. No row is rewritten (the
--- column arrives null on every existing receipt, which is what a
+-- WHICH IS WHY THERE ARE TWO COLUMNS, and this one is not a convenience. With
+-- the fact recorded only as "`asserted_by` is not null", the sentence above is
+-- false at the one place the fact is ever read: the api derives both the name
+-- and the DATE through that pointer, so deleting the account takes the date
+-- with it and the item screen falls back to "published — link unavailable" —
+-- the platform-confirmed delivery this column exists to stop the product
+-- claiming. `asserted_at` is written beside `asserted_by`, by the same
+-- statement, from the same `now()` the receipt's own `created_at` defaults to,
+-- and NO foreign key can reach it: after the account is gone the row still
+-- says a person settled this delivery, and when.
+--
+-- ADDITIVE. Two nullable columns and one foreign key. No row is rewritten (both
+-- columns arrive null on every existing receipt, which is what a
 -- worker-written receipt means anyway), no existing value can stop being
 -- valid, and there is no CHECK and no enum for a later value to fall foul of.
 -- Nothing the WORKER reads changes shape either, so `docs/self-hosting.md`
 -- §Upgrade's "worker first is always safe" stays true unamended.
 ALTER TABLE "publications" ADD COLUMN "asserted_by" text;--> statement-breakpoint
+ALTER TABLE "publications" ADD COLUMN "asserted_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "publications" ADD CONSTRAINT "publications_asserted_by_user_id_fk" FOREIGN KEY ("asserted_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;

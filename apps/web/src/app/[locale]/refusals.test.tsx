@@ -284,6 +284,34 @@ describe("the post screen", () => {
   });
 
   /**
+   * THE OTHER HALF OF THE SAME DESIGN, and it arrives from a different button.
+   *
+   * `delivery_outcome_unknown` is what "Publish now" answers when the only
+   * delivery left is one nobody can speak for — the refusal the resolver above
+   * exists to give a way out of. It reaches the same `actionError` site as the
+   * refusals above, which is exactly why it is asserted BY NAME rather than
+   * left covered by construction: a sentence is only in four languages if
+   * somebody wrote it in four, and this one instructs the reader to go and look
+   * at a channel before sending again.
+   */
+  it("says in Russian that a delivery nobody can speak for must be looked at first", async () => {
+    const sentence =
+      "This post was sent to its channel and the platform never confirmed it, so it may already be live";
+    serve((url, method) =>
+      method === "POST" && url === `/api/content/${ITEM_ID}/approve`
+        ? jsonResponse(409, refusalBody(409, "delivery_outcome_unknown", sentence))
+        : undefined,
+    );
+
+    await renderItem("ru");
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: ru.Publish.approveNow }));
+
+    await expectShown(ru.Errors.delivery_outcome_unknown, sentence);
+  });
+
+  /**
    * The screen's SECOND route to a rendered sentence. The poll is a separate
    * call into `errorMessage` from the one every button goes through, so a
    * translator dropped from it survives both tests above — and this is the path

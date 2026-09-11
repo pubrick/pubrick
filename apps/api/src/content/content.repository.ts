@@ -420,6 +420,17 @@ function isEditableAdaptationStatus(status: AdaptationStatus): status is Editabl
   return EDITABLE_ADAPTATION_STATUSES.some((editable) => editable === status);
 }
 
+/**
+ * The one sentence `approve` answers with when a delivery nobody can speak for
+ * is in the way, said once because it is thrown from two places: a timed
+ * request that would skip such a row, and a request of any kind left with
+ * nothing else to send. Both refuse the same act for the same reason, and two
+ * copies would be free to drift into saying different things about it.
+ */
+const DELIVERY_OUTCOME_UNKNOWN_MESSAGE =
+  "This post was sent to its channel and the platform never confirmed it, so it may already be " +
+  "live; open the channel, then say what you found before sending again";
+
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const ADAPTATION_COLUMNS = {
@@ -561,9 +572,26 @@ const ADAPTATION_COLUMNS = {
       limit 1
     )
   )`,
+  /**
+   * WHEN A PERSON SETTLED IT — read from `asserted_at`, and deliberately NOT
+   * derived from `asserted_by`.
+   *
+   * The column above is `ON DELETE SET NULL`: the pointer goes when the account
+   * does, and that is the decision — a receipt outlives what it points at, and
+   * what a departure costs is the name. Gating this timestamp on that pointer
+   * would make the cost the FACT: the row would answer null for a delivery a
+   * person really did settle, and the screen would fall back to "published —
+   * link unavailable", claiming the platform confirmation nobody ever got —
+   * the exact lie `asserted_by` was added to prevent, arrived at by deleting an
+   * account. `asserted_at` is written beside it by the resolver and nothing can
+   * null it, so `assertedByName` null with `assertedAt` set is a real state
+   * with its own sentence on the screen: a removed member, and the date.
+   *
+   * The same receipt and the same predicate as `assertedByName` — the LAST
+   * FINISHED attempt — for the reason given there.
+   */
   assertedAt: sql<Date | null>`(
-    select case when p.asserted_by is not null then p.created_at end
-    from publications p
+    select p.asserted_at from publications p
     where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
     order by p.created_at desc
     limit 1
@@ -2748,16 +2776,6 @@ export class ContentRepository {
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
-      // Only for a request that names a time: "Publish now" over a queued or
-      // publishing channel is already true of it. See the method's own comment.
-      if (scheduledAt !== null) {
-        await this.requireScheduleReachesEveryChannel(tx, orgId, id);
-      }
-      // After `requireNotPublished`: an item already live in a channel gets the
-      // message about the post that went out, not one about reading it. Before
-      // the loop, so a refusal costs no queue work.
-      await this.requireHumanInvolvement(tx, orgId, id);
-
       /*
        * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
        * ROW.
@@ -2779,15 +2797,8 @@ export class ContentRepository {
        * THE READ IS AFTER `lockAdaptations`, for the reason
        * `requireNotPublished` gives at length: delivery state read before the
        * lock is stale against a worker landing a moment later. It takes no new
-       * lock and changes no order (`docs/lock-order.md`).
-       *
-       * When the skip leaves NOTHING to enqueue it refuses rather than
-       * answering 200 — the same judgement `requireAdaptations` and
-       * `requireScheduleReachesEveryChannel` make, and for the same reason: a
-       * 200 that did no work is a report the reader has to discover is false.
-       * The way out is the resolver (`assertDelivery`), which this refusal
-       * shipped with — without it a person could only finish the post by
-       * deleting the channel.
+       * lock and changes no order (`docs/lock-order.md`). It is also BEFORE the
+       * schedule guard, which is the next comment's subject.
        */
       const unknown = await this.unknownDeliveries(
         tx,
@@ -2795,12 +2806,56 @@ export class ContentRepository {
         targets.map((target) => target.id),
       );
       const sendable = targets.filter((target) => !unknown.has(target.id));
+      /*
+       * A REQUEST THAT NAMES A TIME MAY NOT SKIP A CHANNEL AT ALL — and this is
+       * why the unknown rows are read BEFORE the schedule is checked rather
+       * than after it.
+       *
+       * `requireScheduleReachesEveryChannel` reads the adaptation STATUS
+       * column, which has no value for "unknown": a row nobody can speak for
+       * reads `failed`, so a timed approve over `{failed, unknown}` passed the
+       * check whose whole job is the sentence its name is, then skipped that
+       * channel and answered 200. The reader was told the post goes out, whole,
+       * at the time they picked.
+       *
+       * Skipping is right for "publish now" and wrong for a schedule, and the
+       * difference is the promise, not the mechanism: "now" says nothing about
+       * the row it leaves alone, which the response still reports as it was,
+       * while a time is a claim about every channel at once. So a timed request
+       * that would skip anything is refused — the standard this guard, the
+       * empty-target refusal below and `requireAdaptations` all set.
+       *
+       * BEFORE the guard, so the reader is told what is actually in their way:
+       * the unknown delivery they must go and look at, rather than a sentence
+       * about a queue.
+       */
+      if (scheduledAt !== null) {
+        if (unknown.size > 0) {
+          throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
+        }
+        // Only for a request that names a time: "Publish now" over a queued or
+        // publishing channel is already true of it. See the method's own comment.
+        await this.requireScheduleReachesEveryChannel(tx, orgId, id);
+      }
+      // After `requireNotPublished`: an item already live in a channel gets the
+      // message about the post that went out, not one about reading it. Before
+      // the loop, so a refusal costs no queue work.
+      await this.requireHumanInvolvement(tx, orgId, id);
+
+      /*
+       * AND WHEN THE SKIP LEAVES NOTHING TO ENQUEUE it refuses rather than
+       * answering 200 — the same judgement `requireAdaptations` and
+       * `requireScheduleReachesEveryChannel` make, and for the same reason: a
+       * 200 that did no work is a report the reader has to discover is false.
+       * The way out is the resolver (`assertDelivery`), which this refusal
+       * shipped with — without it a person could only finish the post by
+       * deleting the channel.
+       *
+       * Unreachable for a timed request, which is refused above before it can
+       * skip anything: this is the "publish now" ending.
+       */
       if (sendable.length === 0 && unknown.size > 0) {
-        throw conflict(
-          "delivery_outcome_unknown",
-          "This post was sent to its channel and the platform never confirmed it, so it may " +
-            "already be live; open the channel, then say what you found before sending again",
-        );
+        throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
       }
 
       for (const adaptation of sendable) {
@@ -2974,7 +3029,16 @@ export class ContentRepository {
         externalUrl: null,
         error: null,
         attempt: current.attemptCount,
+        // WHO, AND WHEN — and the two are written together because only the
+        // second survives the first. `asserted_by` is `ON DELETE SET NULL`, so
+        // a date derived from it dies with the account and the screen goes back
+        // to claiming a platform confirmed the post (`assertedAt` in
+        // `ADAPTATION_COLUMNS`, migration 0017). `now()` rather than a
+        // JavaScript `Date`: it is the same transaction clock `created_at`
+        // defaults to, so the receipt and the assertion cannot disagree about
+        // their own instant.
         assertedBy: userId,
+        assertedAt: sql`now()`,
       });
 
       // `content_items` last, and only now: the row is terminal either way, so

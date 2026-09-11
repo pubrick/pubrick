@@ -201,6 +201,7 @@
     "markNotDelivered": "Marcar como no entregado",
     "assertDeliveryHint": "Abre {channel} y mira antes de elegir. Marcarlo como entregado registra, a tu nombre, que viste la publicación allí.",
     "assertedDelivery": "Marcado como entregado por {name} el {date}",
+    "assertedDeliveryByRemovedMember": "Marcado como entregado por un miembro eliminado el {date}",
     "viewPost": "Ver publicación",
     "scheduledFor": "Programado para",
     "genericError": "Algo salió mal. Inténtalo de nuevo.",

@@ -358,6 +358,27 @@ export const publications = pgTable(
      * null, which is what a worker-written receipt means anyway.
      */
     assertedBy: text("asserted_by").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * WHEN THEY SAID IT — and the reason this is a column of its own rather
+     * than `created_at` read through `asserted_by`.
+     *
+     * `set null` above means the pointer goes when the account does. Derive the
+     * DATE from the pointer and the fact goes with it: the api's `assertedAt`
+     * would answer null for a receipt a person really did settle, and the item
+     * screen would fall back to "published — link unavailable" — a
+     * platform-confirmed delivery, which is exactly the claim `asserted_by`
+     * exists to keep the product from making. Nothing points at this column, so
+     * nothing can null it: after the asserter is deleted the row still says a
+     * person settled this delivery, and when, and the screen says so without a
+     * name.
+     *
+     * Written by the resolver in the same statement as `asserted_by`, from the
+     * same `now()` the receipt's `created_at` defaults to, so the two are one
+     * instant rather than two readings of a clock. Null on every worker-written
+     * receipt, exactly as `asserted_by` is: the pair travels together, and the
+     * api reads this one.
+     */
+    assertedAt: timestamp("asserted_at", { withTimezone: true }),
     attempt: integer("attempt").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
