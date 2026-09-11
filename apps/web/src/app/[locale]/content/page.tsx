@@ -207,6 +207,24 @@ export default function ContentQueuePage() {
   const [status, setStatus] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   /**
+   * The last tick's verdict on the LATER pages' reads — a sentence while one of
+   * them could not be read, null the moment they all can again.
+   *
+   * Its own state, and not `actionError`, because it is a READ error and reads
+   * repeat: `actionError` is cleared only by a user action (a press, a retry, a
+   * dismissal), so one transient 500 on a page the reader may not even be
+   * looking at used to leave "the queue could not be read" on screen for the
+   * life of the tab while the queue was being re-read fine every five seconds —
+   * and stood in front of the next real refusal. Written on EVERY tick that
+   * belongs to the current filter, which is what makes it self-clearing in the
+   * way `usePoll` clears `contentError`.
+   *
+   * A string rather than the error, so that a page which keeps failing keeps
+   * writing the SAME value and React bails out of the render: one sentence per
+   * event, not a re-rendered list every five seconds.
+   */
+  const [laterPagesError, setLaterPagesError] = useState<string | null>(null);
+  /**
    * The run whose retry is out, or `null` — the whole of this screen's
    * double-press guard, and the item screen's `refineBusy` applied to the other
    * button on this product that spends money.
@@ -233,17 +251,29 @@ export default function ContentQueuePage() {
     [router, locale, t, te],
   );
   /**
-   * ...reachable from the poll's fetcher, which must not depend on it.
+   * A read failure as a sentence — the reporting half of `handleError` without
+   * the acting half, and reachable from the poll's fetcher, which must not
+   * depend on the whole of it.
    *
-   * `fetchContent` is a `usePoll` effect dependency, so its identity has to
-   * move with `status` and with nothing else — and `handleError` closes over
-   * the translator, whose identity this screen does not control. A ref carries
-   * the current one across without making the poll restart on every render.
+   * A background re-read must not navigate and must not write the action error,
+   * so the later pages' failure takes this instead. "No active organization"
+   * says nothing here for the same reason it says nothing below: page 1's own
+   * read fails the same way on the same tick, and the effect watching it is
+   * already leaving for onboarding.
+   *
+   * Behind a ref because `fetchContent` is a `usePoll` effect dependency, so
+   * its identity has to move with `status` and with nothing else — and this
+   * closes over the translator, whose identity this screen does not control.
    */
-  const handleErrorRef = useRef(handleError);
+  const describeFailure = useCallback(
+    (err: unknown) =>
+      err instanceof ApiError && err.noActiveOrg ? null : errorMessage(err, t("genericError"), te),
+    [t, te],
+  );
+  const describeFailureRef = useRef(describeFailure);
   useEffect(() => {
-    handleErrorRef.current = handleError;
-  }, [handleError]);
+    describeFailureRef.current = describeFailure;
+  }, [describeFailure]);
 
   /**
    * The pages loaded by `Load more`, page 2 onwards — page 1 is the poll's own
@@ -362,26 +392,40 @@ export default function ContentQueuePage() {
       { length: Math.min(unsettled.length, MAX_REFRESHED_LATER_PAGES) },
       (_, i) => unsettled[(from + i) % unsettled.length] as LaterPage,
     );
-    refreshFrom.current = from + stale.length;
     const [first, refreshed] = await Promise.all([
       apiPage<ContentItem>(listUrl(null), { cache: "no-store" }),
       Promise.allSettled(
         stale.map((page) => apiPage<ContentItem>(listUrl(page.cursor), { cache: "no-store" })),
       ),
     ]);
-    // WRITTEN BACK BY CURSOR, WHICH IS THE ONLY THING THAT IDENTIFIES A PAGE.
-    // `laterPagesRef.current` is mutable state a reset can empty and a
-    // `Load more` can extend while these requests are away, so a position in it
-    // is only valid for the array the request was dispatched against — writing
-    // by index left a HOLE when the array had shrunk, and a sparse array
-    // reaching `loadedQueue` throws out of this component's render. An answer
-    // for a page that is no longer loaded is simply dropped, which is the
-    // honest outcome and covers every reset, including ones nobody has thought
-    // of yet. The whole write is dropped if the filter moved, because then
-    // these are pages of a queue nobody is looking at. The ref is written
-    // before the state for the same reason `loadMore` writes it first:
-    // `contentSettled` runs on the value returned here, before the next render.
-    if (statusRef.current === at && stale.length > 0) {
+    // THE TURN IS SPENT ONLY BY A TICK THAT CAME BACK. Written AFTER the await,
+    // because a page-1 rejection takes the whole `Promise.all` down and skips
+    // the write-back below: advancing before it meant up to three later pages
+    // were re-read for nothing AND lost their place in the rotation, each then
+    // waiting a full lap. Page 1 is the likeliest of the four to be retried, so
+    // on a flaky connection that compounds.
+    refreshFrom.current = from + stale.length;
+    // NOT BY ITS POSITION, which is only valid for the array the request was
+    // dispatched against — `laterPagesRef.current` is mutable state a reset can
+    // empty and a `Load more` can extend while these requests are away, and
+    // writing by index left a HOLE when the array had shrunk, a sparse array
+    // reaching `loadedQueue` throwing out of this component's render.
+    //
+    // Not by the cursor either, though that never throws: a cursor names a
+    // WINDOW on the queue, and the same window read twice is two different
+    // facts. A → B → A drops the loaded pages and `Load more` re-asks for the
+    // same boundary, so a cursor key cannot tell "still the page I asked about"
+    // from "a newer read of it" — and applying the held answer over the newer
+    // rows rolls a SETTLED page back to unsettled at a moment when `usePoll`
+    // has already stopped, leaving a card on "Publishing" until the reader
+    // reloads. Identity is exactly the guarantee wanted and nothing more: the
+    // re-added page is a new `LaterPage` object, so this drops the answer.
+    //
+    // The whole write is dropped if the filter moved, because then these are
+    // pages of a queue nobody is looking at. The ref is written before the
+    // state for the same reason `loadMore` writes it first: `contentSettled`
+    // runs on the value returned here, before the next render.
+    if (statusRef.current === at) {
       const next = [...laterPagesRef.current];
       let changed = false;
       let failure: unknown;
@@ -392,7 +436,7 @@ export default function ContentQueuePage() {
           failure ??= answer.reason;
           return;
         }
-        const slot = next.findIndex((p) => p.cursor === page.cursor);
+        const slot = next.indexOf(page);
         if (slot === -1) return;
         next[slot] = { cursor: page.cursor, rows: answer.value.rows };
         changed = true;
@@ -401,11 +445,13 @@ export default function ContentQueuePage() {
         laterPagesRef.current = next;
         setLaterPages(next);
       }
-      // One sentence for the tick, not one per failed page: they are all the
-      // same event to a reader, and `setActionError` with the same string is a
-      // no-op, so a page that keeps failing does not re-render the list every
-      // five seconds to say so again.
-      if (failure !== undefined) handleErrorRef.current(failure);
+      // ONE SENTENCE FOR THE TICK, AND ONLY FOR AS LONG AS IT IS TRUE. One per
+      // tick rather than one per failed page because they are all the same
+      // event to a reader; cleared on a tick with no failure — including a tick
+      // that re-read nothing, since then there is no failing page left to speak
+      // for — because a read error that outlives the read is a lie the reader
+      // cannot dismiss.
+      setLaterPagesError(failure === undefined ? null : describeFailureRef.current(failure));
     }
     return first as Page<ContentItem>;
   }, [listUrl]);
@@ -433,6 +479,11 @@ export default function ContentQueuePage() {
     // nothing, which is what it looks like it does.
     if (statusRef.current === next) return;
     statusRef.current = next;
+    // `refreshFrom` is deliberately NOT reset: every read of it is taken modulo
+    // the current number of unsettled pages, so a counter left mid-lap over a
+    // page set that no longer exists names an in-range page of the new one. A
+    // fourth reset here would be a fourth thing to keep in step for no
+    // behaviour.
     laterPagesRef.current = [];
     setLaterPages([]);
     setLaterCursor(null);
@@ -811,7 +862,11 @@ export default function ContentQueuePage() {
     readError && !(readError instanceof ApiError && readError.noActiveOrg)
       ? errorMessage(readError, t("genericError"), te)
       : null;
-  const error = actionError ?? readErrorMessage;
+  // PAGE 1'S REFUSAL WINS OVER A LATER PAGE'S. What the user just did still
+  // comes first; after that it is the half of the queue they are looking at —
+  // and the one whose failure stops the poll — rather than a stretch below the
+  // fold that may have been failing for several ticks.
+  const error = actionError ?? readErrorMessage ?? laterPagesError;
 
   const openRuns = runs ?? [];
   // "Nothing here yet" is only true when there is no work in flight either —

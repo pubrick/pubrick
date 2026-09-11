@@ -2245,7 +2245,10 @@ describe("paging (0009 T5)", () => {
       expect(screen.getByRole("link", { name: "Brand new post" })).toBeInTheDocument();
       // ...and the later page keeps the rows it has rather than emptying.
       expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
-      // The failure is said once, not once a tick.
+      // A failure that keeps happening is still ONE sentence on screen — which
+      // is all a count can witness, this screen rendering at most one alert:
+      // that it is the RIGHT sentence, and that it goes when the reads recover,
+      // is the test two below.
       await advance(CONTENT_LIST_POLL_INTERVAL_MS * 3);
       expect(screen.getAllByRole("alert")).toHaveLength(1);
     });
@@ -2345,6 +2348,218 @@ describe("paging (0009 T5)", () => {
       }
       // Every unsettled page has had its turn.
       expect(seen.size).toBe(later);
+    });
+
+    /**
+     * A LATER PAGE'S FAILURE IS A READ ERROR, AND A READ ERROR IS TRUE ONLY
+     * UNTIL THE NEXT READ.
+     *
+     * Routed through `setActionError` it was neither: nothing on the poll's
+     * success path clears `actionError` — only a press does — so one blip on
+     * one later page left "the queue could not be read" on screen for the life
+     * of the tab while the queue was in fact being re-read fine every five
+     * seconds. And because the action error is consulted FIRST, that stale
+     * sentence then stood in front of the next real one: a genuine page-1
+     * refusal arriving behind it was never shown.
+     *
+     * Both halves here, and both need the two messages to be different
+     * sentences — a count of alerts cannot tell "said once" from "stuck", which
+     * is what let this through the first time.
+     */
+    it("clears a later page's failure on the next clean tick, and never stands in front of page 1's", async () => {
+      const LATER_FAILURE = "the later page could not be read";
+      const FIRST_FAILURE = "page one could not be read";
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+      // 4xx with a message and no code, so `errorMessage` shows the sentence
+      // itself: the two failures have to be distinguishable ON SCREEN.
+      const failing = { later: false, first: false };
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        const path = String(args[0]);
+        const isLater = path.includes("cursor=");
+        if (isLater ? failing.later : failing.first) {
+          calls.push({ path, method: "GET" });
+          throw new ApiError(400, isLater ? LATER_FAILURE : FIRST_FAILURE);
+        }
+        return paged(...args);
+      });
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+      expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+      failing.later = true;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      expect(screen.getByRole("alert")).toHaveTextContent(LATER_FAILURE);
+
+      // One transient blip, then a tick on which every later page answered.
+      failing.later = false;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+      // ...and a page-1 refusal arriving while a later page is failing is the
+      // one the reader is told about: it is the half of the screen they are
+      // looking at, and it is the one that stops the poll.
+      failing.later = true;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      expect(screen.getByRole("alert")).toHaveTextContent(LATER_FAILURE);
+      failing.first = true;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      expect(screen.getByRole("alert")).toHaveTextContent(FIRST_FAILURE);
+    });
+
+    /**
+     * A PAGE IS THE OBJECT THAT WAS ASKED ABOUT, NOT THE CURSOR IT WAS ASKED
+     * BY — the same window read twice is two different facts.
+     *
+     * A → B → A drops the loaded pages and `Load more` re-asks for the same
+     * boundary, so the cursor cannot tell "still the page I asked about" from
+     * "a newer read of the same window". Applied on top of the newer read, a
+     * held answer does not merely make the rows a tick stale: it rolls a
+     * SETTLED page back to unsettled at a moment when `usePoll` has already
+     * stopped, and nothing in the write-back restarts it — so the card sits on
+     * "Publishing" until the reader reloads, which is the very defect the
+     * later-page refresh exists to remove, arriving by a different door.
+     *
+     * A page re-added by `Load more` is a NEW `LaterPage` object, so identity
+     * drops the stale answer where the cursor accepts it.
+     */
+    it("drops a held refresh for a page that was dropped and re-added under the same cursor", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByText(en.Content.adaptationStatus.publishing)).toBeInTheDocument();
+
+      // The tick's refresh of page 2, snapshotted while the delivery is still
+      // out, and held.
+      const release = holdFirstRead((path) => path.includes("cursor=c1"));
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.status.approved }));
+      });
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.filterAll }));
+      });
+      await act(async () => {});
+
+      // The delivery finished while the reader was away, and `Load more`
+      // re-asks for the same boundary and gets the finished row.
+      pages.current = [
+        [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+        [item("c2", "Going out", "published", [adaptation({ status: "published" })])],
+      ];
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      const loaded = screen.getByRole("link", { name: "Going out" }).closest("li") as HTMLElement;
+      expect(within(loaded).getByText(en.Content.adaptationStatus.published)).toBeInTheDocument();
+
+      const before = contentReads(calls).length;
+      await release();
+
+      const card = screen.getByRole("link", { name: "Going out" }).closest("li") as HTMLElement;
+      expect(within(card).getByText(en.Content.adaptationStatus.published)).toBeInTheDocument();
+      expect(
+        within(card).queryByText(en.Content.adaptationStatus.publishing),
+      ).not.toBeInTheDocument();
+      // ...and the poll stays stopped, which is what makes the rollback
+      // permanent rather than five seconds long: nothing would re-read this.
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 12);
+      expect(contentReads(calls)).toHaveLength(before);
+    });
+
+    /**
+     * A TICK THAT BROUGHT BACK NOTHING DOES NOT SPEND THE LATER PAGES' TURN.
+     *
+     * The rotation counter said where the NEXT tick starts, and it was written
+     * before the await — so a page-1 failure, which rejects the whole read and
+     * skips the write-back, still moved the window past three later pages that
+     * had just been re-read for nothing. Page 1 is the likeliest of the four to
+     * be retried, so on a flaky connection every retry costs three later pages
+     * a full lap.
+     */
+    it("re-reads the same later pages on the tick after page 1's read failed", async () => {
+      const calls: Call[] = [];
+      const later = MAX_REFRESHED_LATER_PAGES + 1;
+      const pages = {
+        current: [
+          [item("c0", "First post", "published", [adaptation({ status: "published" })])],
+          ...Array.from({ length: later }, (_, i) => [
+            item(`c${i + 1}`, `Going out ${i + 1}`, "approved", [
+              adaptation({ status: "publishing" }),
+            ]),
+          ]),
+        ],
+      };
+      installPages(calls, pages);
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+      const failFirst = { on: false };
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        const path = String(args[0]);
+        if (failFirst.on && !path.includes("cursor=")) {
+          calls.push({ path, method: "GET" });
+          // A 5xx, so the poll keeps ticking: a PERMANENT refusal stops it and
+          // there would be no next tick to observe.
+          throw new ApiError(500, "boom");
+        }
+        return paged(...args);
+      });
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      for (let i = 0; i < later; i += 1) {
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+        });
+      }
+      expect(screen.getByRole("link", { name: `Going out ${later}` })).toBeInTheDocument();
+
+      function cursorsSince(from: number): string[] {
+        return contentReads(calls)
+          .slice(from)
+          .map((c) => /cursor=(c\d+)/.exec(c.path)?.[1])
+          .filter((c): c is string => c !== undefined);
+      }
+
+      failFirst.on = true;
+      const beforeFailed = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      const spent = cursorsSince(beforeFailed);
+      expect(spent).toHaveLength(MAX_REFRESHED_LATER_PAGES);
+
+      failFirst.on = false;
+      const beforeGood = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      // The same window, because the failed tick delivered none of it.
+      expect(cursorsSince(beforeGood)).toEqual(spent);
     });
   });
 });
