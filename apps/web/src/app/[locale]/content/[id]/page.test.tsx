@@ -2,6 +2,7 @@ import type {
   AdaptationStatus,
   ContentStatus,
   DeliveryOutcome,
+  PublishFailureReason,
   RefineProposal,
   RunInput,
 } from "@pubrick/shared";
@@ -45,6 +46,8 @@ type Adaptation = {
   scheduledAt: string | null;
   attemptCount: number;
   lastError: string | null;
+  failureReason: PublishFailureReason | null;
+  lateBySeconds: number | null;
   externalUrl: string | null;
   assertedByName: string | null;
   assertedAt: string | null;
@@ -87,6 +90,10 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     scheduledAt: null,
     attemptCount: 0,
     lastError: null,
+    // Null on a row that has not failed, and on the one population that failed
+    // before the column existed. A fixture that wants a coded failure says so.
+    failureReason: null,
+    lateBySeconds: null,
     externalUrl: null,
     // Null on every delivery a platform answered for, which is what a fixture
     // that does not say otherwise describes. The api returns both keys on
@@ -282,16 +289,119 @@ describe("rendering by adaptation status (Step 1)", () => {
     expect(within(resultsList()).queryByRole("link")).not.toBeInTheDocument();
   });
 
-  it("renders lastError for a failed adaptation", async () => {
+  /**
+   * WHAT A FAILED ROW SAYS, per class of failure.
+   *
+   * This used to be one test asserting the worker's `lastError` was printed
+   * verbatim. It is not, any more, except where the platform wrote the words:
+   * the api ships the CODE, and the screen picks a sentence of ours from it.
+   * Each case below is one branch of that choice, and they are separate tests
+   * because a mutation drops one at a time.
+   */
+  it("says a missed slot missed its slot, in OUR words and with the hours", async () => {
     const item = makeItem({
-      adaptations: [makeAdaptation({ status: "failed", lastError: "Telegram: chat not found" })],
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          failureReason: "schedule_missed",
+          lateBySeconds: 26 * 3600,
+          // The worker's frozen English prose, which the reader must NOT see.
+          lastError:
+            "Missed its scheduled slot: this post was due at 2026-09-10T09:00:00.000Z and " +
+            "nothing could deliver it until 26.0 h later, past the 6.0 h limit.",
+        }),
+      ],
     });
     installBaseHandlers({ current: item }, []);
 
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
 
     const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("Missed its slot by 26.0 h");
+    expect(alert).toHaveTextContent("publish now?");
+    expect(alert).not.toHaveTextContent("2026-09-10T09:00:00.000Z");
+    expect(alert).not.toHaveTextContent("past the 6.0 h limit");
+  });
+
+  it("sends a dead credential to Settings and names the channel", async () => {
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          failureReason: "credentials_invalid",
+          lastError: "Stored credentials for this channel are invalid",
+        }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("not what the platform expects");
+    expect(alert).toHaveTextContent("Settings");
+    expect(alert).toHaveTextContent("Main channel");
+    expect(alert).not.toHaveTextContent("Stored credentials for this channel are invalid");
+  });
+
+  it("still prints the platform's own words when the platform is what refused", async () => {
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          failureReason: "platform_rejected",
+          lastError: "Telegram: chat not found",
+        }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("The platform refused this post");
     expect(alert).toHaveTextContent("Telegram: chat not found");
+  });
+
+  it("falls back to lastError for a row that failed before the column existed", async () => {
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({ status: "failed", failureReason: null, lastError: "Retries exhausted" }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("Retries exhausted");
+  });
+
+  /**
+   * ONE MESSAGE, NOT TWO. A row coded `outcome_unknown` carries an `unknown`
+   * receipt, so the api answers `deliveryOutcome: "unknown"` and the resolver
+   * block above owns the row — buttons and all. A failure sentence underneath
+   * it would be the same event stated twice, in two colors, one of them red.
+   */
+  it("leaves an unknown outcome to the resolver, with no second sentence", async () => {
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          deliveryOutcome: "unknown",
+          failureReason: "outcome_unknown",
+          lastError: "DELIVERY OUTCOME UNKNOWN: an attempt claimed this send",
+        }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alerts = await within(resultsList()).findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("never confirmed it");
+    expect(within(resultsList()).queryByText(/DELIVERY OUTCOME UNKNOWN/)).not.toBeInTheDocument();
   });
 
   it("renders the scheduled time for a scheduled adaptation", async () => {
@@ -308,6 +418,30 @@ describe("rendering by adaptation status (Step 1)", () => {
         `${en.Publish.scheduledFor} ${new Date(scheduledAt).toLocaleString("en")}`,
       );
     });
+  });
+
+  /**
+   * THE OUTAGE, WHILE IT IS STILL HAPPENING. A slot that has come and gone with
+   * nothing delivered leaves the row `scheduled` until the worker's bound runs
+   * out — hours, by design — and this screen said "Scheduled for …" in calm
+   * blue for every one of them. It is the only state on these screens that
+   * nothing else can report: no failure has been recorded yet.
+   */
+  it("says so when a scheduled slot has already passed", async () => {
+    const scheduledAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const item = makeItem({
+      adaptations: [makeAdaptation({ status: "scheduled", scheduledAt })],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alert = await within(resultsList()).findByRole("alert");
+    expect(alert).toHaveTextContent("has passed and nothing has delivered it");
+    expect(alert).toHaveTextContent(new Date(scheduledAt).toLocaleString("en"));
+    // And NOT the calm blue sentence: two lines about one slot, one of which
+    // says nothing is wrong, is worse than either alone.
+    expect(resultsList()).not.toHaveTextContent(`${en.Publish.scheduledFor} `);
   });
 });
 

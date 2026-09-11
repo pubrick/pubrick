@@ -3,6 +3,7 @@
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  type PublishFailureReason,
   REFINE_VERBS,
   type RefineProposal,
   type RefineVerb,
@@ -26,6 +27,7 @@ import {
   type ContentStatus,
   DELIVERY_BADGE_STATUS,
   type DeliveryOutcome,
+  failureSentence,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
@@ -55,6 +57,20 @@ type Adaptation = {
   scheduledAt: string | null;
   attemptCount: number;
   lastError: string | null;
+  /**
+   * WHICH KIND of failure this was — the api's closed code, and what this
+   * screen's sentence is chosen by. `lastError` is the worker's English prose
+   * and is printed for exactly one class now (a platform's own refusal) plus
+   * the rows that failed before the column existed.
+   */
+  failureReason: PublishFailureReason | null;
+  /**
+   * How late the delivery that failed was, in seconds, measured by the api at
+   * the moment of refusal — never recomputed here. `scheduled_at` survives a
+   * failure, so a browser subtracting it from its own clock would report a
+   * lateness that grows every time the page is opened.
+   */
+  lateBySeconds: number | null;
   externalUrl: string | null;
   /**
    * WHO SAID THIS POST WAS DELIVERED, when no platform did, and when they said
@@ -1507,16 +1523,59 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 </div>
               </>
             )}
-            {a.deliveryOutcome === "failed" && a.lastError && (
-              <p role="alert" className="text-sm text-danger">
-                {a.lastError}
-              </p>
-            )}
-            {a.status === "scheduled" && a.scheduledAt && (
-              <span className="text-sm text-fg-tertiary">
-                {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
-              </span>
-            )}
+            {/*
+              WHY IT FAILED, said in the reader's language and chosen by the
+              api's CODE rather than by the worker's sentence.
+
+              This line used to print `lastError` verbatim. That string is a log
+              line: it names the slot as a raw UTC instant, it talks about
+              adapters and claims, and it is English on a product that ships in
+              four. Worse, it is free text the worker and the platform both
+              write, so a screen that reads it is a screen a rewording can
+              change — the defect `lib/adaptations.ts`'s docstring exists to
+              have ended, one column over.
+
+              `deliveryOutcome === "failed"` scopes it, and that is what keeps
+              the unknown-outcome block above from being answered twice: a row
+              coded `outcome_unknown` reads `unknown` here, takes that branch,
+              and never reaches this one.
+            */}
+            {a.deliveryOutcome === "failed" &&
+              (() => {
+                const sentence = failureSentence(a, tc, channelLabel(a.channelId));
+                return sentence ? (
+                  <p role="alert" className="text-sm text-danger">
+                    {sentence}
+                  </p>
+                ) : null;
+              })()}
+            {a.status === "scheduled" &&
+              a.scheduledAt &&
+              (new Date(a.scheduledAt).getTime() < Date.now() ? (
+                /*
+                  THE SLOT HAS PASSED AND NOTHING HAS DELIVERED IT — the only
+                  thing that makes an outage visible WHILE it is happening.
+                  Until the worker's bound runs out, such a row is `scheduled`
+                  and this screen said "Scheduled for Tuesday 09:00" in calm
+                  blue all through Wednesday.
+
+                  Read from `scheduled_at` against the browser's clock, which is
+                  the one case where that is the right clock: nothing is being
+                  decided here, and the question is whether the time this reader
+                  is looking at has passed for THEM. The verdict that fails the
+                  post is the worker's, on the database's clock, and this says
+                  nothing about it.
+                */
+                <span role="alert" className="text-sm text-[var(--status-review-fg)]">
+                  {tc("scheduledOverdue", {
+                    date: new Date(a.scheduledAt).toLocaleString(locale),
+                  })}
+                </span>
+              ) : (
+                <span className="text-sm text-fg-tertiary">
+                  {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
+                </span>
+              ))}
           </li>
         ))}
       </ul>

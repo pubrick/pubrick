@@ -1,5 +1,6 @@
 "use client";
 
+import type { PublishFailureReason } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -20,6 +21,7 @@ import {
   type ContentStatus,
   DELIVERY_BADGE_STATUS,
   type DeliveryOutcome,
+  failureSentence,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
 import { ApiError, api, type ErrorCode, errorMessage } from "@/lib/api";
@@ -92,6 +94,15 @@ type Adaptation = {
   origin: ContentOrigin;
   externalUrl: string | null;
   lastError: string | null;
+  /**
+   * The api's closed failure code, and the attempt count and frozen lateness
+   * its sentence is built from. Carried by the LIST rows and not only by the
+   * item, for `bodyIsAiVerbatim`'s reason: a card and the screen it opens must
+   * not answer the same question differently.
+   */
+  failureReason: PublishFailureReason | null;
+  lateBySeconds: number | null;
+  attemptCount: number;
 };
 
 type ContentItem = {
@@ -450,6 +461,25 @@ export default function ContentQueuePage() {
                   {t("unknownOutcome", { channel: channelLabel(a.channelId) })}
                 </span>
               )}
+              {/*
+                AND WHY A FAILED ONE FAILED, on the row rather than only behind
+                the link. The group above this card is still headed "Failed" and
+                the badge still reads Failed — the difference is that the row
+                now says WHICH failure, so a missed slot ("publish now?") and a
+                dead credential ("reconnect it in Settings") stop looking like
+                the same red chip.
+
+                The same sentence as the item screen, from the same catalogue
+                and the same api code, for the reason the badge colors are
+                shared: two places that answer one question are two places that
+                will answer it differently. Never `lastError`, except where the
+                catalogue itself hands the platform's words back.
+              */}
+              {a.deliveryOutcome === "failed" &&
+                (() => {
+                  const sentence = failureSentence(a, t, channelLabel(a.channelId));
+                  return sentence ? <span className="w-full text-danger">{sentence}</span> : null;
+                })()}
               {a.status === "published" &&
                 a.externalUrl &&
                 (isLinkableUrl(a.externalUrl) ? (

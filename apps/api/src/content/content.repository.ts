@@ -488,6 +488,64 @@ const ADAPTATION_COLUMNS = {
   attemptCount: schema.adaptations.attemptCount,
   lastError: schema.adaptations.lastError,
   /**
+   * WHICH KIND OF FAILURE THIS WAS — `adaptations.failure_reason`, the closed
+   * `PUBLISH_FAILURE_REASONS` code the worker stamps beside the sentence.
+   *
+   * Shipped because a screen has to tell a missed slot from a dead credential
+   * from the platform's own refusal, and `last_error` cannot answer that: it is
+   * free text, half of it written by the platform, and this product has already
+   * shipped the bug where the web read a worker sentence's prefix to decide
+   * behaviour (`apps/web/src/lib/adaptations.ts`: a reworded log line turned
+   * every unknown delivery back into a plain red Failed). The code says the
+   * CLASS, the sentence stays the platform's own words, and `platform_rejected`
+   * is the one class where the screen still prints them.
+   *
+   * `null` is not an "other" bucket — every writer that lands a row on a
+   * verdict names a reason and every writer that moves it off one clears the
+   * column (`@pubrick/shared`, `PUBLISH_FAILURE_REASONS`). It survives for
+   * exactly one population: rows that failed before the column existed, which
+   * the screens render from `last_error` as they always did.
+   */
+  failureReason: schema.adaptations.failureReason,
+  /**
+   * HOW LATE THE DELIVERY THAT FAILED WAS, in seconds — the number the missed-slot
+   * sentence on the screens says out loud, and `null` on every row that is not
+   * one.
+   *
+   * MEASURED AT THE REFUSAL, NOT NOW. The worker never clears `scheduled_at` on
+   * a failure, so `now() - scheduled_at` read at render time would grow for
+   * ever: the same post would be "3 h late" this morning and "2 days late"
+   * tomorrow, and each reading would disagree with the frozen sentence stored
+   * beside it. The receipt's `created_at` is the instant the attempt that
+   * refused was claimed, and it does not move again.
+   *
+   * THE SAME RECEIPT `deliveryOutcome` AND `assertedByName` READ, by the same
+   * predicate — the LAST FINISHED attempt (`status <> 'in_flight'`, ordered
+   * `created_at desc`). Three fields captioning one row off three different
+   * attempts is how a screen tells a story about a delivery that never
+   * happened; they are one receipt or they are nothing.
+   *
+   * Scoped to `failed` adaptations with a slot. A `published` row is not late,
+   * it is late-or-not history nobody asked about; an unscheduled one ("publish
+   * now") has no slot to have missed, which is exactly why the worker's own
+   * bound answers null for it.
+   *
+   * Deliberately NOT parsed out of `last_error`. The hours are in that
+   * sentence, and reading them back out of prose is the defect one field up.
+   */
+  lateBySeconds: sql<number | null>`(
+    case
+      when adaptations.status = 'failed' and adaptations.scheduled_at is not null
+      then (
+        select extract(epoch from p.created_at - adaptations.scheduled_at)
+        from publications p
+        where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+        order by p.created_at desc
+        limit 1
+      )
+    end
+  )`.mapWith(Number),
+  /**
    * The worker logs one `publications` row per delivery attempt
    * (apps/worker/src/publish/publish.repository.ts markPublished/markFailed)
    * but never writes back to the adaptation row itself, so the link the web

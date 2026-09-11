@@ -1,4 +1,9 @@
-import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
+import type {
+  AdaptationStatus,
+  ContentStatus,
+  DeliveryOutcome,
+  PublishFailureReason,
+} from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
 /**
@@ -115,3 +120,114 @@ export function hasAdaptationInFlight(
  * pressed the button.
  */
 export const CONTENT_LIST_POLL_INTERVAL_MS = 5000;
+
+/**
+ * WHY A DELIVERY FAILED, in the reader's language — one sentence per member of
+ * `PUBLISH_FAILURE_REASONS`.
+ *
+ * The worker writes two things about a failure: a CODE, closed and typed, and
+ * `last_error`, free text it composes in English. Until now the screens printed
+ * the text. That is a log line — it names `scheduled_at` as a raw UTC instant,
+ * it says "adapter" and "claim", and it is English on a product that ships in
+ * four languages — so the screen now speaks from the CODE, and the prose is
+ * kept for the one class where the words are not ours to write: a platform's
+ * own refusal.
+ *
+ * This is the same lesson as the module docstring at the top of this file, one
+ * column over: behaviour keyed off a worker sentence is behaviour a rewording
+ * silently changes. Nothing here reads `last_error` to decide anything.
+ */
+const FAILURE_REASON_KEYS = {
+  schedule_missed: "failureReason.scheduleMissed",
+  no_adapter: "failureReason.noAdapter",
+  credentials_unreadable: "failureReason.credentialsUnreadable",
+  credentials_missing: "failureReason.credentialsMissing",
+  credentials_invalid: "failureReason.credentialsInvalid",
+  platform_rejected: "failureReason.platformRejected",
+  retries_exhausted: "failureReason.retriesExhausted",
+  send_abandoned: "failureReason.sendAbandoned",
+  /**
+   * NOT A SENTENCE OF ITS OWN, and deliberately the one the screens already
+   * say. A row coded `outcome_unknown` always carries an `unknown` receipt, so
+   * the api answers `deliveryOutcome: "unknown"` for it and both screens take
+   * the resolver branch — the paragraph that names the channel and the buttons
+   * that settle it. Pointing this member at that same key keeps the map total
+   * without inventing a tenth wording for a state that already has one, and
+   * makes it impossible for the two to drift into saying different things.
+   */
+  outcome_unknown: "unknownOutcome",
+} as const satisfies Record<PublishFailureReason, string>;
+
+/** The `Content` message key for one failure reason. Total by construction. */
+export function failureReasonKey(reason: PublishFailureReason): string {
+  return FAILURE_REASON_KEYS[reason];
+}
+
+/** What `failureSentence` needs of a translator: `useTranslations("Content")`. */
+export type ContentTranslator = (key: string, values?: Record<string, string | number>) => string;
+
+/** The parts of a failed adaptation the sentence is built from. */
+export type FailedDelivery = {
+  failureReason: PublishFailureReason | null;
+  lastError: string | null;
+  lateBySeconds: number | null;
+  attemptCount: number;
+};
+
+/**
+ * HOW LATE, as the reader sees it: tenths of an hour, ROUNDED UP.
+ *
+ * Up rather than to nearest, for the reason the worker rounds its own frozen
+ * sentence up: the number is a claim about how long somebody's post sat
+ * unsent, and rounding down understates it — a post 6.04 h past a 6 h bound
+ * would read "6.0 h", which is the bound itself and reads as "only just".
+ */
+function lateHours(seconds: number): string {
+  return (Math.ceil((seconds / 3600) * 10) / 10).toFixed(1);
+}
+
+/**
+ * The one sentence a failed delivery shows, or `null` when it has nothing to
+ * say.
+ *
+ * THREE ANSWERS, in falling order of how much each knows — the shape
+ * `errorMessage` uses for a refused request, for the same reason:
+ *
+ * 1. THE CODE, turned into a sentence in the reader's language, with the
+ *    numbers the api computed (the lateness frozen at the refusal, the attempt
+ *    count) interpolated. This is every row that failed after the column
+ *    shipped.
+ * 2. `last_error`, for a row that failed BEFORE it — the one population the
+ *    column is null for. English prose, and better than a blank line.
+ * 3. Nothing, for a failure that recorded neither.
+ *
+ * `channel` is the label the calling screen already resolved; the sentences
+ * that send a reader to Settings name it, because "reconnect the channel" is
+ * not an instruction anybody can follow without knowing which one.
+ */
+export function failureSentence(
+  delivery: FailedDelivery,
+  t: ContentTranslator,
+  channel: string,
+): string | null {
+  const { failureReason: reason, lastError, lateBySeconds, attemptCount } = delivery;
+  if (reason === null) return lastError;
+  switch (reason) {
+    case "schedule_missed":
+      // A slot the api could not measure — a pre-column row re-failed, or a
+      // receipt that went missing — still gets the reason, without the number.
+      return lateBySeconds !== null && lateBySeconds > 0
+        ? t(FAILURE_REASON_KEYS.schedule_missed, { hours: lateHours(lateBySeconds) })
+        : t("failureReason.scheduleMissedNoHours");
+    case "platform_rejected":
+      return lastError
+        ? t(FAILURE_REASON_KEYS.platform_rejected, { error: lastError })
+        : t("failureReason.platformRejectedNoText");
+    case "retries_exhausted":
+      return t(FAILURE_REASON_KEYS.retries_exhausted, { attempts: attemptCount });
+    case "credentials_missing":
+      return t(FAILURE_REASON_KEYS.credentials_missing);
+    default:
+      return t(FAILURE_REASON_KEYS[reason], { channel });
+  }
+}

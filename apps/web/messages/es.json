@@ -125,6 +125,19 @@
       "human": "Escrito por una persona"
     },
     "unknownOutcome": "Se envió a {channel}, pero la plataforma nunca lo confirmó. Revisa ese canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
+    "scheduledOverdue": "Su franja ({date}) ya pasó y todavía nada lo ha entregado.",
+    "failureReason": {
+      "scheduleMissed": "Perdió su franja por {hours} h. No se envió nada: ¿publicar ahora?",
+      "scheduleMissedNoHours": "Perdió su franja programada. No se envió nada: ¿publicar ahora?",
+      "noAdapter": "No se envió nada: {channel} está en una plataforma en la que este producto no puede publicar.",
+      "credentialsUnreadable": "No se envió nada: no se pudieron leer las credenciales guardadas de {channel}. Vuelve a conectarlo en Ajustes.",
+      "credentialsMissing": "No se envió nada: el canal al que iba esta publicación ya no está conectado. Vuelve a añadirlo en Ajustes.",
+      "credentialsInvalid": "No se envió nada: las credenciales guardadas de {channel} no son las que la plataforma espera. Vuelve a conectarlo en Ajustes.",
+      "platformRejected": "La plataforma rechazó esta publicación: {error}",
+      "platformRejectedNoText": "La plataforma rechazó esta publicación y no dijo por qué.",
+      "retriesExhausted": "La plataforma no respondió tras {attempts} intentos. No se confirmó ningún envío: publica ahora para volver a intentarlo.",
+      "sendAbandoned": "El envío a {channel} se detuvo antes de llegar a la plataforma y no queda ningún reintento. No se envió nada: publica ahora para volver a intentarlo."
+    },
     "channelsUnavailable": "No se pudieron cargar los nombres de los canales, así que se muestran por ID.",
     "tryAgain": "Reintentar"
   },

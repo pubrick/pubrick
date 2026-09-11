@@ -1,4 +1,9 @@
-import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
+import type {
+  AdaptationStatus,
+  ContentStatus,
+  DeliveryOutcome,
+  PublishFailureReason,
+} from "@pubrick/shared";
 import { runDtoSchema, type SourceRunListInput } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
@@ -30,6 +35,9 @@ type Adaptation = {
   origin: ContentOrigin;
   externalUrl: string | null;
   lastError: string | null;
+  failureReason: PublishFailureReason | null;
+  lateBySeconds: number | null;
+  attemptCount: number;
 };
 
 type Channel = { id: string; platform: string; name: string };
@@ -55,6 +63,11 @@ function adaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     origin: "human",
     externalUrl: null,
     lastError: null,
+    // Null on a row that has not failed, and on the one population that failed
+    // before the column existed. A fixture that wants a coded failure says so.
+    failureReason: null,
+    lateBySeconds: null,
+    attemptCount: 0,
     ...overrides,
   };
 }
@@ -1244,6 +1257,94 @@ describe("an outcome nobody knows, on the list (Finding 2)", () => {
     // replacing nothing, and would still leave the reader without an address.
     expect(advice).toHaveTextContent("Telegram · Main channel");
     expect(within(row).queryByRole("link", { name: /t\.me/ })).toBeNull();
+  });
+
+  it("says why a coded failure failed, in our sentence and not the worker's", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      () => [
+        item("c1", "Launch post", "failed", [
+          adaptation({
+            status: "failed",
+            failureReason: "schedule_missed",
+            lateBySeconds: 26 * 3600,
+            lastError: "Missed its scheduled slot: this post was due at 2026-09-10T09:00:00.000Z",
+          }),
+        ]),
+      ],
+      [{ id: "ch1", platform: "telegram", name: "Main channel" }],
+    );
+
+    render(<ContentQueuePage />);
+
+    const row = (await screen.findByRole("link", { name: "Launch post" })).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    expect(within(row).getByText(/Missed its slot by 26\.0 h/)).toBeInTheDocument();
+    expect(screen.queryByText(/2026-09-10T09:00:00\.000Z/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * THE GROUP TITLE AND THE BADGE STAY "Failed" — both are about the class of
+   * the row, which has not changed and which is what someone scanning the list
+   * sorts on. The sentence underneath is the part that stopped being the same
+   * for every red row, and a missed slot is the case that proves it: the
+   * remedy is "publish now", not "reconnect the channel".
+   */
+  it("keeps the Failed badge while the sentence names the reason", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      () => [
+        item("c1", "Launch post", "failed", [
+          adaptation({ status: "failed", failureReason: "credentials_invalid" }),
+        ]),
+      ],
+      [{ id: "ch1", platform: "telegram", name: "Main channel" }],
+    );
+
+    render(<ContentQueuePage />);
+
+    const row = (await screen.findByRole("link", { name: "Launch post" })).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    expect(within(row).getByText(en.Content.adaptationStatus.failed)).toBeInTheDocument();
+    expect(within(row).getByText(/not what the platform expects/)).toBeInTheDocument();
+    // And the re-send affordance the failed group has always carried is still
+    // there: T2 changes what the row SAYS, not what it offers.
+    expect(within(row).getByRole("link", { name: en.Content.tryAgain })).toBeInTheDocument();
+  });
+
+  /**
+   * ONE SENTENCE PER ROW. An `unknown` delivery already has its own advice
+   * paragraph here, and the reason code that produced it (`outcome_unknown`)
+   * must not add a second, red copy of the same news.
+   */
+  it("does not double up on an unknown delivery", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      () => [
+        item("c1", "Launch post", "failed", [
+          adaptation({
+            status: "failed",
+            deliveryOutcome: "unknown",
+            failureReason: "outcome_unknown",
+            lastError: workerSentence,
+          }),
+        ]),
+      ],
+      [{ id: "ch1", platform: "telegram", name: "Main channel" }],
+    );
+
+    render(<ContentQueuePage />);
+
+    const row = (await screen.findByRole("link", { name: "Launch post" })).closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    expect(
+      within(row).getAllByText(
+        en.Content.unknownOutcome.replace("{channel}", "Telegram · Main channel"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("leaves a real failure red", async () => {

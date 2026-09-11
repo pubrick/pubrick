@@ -1818,6 +1818,103 @@ describe.skipIf(!url)("content e2e", () => {
     });
 
     /**
+     * THE CODED REASON, AND THE LATENESS THE SCREEN SAYS OUT LOUD.
+     *
+     * `failure_reason` is what a screen asks to tell a missed slot from a dead
+     * credential, and until it is in the allowlist it exists only in the
+     * database: the web would be back to reading `last_error`'s prose, which is
+     * the defect `deliveryOutcome` was added next door to end.
+     *
+     * `lateBySeconds` rides with it because the sentence has a number in it,
+     * and the number must be FROZEN. `scheduled_at` survives a failure, so a
+     * browser subtracting it from its own clock would report a lateness that
+     * grows every time the page is opened and disagrees with the stored
+     * sentence beside it. It is measured from the receipt: 26 hours past the
+     * slot, refused 2 hours ago, is 24 hours late — NOT 26.
+     */
+    it("ships failure_reason and a lateness frozen at the receipt, item and queue alike", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Too late");
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [row] = (
+          await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+        ).rows as { org_id: string }[];
+        await db.execute(
+          `UPDATE adaptations SET status = 'failed', failure_reason = 'schedule_missed',
+             last_error = 'Missed its scheduled slot: ...',
+             scheduled_at = now() - interval '26 hours' WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt, created_at)
+           VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'failed', NULL, NULL, 1, now() - interval '2 hours')`,
+        );
+      } finally {
+        await pool.end();
+      }
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
+        status: "failed",
+        deliveryOutcome: "failed",
+        failureReason: "schedule_missed",
+      });
+      // A window, not an equality: the seed and the read are separate
+      // statements and `now()` moved between them.
+      expect(fetched.body.adaptations[0].lateBySeconds).toBeGreaterThan(24 * 3600 - 60);
+      expect(fetched.body.adaptations[0].lateBySeconds).toBeLessThan(24 * 3600 + 60);
+
+      // The queue card and the screen it opens must not answer this
+      // differently, which is why it is one expression in ADAPTATION_COLUMNS.
+      const listed = await agent.get("/api/content").expect(200);
+      const item = (
+        listed.body as {
+          id: string;
+          adaptations: { failureReason: string | null; lateBySeconds: number | null }[];
+        }[]
+      ).find((i) => i.id === itemId);
+      expect(item?.adaptations[0]?.failureReason).toBe("schedule_missed");
+      expect(item?.adaptations[0]?.lateBySeconds).toBeGreaterThan(24 * 3600 - 60);
+    });
+
+    /**
+     * NULL WHERE THERE IS NOTHING TO MEASURE, and that is what the screen's
+     * "no hours" sentence is for. A "publish now" delivery has no slot it could
+     * have missed — the worker's own bound answers null for exactly this row —
+     * and a zero here would be read as "missed it by nothing".
+     */
+    it("answers null for a failed delivery that never had a slot", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "No slot");
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [row] = (
+          await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+        ).rows as { org_id: string }[];
+        await db.execute(
+          `UPDATE adaptations SET status = 'failed', failure_reason = 'platform_rejected',
+             last_error = 'Telegram: chat not found' WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+           VALUES ('${row?.org_id}', '${adaptationId}', '${channelId}', 'failed', NULL, NULL, 1)`,
+        );
+      } finally {
+        await pool.end();
+      }
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
+        failureReason: "platform_rejected",
+        lateBySeconds: null,
+      });
+    });
+
+    /**
      * THE POINT OF THE FIELD, asserted directly: the sentence on `last_error`
      * is a log line, and nothing outside the worker may depend on how it is
      * worded. This seeds an unknown delivery whose message is deliberately NOT
