@@ -135,6 +135,8 @@
       "credentialsInvalid": "Nada foi enviado: as credenciais salvas de {channel} não são as que a plataforma espera. Conecte-o de novo na página da marca, em Marcas.",
       "platformRejected": "A plataforma recusou esta publicação: {error}",
       "platformRejectedNoText": "A plataforma recusou esta publicação e não disse por quê.",
+      "rejectedBeforeSend": "Nada foi enviado: esta publicação foi recusada antes de chegar à plataforma. {error}",
+      "rejectedBeforeSendNoText": "Nada foi enviado: esta publicação foi recusada antes de chegar à plataforma e não se disse por quê.",
       "retriesExhausted": "A plataforma não aceitou esta publicação após {attempts, plural, one {# tentativa} other {# tentativas}} até agora. Nenhum envio foi confirmado — publique agora para tentar de novo.",
       "sendAbandoned": "O envio para {channel} parou antes de chegar à plataforma e não restam novas tentativas. Nada foi enviado — publique agora para tentar de novo."
     },

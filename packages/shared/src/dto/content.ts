@@ -225,8 +225,22 @@ export const PUBLISH_FAILURE_REASONS = [
   "credentials_missing",
   /** The stored credentials do not satisfy the adapter's own schema. */
   "credentials_invalid",
-  /** The platform itself refused the post, permanently. */
+  /** The platform's own envelope refused the post, permanently. */
   "platform_rejected",
+  /**
+   * REFUSED BEFORE THE PLATFORM EVER SAW IT — the adapter's own pre-flight
+   * guards (a body over the platform's text limit, a payload that will not
+   * serialize) and a 4xx that did not carry the platform's envelope, which is
+   * something between us and it refusing to forward.
+   *
+   * Split off `platform_rejected` because the sentence quotes the message: with
+   * one code for both, the screen read "The platform refused this post: Text
+   * must be 1..4096 characters, got 5000" — our own words attributed to
+   * somebody else, about a request that never left. Which class a permanent
+   * refusal is comes from `PlatformRejectionError`, raised by adapters for the
+   * envelope case only, and never from reading the message.
+   */
+  "rejected_before_send",
   /** pg-boss spent the queue's retries on transient failures and dead-lettered the job. */
   "retries_exhausted",
   /** An attempt stopped before it reached the platform and no job is left to retry it. */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
 import {
   PermanentPublishError,
+  PlatformRejectionError,
   type PublishInput,
   TransientPublishError,
   UnknownOutcomePublishError,
@@ -348,6 +349,52 @@ describe("telegramPublisher.publish", () => {
     await expect(
       telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
     ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+  });
+
+  /**
+   * WHO REFUSED, AS A CLASS — because the worker stamps a reason code from it
+   * and a screen quotes the message under a sentence naming the refuser.
+   *
+   * Telegram's `ok:false` envelope is the platform refusing. The two guards
+   * below it in this file are THIS ADAPTER refusing, with the platform never
+   * contacted, and a 4xx whose body was not Telegram's envelope is a gateway
+   * refusing to forward. Reported as one class, the screen read "The platform
+   * refused this post: Text must be 1..4096 characters" — our own words, put in
+   * somebody else's mouth.
+   */
+  describe("which refusals are the platform's own", () => {
+    it("marks an ok:false envelope as the platform's rejection", async () => {
+      const fetchImpl = fetchReturning({
+        ok: false,
+        error_code: 400,
+        description: "chat not found",
+      });
+      await expect(
+        telegramPublisher.publish(CREDS, { text: "x" }, { fetchImpl }),
+      ).rejects.toBeInstanceOf(PlatformRejectionError);
+    });
+
+    it("does not blame the platform for the adapter's own length guard", async () => {
+      const fetchImpl = vi.fn();
+      const tooLong = "x".repeat(telegramPublisher.maxTextLength + 1);
+      const caught = await telegramPublisher
+        .publish(CREDS, { text: tooLong }, { fetchImpl })
+        .catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(PermanentPublishError);
+      expect(caught).not.toBeInstanceOf(PlatformRejectionError);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("does not blame the platform for a 4xx that never carried its envelope", async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(new Response("<html>gateway says no</html>", { status: 403 }));
+      const caught = await telegramPublisher
+        .publish(CREDS, { text: "x" }, { fetchImpl })
+        .catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(PermanentPublishError);
+      expect(caught).not.toBeInstanceOf(PlatformRejectionError);
+    });
   });
 
   it("throws PermanentPublishError, without calling the API, when the request body cannot be JSON-serialized", async () => {

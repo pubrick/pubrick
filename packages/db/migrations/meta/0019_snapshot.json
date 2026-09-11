@@ -1110,7 +1110,7 @@
         },
         "adaptations_failure_reason_check": {
           "name": "adaptations_failure_reason_check",
-          "value": "\"adaptations\".\"failure_reason\" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'retries_exhausted', 'send_abandoned', 'outcome_unknown')"
+          "value": "\"adaptations\".\"failure_reason\" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'rejected_before_send', 'retries_exhausted', 'send_abandoned', 'outcome_unknown')"
         }
       },
       "isRLSEnabled": false

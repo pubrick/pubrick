@@ -144,6 +144,7 @@ const FAILURE_REASON_KEYS = {
   credentials_missing: "failureReason.credentialsMissing",
   credentials_invalid: "failureReason.credentialsInvalid",
   platform_rejected: "failureReason.platformRejected",
+  rejected_before_send: "failureReason.rejectedBeforeSend",
   retries_exhausted: "failureReason.retriesExhausted",
   send_abandoned: "failureReason.sendAbandoned",
   /**
@@ -226,6 +227,14 @@ export function failureSentence(
       return lastError
         ? t(FAILURE_REASON_KEYS.platform_rejected, { error: lastError })
         : t("failureReason.platformRejectedNoText");
+    // THE SAME SHAPE, THE OTHER REFUSER. The words are still not ours to
+    // paraphrase — a length limit, a gateway's "no" — but the sentence around
+    // them must not say the platform wrote them, because the platform never saw
+    // the post.
+    case "rejected_before_send":
+      return lastError
+        ? t(FAILURE_REASON_KEYS.rejected_before_send, { error: lastError })
+        : t("failureReason.rejectedBeforeSendNoText");
     case "retries_exhausted":
       // "SO FAR", because this is a LIFETIME counter. `attempt_count` is never
       // reset — `approve` carries it forward and increments, the delivery

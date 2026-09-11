@@ -1,3 +1,4 @@
+import { PermanentError } from "@pubrick/shared";
 import type { z } from "zod";
 
 /**
@@ -55,6 +56,27 @@ export {
   PermanentError as PermanentPublishError,
   TransientError as TransientPublishError,
 } from "@pubrick/shared";
+
+/**
+ * THE PLATFORM'S OWN ENVELOPE SAID NO — as opposed to every other way a post
+ * can be permanently refused without the platform ever having seen it.
+ *
+ * A `PermanentPublishError` means "known-not-posted, and retrying cannot help".
+ * That covers two quite different events, and a screen has to tell them apart
+ * because it quotes the message: Telegram answering `ok:false, error_code:400`
+ * is the PLATFORM refusing, while an adapter's own pre-flight guard (text
+ * length, a body that will not serialize) and a gateway 4xx that never carried
+ * Telegram's envelope are refusals the platform knows nothing about. The worker
+ * used to call all of them `platform_rejected`, so the screen could read "The
+ * platform refused this post: Text must be 1..4096 characters, got 5000" —
+ * our own sentence, attributed to somebody else.
+ *
+ * Raised by adapters for the envelope case ONLY, and everything a publisher
+ * throws as a plain `PermanentPublishError` is thereby the other class. The
+ * default is the safe way round: a new adapter that has not been taught this
+ * distinction attributes nothing to a platform it never reached.
+ */
+export class PlatformRejectionError extends PermanentError {}
 
 /**
  * The third outcome, and the only one that is not a claim about the platform:

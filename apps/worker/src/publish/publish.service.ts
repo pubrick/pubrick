@@ -3,6 +3,7 @@ import { schema } from "@pubrick/db";
 import {
   getPublisher,
   PermanentPublishError,
+  PlatformRejectionError,
   type Publisher,
   type PublishResult,
   TELEGRAM_REQUEST_TIMEOUT_MS,
@@ -489,10 +490,23 @@ export class PublishService {
         // the three credential failures above are raised inside this same try
         // and are indistinguishable here by anything except their prose, which
         // is the reading the coded column exists to end. Anything else reaching
-        // this line came out of `publisher.publish()` — the platform's own
-        // permanent refusal.
-        const failureReason =
-          error instanceof ClassifiedPermanentError ? error.failureReason : "platform_rejected";
+        // this line came out of `publisher.publish()`.
+        //
+        // AND "THE PLATFORM REFUSED" IS THE NARROW CASE, not the default. The
+        // screen quotes this message under a sentence that names who refused,
+        // and `publisher.publish()` raises a permanent error for things the
+        // platform never saw: its own pre-flight guards (text length, a payload
+        // that will not serialize) and a 4xx that did not carry the platform's
+        // envelope. Calling those `platform_rejected` put our own words — "Text
+        // must be 1..4096 characters" — in the platform's mouth. Only a
+        // `PlatformRejectionError`, which an adapter raises for the envelope
+        // alone, is the platform's own "no"; the safe default is the other way.
+        const failureReason: PublishFailureReason =
+          error instanceof ClassifiedPermanentError
+            ? error.failureReason
+            : error instanceof PlatformRejectionError
+              ? "platform_rejected"
+              : "rejected_before_send";
         await this.safeMarkFailed(
           job.orgId,
           job.adaptationId,

@@ -1,6 +1,7 @@
 import { schema } from "@pubrick/db";
 import {
   PermanentPublishError,
+  PlatformRejectionError,
   TELEGRAM_REQUEST_TIMEOUT_MS,
   TransientPublishError,
   UnknownOutcomePublishError,
@@ -127,9 +128,14 @@ describe("PublishService.handle", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("does NOT rethrow permanent errors — the job must not be retried", async () => {
+  /**
+   * "THE PLATFORM REFUSED THIS POST: …" IS A CLAIM ABOUT WHO SAID NO, and the
+   * screen quotes the message under it. Only the platform's own envelope earns
+   * that sentence, and an adapter says so by raising `PlatformRejectionError`.
+   */
+  it("does NOT rethrow the platform's own refusal — the job must not be retried", async () => {
     const { repo } = fixture();
-    const publish = vi.fn().mockRejectedValue(new PermanentPublishError("Forbidden", 403));
+    const publish = vi.fn().mockRejectedValue(new PlatformRejectionError("Forbidden", 403));
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
     await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
@@ -138,6 +144,33 @@ describe("PublishService.handle", () => {
       "a1",
       "Forbidden",
       "platform_rejected",
+      { status: "publishing", attemptCount: 1 },
+      "failed",
+      CLAIM,
+    );
+  });
+
+  /**
+   * AND EVERY OTHER PERMANENT REFUSAL IS SOMEBODY ELSE'S — the adapter's own
+   * pre-flight guards, or a gateway 4xx that never carried the platform's
+   * envelope. Same terminal write, same "never retried", different claim about
+   * who refused: this one never reached the platform at all, so quoting its
+   * message under "the platform refused" would attribute our own sentence to
+   * a service that never saw the post.
+   */
+  it("does not blame the platform for a refusal it never made", async () => {
+    const { repo } = fixture();
+    const publish = vi
+      .fn()
+      .mockRejectedValue(new PermanentPublishError("Text must be 1..4096 characters, got 5000"));
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      "Text must be 1..4096 characters, got 5000",
+      "rejected_before_send",
       { status: "publishing", attemptCount: 1 },
       "failed",
       CLAIM,

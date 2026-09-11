@@ -135,6 +135,8 @@
       "credentialsInvalid": "Nothing was sent: the saved credentials for {channel} are not what the platform expects. Reconnect it on the brand's page, under Brands.",
       "platformRejected": "The platform refused this post: {error}",
       "platformRejectedNoText": "The platform refused this post and said nothing about why.",
+      "rejectedBeforeSend": "Nothing was sent: this post was refused before it reached the platform. {error}",
+      "rejectedBeforeSendNoText": "Nothing was sent: this post was refused before it reached the platform, with nothing said about why.",
       "retriesExhausted": "The platform did not accept this post after {attempts, plural, one {# attempt} other {# attempts}} so far. Nothing was confirmed sent — publish now to try again.",
       "sendAbandoned": "The send to {channel} stopped before it reached the platform and no retry is left. Nothing was sent — publish now to try again."
     },

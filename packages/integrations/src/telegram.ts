@@ -2,6 +2,7 @@ import { PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
 import { z } from "zod";
 import {
   PermanentPublishError,
+  PlatformRejectionError,
   type Publisher,
   type PublisherOptions,
   type PublishInput,
@@ -175,7 +176,15 @@ class UnrecognizedTelegramResponse extends Error {
  * `verify()` both rely on that proof to know "the platform decided, nothing
  * is in flight" rather than "unknown outcome".
  */
-class TelegramRejection extends PermanentPublishError {}
+/**
+ * Telegram's own envelope said no: `ok:false` with an `error_code` that is
+ * neither 429 nor a 5xx. The one permanent refusal in this file the PLATFORM
+ * actually made — the pre-flight guards below and the unparseable-4xx branch
+ * above are refusals it never saw — so it is the only one raised as a
+ * `PlatformRejectionError`, and the worker's reason code follows that class
+ * rather than the wording of the message.
+ */
+class TelegramRejection extends PlatformRejectionError {}
 
 type TelegramEnvelope =
   | { kind: "ok"; result: unknown }

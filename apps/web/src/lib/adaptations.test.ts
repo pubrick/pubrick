@@ -172,6 +172,7 @@ describe("every failure reason has a sentence", () => {
     ["credentials_missing", "no longer connected"],
     ["credentials_invalid", "not what the platform expects"],
     ["platform_rejected", "The platform refused"],
+    ["rejected_before_send", "before it reached the platform"],
     ["retries_exhausted", "did not accept this post"],
     ["send_abandoned", "stopped before it reached the platform"],
     ["outcome_unknown", "never confirmed it"],
@@ -326,6 +327,35 @@ describe("failureSentence", () => {
         values: { error: "Bad Request: message is too long" },
       },
     ]);
+  });
+
+  /**
+   * AND THE REFUSAL THAT WAS NOT THE PLATFORM'S keeps the words without the
+   * attribution: an adapter's own pre-flight guard, or a gateway's 4xx.
+   */
+  it("carries the words of a refusal the platform never made, without blaming it", () => {
+    const { calls, t } = recorder();
+    const text = failureSentence(
+      row({
+        failureReason: "rejected_before_send",
+        lastError: "Text must be 1..4096 characters, got 5000",
+      }),
+      t,
+      "#news",
+    );
+    expect(calls).toEqual([
+      {
+        key: "failureReason.rejectedBeforeSend",
+        values: { error: "Text must be 1..4096 characters, got 5000" },
+      },
+    ]);
+    expect(text).not.toContain("platformRejected");
+  });
+
+  it("frames a pre-send refusal that came with no text", () => {
+    const { calls, t } = recorder();
+    failureSentence(row({ failureReason: "rejected_before_send", lastError: null }), t, "#news");
+    expect(calls[0]?.key).toBe("failureReason.rejectedBeforeSendNoText");
   });
 
   it("still frames a platform refusal that came with no text", () => {

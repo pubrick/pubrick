@@ -385,6 +385,45 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // (handle() returned normally) never "retry" (handle() rethrew).
     const job = await waitForJobState(jobId);
     expect(job.state).toBe("completed");
+    // The PLATFORM's own envelope said no, and the code says that and only
+    // that. Its sibling below is the refusal the platform never made.
+    expect(adaptation.failureReason).toBe("platform_rejected");
+  }, 25_000);
+
+  /**
+   * A REFUSAL THE PLATFORM NEVER MADE, THROUGH THE REAL DATABASE.
+   *
+   * The adapter's own text-length guard throws before any fetch, so nothing
+   * reaches Telegram and the sentence on the screen must not say Telegram
+   * refused. Driven end to end rather than against a stub because the other
+   * half of the claim is the `adaptations_failure_reason_check` constraint: a
+   * reason the type system knows and the CHECK does not is a terminal write the
+   * database refuses, leaving the row stuck in `publishing` with the post
+   * neither sent nor failed.
+   */
+  it("records the adapter's own refusal as one the platform never made", async () => {
+    const chatId = `-100${Date.now()}7`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: { ok: true, result: { message_id: 1, chat: { id: Number(chatId) } } },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+    // Past telegram's own 4096 limit: the guard is in the adapter, above fetch.
+    await db
+      .update(schema.adaptations)
+      .set({ body: "x".repeat(5000) })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+    const adaptation = await waitUntilLeftQueued(adaptationId);
+    expect(adaptation.status).toBe("failed");
+    expect(adaptation.failureReason).toBe("rejected_before_send");
+    // Nothing left this process: the guard runs before the request is built.
+    expect(sendCounts.get(chatId)).toBeUndefined();
+    const job = await waitForJobState(jobId);
+    expect(job.state).toBe("completed");
   }, 25_000);
 
   /**

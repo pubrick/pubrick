@@ -41,4 +41,4 @@
 -- writes the column — so `docs/self-hosting.md` §Upgrade's "worker first is
 -- always safe" stays true unamended.
 ALTER TABLE "adaptations" ADD COLUMN "failure_reason" text;--> statement-breakpoint
-ALTER TABLE "adaptations" ADD CONSTRAINT "adaptations_failure_reason_check" CHECK ("adaptations"."failure_reason" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'retries_exhausted', 'send_abandoned', 'outcome_unknown'));
+ALTER TABLE "adaptations" ADD CONSTRAINT "adaptations_failure_reason_check" CHECK ("adaptations"."failure_reason" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'rejected_before_send', 'retries_exhausted', 'send_abandoned', 'outcome_unknown'));
