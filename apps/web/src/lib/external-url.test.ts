@@ -1,4 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { isHttpUrl } from "./external-url";
+
+describe("isHttpUrl", () => {
+  it("accepts http and https, case-insensitively on the scheme", () => {
+    expect(isHttpUrl("http://example.com/story")).toBe(true);
+    expect(isHttpUrl("HTTPS://Example.com/story")).toBe(true);
+  });
+
+  it("rejects a javascript: URL that parses to an ordinary-looking host", () => {
+    // `new URL(...)`.hostname is "example.com" for this string; the scheme is
+    // what an href acts on.
+    expect(isHttpUrl("javascript://example.com/%0aalert(1)")).toBe(false);
+    expect(isHttpUrl("vbscript:alert(1)")).toBe(false);
+    expect(isHttpUrl("file:///etc/passwd")).toBe(false);
+  });
+
+  it("rejects null, undefined and a bare string", () => {
+    expect(isHttpUrl(null)).toBe(false);
+    expect(isHttpUrl(undefined)).toBe(false);
+    expect(isHttpUrl("not a url")).toBe(false);
+  });
+});
 import { isLinkableUrl } from "./external-url";
 
 describe("isLinkableUrl", () => {

@@ -623,6 +623,24 @@ describe("a run drafted from pasted material", () => {
     expect(calls.map((c) => c.path)).toEqual([`/api/runs/${RUN_ID}`]);
   });
 
+  it("shows a source address whose scheme an href would run as text, not as a link", async () => {
+    // The wire schema refuses this, so it cannot be built through the fixture:
+    // it is the shape a row written by hand would take, and the screen does
+    // not parse the api's body. Overridden AFTER the parse on purpose.
+    const parsed = sourceRun({ sourceUrl: "https://example.com/story" });
+    const hostile = {
+      ...parsed,
+      input: { ...parsed.input, sourceUrl: "javascript://example.com/%0aalert(1)" },
+    } as RunDetail;
+    installHandlers({ current: hostile });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.sourceLabel)).toBeInTheDocument();
+    expect(screen.getByText("javascript://example.com/%0aalert(1)")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /javascript:/ })).toBeNull();
+  });
+
   it("shows no source line at all when the paste came with no link", async () => {
     installHandlers({ current: sourceRun() });
 

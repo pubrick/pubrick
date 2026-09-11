@@ -87,6 +87,22 @@ describe("the source strip on a draft", () => {
    * reaches this branch — but this app does not parse the api's body, and a
    * row written by hand is a row the strip still has to draw.
    */
+  it("draws the host as text, never as a link, for a scheme an href would run", () => {
+    // Parses to host "example.com" — `sourceHost` alone would link it.
+    const hostile = "javascript://example.com/%0aalert(1)";
+    render(<SourceStrip input={{ ...sourceInput(), sourceUrl: hostile } as RunInput} />);
+
+    expect(screen.getByText("example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("caps the material block so it scrolls instead of pushing the editor down", () => {
+    render(<SourceStrip input={sourceInput()} />);
+    const block = screen.getByTestId("source-strip-material");
+    expect(block.className).toContain("max-h-32");
+    expect(block.className).toContain("overflow-y-auto");
+  });
+
   it("draws no link for a stored value that is not a URL at all", () => {
     render(<SourceStrip input={{ ...sourceInput(), sourceUrl: "not a url" } as RunInput} />);
 

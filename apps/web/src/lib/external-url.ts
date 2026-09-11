@@ -14,3 +14,15 @@
 export function isLinkableUrl(url: string | null | undefined): url is string {
   return typeof url === "string" && url.startsWith("https://");
 }
+
+/**
+ * The same question for a person-supplied SOURCE address (`sourceUrl` on a
+ * run's input), which the DTO admits over http as well as https. The DTO's
+ * scheme check runs on the api; this app never parses the api's body, so a
+ * row written by hand — `javascript://example.com/%0aalert(1)` parses to a
+ * host of `example.com` and would reach an `href` — is stopped HERE, the
+ * last place before the anchor. Anything else renders as plain text.
+ */
+export function isHttpUrl(url: string | null | undefined): url is string {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
+}

@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { isHttpUrl } from "@/lib/external-url";
 import {
   isTerminalRunStatus,
   RUN_BADGE_STATUS,
@@ -285,14 +286,18 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                         http/https — the reason `sourceUrl` constrains its
                         protocol rather than merely being a URL.
                       */}
-                      <a
-                        href={run.input.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="break-all text-sm text-accent hover:underline"
-                      >
-                        {run.input.sourceUrl}
-                      </a>
+                      {isHttpUrl(run.input.sourceUrl) ? (
+                        <a
+                          href={run.input.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all text-sm text-accent hover:underline"
+                        >
+                          {run.input.sourceUrl}
+                        </a>
+                      ) : (
+                        <span className="break-all text-sm text-fg">{run.input.sourceUrl}</span>
+                      )}
                     </RunField>
                   )}
                   <RunField label={t("materialLabel")}>

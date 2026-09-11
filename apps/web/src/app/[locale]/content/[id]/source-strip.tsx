@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { isHttpUrl } from "@/lib/external-url";
 import { type RunInput, sourceHost } from "@/lib/runs";
 
 /**
@@ -57,14 +58,18 @@ export function SourceStrip({ input }: { input: RunInput | null }) {
               http/https; `rel` keeps the opened tab from getting a handle on
               this one.
             */}
-            <a
-              href={input.sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="break-all text-accent hover:underline"
-            >
-              {host}
-            </a>
+            {isHttpUrl(input.sourceUrl) ? (
+              <a
+                href={input.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="break-all text-accent hover:underline"
+              >
+                {host}
+              </a>
+            ) : (
+              <span className="break-all">{host}</span>
+            )}
           </>
         )}
       </p>
