@@ -7,6 +7,9 @@
       // API_INTERNAL_URL is baked into the web build's /api rewrite; turbo's strict env
       // mode strips anything not declared here, silently producing a localhost:3001
       // destination inside the docker image.
+      // apps/web/src/test/env-declaration.guard.spec.ts now requires this list to hold every
+      // process.env read `next build` evaluates — next.config.*, middleware.* and every
+      // NEXT_PUBLIC_* read — so a second such omission fails a test instead of a deploy.
       "env": ["API_INTERNAL_URL"]
     },
     "typecheck": { "dependsOn": ["^build"] },
@@ -45,7 +48,13 @@
         "DATABASE_URL",
         "HOME",
         "PATH",
-        "SIGNUP_MODE"
+        "SIGNUP_MODE",
+        // NODE_ENV is read by apps/web's design page to hide itself in production, and the
+        // page's tests import that module — so the test task is the one that executes the
+        // read, and it is declared here for the same reason as CI above rather than because
+        // anything measured breaks without it (vitest sets NODE_ENV itself, and `next build`
+        // assigns it during the build, which is why it is NOT in build.env).
+        "NODE_ENV"
       ]
     }
   }
