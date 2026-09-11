@@ -480,6 +480,58 @@ describe("run strips (Task 10)", () => {
     }
   });
 
+  /**
+   * ONE press, one run. The api ADMITS a retry rather than refusing it (it
+   * re-reads the stored input and creates a new run), so a second press while
+   * the first request is still out is not a harmless duplicate — it is a
+   * second generation, paid for, against the org's concurrency cap. The item
+   * screen's refine controls have guarded this since they were built
+   * (`refineBusy`); the queue's own paid button did not.
+   *
+   * The retry is held open on purpose: the defect only exists in the window
+   * between the press and the answer, and a test whose first request has
+   * already resolved could never see it.
+   */
+  it("cannot be pressed again while its own retry is still in flight", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, {
+      current: [run({ status: "failed", errorCode: "internal" })],
+    });
+    const handlers = mockApi.getMockImplementation();
+    if (!handlers) throw new Error("installHandlers did not install one");
+    const retries: string[] = [];
+    let release: (() => void) | null = null;
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      const path = args[0] as string;
+      const method = ((args[1] as RequestInit | undefined)?.method ?? "GET") as string;
+      if (method === "POST" && path.endsWith("/retry")) {
+        retries.push(path);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return handlers(...(args as Parameters<typeof handlers>));
+    });
+
+    render(<ContentQueuePage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+    await waitFor(() => expect(retries).toHaveLength(1));
+
+    // The control the person would press again says so itself, and pressing it
+    // sends nothing.
+    const again = screen.getByRole("button", { name: en.Runs.tryAgain });
+    expect(again).toBeDisabled();
+    await user.click(again);
+    expect(retries).toHaveLength(1);
+
+    // ...and the button comes back once the answer does: the guard is the
+    // request's window, not a one-way door.
+    const resume = release as unknown as (() => void) | null;
+    resume?.();
+    await waitFor(() => expect(calls.some((c) => c.path.endsWith("/dismiss"))).toBe(true));
+  });
+
   it("Dismiss clears the strip", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => [], noChannels, {

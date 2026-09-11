@@ -133,6 +133,21 @@ export default function ContentQueuePage() {
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [status, setStatus] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  /**
+   * The run whose retry is out, or `null` — the whole of this screen's
+   * double-press guard, and the item screen's `refineBusy` applied to the other
+   * button on this product that spends money.
+   *
+   * A retry is ADMITTED, not superseded: the api re-reads the stored input and
+   * creates a new run, so two presses in the request's window are two
+   * generations — two bills, and two of the three slots `MAX_CONCURRENT_RUNS`
+   * allows. A click is a discrete event, so React has flushed this state before
+   * a second one can be dispatched, and every Try again on the list is
+   * `disabled` by then. All of them, not only the pressed one: the press
+   * navigates to the new run's receipt, so a second retry started from this
+   * list while the first is still out has nowhere to land either.
+   */
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -228,6 +243,7 @@ export default function ContentQueuePage() {
    */
   async function tryAgain(run: Run) {
     setActionError(null);
+    setRetrying(run.id);
     try {
       const created = await api<Run>(`/api/runs/${run.id}/retry`, { method: "POST" });
       const dismissed = await api(`/api/runs/${run.id}/dismiss`, { method: "POST" })
@@ -243,6 +259,8 @@ export default function ContentQueuePage() {
       router.push(`/${locale}/content/runs/${created.id}`);
     } catch (err) {
       handleError(err);
+    } finally {
+      setRetrying(null);
     }
   }
 
@@ -319,7 +337,12 @@ export default function ContentQueuePage() {
         {failure && <span className="w-full text-[13px] text-danger">{failure}</span>}
         {terminal && (
           <span className="flex shrink-0 items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={() => tryAgain(run)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => tryAgain(run)}
+              disabled={retrying !== null}
+            >
               {tr("tryAgain")}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => dismissRun(run)}>
