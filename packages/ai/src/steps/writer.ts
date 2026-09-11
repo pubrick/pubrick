@@ -32,14 +32,36 @@ export function planMaterial(research: ResearchOutput): string {
   ].join("\n");
 }
 
-/** Step 2 — write the master draft the channels are adapted from. */
+/**
+ * Step 2 — write the master draft the channels are adapted from.
+ *
+ * TWO ROLE LINES ANSWER THE MATERIAL, and they are separate rules.
+ *
+ * The third line used to read "add nothing the BRIEF or the plan does not
+ * support", which told this step to ignore the pasted article it had just been
+ * handed — and on a paste-only run, where the brief is null, to support nothing
+ * at all. Widened, not deleted: the rule against invention is the point of it.
+ *
+ * The fourth is added by this increment and is the only place anything in this
+ * product says not to reproduce someone else's text. It is phrased over "the
+ * material" rather than over "the source" deliberately: this step runs on EVERY
+ * run including brief-only ones, and a role line naming a source that is not
+ * there is a rule the model has to guess at.
+ *
+ * It is an instruction, never a guarantee. Nothing checks the draft against the
+ * material, `steps.test.ts` can pin this prompt and never the output, and the
+ * gate that follows answers who TYPED a sentence rather than where the sentence
+ * came from before that — which is why no string in this product claims the
+ * text is original or that anything verified it.
+ */
 export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep({
   name: "writer",
   schema: draftSchema,
   role: [
     "You write the master draft of a social post, working from a brief and a plan someone else made.",
     "Write the post itself: no title, no preamble, no explanation of what you wrote, no hashtags unless the brief asks for them.",
-    "Make every point in the plan, in its order, and add nothing the brief or the plan does not support.",
+    "Make every point in the plan, in its order, and add nothing the material or the plan does not support.",
+    "Write from the material in your own words: take what it says, not how it says it, and do not reproduce it at length.",
     `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
   ],
   material: (ctx: RunStepContext, input) => {

@@ -1090,6 +1090,94 @@ describe("material a person pasted", () => {
   });
 
   /**
+   * THE TWO ROLE SENTENCES A STEP WITH MATERIAL MADE FALSE, AND THE ONE ADDED.
+   *
+   * The spec justified the three-step fan-out with "no step's role text has to
+   * be rewritten". That was false for exactly two lines, and they live in the
+   * SYSTEM half, which is why the byte-identical capture below is of the USER
+   * half: these assertions and that one are the same feature's two sides, and
+   * neither can be satisfied by weakening the other.
+   *
+   * Each is pinned in BOTH directions — the old sentence absent and the new
+   * phrase present. Absence alone passes on a deleted line; presence alone
+   * passes on a line added beside the false one it was supposed to replace.
+   *
+   * Asserted on the BUILT system half rather than on `RESEARCHER.role` /
+   * `WRITER.role`, because what the model is told is what `instructionsFor`
+   * assembles: a role line the builder drops reaches nobody, and a test over
+   * the array would not notice.
+   */
+  it("no longer tells the researcher it has no sources, or to work from the brief", async () => {
+    // The step now receives a SOURCE block and may receive no BRIEF at all, so
+    // both halves of the old sentence were false on a paste-only run: it has a
+    // source, and there is no brief to work from. The NO-WEB-ACCESS half is
+    // still true and is kept — 3a fetches nothing, and a model told to research
+    // with no way to look anything up produces confident invention.
+    const model = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+
+    await RESEARCHER.run(pasteContext(model), undefined);
+
+    const { system } = halvesOf(model);
+    expect(system).not.toContain("You have no web access and no sources");
+    expect(system).not.toContain("work from the brief and from what you already know");
+    expect(system).toContain("You have no web access");
+    expect(system).toContain("work from the material you are given");
+    // The invention rule rode on the same sentence and must survive the widening.
+    expect(system).toContain("Never invent a statistic");
+  });
+
+  it("no longer tells the writer to add nothing the BRIEF does not support", async () => {
+    // The old line told the writer to ignore the very material it was handed:
+    // on a paste-only run the brief is null, so "nothing the brief supports" is
+    // nothing at all.
+    const model = jsonModel(JSON.stringify({ body: "text" }));
+
+    await WRITER.run(pasteContext(model), { research });
+
+    const { system } = halvesOf(model);
+    expect(system).not.toContain("add nothing the brief or the plan does not support");
+    expect(system).toContain("add nothing the material or the plan does not support");
+  });
+
+  it("tells the writer to write FROM the material rather than reproduce it", async () => {
+    // The one line this task adds. Phrased over "the material" and not over
+    // "the source" deliberately: WRITER runs on every run including brief-only
+    // ones, and a role line naming a source that is not there is a rule the
+    // model has to guess at.
+    //
+    // THE PROMPT IS ALL THIS CAN PIN. Nothing here — and nothing in this
+    // repository — tests that the model obeys it; the parity e2e says so in
+    // its own words, and the product's copy claims nothing about originality.
+    const model = jsonModel(JSON.stringify({ body: "text" }));
+
+    await WRITER.run(pasteContext(model), { research });
+
+    const { system } = halvesOf(model);
+    expect(system).toContain("Write from the material in your own words");
+    expect(system).toContain("do not reproduce it at length");
+  });
+
+  it("gives a brief-only run the same three sentences, in the system half", async () => {
+    // The lines are unconditional: a run with no material is told the same
+    // rules, which is the whole reason they are phrased over "the material"
+    // rather than over "the source". This is also the assertion that would
+    // catch someone making them conditional on `ctx.material` to keep the
+    // brief-only capture below green — the capture is of the USER half and
+    // would not notice.
+    const researcher = jsonModel(JSON.stringify({ angle: "a", keyPoints: ["one"], avoid: [] }));
+    const writer = jsonModel(JSON.stringify({ body: "text" }));
+
+    await RESEARCHER.run(contextFor(researcher), undefined);
+    await WRITER.run(contextFor(writer), { research });
+
+    expect(halvesOf(researcher).system).toContain("work from the material you are given");
+    expect(halvesOf(writer).system).toContain("Write from the material in your own words");
+    expect(halvesOf(writer).system).toContain(
+      "add nothing the material or the plan does not support",
+    );
+  });
+
+  /**
    * FABRICATED INPUT — reachable only through a cast, and deliberately so.
    *
    * `material` is required on `RunStepContext`, so no compiling builder can

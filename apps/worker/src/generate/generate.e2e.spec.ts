@@ -13,6 +13,8 @@ type QueueServiceCtor = typeof import("../queue.service").QueueService;
 type PgBossCtor = typeof import("pg-boss").PgBoss;
 type PgBossInstance = InstanceType<PgBossCtor>;
 type RunInput = import("@pubrick/shared").RunInput;
+/** `"full" | "fragment"` — narrowed here because `allSentencesAi` reads it. */
+type VersionScope = import("@pubrick/shared").VersionScope;
 type Schema = typeof import("@pubrick/db").schema;
 type Db = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["db"];
 type Pool = Awaited<ReturnType<typeof import("@pubrick/db").createDb>>["pool"];
@@ -68,6 +70,14 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   let MALFORMED_STORED_AI_CREDENTIAL_MESSAGE: string;
   let runFailureOf: typeof import("@pubrick/ai").runFailureOf;
   /**
+   * The SHIPPED provenance formula, not a copy of it: `ContentRepository` asks
+   * the badge's question and the publish gate's question through this same
+   * function. The parity test below reads it out of `@pubrick/shared` for that
+   * reason — a hand-rolled "is it verbatim" here would agree with itself and
+   * with nothing that ships.
+   */
+  let allSentencesAi: typeof import("@pubrick/shared").allSentencesAi;
+  /**
    * The real first step, held so a test can read the CONTEXT the real service
    * built for it. Spied, never replaced: everything below still runs through
    * the step it names.
@@ -101,6 +111,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       UNREADABLE_CREDENTIALS_MESSAGE,
       MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
       GENERATE_QUEUE_OPTIONS: queueOptions,
+      allSentencesAi,
     } = await import("@pubrick/shared"));
     ({ runFailureOf, RESEARCHER } = await import("@pubrick/ai"));
 
@@ -482,6 +493,238 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       { brief: -1, source: -1 },
     ]);
   }, 40_000);
+
+  /**
+   * A DRAFT THAT BEGAN AS SOMEONE ELSE'S TEXT MEETS THE SAME GATE.
+   *
+   * A run started from pasted material produces `origin = 'ai'` and the same
+   * first `ai` / `scope = 'full'` version row as a run started from a brief, so
+   * `allSentencesAi`, the origin badge, the lens and the publish refusal behave
+   * identically — and that is the POINT, not an oversight. A draft from a
+   * stranger's article meets the same gate as any other.
+   *
+   * **The values, never "the two runs are equal to each other."** Two
+   * identically wrong results compare equal: a build that wrote `origin =
+   * 'human'` on both paths, or three version rows per level on both, would
+   * satisfy an equality assertion and open the publish gate on text nobody
+   * read. Every assertion below therefore names the value it expects, and the
+   * loop runs it against each path in turn with the path in the failure
+   * message, so a reader six months from now can see which values "the same"
+   * meant.
+   *
+   * **WHAT THIS TEST DOES NOT PROVE, and nothing in this repository does.**
+   * The writer reproducing the material verbatim would pass it, in full — those
+   * sentences are still the model's output, they are in the first `ai` row, the
+   * lens dims them and the badge reads *AI-drafted*, all entirely truthfully.
+   * The provenance machinery answers *human versus machine*; it says nothing
+   * about *machine versus somebody else's copyright*, and this increment does
+   * not invent a third state for it. `WRITER.role` asks the model not to
+   * reproduce the material (`packages/ai/src/steps/writer.ts`, pinned as a
+   * prompt in `steps.test.ts` and nowhere as an outcome), and the product says
+   * so in its copy rather than checking it in code. A similarity check would be
+   * a new promise, and a weak one that misses is worse than none — the same
+   * argument the fact-check label rests on.
+   */
+  describe("a draft that began as someone else's text", () => {
+    type Drafted = {
+      status: string | null;
+      error: string | null;
+      body: string;
+      origin: string;
+      firstOpenedAt: Date | null;
+      itemId: string;
+      /** Every `ai` version row of the item and of its adaptations. */
+      versions: Array<{
+        adaptationId: string | null;
+        body: string;
+        origin: string;
+        scope: VersionScope;
+        unitDelta: number | null;
+      }>;
+      adaptations: Array<{ id: string; body: string | null }>;
+    };
+
+    /**
+     * Drive one real generation and read back everything the provenance
+     * machines are computed from.
+     *
+     * The SAME scripted replies for both paths, so the two drafts differ in
+     * exactly one thing: what was stored in `pipeline_runs.input`.
+     */
+    async function draft(input?: (channelIds: string[]) => RunInput): Promise<Drafted> {
+      const seeded = await seed(2, input);
+      active = scriptedModel({ editor: () => ({ body: EDITED, changes: ["Tightened."] }) });
+
+      const job = await waitForJobState(await enqueue(seeded.runId, seeded.orgId));
+      expect(job.state).toBe("completed");
+      const run = await runRow(seeded.runId);
+      const itemId = run?.contentItemId as string;
+
+      const [item] = await db
+        .select()
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, itemId));
+      const versions = await db
+        .select()
+        .from(schema.contentVersions)
+        .where(eq(schema.contentVersions.contentItemId, itemId));
+      const adaptations = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.contentItemId, itemId));
+
+      return {
+        status: run?.status ?? null,
+        error: run?.error ?? null,
+        body: item?.body as string,
+        origin: item?.origin as string,
+        firstOpenedAt: (item?.firstOpenedAt as Date | null) ?? null,
+        itemId,
+        versions: versions
+          .filter((row) => row.origin === "ai")
+          .map((row) => ({
+            adaptationId: row.adaptationId,
+            body: row.body,
+            origin: row.origin,
+            scope: row.scope as VersionScope,
+            unitDelta: row.unitDelta,
+          })),
+        adaptations: adaptations.map((row) => ({ id: row.id, body: row.body })),
+      };
+    }
+
+    /** The `ai` rows of one level — the master body (`null`) or one adaptation. */
+    const levelRows = (drafted: Drafted, level: string | null) =>
+      drafted.versions.filter((row) => row.adaptationId === level);
+
+    /**
+     * Is every sentence of this level's shipping text still the model's?
+     *
+     * The API ships this verdict as `bodyIsAiVerbatim` on `GET
+     * /api/content/:id` and on the list rows. It is computed here through the
+     * same `allSentencesAi` off the same two references — every `ai` row of the
+     * level, plus that level's first `scope = 'full'` row as the anchor — and
+     * NOT re-derived: a second formula is precisely what `CLAUDE.md` forbids.
+     */
+    const stillAi = (drafted: Drafted, current: string, level: string | null): boolean => {
+      const rows = levelRows(drafted, level);
+      return allSentencesAi(current, rows, rows.find((row) => row.scope === "full")?.body ?? null);
+    };
+
+    /**
+     * Would the publish gate refuse to approve this draft?
+     *
+     * `requireHumanInvolvement` itself lives in `apps/api`, and the two Nest
+     * apps are siblings (`docs/architecture.md`) — the worker may not import it,
+     * so its THREE clauses are restated here over rows this file read from the
+     * real database: nobody has opened it, the body is still the model's, and
+     * so is every channel's text (with the adapter's `body ?? item.body`
+     * fallback, because a cleared override ships the item's own text). The one
+     * thing a restatement must not do is re-derive the hard half, and it does
+     * not: the verdict per level is `allSentencesAi`, the shipped function.
+     *
+     * The HTTP behaviour — 409 `unread_ai_draft`, then 200 after `POST
+     * /api/content/:id/opened` — is pinned in `apps/api/src/content/content.e2e.spec.ts`
+     * against the same row shapes. What this file adds, and only this file can,
+     * is that a run started from a stranger's article hands that gate the same
+     * rows as a run started from a brief.
+     */
+    const gateRefuses = (drafted: Drafted): boolean => {
+      if (drafted.origin !== "ai" && drafted.versions.length === 0) return false;
+      return (
+        drafted.firstOpenedAt === null &&
+        stillAi(drafted, drafted.body, null) &&
+        drafted.adaptations.every((adaptation) =>
+          adaptation.body === null
+            ? stillAi(drafted, drafted.body, null)
+            : stillAi(drafted, adaptation.body, adaptation.id),
+        )
+      );
+    };
+
+    /** What `POST /api/content/:id/opened` does, and all it does. */
+    async function markOpened(itemId: string): Promise<Drafted["firstOpenedAt"]> {
+      await db
+        .update(schema.contentItems)
+        .set({ firstOpenedAt: new Date() })
+        .where(eq(schema.contentItems.id, itemId));
+      const [row] = await db
+        .select({ firstOpenedAt: schema.contentItems.firstOpenedAt })
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, itemId));
+      return (row?.firstOpenedAt as Date | null) ?? null;
+    }
+
+    it("gives a source-started draft the same provenance VALUES as a brief-started one", async () => {
+      const fromSource = await draft((channelIds) => ({
+        kind: "source",
+        text: null,
+        material: MATERIAL,
+        sourceUrl: SOURCE_URL,
+        channelIds,
+      }));
+      const fromBrief = await draft();
+
+      for (const [path, drafted] of [
+        ["source", fromSource],
+        ["brief", fromBrief],
+      ] as const) {
+        expect(drafted.error, `the ${path} run failed`).toBeNull();
+        expect(drafted.status, `the ${path} run did not succeed`).toBe("succeeded");
+
+        // THE ITEM. `origin` is what the badge reads and what the gate's first
+        // clause turns on; a source run that stored anything else would be
+        // claiming a human wrote text nobody has read.
+        expect(drafted.origin, `the ${path} draft's origin`).toBe("ai");
+        expect(drafted.body, `the ${path} draft's body`).toBe(EDITED);
+
+        // THE EVIDENCE, PER LEVEL: exactly one `ai` row, `full`, `unit_delta`
+        // null. One per level is what makes the anchor unambiguous — the
+        // deletion clause composes only while a level has at most one `full`
+        // row — and `full` is what stops `allSentencesAi` taking its
+        // missing-evidence branch, where every body reads as the model's and
+        // the refusal can never be cleared by editing.
+        const levels: Array<string | null> = [null, ...drafted.adaptations.map((a) => a.id)];
+        expect(levels, `the ${path} draft's levels`).toHaveLength(3);
+        for (const level of levels) {
+          const rows = levelRows(drafted, level);
+          const where = `the ${path} draft's ${level === null ? "body" : `adaptation ${level}`}`;
+          expect(rows, `${where} has the wrong number of ai version rows`).toHaveLength(1);
+          expect(rows[0]?.origin, `${where}'s version origin`).toBe("ai");
+          expect(rows[0]?.scope, `${where}'s version scope`).toBe("full");
+          // Kept for the reader and known not to fail on its own:
+          // `content_versions_unit_delta_scope_check` (migration 0015) already
+          // makes `unit_delta IS NULL` follow from `scope = 'full'`, so a
+          // worker that wrote a number here fails the INSERT and the run.
+          expect(rows[0]?.unitDelta, `${where}'s unit_delta`).toBeNull();
+        }
+
+        // THE BADGE AND THE LENS, through the shipped formula: every sentence
+        // of what ships is still the model's, at the master level and at each
+        // channel's.
+        expect(stillAi(drafted, drafted.body, null), `${path}: bodyIsAiVerbatim`).toBe(true);
+        for (const adaptation of drafted.adaptations) {
+          expect(
+            stillAi(drafted, adaptation.body ?? drafted.body, adaptation.id),
+            `${path}: adaptation ${adaptation.id} is not verbatim ai`,
+          ).toBe(true);
+        }
+
+        // THE GATE. Refuses while nobody has opened it, and only the opening
+        // changes that — the same two verdicts for a draft from a stranger's
+        // article as for a draft from a brief.
+        expect(drafted.firstOpenedAt, `${path}: something stamped the read receipt`).toBeNull();
+        expect(gateRefuses(drafted), `${path}: the gate did not refuse an unread draft`).toBe(true);
+
+        const opened = await markOpened(drafted.itemId);
+        expect(opened, `${path}: opening it stamped nothing`).not.toBeNull();
+        expect(
+          gateRefuses({ ...drafted, firstOpenedAt: opened }),
+          `${path}: the gate still refused after it was opened`,
+        ).toBe(false);
+      }
+    }, 80_000);
+  });
 
   it("completes the job for a permanent failure instead of retrying a run that cannot succeed", async () => {
     const seeded = await seed(1);

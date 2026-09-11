@@ -190,6 +190,20 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   grain knows what is no longer there: delete a sentence and every sentence left
   is dimmed while the badge reads "Human-edited". The lens legend says so; do not
   "fix" it by making the badge ignore deletions.
+- **A source is attribution, not verification, and the badge never said
+  otherwise.** A draft may be started from text somebody else wrote — pasted
+  into the compose screen, carried to the researcher, the writer and the editor
+  as a `SOURCE` block. The writer is asked to write *from* it and not to
+  reproduce it (`WRITER.role`), and nothing checks that it did: the model may
+  return a stranger's sentence word for word, and it is then, correctly, a
+  sentence the model wrote — in the first `ai` row, dimmed by the lens, captioned
+  *AI-drafted*. The badge and the lens answer **who typed this**, never **where
+  it came from before that**, and there is no third provenance state; do not
+  invent one. So **no string in the UI, the docs or the changelog may say or
+  imply that a draft is original, or that anything checked it** — and a
+  similarity check is not a small addition but a new promise, where a weak one
+  that misses is worse than none. That is the argument the fact-check label
+  already rests on, one screen over.
 - **Never mask against a concatenation of versions.** `aiSentenceMask` consumes
   each AI sentence at most once on purpose — a human's second copy of a sentence
   the AI wrote once stays human — and joining the versions destroys that count,

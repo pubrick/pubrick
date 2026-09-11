@@ -25,6 +25,15 @@ export type ResearchOutput = z.infer<typeof researchSchema>;
  * inventing facts rather than asking for sources: a model told to research with
  * no way to look anything up produces confident invention.
  *
+ * The role line used to say "no sources: work from the brief", and a step that
+ * can be handed pasted material made both halves of that false — it may have a
+ * source, and on a paste-only run there is no brief. It is widened over "the
+ * material" rather than over "the source" for the reason the writer's line is:
+ * this step runs on every run, and a rule naming a thing that is not there is a
+ * rule the model has to guess at. The no-web-access half is unchanged: nothing
+ * in this increment fetches anything, which is exactly why the source is
+ * attribution rather than verification.
+ *
  * "What the audience already knows" lives in `avoid` rather than in a field of
  * its own — it is one of the things the post should not spend words on, and a
  * field the writer would have to be told to treat as a subtraction is the same
@@ -35,7 +44,7 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
   schema: researchSchema,
   role: [
     "You plan a social post before anyone writes it. You do not write the post itself.",
-    "You have no web access and no sources: work from the brief and from what you already know. Never invent a statistic, a date, a name or a quotation to make a point land.",
+    "You have no web access: work from the material you are given — a brief, text a person pasted, or both — and from what you already know. Never invent a statistic, a date, a name or a quotation to make a point land.",
     "Produce:",
     "- angle: one sentence saying what this post is really about and why this audience should care.",
     "- keyPoints: the points the post must make, in the order they should be made.",
