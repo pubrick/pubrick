@@ -10,6 +10,7 @@ import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
+import ru from "../../../../messages/ru.json";
 import ContentQueuePage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -530,6 +531,102 @@ describe("run strips (Task 10)", () => {
     const resume = release as unknown as (() => void) | null;
     resume?.();
     await waitFor(() => expect(calls.some((c) => c.path.endsWith("/dismiss"))).toBe(true));
+  });
+
+  /**
+   * WHAT A REFUSED RETRY SAYS, when the code's own sentence was written for
+   * another screen.
+   *
+   * `channels_not_in_brand` says "reload the page and pick them again" and
+   * `invalid_request` says "check the form" — both true on the compose form,
+   * both useless here: the person pressing Try again picked nothing, is looking
+   * at no form, and the channels and input in question are the STORED ones the
+   * api just re-read. Neither run can be re-admitted as it stands, and the only
+   * thing a reader can do about either is start a new post.
+   *
+   * Asserted with the shared `Errors.*` sentence ABSENT, so a screen that
+   * quietly fell back to it cannot pass.
+   */
+  describe("a retry the api will never admit", () => {
+    function refuseRetry(calls: Call[], code: string, message: string) {
+      const handlers = mockApi.getMockImplementation();
+      if (!handlers) throw new Error("installHandlers did not install one");
+      mockApi.mockImplementation(async (...args: unknown[]) => {
+        const path = args[0] as string;
+        const method = ((args[1] as RequestInit | undefined)?.method ?? "GET") as string;
+        if (method === "POST" && path.endsWith("/retry")) {
+          calls.push({ path, method });
+          throw new ApiError(400, message, false, code);
+        }
+        return handlers(...(args as Parameters<typeof handlers>));
+      });
+    }
+
+    it("says the run's channels are gone, not that the reader should pick them again", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, {
+        current: [run({ status: "failed", errorCode: "internal" })],
+      });
+      refuseRetry(calls, "channels_not_in_brand", "One or more channels do not belong");
+
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(en.Runs.retryChannelsGone);
+      expect(screen.queryByText(en.Errors.channels_not_in_brand)).not.toBeInTheDocument();
+      // The strip stays: a refused retry leaves the run where its Dismiss is.
+      expect(screen.getByRole("button", { name: en.Runs.tryAgain })).toBeInTheDocument();
+    });
+
+    it("says the run cannot be re-sent as it was, not that there is a form to check", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, {
+        current: [run({ status: "failed", errorCode: "internal" })],
+      });
+      refuseRetry(calls, "invalid_request", "brief: provide a brief, material, or both");
+
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(en.Runs.retryNotRepeatable);
+      expect(screen.queryByText(en.Errors.invalid_request)).not.toBeInTheDocument();
+    });
+
+    /**
+     * ...and only those two. Every other refusal keeps the shared sentence,
+     * including the one a person CAN act on from here — the run cap clears
+     * itself when a run finishes. A screen that answered every refused retry
+     * with "start a new post" would be lying about that one.
+     */
+    it("leaves every other refusal to the sentence it already had", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, {
+        current: [run({ status: "failed", errorCode: "internal" })],
+      });
+      refuseRetry(calls, "run_limit_reached", "Too many runs in flight");
+
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(en.Errors.run_limit_reached.replace("{limit}", "3"));
+      expect(alert).not.toHaveTextContent(en.Runs.retryNotRepeatable);
+      expect(alert).not.toHaveTextContent(en.Runs.retryChannelsGone);
+    });
+
+    /** In the reader's own language, like every other refusal on this screen. */
+    it("speaks Russian to a Russian reader", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, {
+        current: [run({ status: "failed", errorCode: "internal" })],
+      });
+      refuseRetry(calls, "channels_not_in_brand", "One or more channels do not belong");
+
+      render(<ContentQueuePage />, { locale: "ru" });
+      await userEvent.setup().click(await screen.findByRole("button", { name: ru.Runs.tryAgain }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(ru.Runs.retryChannelsGone);
+    });
   });
 
   it("Dismiss clears the strip", async () => {

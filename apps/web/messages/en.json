@@ -320,6 +320,8 @@
     "cancel": "Cancel",
     "stripsTitle": "Generating",
     "tryAgain": "Try again",
+    "retryChannelsGone": "This run's channels are gone; start a new post.",
+    "retryNotRepeatable": "This run can no longer be re-sent as it was; start a new post.",
     "dismiss": "Dismiss",
     "genericError": "Something went wrong. Please try again."
   },

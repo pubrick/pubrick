@@ -22,7 +22,7 @@ import {
   type DeliveryOutcome,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
-import { ApiError, api, errorMessage } from "@/lib/api";
+import { ApiError, api, type ErrorCode, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { channelLabel as platformChannelLabel } from "@/lib/platform";
@@ -49,6 +49,32 @@ const GROUP_STATUSES: readonly ContentStatus[] = [
   "failed",
   ...CONTENT_STATUSES.filter((s) => s !== "failed"),
 ];
+
+/**
+ * TWO REFUSALS THAT ARE TRUE ELSEWHERE AND USELESS HERE.
+ *
+ * `errorMessage` turns a code into the one sentence that fits the screen the
+ * code was designed for, and for these two that screen is the compose form:
+ * "Reload the page and pick them again" (`channels_not_in_brand`) and "Check
+ * the form and try again" (`invalid_request`). A person pressing Try again on
+ * the queue picked nothing and is looking at no form — the run's channels and
+ * the run's input are the stored ones the api just re-read — so both sentences
+ * ask them to do something that does not exist on their screen, about a run
+ * that can never be re-admitted as it stands.
+ *
+ * The honest sentence for both is the same shape: this run is over, start a new
+ * post. It is said HERE, at the one call site where the code means that, rather
+ * than by rewording `Errors.*` — those sentences are right on the compose
+ * screen, which is where the same two codes are also answered.
+ *
+ * Keyed by `ErrorCode` so a member cannot be invented, and PARTIAL so
+ * `ERROR_MESSAGE_KEYS` stays the total map it is: every other code, including
+ * one from an api newer than this build, still goes through `handleError`.
+ */
+const RETRY_REFUSAL_KEYS: Partial<Record<ErrorCode, string>> = {
+  channels_not_in_brand: "retryChannelsGone",
+  invalid_request: "retryNotRepeatable",
+};
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -258,7 +284,17 @@ export default function ContentQueuePage() {
       await refreshRuns();
       router.push(`/${locale}/content/runs/${created.id}`);
     } catch (err) {
-      handleError(err);
+      // A cast, because `ApiError.code` is `string | null` on purpose — it
+      // arrives off the wire, and an api newer than this build can send a code
+      // no union here contains. Looking it up in a PARTIAL record is what makes
+      // that safe: an unknown code finds nothing and falls through to the
+      // screen's ordinary refusal.
+      const retryKey =
+        err instanceof ApiError && err.code !== null
+          ? RETRY_REFUSAL_KEYS[err.code as ErrorCode]
+          : undefined;
+      if (retryKey) setActionError(tr(retryKey));
+      else handleError(err);
     } finally {
       setRetrying(null);
     }

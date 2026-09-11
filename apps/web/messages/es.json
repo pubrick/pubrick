@@ -320,6 +320,8 @@
     "cancel": "Cancelar",
     "stripsTitle": "Generando",
     "tryAgain": "Reintentar",
+    "retryChannelsGone": "Los canales de esta generación ya no existen; crea una publicación nueva.",
+    "retryNotRepeatable": "Esta generación ya no puede reenviarse tal como estaba; crea una publicación nueva.",
     "dismiss": "Descartar",
     "genericError": "Algo salió mal. Inténtalo de nuevo."
   },
