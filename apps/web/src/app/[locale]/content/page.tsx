@@ -159,21 +159,27 @@ const queueSettled = (items: readonly ContentItem[]) =>
 /**
  * THE LOADED QUEUE, DE-DUPLICATED BY ID, PAGE 1 FIRST.
  *
- * The poll refreshes page 1 and leaves the appended pages as they were loaded
- * (see `fetchContent`), so the two halves of what is on screen were read at
+ * A tick re-reads page 1 and the later pages that still hold something moving
+ * (see `fetchContent`), so the halves of what is on screen were read at
  * different moments and can disagree about one row. Two ways, both ordinary:
  *
  * - **A repeat.** Something was deleted above the boundary, so refreshed page 1
  *   now reaches one row further down — into what page 2 already holds. Page 1
  *   is the newer read, so its copy wins and the older one is dropped.
  * - **A gap.** Something was created, so a row that used to be at the bottom of
- *   page 1 is pushed past it, into a stretch no loaded page covers. It is not
- *   drawn until the reader loads more or the screen is reloaded, and NOTHING
- *   HERE PRETENDS OTHERWISE — the sections say what is loaded, not what exists.
+ *   page 1 is pushed past it, into a stretch no loaded page covers. Only a
+ *   RELOAD draws it: `Load more` asks for the boundary BELOW the last loaded
+ *   page, and the gap is above it, so no cursor this screen holds points back
+ *   at it. NOTHING HERE PRETENDS OTHERWISE — the sections say what is loaded,
+ *   not what exists.
  *
- * The alternative — re-reading every loaded page every five seconds — is the
- * unbounded read this whole design removed, one `Load more` press at a time.
+ * The alternative — re-reading every loaded page every five seconds, settled or
+ * not — is the unbounded read this whole design removed, one `Load more` press
+ * at a time.
  */
+/** A page appended by `Load more`, with the cursor that asked for it. */
+type LaterPage = { readonly cursor: string; readonly rows: readonly ContentItem[] };
+
 function loadedQueue(pages: readonly (readonly ContentItem[])[]): ContentItem[] {
   const seen = new Set<string>();
   const items: ContentItem[] = [];
@@ -228,7 +234,13 @@ export default function ContentQueuePage() {
 
   /**
    * The pages loaded by `Load more`, page 2 onwards — page 1 is the poll's own
-   * data and is never in here.
+   * data and is never in here — EACH WITH THE CURSOR IT WAS ASKED FOR BY.
+   *
+   * The entry cursor is kept because it is the only thing that can re-read that
+   * page: it names the boundary the page starts at, and a page is a window on
+   * a fixed sort, so asking for it again answers with that same window as it is
+   * now. Keeping only the trailing cursor (which is all `Load more` needs) left
+   * the refresh below with no way to ask for anything but page 1.
    *
    * Mirrored into a ref because the settle predicate below has to read them and
    * `usePoll` requires a STABLE `isTerminal` (it is an effect dependency: a new
@@ -236,11 +248,26 @@ export default function ContentQueuePage() {
    * ref is written before the state so the predicate sees the page the moment
    * it lands, not after the next render.
    */
-  const [laterPages, setLaterPages] = useState<ContentItem[][]>([]);
-  const laterPagesRef = useRef<ContentItem[][]>([]);
+  const [laterPages, setLaterPages] = useState<LaterPage[]>([]);
+  const laterPagesRef = useRef<LaterPage[]>([]);
   /** The cursor for the page after the last one loaded, or null at the end. */
   const [laterCursor, setLaterCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  /**
+   * The filter as of NOW, for the two requests that can outlive it.
+   *
+   * A `Load more` and a poll tick both read a queue that a chip press can
+   * replace while they are away, and both of them WRITE what they bring back
+   * into the loaded pages. Under a status filter the sections are
+   * `[[status, items]]` — every loaded row is drawn under the chosen status's
+   * heading without being checked against it — so a late answer of the old
+   * filter renders as rows of the new one. A ref rather than state because the
+   * comparison has to be against the value as of the moment the answer lands,
+   * not as of the render the request was dispatched in; it is `usePoll`'s own
+   * generation guard, over the one thing that changes WHICH queue is being
+   * read.
+   */
+  const statusRef = useRef(status);
 
   /**
    * THE POLL STOPS ONLY WHEN NOTHING ON SCREEN IS STILL MOVING — every loaded
@@ -258,29 +285,73 @@ export default function ContentQueuePage() {
    * than stale.
    */
   const contentSettled = useCallback(
-    (page: Page<ContentItem>) => queueSettled(loadedQueue([page.rows, ...laterPagesRef.current])),
+    (page: Page<ContentItem>) =>
+      queueSettled(loadedQueue([page.rows, ...laterPagesRef.current.map((p) => p.rows)])),
     [],
   );
 
-  /**
-   * PAGE 1, AND ONLY PAGE 1. `no-store` for the same reason the runs poll sets
-   * it: a poll exists to see a change, so it must never be answered from the
-   * browser's cache.
-   *
-   * No cursor, so every tick re-reads the newest `CONTENT_PAGE_SIZE` cards
-   * under the current filter. Refreshing the appended pages too would put the
-   * whole loaded queue back on the wire every five seconds — the unbounded read
-   * this design removed — and would do it while the reader is watching a post
-   * go out, which is exactly when the queue is longest.
-   */
-  const fetchContent = useCallback(
-    () =>
-      apiPage<ContentItem>(
-        `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}`,
-        { cache: "no-store" },
-      ),
+  /** One page of the queue under the current filter; no cursor means page 1. */
+  const listUrl = useCallback(
+    (cursor: string | null) =>
+      `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}${
+        cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`
+      }`,
     [status],
   );
+
+  /**
+   * PAGE 1, PLUS EVERY LATER PAGE THAT STILL HOLDS SOMETHING MOVING — AND ONLY
+   * THOSE.
+   *
+   * The predicate and the fetcher have to read the same set, and that is the
+   * whole of this. `contentSettled` above asks about every loaded page, so a
+   * fetcher that can only ever rewrite page 1 makes a `publishing` card on
+   * page 2 a value the poll reads and cannot change: the stop rule never comes
+   * true, the card never finishes, and the tab pays a request every five
+   * seconds for the rest of its life without ever being able to deliver the
+   * update it is paying for.
+   *
+   * Bounded by IN-FLIGHT WORK, not by how many times `Load more` was pressed:
+   * `MAX_CONCURRENT_RUNS` keeps the number of pages holding something
+   * unfinished at one or two in practice, and the set collapses to "page 1
+   * alone" — one request a tick, which is what shipped — the instant everything
+   * settles. Re-reading every loaded page unconditionally is the other thing,
+   * and it is the unbounded read this design removed arriving one press at a
+   * time.
+   *
+   * A refresh does NOT move the `Load more` boundary: `laterCursor` names the
+   * position below the last page loaded, and re-reading a page by its own entry
+   * cursor does not change where the reader has walked to.
+   *
+   * `no-store` for the same reason the runs poll sets it: a poll exists to see
+   * a change, so it must never be answered from the browser's cache.
+   */
+  const fetchContent = useCallback(async () => {
+    const at = statusRef.current;
+    const stale = laterPagesRef.current
+      .map((page, index) => ({ index, page }))
+      .filter(({ page }) => !queueSettled(page.rows));
+    const [first, ...refreshed] = await Promise.all([
+      apiPage<ContentItem>(listUrl(null), { cache: "no-store" }),
+      ...stale.map(({ page }) => apiPage<ContentItem>(listUrl(page.cursor), { cache: "no-store" })),
+    ]);
+    // Written by INDEX onto the ref as it is now, so a `Load more` that landed
+    // while these were away keeps its appended page — and dropped entirely if
+    // the filter moved, because then these are pages of a queue nobody is
+    // looking at. The ref is written before the state for the same reason
+    // `loadMore` writes it first: `contentSettled` runs on the value returned
+    // here, before the next render.
+    if (statusRef.current === at && refreshed.length > 0) {
+      const next = [...laterPagesRef.current];
+      stale.forEach(({ index, page }, i) => {
+        const answer = refreshed[i];
+        if (answer !== undefined) next[index] = { cursor: page.cursor, rows: answer.rows };
+      });
+      laterPagesRef.current = next;
+      setLaterPages(next);
+    }
+    return first as Page<ContentItem>;
+  }, [listUrl]);
   const {
     data: firstPage,
     error: contentError,
@@ -298,13 +369,14 @@ export default function ContentQueuePage() {
    * `fetchContent`'s identity moves with `status`.
    */
   function changeStatus(next: string) {
+    statusRef.current = next;
     laterPagesRef.current = [];
     setLaterPages([]);
     setLaterCursor(null);
     setStatus(next);
   }
 
-  const items = loadedQueue([firstPage?.rows ?? [], ...laterPages]);
+  const items = loadedQueue([firstPage?.rows ?? [], ...laterPages.map((p) => p.rows)]);
   // While nothing beyond page 1 is loaded the next cursor is page 1's own —
   // which the poll keeps current. After that it is the last loaded page's, and
   // page 1's is deliberately ignored: it describes a boundary the reader has
@@ -326,10 +398,16 @@ export default function ContentQueuePage() {
     setActionError(null);
     setLoadingMore(true);
     try {
-      const page = await apiPage<ContentItem>(
-        `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}&cursor=${encodeURIComponent(nextCursor)}`,
-        { cache: "no-store" },
-      );
+      const at = statusRef.current;
+      const page = await apiPage<ContentItem>(listUrl(nextCursor), { cache: "no-store" });
+      // A PAGE OF A QUEUE THE READER HAS LEFT IS DROPPED. A chip pressed while
+      // this was out has already reset the loaded pages, and these rows are of
+      // the old filter — appended, they would be drawn under the new filter's
+      // heading, because with a status active the sections are
+      // `[[status, items]]` and nothing there re-checks a row's own status.
+      // The guard is here rather than on the chip: disabling the filter for a
+      // network round trip is the worse trade.
+      if (statusRef.current !== at) return;
       // A PAGE THAT ARRIVES WITH A DELIVERY STILL MOVING HAS TO RESTART THE
       // POLL, not merely be counted by it. `usePoll` stops the moment a fetched
       // value is terminal and asks again only when something fetches; page 1
@@ -339,7 +417,7 @@ export default function ContentQueuePage() {
       // is not — so an ordinary `Load more` over finished posts stays what it
       // looks like: one request for one page.
       const wasSettled = queueSettled(items);
-      laterPagesRef.current = [...laterPagesRef.current, page.rows];
+      laterPagesRef.current = [...laterPagesRef.current, { cursor: nextCursor, rows: page.rows }];
       setLaterPages(laterPagesRef.current);
       setLaterCursor(page.nextCursor);
       if (wasSettled && !queueSettled(page.rows)) await refreshContent();

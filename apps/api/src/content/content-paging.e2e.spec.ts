@@ -338,6 +338,25 @@ describe.skipIf(!url)("paging the queue", () => {
   });
 
   /**
+   * AND THE STATUS FILTER'S REFUSAL CARRIES A CODE TOO.
+   *
+   * The one refusal on this route that did not. A bare `BadRequestException`
+   * answers with no `code`, so `errorMessage` on the web has nothing to turn
+   * into a sentence and shows the api's English — which is the failure the
+   * cursor refusal three lines above it exists to prevent. The chips cannot
+   * send an unknown status today; a hand-typed URL and the next caller can.
+   */
+  it.each([
+    ["not a status at all", "nope"],
+    ["a status in the wrong case", "DRAFT"],
+    ["empty", ""],
+  ])("400s a status that is %s, with a code a screen can translate", async (_label, status) => {
+    const { agent } = await orgAgent();
+    const refused = await agent.get(`/api/content?status=${status}`).expect(400);
+    expect(refused.body.code).toBe("invalid_request");
+  });
+
+  /**
    * THE CEILING IS REFUSED, NOT CLAMPED.
    *
    * Serving 200 rows to a caller that asked for 5 000 lets it go on believing

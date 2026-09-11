@@ -70,11 +70,18 @@ next 50 is **one `Load more`**, never numbered pages:
   organisation's drafts that a page of fifty cannot make. Moving the grouping
   server-side so a heading could count again was considered and deliberately not
   taken (design 0009 §2c).
-- **The poll refreshes page 1 only.** Re-reading every loaded page every five
-  seconds is the unbounded read this replaced, arriving one press at a time. A
-  row that page 1 has taken over from a later page is drawn once, from page 1's
-  newer copy; a row pushed past the boundary by a new post is not drawn until
-  the reader loads more — which is what "of what is loaded" means, honestly.
+- **The poll refreshes page 1, plus any loaded page that still holds a post on
+  its way out.** Re-reading EVERY loaded page every five seconds is the
+  unbounded read this replaced, arriving one press at a time; refreshing page 1
+  alone is the opposite failure, because the stop rule is asked about every
+  loaded page, so a card sending on page 2 is a thing the poll watches for and
+  can never see. The refresh set is bounded by in-flight work rather than by
+  presses, and collapses to page 1 alone the instant everything settles. A row
+  that page 1 has taken over from a later page is drawn once, from page 1's
+  newer copy; a row pushed past the boundary by a new post is not drawn again
+  until the screen is reloaded — `Load more` asks for the boundary BELOW the
+  last loaded page, not for the gap above it — which is what "of what is loaded"
+  means, honestly.
 
 Infinite scroll was not considered: it takes the decision away from the reader
 and makes the footer unreachable, which is the same objection §10's do-not list

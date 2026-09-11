@@ -1663,6 +1663,60 @@ describe("paging (0009 T5)", () => {
     expect(contentReads(calls).filter((c) => c.path.includes("cursor="))).toHaveLength(1);
   });
 
+  /**
+   * A FILTER CHANGE RACING AN IN-FLIGHT `Load more` DROPS THE PAGE, because the
+   * page is rows of a queue the reader has left.
+   *
+   * `changeStatus` resets the loaded pages, but a request already out knows
+   * nothing about that, and it appends unconditionally when it lands. With a
+   * status filter active the sections are `[[status, items]]` — every loaded
+   * row is drawn under the chosen status's heading WITHOUT being checked
+   * against it — so the old filter's drafts would render, labelled Approved.
+   *
+   * Two clicks a reader reaches by pressing Load more and immediately changing
+   * their mind; the chips stay pressable on purpose, so the guard is on the
+   * answer rather than on the button.
+   */
+  it("drops a page that lands after the filter has changed", async () => {
+    const calls: Call[] = [];
+    const pages = {
+      current: [[item("c1", "First draft", "draft")], [item("c2", "Second draft", "draft")]],
+    };
+    installPages(calls, pages);
+    let release: (() => void) | undefined;
+    const paged = mockApiPage.getMockImplementation() as (
+      ...args: unknown[]
+    ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+    mockApiPage.mockImplementation(async (...args: unknown[]) => {
+      // Answered from the queue AS IT WAS WHEN ASKED, then held: the point of
+      // the test is a page of the OLD filter arriving late, not an empty one.
+      const answer = await paged(...args);
+      if (String(args[0]).includes("cursor=")) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return answer;
+    });
+
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "First draft" });
+    const button = screen.getByRole("button", { name: en.Content.loadMore });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+
+    pages.current = [[item("c3", "Approved post", "approved")]];
+    fireEvent.click(screen.getByRole("tab", { name: en.Content.status.approved }));
+    await screen.findByRole("link", { name: "Approved post" });
+
+    await act(async () => {
+      release?.();
+    });
+
+    expect(screen.queryByRole("link", { name: "Second draft" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Approved post" })).toBeInTheDocument();
+  });
+
   describe("the poll, against pages it did not fetch", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -1678,12 +1732,21 @@ describe("paging (0009 T5)", () => {
     }
 
     /**
-     * SEAM 1 OF DESIGN 0009 §3. The stop rule is asked of the value the poll
-     * just fetched, which is page 1. A post publishing on page 2 would leave
-     * that page settled, the poll would stop, and the card the reader is
-     * watching would sit on "Publishing" until they reloaded the screen.
+     * SEAM 1 OF DESIGN 0009 §3, AND THE WHOLE OF WHAT THE POLL IS FOR.
+     *
+     * The stop rule is asked of the value the poll just fetched, which is
+     * page 1. A post publishing on page 2 would leave that page settled, the
+     * poll would stop, and the card the reader is watching would sit on
+     * "Publishing" until they reloaded the screen.
+     *
+     * Asserted as the DELIVERY, not as a request count. A count only says the
+     * poll is spinning, which is equally true of a poll that is structurally
+     * incapable of seeing the change it is paying for — so this test completes
+     * the send on the later page, requires the card to reach "Published", and
+     * then requires the poll to STOP. All three, because each one alone passes
+     * on a different defect.
      */
-    it("keeps polling while a post on a LATER page is still on its way out", async () => {
+    it("carries a delivery on a LATER page through to terminal, and then stops", async () => {
       const calls: Call[] = [];
       const pages = {
         current: [
@@ -1703,9 +1766,145 @@ describe("paging (0009 T5)", () => {
       });
       expect(screen.getByText(en.Content.adaptationStatus.publishing)).toBeInTheDocument();
 
+      // While that page holds something moving, the tick re-reads page 1 AND
+      // that page, by the page's OWN entry cursor — which is the only request
+      // that can ever carry the update.
       const before = contentReads(calls).length;
-      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 3);
-      expect(contentReads(calls).length).toBeGreaterThan(before);
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      expect(
+        contentReads(calls)
+          .slice(before)
+          .map((c) => c.path),
+      ).toEqual([PAGE_URL, `${PAGE_URL}&cursor=c1`]);
+
+      // The send finishes, on page 2.
+      pages.current = [
+        pages.current[0] as ContentItem[],
+        [item("c2", "Going out", "published", [adaptation({ status: "published" })])],
+      ];
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+
+      const card = screen.getByRole("link", { name: "Going out" }).closest("li") as HTMLElement;
+      expect(within(card).getByText(en.Content.adaptationStatus.published)).toBeInTheDocument();
+
+      // ...and the tab stops paying five seconds a tick for the rest of its life.
+      const settled = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 20);
+      expect(contentReads(calls)).toHaveLength(settled);
+    });
+
+    /**
+     * ...AND NEITHER DOES A TICK'S OWN REFRESH, WHICH IS THE SECOND WRITER.
+     *
+     * `loadMore` is not the only request that can outlive the filter it was
+     * made under: a tick re-reading an unsettled later page writes what it
+     * brings back into the loaded pages too, and a chip pressed while that is
+     * out puts rows of the old queue under the new queue's heading — the same
+     * defect by the other road, and it would also keep the new queue's poll
+     * from ever settling.
+     */
+    it("drops a tick's refresh of a later page when the filter has changed", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "Settled post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+      let release: (() => void) | undefined;
+      let cursorReads = 0;
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        // Answered from the queue AS IT WAS WHEN ASKED, then held — the first
+        // cursor read is `Load more` and must land, the second is the tick's
+        // refresh and is the one caught out by the chip.
+        const answer = await paged(...args);
+        if (String(args[0]).includes("cursor=") && ++cursorReads === 2) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return answer;
+      });
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByText(en.Content.adaptationStatus.publishing)).toBeInTheDocument();
+
+      // A tick goes out, and its page-2 refresh is still away...
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      pages.current = [
+        [item("c3", "Approved post", "approved", [adaptation({ status: "published" })])],
+      ];
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.status.approved }));
+      });
+      await act(async () => {});
+      expect(screen.getByRole("link", { name: "Approved post" })).toBeInTheDocument();
+      await act(async () => {
+        release?.();
+      });
+
+      expect(screen.queryByRole("link", { name: "Going out" })).not.toBeInTheDocument();
+      // ...and the new queue's poll is not held open by a page nobody loaded.
+      const settled = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 20);
+      expect(contentReads(calls)).toHaveLength(settled);
+    });
+
+    /**
+     * THE PAGES A FILTER CHANGE THREW AWAY DO NOT KEEP THE NEW QUEUE'S POLL
+     * ALIVE — the ref half of that reset, which nothing rendered can see.
+     *
+     * `changeStatus` clears the state (which is what is drawn) and the ref
+     * (which is what the stop rule and the refresh set are read from). Only the
+     * first has a witness on screen, so without this the ref reset is free to
+     * be deleted: rows of a filter the reader left would go on being re-read,
+     * and would keep the new filter's poll from ever settling.
+     */
+    it("settles after a filter change throws an unsettled later page away", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "Settled post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByText(en.Content.adaptationStatus.publishing)).toBeInTheDocument();
+
+      // A different queue, and everything in it has finished.
+      pages.current = [
+        [item("c3", "Approved post", "approved", [adaptation({ status: "published" })])],
+      ];
+      const before = contentReads(calls).length;
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.status.approved }));
+      });
+      await act(async () => {});
+
+      // One request for the new queue's page 1, and no request for a page of
+      // the old one.
+      expect(
+        contentReads(calls)
+          .slice(before)
+          .map((c) => c.path),
+      ).toEqual([`${PAGE_URL}&status=approved`]);
+      const settled = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 20);
+      expect(contentReads(calls)).toHaveLength(settled);
     });
 
     it("stops once every loaded page has settled, not only page 1", async () => {
@@ -1731,13 +1930,14 @@ describe("paging (0009 T5)", () => {
     });
 
     /**
-     * THE POLL REFRESHES PAGE 1 AND NOTHING ELSE — counted, because the only
-     * visible difference between refreshing one page and refreshing three is
-     * how many requests leave the browser. Three loaded pages re-read every
-     * five seconds is the unbounded read this design removed, arriving one
-     * `Load more` at a time.
+     * A SETTLED LATER PAGE IS NOT RE-READ — counted, because the only visible
+     * difference between refreshing one page and refreshing three is how many
+     * requests leave the browser. Three loaded pages re-read every five seconds
+     * is the unbounded read this design removed, arriving one `Load more` at a
+     * time; the refresh set is bounded by in-flight work instead, and here the
+     * only thing moving is on page 1.
      */
-    it("re-reads page 1 only, however many pages are loaded", async () => {
+    it("re-reads page 1 only, however many SETTLED pages are loaded", async () => {
       const calls: Call[] = [];
       const inFlight = adaptation({ status: "publishing" });
       const pages = {

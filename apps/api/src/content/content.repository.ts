@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepBrand } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
@@ -1121,8 +1121,13 @@ export class ContentRepository {
    */
   async list(orgId: string, options: ContentListOptions = {}) {
     const { status, cursor: rawCursor } = options;
+    // CODED, like every other refusal on this route. A bare
+    // `BadRequestException` carries no `code`, and `errorMessage` on the web
+    // has nothing to translate — so the reader gets the api's English, which is
+    // the exact failure the cursor refusal below is written to avoid.
     if (status !== undefined && !(CONTENT_STATUSES as readonly string[]).includes(status)) {
-      throw new BadRequestException(
+      throw badRequest(
+        "invalid_request",
         `Unknown status: ${status}. Expected one of: ${CONTENT_STATUSES.join(", ")}`,
       );
     }
@@ -1163,8 +1168,9 @@ export class ContentRepository {
       .orderBy(desc(schema.contentItems.createdAt), desc(schema.contentItems.id))
       // ONE MORE ROW THAN THE PAGE, which is how "is there a next page?" is
       // answered without a second query and without a `COUNT(*)` over the whole
-      // organisation. The extra row is never rendered and never serialised; all
-      // that is read off it is that it exists.
+      // organisation. The extra row is never rendered and never serialised — it
+      // is READ whole, `body` included, because the projection is
+      // `ITEM_COLUMNS`, which is one row's worth of waste per page.
       .limit(limit + 1);
     const hasNext = page.length > limit;
     const items = hasNext ? page.slice(0, limit) : page;
