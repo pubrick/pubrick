@@ -25,6 +25,7 @@ import {
   type RefineProposal,
   type RefineRequest,
   type RefineVerb,
+  type RunInput,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -814,8 +815,9 @@ export class ContentRepository {
   }
 
   /**
-   * The id of the run that produced this item, or `null` — the receipt's
-   * address, in the reverse direction.
+   * The run that produced this item — its id and what it was asked for — or
+   * `null`. The receipt's address, in the reverse direction, plus the
+   * attribution the draft screen shows beside it.
    *
    * On the ITEM's response rather than behind a `GET /api/runs?contentItemId=`
    * lookup, for three reasons. The item screen already reads this endpoint, and
@@ -837,11 +839,30 @@ export class ContentRepository {
    *
    * `org_id` is in the predicate and is not decoration: the FK does not require
    * a run and its item to share an org, so without it an item could be made to
-   * name a stranger's receipt.
+   * name a stranger's receipt — and, since this now returns the run's `input`
+   * as well, to reprint the article that stranger pasted as this draft's own
+   * provenance.
+   *
+   * `input` rides along on a query that already runs, which is what the whole
+   * source strip costs: no new index (the read is by `(org_id,
+   * content_item_id)` under `pipeline_runs_org_id_idx`, exactly as the shipped
+   * link is) and no new endpoint. WHAT IT CANNOT DO, and the cost the design
+   * accounted as zero: a draft whose run row was deleted keeps its body and
+   * loses its attribution. `content_item_id` is `ON DELETE SET NULL` and
+   * carries no unique constraint, the run is deletable, and a `content_items`
+   * row holds no source of its own — so the attribution is only as durable as
+   * the run behind it, and there is no second place to read it from.
+   *
+   * `get()` only. `list()` does not read a run today and must not start: a
+   * queue card says nothing about a source, and a list that carried one would
+   * ship every open item's pasted article to draw cards that never mention it.
    */
-  private async runIdFor(orgId: string, contentItemId: string): Promise<string | null> {
+  private async runFor(
+    orgId: string,
+    contentItemId: string,
+  ): Promise<{ id: string; input: RunInput } | null> {
     const rows = await db
-      .select({ id: schema.pipelineRuns.id })
+      .select({ id: schema.pipelineRuns.id, input: schema.pipelineRuns.input })
       .from(schema.pipelineRuns)
       .where(
         and(
@@ -851,7 +872,7 @@ export class ContentRepository {
       )
       .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
       .limit(1);
-    return rows[0]?.id ?? null;
+    return rows[0] ?? null;
   }
 
   async get(orgId: string, id: string) {
@@ -865,10 +886,10 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions, runId, refineProposal] = await Promise.all([
+    const [adaptations, aiVersions, run, refineProposal] = await Promise.all([
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
-      this.runIdFor(orgId, item.id),
+      this.runFor(orgId, item.id),
       this.stagedProposal(orgId, item.id),
     ]);
     /**
@@ -898,7 +919,19 @@ export class ContentRepository {
        * from the finished draft (dossier §6.3). `null` for a hand-written item
        * — the ordinary case — and for one whose run row is gone.
        */
-      runId,
+      runId: run?.id ?? null,
+      /**
+       * What that run was asked for, so the draft can say where it came from —
+       * "drafted from pasted text", with the host of the source as attribution
+       * — without a second request against a run this screen would then have to
+       * keep in step with the item it polls.
+       *
+       * The WHOLE input, not two flattened attribution fields: `RunInput` is
+       * the column's own schema and the only thing the compiler can hold both
+       * ends of this wire to, and a flattened pair would be a third
+       * hand-written description of a column that has two already.
+       */
+      runInput: run?.input ?? null,
       /**
        * The origin badge's answer — computed here rather than in the browser,
        * because the QUEUE has to be able to give it too and the queue has no

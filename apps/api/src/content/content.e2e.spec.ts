@@ -5756,6 +5756,173 @@ describe.skipIf(!url)("content e2e", () => {
     });
   });
 
+  /**
+   * WHERE THE DRAFT CAME FROM.
+   *
+   * The item's own response carries the run's `input`, not just its id, so the
+   * draft screen can say "drafted from pasted text" without a second request
+   * against a run it would then have to keep in step with the item it polls.
+   * The `org_id` predicate on that read is the whole of its blast radius: the
+   * foreign key does not require a run and its item to share an org.
+   */
+  describe("the source a draft was drafted from", () => {
+    const SOURCE_INPUT = {
+      kind: "source" as const,
+      text: "Keep it to two paragraphs.",
+      sourceUrl: "https://www.example.com/news/story",
+      material: "The council voted on Tuesday to fund the new library wing.",
+      channelIds: [randomUUID()],
+    };
+    const BRIEF_INPUT = {
+      kind: "brief" as const,
+      text: "Write about the vote.",
+      channelIds: [randomUUID()],
+    };
+
+    /**
+     * A run row pointing at an item, written from underneath the API: the only
+     * other way to make one is to spend money on a real generation, and the
+     * cross-org case below cannot be made through the API at all.
+     */
+    async function seedRun(
+      orgId: string,
+      brandId: string,
+      contentItemId: string,
+      input: typeof SOURCE_INPUT | typeof BRIEF_INPUT,
+      createdAt?: Date,
+    ): Promise<string> {
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const inserted = await db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId,
+          brandId,
+          contentItemId,
+          input,
+          status: "succeeded",
+          ...(createdAt ? { createdAt } : {}),
+        })
+        .returning({ id: schema.pipelineRuns.id });
+      await pool.end();
+      return inserted[0]?.id as string;
+    }
+
+    /** An item, its brand and its org — everything a seeded run needs to name. */
+    async function draftWithBrand() {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+      return { agent, brandId, itemId, orgId: await orgOf(itemId) };
+    }
+
+    it("carries the pasted material and its URL, exactly as the run stored them", async () => {
+      const { agent, brandId, itemId, orgId } = await draftWithBrand();
+      const runId = await seedRun(orgId, brandId, itemId, SOURCE_INPUT);
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+      expect(item.body.runId).toBe(runId);
+      expect(item.body.runInput).toEqual(SOURCE_INPUT);
+    });
+
+    it("carries the brief arm for a run started from a brief", async () => {
+      const { agent, brandId, itemId, orgId } = await draftWithBrand();
+      await seedRun(orgId, brandId, itemId, BRIEF_INPUT);
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+      expect(item.body.runInput).toEqual(BRIEF_INPUT);
+    });
+
+    it("is null on a hand-written draft, which no run made", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+
+      const item = await agent.get(`/api/content/${created.body.id as string}`).expect(200);
+
+      expect(item.body.runId).toBeNull();
+      expect(item.body.runInput).toBeNull();
+    });
+
+    /**
+     * THE MUTATION MOST WORTH KILLING. Drop `org_id` from the join and this
+     * item names a stranger's run — and hands back the text that stranger
+     * pasted, on a screen that presents it as this draft's own provenance.
+     */
+    it("never reads a run that belongs to another org", async () => {
+      const { agent, itemId } = await draftWithBrand();
+      const stranger = await orgAgent();
+      const strangerBrand = await brandWithChannel(stranger);
+      const strangerItem = await stranger
+        .post("/api/content")
+        .send({
+          brandId: strangerBrand.brandId,
+          body: "Their own draft",
+          channelIds: [strangerBrand.channelId],
+        })
+        .expect(201);
+      const strangerOrgId = await orgOf(strangerItem.body.id as string);
+      // The run points at THIS org's item from THAT org's row — the shape the
+      // foreign key permits and the predicate refuses.
+      await seedRun(strangerOrgId, strangerBrand.brandId, itemId, SOURCE_INPUT);
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+      expect(item.body.runId).toBeNull();
+      expect(item.body.runInput).toBeNull();
+    });
+
+    /**
+     * THE SECOND RUN, which the column permits and the writer does not make.
+     *
+     * `content_item_id` carries no unique constraint, so "at most one" is a
+     * fact about the writer rather than one the database enforces. Unordered,
+     * this read hands back whichever row the planner reaches first — and now
+     * that it returns the run's INPUT, that is not merely a link that changes
+     * on refresh but a different article named as this draft's source. The
+     * rows are written newest-first so that heap order and `created_at` order
+     * disagree: an unordered read answers with the later one.
+     */
+    it("names the FIRST run of an item, not whichever row the planner reaches", async () => {
+      const { agent, brandId, itemId, orgId } = await draftWithBrand();
+      const later = { ...SOURCE_INPUT, material: "A later paste, from a re-run." };
+      await seedRun(orgId, brandId, itemId, later, new Date("2026-08-02T00:00:00.000Z"));
+      const firstRunId = await seedRun(
+        orgId,
+        brandId,
+        itemId,
+        SOURCE_INPUT,
+        new Date("2026-08-01T00:00:00.000Z"),
+      );
+
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+
+      expect(item.body.runId).toBe(firstRunId);
+      expect(item.body.runInput).toEqual(SOURCE_INPUT);
+    });
+
+    /**
+     * ...and NOT on the list rows. A queue card says nothing about a source,
+     * and a list that carried one would ship every open item's pasted article
+     * — up to 8000 characters each — to draw cards that never mention them.
+     */
+    it("stays off the list, which draws no source", async () => {
+      const { agent, brandId, itemId, orgId } = await draftWithBrand();
+      await seedRun(orgId, brandId, itemId, SOURCE_INPUT);
+
+      const list = await agent.get("/api/content").expect(200);
+
+      const row = (list.body as { id: string }[]).find((item) => item.id === itemId);
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty("runInput");
+    });
+  });
+
   describe("coded refusals", () => {
     /** A post whose text is pinned, plus the ids to aim at it. */
     async function approvedPost(agent: request.Agent) {

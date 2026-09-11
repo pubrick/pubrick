@@ -82,6 +82,10 @@ const item = {
   aiVersionBodies: { item: ["Hello world"], adaptations: {} },
   runId: null,
   refineProposal: null,
+  // The api returns this key on every item — `null` here, for a draft no run
+  // pasted anything into. Omitting it made this fixture a body the api cannot
+  // produce, and the screen's source strip read `.kind` off `undefined`.
+  runInput: null,
 };
 
 const run = {

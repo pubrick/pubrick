@@ -3,6 +3,7 @@ import type {
   ContentStatus,
   DeliveryOutcome,
   RefineProposal,
+  RunInput,
 } from "@pubrick/shared";
 import {
   adaptationUpdateSchema,
@@ -62,6 +63,8 @@ type ContentItem = {
   runId: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
+  /** What that run was asked for — the source strip's input. */
+  runInput: RunInput | null;
 };
 
 type Channel = { id: string; platform: string; name: string };
@@ -107,6 +110,9 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
     refineProposal: null as RefineProposal | null,
+    // ...and this one. The api returns the key on every item, `null` for the
+    // hand-written draft that no run made.
+    runInput: null as RunInput | null,
     ...overrides,
   };
   return {
@@ -1428,6 +1434,38 @@ describe("the way back to the run that made this", () => {
     await screen.findByRole("link", { name: en.Runs.viewRun });
     expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: en.Runs.viewRun })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ...and the input it carries reaches the strip. The strip's own branches are
+   * pinned in `source-strip.test.tsx`; this is the one assertion that the
+   * screen actually hands it the item's `runInput` — the wire, not the widget.
+   */
+  it("shows what the draft was drafted from, above the body it produced", async () => {
+    const runInput: RunInput = {
+      kind: "source",
+      text: null,
+      sourceUrl: "https://example.com/story",
+      material: "The council voted on Tuesday.",
+      channelIds: ["11111111-1111-4111-8111-111111111111"],
+    };
+    installBaseHandlers({ current: makeItem({ runId: RUN_ID, runInput }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByTestId("source-strip-material")).toHaveTextContent(
+      "The council voted on Tuesday.",
+    );
+    expect(screen.getByText(en.Runs.pastedLabel)).toBeInTheDocument();
+  });
+
+  it("says nothing about a source on a hand-written draft", async () => {
+    installBaseHandlers({ current: makeItem({ runId: null, runInput: null }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByText(en.Publish.backToQueue);
+    expect(screen.queryByTestId("source-strip")).not.toBeInTheDocument();
   });
 });
 

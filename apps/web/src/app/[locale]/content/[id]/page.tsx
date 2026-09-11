@@ -32,6 +32,8 @@ import { isLinkableUrl } from "@/lib/external-url";
 import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
+import type { RunInput } from "@/lib/runs";
+import { SourceStrip } from "./source-strip";
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -103,6 +105,11 @@ type ContentItem = {
    * after any of those — there is no separate GET.
    */
   refineProposal: RefineProposal | null;
+   * What that run was asked for — the source strip's whole input, or `null`
+   * for a hand-written draft. `RunInput` is the column's own schema, so this
+   * screen and the api describe one shape rather than two.
+   */
+  runInput: RunInput | null;
 };
 
 /**
@@ -881,6 +888,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
 
       <Card className="mb-6">
+        <SourceStrip input={item.runInput} />
         <div ref={editorRef}>
           {/*
             ONE control, in the card's header, always mounted — never a toolbar
