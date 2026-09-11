@@ -1,6 +1,6 @@
 {
-  "id": "ab2b5c3e-416b-458c-a3da-8473225fbc48",
-  "prevId": "b568ec82-93cc-488e-95f5-60fe173e5cd6",
+  "id": "a21ec057-c78a-4dcb-860f-48eebbb82279",
+  "prevId": "4b39dfba-651c-4bc0-972f-ad9bf8d1b579",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1251,7 +1251,7 @@
       "checkConstraints": {
         "content_items_status_check": {
           "name": "content_items_status_check",
-          "value": "\"content_items\".\"status\" in ('draft', 'approved', 'rejected', 'published', 'failed')"
+          "value": "\"content_items\".\"status\" in ('draft', 'approved', 'partially_published', 'rejected', 'published', 'failed')"
         },
         "content_items_origin_check": {
           "name": "content_items_origin_check",
