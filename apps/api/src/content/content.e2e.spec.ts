@@ -2210,6 +2210,65 @@ describe.skipIf(!url)("content e2e", () => {
     expect(new Date(rows[1]?.start_after as string).toISOString()).toBe(second);
   });
 
+  /**
+   * A POST THAT MISSED ITS SLOT MUST NOT BE UNSENDABLE FOR EVER.
+   *
+   * The worker fails a delivery whose slot passed more than
+   * `PUBLISH_MAX_LATENESS_HOURS` ago, and it leaves `scheduled_at` where it was
+   * — nothing clears it on failure, and the stored sentence names it. The only
+   * way back is "Publish now", which works because this method writes
+   * `scheduled_at` UNCONDITIONALLY. Written conditionally — the tempting
+   * `...(scheduledAt && { scheduledAt })` — the re-approved row would carry the
+   * same overdue slot, the worker would find itself past the bound again, and
+   * the post could never be sent by any route: an infinite refusal loop with a
+   * 200 in front of it.
+   */
+  it("publish-now clears the slot a missed post is still carrying", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Missed the window", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    // Exactly what the worker's bound leaves behind: `failed`, with the slot
+    // still on the row and the coded reason beside it. Written directly because
+    // `approve` refuses a past time, which is why an outage is the only way to
+    // reach this shape at all.
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "failed",
+          scheduledAt: sql`now() - interval '26 hours'`,
+          lastError: "Missed its scheduled slot: ...",
+          failureReason: "schedule_missed",
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      const now = await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+      expect(now.body.adaptations[0].status).toBe("queued");
+      expect(now.body.adaptations[0].scheduledAt).toBeNull();
+
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      // The slot is gone from the row itself, not merely from the response.
+      expect(row?.scheduledAt).toBeNull();
+      // And so is the verdict, beside the `last_error` this method already
+      // cleared — otherwise the screen would caption a live delivery "Missed
+      // its slot".
+      expect(row?.failureReason).toBeNull();
+      expect(row?.lastError).toBeNull();
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("approve now on a scheduled item actually publishes now: the old job is cancelled and a fresh one is queued", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

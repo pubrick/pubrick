@@ -2981,8 +2981,20 @@ export class ContentRepository {
           .update(schema.adaptations)
           .set({
             status: scheduledAt ? "scheduled" : "queued",
+            // `null` FOR "PUBLISH NOW", and that is load-bearing rather than
+            // incidental. A row that missed its slot is `failed` with the slot
+            // still on it; "Publish now" has to erase the slot, or the worker
+            // would load the same overdue `scheduled_at`, find itself past the
+            // bound again, and fail the row for ever — a post nobody could ever
+            // send. Writing it conditionally (`...(scheduledAt && { scheduledAt })`)
+            // is exactly that loop.
             scheduledAt,
             lastError: null,
+            // Beside the `lastError` it already clears, for the same reason:
+            // the row is outstanding again and the previous attempt's verdict
+            // is not its verdict. Leaving the code would have the screen
+            // caption a re-approved row "Missed its slot".
+            failureReason: null,
             attemptCount,
           })
           .where(
@@ -3122,6 +3134,13 @@ export class ContentRepository {
           // answer somebody just gave. There is no platform error to report in
           // its place, because no platform answered.
           lastError: null,
+          // The code goes with the sentence, on both verdicts and for the same
+          // reason. A person who looked at the channel and said "not delivered"
+          // has replaced `outcome_unknown` with their own word, and none of the
+          // nine coded reasons is a human verdict — the provenance of this one
+          // lives on the receipt (`asserted_by`), which is where a reader that
+          // must not render a person's word as a platform's already looks.
+          failureReason: null,
         })
         .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
 
@@ -3256,6 +3275,9 @@ export class ContentRepository {
             // to "nothing has been attempted", and leaving the last platform
             // error behind makes a rejected adaptation look like a failed one.
             lastError: null,
+            // And the coded half of that same sentence, which a screen reads
+            // instead of the prose.
+            failureReason: null,
           })
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),

@@ -1,0 +1,44 @@
+-- 0019 — a failed delivery says WHICH kind of failure it was, not only what the
+-- platform's own sentence happened to read.
+--
+-- WHY A COLUMN AND NOT A SENTENCE. `adaptations.last_error` is free `text`
+-- printed verbatim on the content screens. It is the only place a delivery's
+-- reason has ever lived, and it is written by the platform on the one class
+-- where free text must remain (`platform_rejected` — Telegram writes it). A
+-- reader that has to ask which KIND of failure this was therefore has to key
+-- off a worker sentence's prefix, which this product has already shipped once:
+-- `apps/web/src/lib/adaptations.ts` carries the note about a reworded log line
+-- turning every unknown delivery back into a plain red Failed. The code says
+-- the class; the sentence keeps the platform's own words.
+--
+-- WHAT MADE IT NECESSARY NOW. The worker gained a bound on how late a
+-- scheduled post may still go out (`PUBLISH_MAX_LATENESS_HOURS`). Beyond it the
+-- delivery is `failed` having sent nothing, and the screen has to be able to
+-- offer the re-send it already has — which means telling that failure apart
+-- from a bad credential, without reading either one's prose.
+--
+-- NULLABLE, AND WHAT NULL MEANS. Every terminal writer of `adaptations.status`
+-- sets it, and every writer that moves a row OFF a verdict clears it in the
+-- same statement that clears `last_error` (`approve`, `reject`, the delivery
+-- resolver, `markPublished`, `markPublishing`); a ratchet over every
+-- `.set({ status:` on this table asserts exactly that. The column is nullable
+-- only because it lands on a populated table: NULL is what rows that failed
+-- BEFORE this migration carry, and the screens render those from `last_error`
+-- as they always did. Back-filling them is not possible — nothing can
+-- retroactively learn why a delivery in someone's database failed last month —
+-- and guessing `platform_rejected` would put a claim about a platform on rows
+-- that may never have reached one.
+--
+-- NO PREFLIGHT, unlike 0009's CHECK constraints, and for 0012's reason: this
+-- constraint arrives WITH the column it constrains, every existing row's value
+-- is NULL, `NULL in (…)` evaluates to NULL, and a CHECK admits NULL. There is
+-- nothing here for a preflight to find on any database.
+--
+-- ADDITIVE. One nullable column and one CHECK over it. No row is rewritten, no
+-- existing value can stop being valid, and every statement is valid against a
+-- database already holding adaptations. Nothing the WORKER reads changes shape
+-- in a way an older worker would choke on either — an old worker simply never
+-- writes the column — so `docs/self-hosting.md` §Upgrade's "worker first is
+-- always safe" stays true unamended.
+ALTER TABLE "adaptations" ADD COLUMN "failure_reason" text;--> statement-breakpoint
+ALTER TABLE "adaptations" ADD CONSTRAINT "adaptations_failure_reason_check" CHECK ("adaptations"."failure_reason" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'retries_exhausted', 'send_abandoned', 'outcome_unknown'));

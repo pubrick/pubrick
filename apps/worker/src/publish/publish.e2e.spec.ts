@@ -63,6 +63,13 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   let server: http.Server;
   let orgId: string;
   let brandId: string;
+  /**
+   * The bound the worker was actually configured with, read from the real env
+   * module so the numbers below track it rather than restating a default. Taken
+   * in `beforeAll` like every other module here, because `../env` is evaluated
+   * at import time and this file sets `DATABASE_URL` before it imports anything.
+   */
+  let boundHours: number;
   let service: InstanceType<PublishServiceCtor>;
   const fakeResponses = new Map<string, FakeTelegramResponse>();
   /** Per-chat script, consumed in order; falls back to `fakeResponses`. */
@@ -124,6 +131,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     schema = dbModule.schema;
     ({ db, pool } = dbModule.createDb(url as string));
     ({ eq, sql } = await import("drizzle-orm"));
+
+    boundHours = (await import("../env")).env.PUBLISH_MAX_LATENESS_HOURS;
 
     const { PgBoss } = await import("pg-boss");
     boss = new (PgBoss as PgBossCtor)(url as string);
@@ -629,6 +638,251 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   }, 25_000);
 
   /**
+   * THE 26-HOUR OUTAGE, end to end — the failure this whole increment exists
+   * for, through the real queue, the real repository and the real adapter.
+   *
+   * Approve Monday 17:00 for Tuesday 09:00; the worker dies Tuesday 08:00 and
+   * comes back Wednesday 10:00. NOTHING expires a waiting pg-boss job in
+   * between — `expireInSeconds` bounds a handler that has STARTED, and the only
+   * other clock deletes the job after fourteen days — so the job is simply
+   * fetched a day late and, before this, the post went out 25 hours late and
+   * `published`, indistinguishable from on time.
+   *
+   * The row is inserted with its slot ALREADY IN THE PAST, directly, because
+   * `approve` refuses a past time. That is what a real outage produces (the
+   * clock moved, not the row), and it means no test here exercises approve →
+   * `startAfter` → a job becoming due. Stated rather than hidden.
+   */
+  describe("a slot that came and went", () => {
+    /**
+     * A `scheduled` adaptation whose slot passed `hoursAgo` ago, with a live
+     * pg-boss job for it — the shape a worker finds when it wakes up.
+     *
+     * The backdating is written straight onto `scheduled_at` with Postgres's own
+     * `now()`: the comparison under test belongs to the database, so a test that
+     * supplied a JavaScript `Date` would be measuring the two clocks this code
+     * exists to keep apart.
+     */
+    async function scheduledInThePast(chatId: string, hoursAgo: number) {
+      const { adaptationId, channelId } = await seedQueuedAdaptation(chatId);
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "scheduled",
+          scheduledAt: sql`now() - make_interval(hours => ${hoursAgo})`,
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+      return { adaptationId, channelId };
+    }
+
+    /** Hard 20s timeout: a hang here must fail loudly, never block the suite. */
+    async function waitForTerminal(adaptationId: string) {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const [row] = await db
+          .select()
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.id, adaptationId));
+        if (row && (row.status === "failed" || row.status === "published")) return row;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      throw new Error(`Timed out after 20s waiting for adaptation ${adaptationId} to end`);
+    }
+
+    it("fails a post the outage made a day late, sends nothing, and completes the job", async () => {
+      const chatId = `-100${Date.now()}20`;
+      // Configured to ACCEPT: if the handler sends, the post goes through and
+      // this test sees it.
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: { ok: true, result: { message_id: 2601, chat: { id: Number(chatId) } } },
+      });
+      const { adaptationId } = await scheduledInThePast(chatId, boundHours + 20);
+
+      const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+      const row = await waitForTerminal(adaptationId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("schedule_missed");
+      expect(row.lastError).toContain("Missed its scheduled slot");
+      // The hours, frozen into the sentence at refusal — within a window,
+      // because the seed and the read are separate statements.
+      const hours = Number(/(\d+\.\d) h later/.exec(row.lastError ?? "")?.[1]);
+      expect(hours).toBeGreaterThanOrEqual(boundHours + 19.9);
+      expect(hours).toBeLessThanOrEqual(boundHours + 20.1);
+
+      // NOTHING reached the platform.
+      expect(sendCounts.get(chatId)).toBeUndefined();
+      // The claim this attempt took became the `failed` receipt — not left
+      // `in_flight` (which would block every future attempt for ever), and not
+      // deleted (which would leave the delivery log silent about a refusal).
+      const publication = await publicationFor(adaptationId);
+      expect(publication?.status).toBe("failed");
+      expect(publication?.externalId).toBeNull();
+      // And the handler RETURNED: a rethrow here would have pg-boss retry a job
+      // that can only ever reach this same line again.
+      expect((await waitForJobState(jobId)).state).toBe("completed");
+    }, 25_000);
+
+    it("publishes a post that is late by less than the bound", async () => {
+      const chatId = `-100${Date.now()}21`;
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: 2602, chat: { id: Number(chatId), username: "stillfine" } },
+        },
+      });
+      // A sixth of the bound — an hour at the default, and still an hour at any
+      // other configured value, which is what keeps this test honest about the
+      // BOUND rather than about the number six.
+      const { adaptationId } = await scheduledInThePast(chatId, boundHours / 6);
+
+      const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+
+      const row = await waitForTerminal(adaptationId);
+      expect(row.status).toBe("published");
+      expect(row.failureReason).toBeNull();
+      expect(sendCounts.get(chatId)).toBe(1);
+      expect((await waitForJobState(jobId)).state).toBe("completed");
+    }, 25_000);
+
+    /**
+     * THE OTHER SIDE: a human moved the slot FORWARD while the old job was
+     * already active. Driven by hand rather than through the queue, because the
+     * whole assertion is that this delivery is left EXACTLY as the person set
+     * it — there is no state change to wait for.
+     */
+    it("touches nothing when the slot has been moved into the future", async () => {
+      const chatId = `-100${Date.now()}22`;
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: { ok: true, result: { message_id: 2603, chat: { id: Number(chatId) } } },
+      });
+      const { adaptationId } = await scheduledInThePast(chatId, boundHours + 20);
+      // The re-approve: a new time, in the future, and the count the api bumps.
+      await db
+        .update(schema.adaptations)
+        .set({
+          scheduledAt: sql`now() + interval '3 hours'`,
+          attemptCount: 1,
+          lastError: null,
+          failureReason: null,
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      await expect(service.handle({ adaptationId, orgId })).resolves.toBeUndefined();
+
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      // Still the person's row: their status, their count, no verdict of ours.
+      expect(row).toMatchObject({ status: "scheduled", attemptCount: 1, failureReason: null });
+      expect(sendCounts.get(chatId)).toBeUndefined();
+      // AND NO CLAIM LEFT BEHIND. This is the half a "return without failing"
+      // placed after `claimSend` would get wrong: the job for the new slot would
+      // be refused the claim and would report an unknown outcome about a post
+      // nobody ever sent.
+      expect(await publicationFor(adaptationId)).toBeUndefined();
+    }, 25_000);
+
+    /**
+     * THE RE-SEND THE SCREEN OFFERS, and the loop it must not become.
+     *
+     * "Publish now" writes `scheduled_at = null`. If it wrote the slot
+     * conditionally instead, the re-approved row would carry the SAME overdue
+     * slot, the worker would find itself past the bound again, and the post
+     * could never be sent by any route. The api's own e2e kills that mutation
+     * on `approve`; this is the worker half — a row re-approved the way
+     * `approve` leaves it does go out.
+     */
+    it("sends a missed post when it is re-approved for now", async () => {
+      const chatId = `-100${Date.now()}23`;
+      fakeResponses.set(chatId, {
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: 2604, chat: { id: Number(chatId), username: "resent" } },
+        },
+      });
+      const { adaptationId } = await scheduledInThePast(chatId, boundHours + 20);
+      await service.handle({ adaptationId, orgId });
+      expect(await waitForTerminal(adaptationId)).toMatchObject({
+        status: "failed",
+        failureReason: "schedule_missed",
+      });
+
+      // Exactly what `approve(orgId, id, null)` leaves behind.
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "queued",
+          scheduledAt: null,
+          lastError: null,
+          failureReason: null,
+          attemptCount: 1,
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+      const row = await waitForTerminal(adaptationId);
+      expect(row.status).toBe("published");
+      expect(row.failureReason).toBeNull();
+      expect(sendCounts.get(chatId)).toBe(1);
+    }, 25_000);
+
+    /**
+     * THE REASON CONTRACT, over a row that fails twice for different causes.
+     *
+     * A nullable column written by one branch and cleared by none is a stale
+     * flag: a later credentials failure would leave `schedule_missed` standing
+     * beside a decryption sentence, and the screen would caption it "Missed its
+     * slot". Both failures here go through the REAL path, so what is asserted is
+     * what the product writes rather than what a helper agrees to.
+     */
+    it("moves the reason to the failure that actually happened", async () => {
+      const chatId = `-100${Date.now()}24`;
+      fakeResponses.set(chatId, {
+        status: 403,
+        body: { ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" },
+      });
+      const { adaptationId } = await scheduledInThePast(chatId, boundHours + 20);
+
+      await service.handle({ adaptationId, orgId });
+      expect(await waitForTerminal(adaptationId)).toMatchObject({
+        failureReason: "schedule_missed",
+      });
+      expect(sendCounts.get(chatId)).toBeUndefined();
+
+      // Re-approved for now — and this time the platform is the one that says no.
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "queued",
+          scheduledAt: null,
+          lastError: null,
+          failureReason: null,
+          attemptCount: 1,
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      await service.handle({ adaptationId, orgId });
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(row?.status).toBe("failed");
+      expect(row?.failureReason).toBe("platform_rejected");
+      expect(row?.lastError).toContain("Forbidden");
+      expect(sendCounts.get(chatId)).toBe(1);
+    }, 25_000);
+  });
+
+  /**
    * FINDING 2: the publish queue's copy of the stuck-forever hole the generate
    * sweep closed, and the one place the two sweeps must NOT behave alike.
    *
@@ -727,6 +981,9 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       // distinction to the human, and the publications row carries it to the
       // machine.
       expect(row?.lastError).toContain("check the channel before re-approving");
+      // And the same distinction as a CODE, decided against the same snapshot
+      // as the sentence so the two on one row can never disagree.
+      expect(row?.failureReason).toBe("outcome_unknown");
       // Counted once, by markPublishing, and not again here.
       expect(row?.attemptCount).toBe(1);
 
@@ -754,6 +1011,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       expect(row?.status).toBe("failed");
       expect(row?.lastError).toContain("nothing was delivered");
       expect(row?.lastError).not.toContain("check the channel");
+      expect(row?.failureReason).toBe("send_abandoned");
 
       const pubs = await publicationsOf(adaptationId);
       expect(pubs).toHaveLength(1);

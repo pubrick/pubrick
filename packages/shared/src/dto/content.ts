@@ -180,6 +180,56 @@ export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknow
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
 /**
+ * WHY A DELIVERY ENDED — `adaptations.failure_reason`, the CLASS of a failure
+ * as opposed to the sentence about it.
+ *
+ * `last_error` is free `text` printed verbatim on the content screens, and the
+ * web has already been burned keying behaviour off a worker sentence's prefix
+ * (`apps/web/src/lib/adaptations.ts`: a reworded log line turned every unknown
+ * delivery back into a plain red Failed). A reader that has to ask WHICH kind
+ * of failure this was — the screen captioning a missed slot, a future report,
+ * an operator filtering — asks this column, and the sentence stays free text
+ * for the platform's own words.
+ *
+ * CLOSED OVER TODAY'S TERMINAL WRITES, and `null` is not an "other" bucket.
+ * Every write that lands an adaptation in `failed` names one of these, so the
+ * column always answers for the row's CURRENT verdict; every write that moves
+ * the row OFF a verdict (`markPublished`, `markPublishing`, `approve`,
+ * `reject`, the delivery resolver) clears it in the same statement that clears
+ * `lastError`. `null` survives for exactly one population: rows that failed
+ * BEFORE the column existed, which the screens render from `last_error` as
+ * they always did.
+ *
+ * Pinned in the database as well as in the types
+ * (`adaptations_failure_reason_check`), like every other closed set here.
+ */
+export const PUBLISH_FAILURE_REASONS = [
+  /** The slot came and went while nothing could deliver it — see `PUBLISH_MAX_LATENESS_HOURS`. */
+  "schedule_missed",
+  /** No publisher is registered for the channel's platform. */
+  "no_adapter",
+  /** The stored credential blob would not decrypt — a key is gone or the ciphertext is corrupt. */
+  "credentials_unreadable",
+  /** The channel row the credentials live on has been deleted. */
+  "credentials_missing",
+  /** The stored credentials do not satisfy the adapter's own schema. */
+  "credentials_invalid",
+  /** The platform itself refused the post, permanently. */
+  "platform_rejected",
+  /** pg-boss spent the queue's retries on transient failures and dead-lettered the job. */
+  "retries_exhausted",
+  /** An attempt stopped before it reached the platform and no job is left to retry it. */
+  "send_abandoned",
+  /**
+   * The request left this process and the answer never came back: a post MAY be
+   * live. The one reason on this list that is not a statement that nothing was
+   * sent, and the reason `publications.status` has an `unknown` of its own.
+   */
+  "outcome_unknown",
+] as const;
+export type PublishFailureReason = (typeof PUBLISH_FAILURE_REASONS)[number];
+
+/**
  * Who wrote the text — `content_items.origin`, `adaptations.origin` and
  * `content_versions.origin`.
  */

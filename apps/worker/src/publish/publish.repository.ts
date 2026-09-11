@@ -8,7 +8,9 @@ import {
   nextItemStatus,
   OUTSTANDING_ADAPTATION_STATUSES,
   type PlatformId,
-  PUBLISH_QUEUE_OPTIONS,
+  PUBLISH_ABANDONED_AFTER_SECONDS,
+  PUBLISH_ABANDONED_GRACE_SECONDS,
+  type PublishFailureReason,
 } from "@pubrick/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -25,6 +27,22 @@ export type LoadedAdaptation = {
   itemStatus: ContentStatus;
   platform: PlatformId;
   attemptCount: number;
+  /** The slot this delivery was approved for, or null for "publish now". */
+  scheduledAt: Date | null;
+  /**
+   * HOW LATE THIS DELIVERY IS, in seconds, measured by POSTGRES — negative when
+   * the slot has not come yet, null when there is no slot at all.
+   *
+   * Computed in the same statement that reads the row rather than in the
+   * worker, for `nowSql`'s reason one paragraph up: a worker-side `new Date()`
+   * puts two machines on the two sides of a comparison whose whole job is to
+   * decide whether a post still belongs in somebody's channel. `scheduled_at`
+   * and `now()` are one clock here, the same clock pg-boss delivered the job on.
+   *
+   * Null rather than zero when unscheduled, so "Publish now" can never be
+   * stale: there is no slot for it to have missed.
+   */
+  lateBySeconds: number | null;
 };
 
 /**
@@ -268,31 +286,18 @@ async function resolveClaim(
 const PGBOSS_SCHEMA = "pgboss";
 
 /**
- * How long PAST the ceiling on one whole attempt an adaptation must lie
- * untouched in `publishing` before the sweep is willing to call it abandoned.
+ * THE SWEEP'S TWO WINDOWS, re-exported from the rule book rather than declared
+ * here.
  *
- * Read from `PUBLISH_QUEUE_OPTIONS.expireInSeconds`, like the ceiling itself,
- * because the two have to move together — a grace shorter than the window
- * pg-boss still allows one attempt would have the sweep firing at a handler the
- * queue has not given up on.
- *
- * Why a WHOLE further attempt-window, when the ceiling has already passed?
- * Because pg-boss's expiry does not stop a handler, it only stops WAITING for
- * one: `resolveWithinSeconds` loses the race, the wrapper fails the job itself
- * and walks away, and the publish handler — which takes no `signal` — carries
- * on. What it can still be doing is bounded and known: a platform request at
- * `TELEGRAM_REQUEST_TIMEOUT_MS`, then `recordPublished`'s retry budget
- * (`PUBLISH_RECORD_BUDGET_MS`) riding out a database hiccup, together barely
- * over a minute. The grace is many times that on purpose. This write is
- * destructive and it must be late rather than wrong; the relationship is
- * asserted in publish.service.spec.ts so that shortening the expiry fails a
- * test instead of quietly moving the sweep inside a live attempt.
+ * They are derived from `PUBLISH_QUEUE_OPTIONS.expireInSeconds` and the full
+ * argument for each lives beside that object in `@pubrick/shared/jobs.ts`. They
+ * moved there because the staleness bound's floor
+ * (`worstCaseSelfInflictedSeconds`) has to add this sweep's delay to the
+ * queue's own worst case, and a rule book that could only assert half of that
+ * sum would be asserting the wrong number. Re-exported under their old names so
+ * every caller and every spec here reads them from the file that uses them.
  */
-export const PUBLISH_ABANDONED_GRACE_SECONDS = PUBLISH_QUEUE_OPTIONS.expireInSeconds;
-
-/** Total silence, from the last write of the attempt, before a row is a candidate. */
-export const PUBLISH_ABANDONED_AFTER_SECONDS =
-  PUBLISH_QUEUE_OPTIONS.expireInSeconds + PUBLISH_ABANDONED_GRACE_SECONDS;
+export { PUBLISH_ABANDONED_AFTER_SECONDS, PUBLISH_ABANDONED_GRACE_SECONDS };
 
 /**
  * What a swept adaptation says happened — and there are TWO answers, which is
@@ -353,6 +358,12 @@ export class PublishRepository {
    * Org-scoped load: adaptation joined to its content item (body AND status)
    * and channel (platform). The item's status is selected because a job for a
    * REJECTED item must never be delivered — see `PublishService.handle`.
+   *
+   * It also answers HOW LATE this delivery is, and that answer is computed by
+   * the database in this statement rather than by the caller: see
+   * `lateBySeconds` on `LoadedAdaptation`. Until it did, `handle()` could not
+   * ask the question at all — a worker that came back from a day-long outage
+   * published yesterday's post with nothing in the record to say it was late.
    */
   async load(orgId: string, adaptationId: string): Promise<LoadedAdaptation | undefined> {
     const rows = await db
@@ -366,6 +377,14 @@ export class PublishRepository {
         itemStatus: schema.contentItems.status,
         platform: schema.channels.platform,
         attemptCount: schema.adaptations.attemptCount,
+        scheduledAt: schema.adaptations.scheduledAt,
+        // THE COMPARISON'S OWN CLOCK. `extract(epoch from ...)` returns
+        // `numeric`, which node-postgres hands back as a string to keep its
+        // precision — mapped through `Number` here so callers get the number
+        // the type says they get rather than "93600.123456" as text.
+        lateBySeconds: sql<
+          number | null
+        >`extract(epoch from now() - ${schema.adaptations.scheduledAt})`.mapWith(Number),
       })
       .from(schema.adaptations)
       .innerJoin(schema.contentItems, eq(schema.contentItems.id, schema.adaptations.contentItemId))
@@ -477,6 +496,12 @@ export class PublishRepository {
       .set({
         status: "publishing",
         attemptCount: sql`${schema.adaptations.attemptCount} + 1`,
+        // A new attempt is under way, so the PREVIOUS attempt's verdict is not
+        // this row's verdict any more. Cleared for the reason the column is
+        // nullable at all: a code left standing beside a status it does not
+        // describe is the stale flag `apps/web/src/lib/adaptations.ts` was
+        // burned by, one column over.
+        failureReason: null,
         updatedAt: nowSql(),
       })
       .where(
@@ -615,7 +640,7 @@ export class PublishRepository {
     await db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
-        .set({ status: "published", lastError: null, updatedAt: nowSql() })
+        .set({ status: "published", lastError: null, failureReason: null, updatedAt: nowSql() })
         .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
         .returning({
           channelId: schema.adaptations.channelId,
@@ -695,7 +720,7 @@ export class PublishRepository {
     await db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
-        .set({ status: "published", lastError: null, updatedAt: nowSql() })
+        .set({ status: "published", lastError: null, failureReason: null, updatedAt: nowSql() })
         .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
         .returning({ contentItemId: schema.adaptations.contentItemId });
       const updated = rows[0];
@@ -726,6 +751,14 @@ export class PublishRepository {
    * re-approved row is how a user's decision was silently lost (see
    * `AttemptFence`). A refused write is not an error.
    *
+   * `failureReason` IS REQUIRED, and that is the whole of what keeps the column
+   * honest. It sits beside `error` rather than beside `outcome` because the two
+   * are one answer at two grains — the class, and the platform's own sentence
+   * about it — and it takes no default: a default is a value five call sites can
+   * forget, and "the mutation that drops the argument does not typecheck" is the
+   * property being bought. It is not derivable from `outcome` either: `failed`
+   * covers six of the nine reasons.
+   *
    * A refused write still resolves THIS ATTEMPT'S OWN CLAIM, when it holds one.
    * The rule that used to be stated here — leave the claim alone — was written
    * when the only way to name a claim was "whatever is in flight for this
@@ -741,6 +774,7 @@ export class PublishRepository {
     orgId: string,
     adaptationId: string,
     error: string,
+    failureReason: PublishFailureReason,
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
@@ -751,6 +785,7 @@ export class PublishRepository {
         .set({
           status: "failed",
           lastError: error,
+          failureReason,
           attemptCount: FAILED_ATTEMPT_COUNT,
           updatedAt: nowSql(),
         })
@@ -946,6 +981,12 @@ export class PublishRepository {
         .set({
           status: "failed",
           lastError: sql`case when ${claimed} then ${ABANDONED_UNKNOWN_ERROR} else ${ABANDONED_FAILED_ERROR} end`,
+          // The same fork, at the same grain as the sentence beside it and
+          // against the same snapshot, so the code and the prose on one row can
+          // never disagree about which of the two things happened. A claim left
+          // standing means a post MAY be live, which is `outcome_unknown` and
+          // never `send_abandoned`.
+          failureReason: sql`case when ${claimed} then 'outcome_unknown' else 'send_abandoned' end`,
           updatedAt: nowSql(),
         })
         .where(

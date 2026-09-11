@@ -45,6 +45,13 @@
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",
         "TELEGRAM_API_BASE_URL",
+        // The worker's staleness bound. Declared not because a test reads it
+        // through `process.env` — it is read through apps/worker/src/env.ts,
+        // which the guard excludes — but because publish.e2e.spec.ts drives the
+        // real handler under the real env module, so what turbo passes through
+        // decides what that suite is actually testing. Undeclared, the suite
+        // would silently test the default whatever an operator's shell says.
+        "PUBLISH_MAX_LATENESS_HOURS",
         "DATABASE_URL",
         "HOME",
         "PATH",

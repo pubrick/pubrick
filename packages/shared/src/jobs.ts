@@ -53,6 +53,108 @@ export const PUBLISH_QUEUE_OPTIONS = {
   deadLetter: PUBLISH_DLQ,
 } as const;
 
+/**
+ * How long PAST the ceiling on one whole attempt an adaptation must lie
+ * untouched in `publishing` before the sweep is willing to call it abandoned.
+ *
+ * Read from `PUBLISH_QUEUE_OPTIONS.expireInSeconds`, like the ceiling itself,
+ * because the two have to move together — a grace shorter than the window
+ * pg-boss still allows one attempt would have the sweep firing at a handler the
+ * queue has not given up on.
+ *
+ * Why a WHOLE further attempt-window, when the ceiling has already passed?
+ * Because pg-boss's expiry does not stop a handler, it only stops WAITING for
+ * one: `resolveWithinSeconds` loses the race, the wrapper fails the job itself
+ * and walks away, and the publish handler — which takes no `signal` — carries
+ * on. What it can still be doing is bounded and known: a platform request at
+ * `TELEGRAM_REQUEST_TIMEOUT_MS`, then `recordPublished`'s retry budget
+ * (`PUBLISH_RECORD_BUDGET_MS`) riding out a database hiccup, together barely
+ * over a minute. The grace is many times that on purpose. This write is
+ * destructive and it must be late rather than wrong; the relationship is
+ * asserted in publish.service.spec.ts so that shortening the expiry fails a
+ * test instead of quietly moving the sweep inside a live attempt.
+ *
+ * IT LIVES HERE, beside the options it is derived from, rather than in the
+ * worker that uses it — `apps/worker/src/publish/publish.repository.ts`
+ * re-exports both under their old names. The staleness bound's floor
+ * (`worstCaseSelfInflictedSeconds` below) has to add this sweep's delay to the
+ * queue's own worst case, and a rule book that could only assert half of that
+ * sum would be asserting the wrong number.
+ */
+export const PUBLISH_ABANDONED_GRACE_SECONDS = PUBLISH_QUEUE_OPTIONS.expireInSeconds;
+
+/** Total silence, from the last write of the attempt, before a row is a candidate. */
+export const PUBLISH_ABANDONED_AFTER_SECONDS =
+  PUBLISH_QUEUE_OPTIONS.expireInSeconds + PUBLISH_ABANDONED_GRACE_SECONDS;
+
+/**
+ * pg-boss's supervisor granularity: how long a job whose `expireInSeconds` has
+ * passed can sit before the maintenance pass notices and fails it
+ * (`pg-boss/dist/attorney.js`, `superviseIntervalSeconds`). Not ours to
+ * configure — `main.ts` takes the default — and named rather than inlined
+ * because the worst case below has to pay it once per attempt.
+ */
+export const PUBLISH_SUPERVISE_INTERVAL_SECONDS = 60;
+
+/**
+ * THE WORST CASE THIS SYSTEM CAN INFLICT ON ITS OWN SCHEDULE — every second a
+ * job can spend between becoming due and the last moment a handler could still
+ * legitimately be sending it, with no outage involved at all.
+ *
+ * It exists to be COMPARED against, not to be read: `PUBLISH_MAX_LATENESS_HOURS`
+ * refuses a post that is too late, so a bound the queue's own retries can reach
+ * would fail posts that were merely retried. The comparison is a test beside
+ * this file (`jobs.test.ts`), on the precedent of
+ * `PUBLISH_ABANDONED_GRACE_SECONDS` above: raising `retryLimit` to 8 pushes the
+ * chain past three hours and to 10 past six, and with the assertion that is a
+ * red test in the queue-tuning PR instead of customers' posts failing silently.
+ *
+ * The sum, per pg-boss v12:
+ *  - THE BACKOFF. `retryDelay` with `retryBackoff` is uniform in
+ *    `[retryDelay·2^rc, retryDelay·2^(rc+1)]`, capped at `retryDelayMax`
+ *    (`pg-boss/dist/plans.js`), so the worst of retry `rc` is the top of that
+ *    interval. Summed over the `retryLimit` retries.
+ *  - THE ATTEMPTS. `retryLimit + 1` deliveries, each of which can occupy its
+ *    whole `expireInSeconds` and then wait a supervise interval for the queue to
+ *    notice. That is the PAPER bound rather than the realistic one (a Telegram
+ *    request times out in 30s, not 600), and a floor has to be built from the
+ *    paper one.
+ *
+ * Head-of-line blocking by `groupConcurrency: 1` is deliberately not in the sum:
+ * a job waiting out its backoff is in `retry`, not `active`, so it occupies no
+ * slot. A rolling deploy is reclaimed within `heartbeatSeconds`.
+ */
+export function worstCaseSelfInflictedSeconds(options: {
+  retryLimit: number;
+  retryDelay: number;
+  retryDelayMax: number;
+  expireInSeconds: number;
+}): number {
+  let backoff = 0;
+  for (let retry = 0; retry < options.retryLimit; retry += 1) {
+    backoff += Math.min(options.retryDelay * 2 ** (retry + 1), options.retryDelayMax);
+  }
+  const attempts =
+    (options.retryLimit + 1) * (options.expireInSeconds + PUBLISH_SUPERVISE_INTERVAL_SECONDS);
+  return backoff + attempts;
+}
+
+/**
+ * HOW LATE IS TOO LATE, in hours — the default of `PUBLISH_MAX_LATENESS_HOURS`
+ * (`apps/worker/src/env.ts`), which is the variable the worker actually reads.
+ *
+ * The defining failure is "yesterday's post today", so the bound is under 24h by
+ * construction: Tuesday 09:00 landing Tuesday 15:00 still meets roughly the day
+ * and the audience it was written for, where Wednesday morning does not. Six is
+ * the round number in the gap between that ceiling and the floor
+ * `worstCaseSelfInflictedSeconds` above pins — today, 3.08x it.
+ *
+ * It is declared in the rule book rather than only in the worker's env schema
+ * because the floor is asserted against it, and an assertion about a number
+ * spelled somewhere else is an assertion about a copy.
+ */
+export const PUBLISH_MAX_LATENESS_HOURS_DEFAULT = 6;
+
 /** Queue the api enqueues generation runs to and the worker consumes. */
 export const GENERATE_QUEUE = "generate";
 

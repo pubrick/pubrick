@@ -432,3 +432,21 @@ It is the "queue claims work for something that does not exist" untidiness both
 deletes were written to reduce, not a lost or duplicated post. `BrandsRepository.delete`
 has always had this window, for the same reason: nothing locks a brand on the
 create path.
+
+## The staleness bound takes no lock
+
+`PUBLISH_MAX_LATENESS_HOURS` (worker, 2026-09-11) adds a comparison, not a
+transaction. `load` reads `now() - scheduled_at` in a plain `SELECT` with no
+`FOR UPDATE` and no join it did not already make; the refusal it can lead to is
+`markFailed`, which is the terminal write the publish path already performed and
+whose order — `adaptations` → the `publications` insert's `FOR KEY SHARE` on
+`channels` → `content_items` — is unchanged and documented above.
+`adaptations.failure_reason` rides along inside statements that already existed.
+
+Stated rather than left silent, because "this change adds no lock" is exactly
+the claim the two cycles at the top of this file were each built out of. The
+next increment on this path — a sweep for `scheduled` and `queued` rows that no
+pg-boss job will ever move — DOES add an edge: a bulk write over a candidate set
+`ContentRepository.approve` walks with `lockAdaptations(…, ["pending", "failed",
+"scheduled"])`, which `sweepAbandoned` never contended with. That edge belongs
+in this file with that change, not with this one.

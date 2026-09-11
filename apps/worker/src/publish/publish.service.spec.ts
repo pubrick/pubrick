@@ -12,6 +12,7 @@ import {
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { env } from "../env";
 import {
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
@@ -54,6 +55,13 @@ function fixture(overrides: Record<string, unknown> = {}) {
     itemStatus: "approved",
     platform: "telegram",
     attemptCount: 0,
+    // The unscheduled shape — "Publish now", which can never be stale. The
+    // staleness tests below override `lateBySeconds` with ONE field, because
+    // this tier tests the COMPARISON and never the computation: the number is
+    // Postgres's (`load`), and `publish.repository.spec.ts` is where it is
+    // proved.
+    scheduledAt: null,
+    lateBySeconds: null,
     ...overrides,
   };
   const repo = {
@@ -128,6 +136,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       "Forbidden",
+      "platform_rejected",
       { status: "publishing", attemptCount: 1 },
       "failed",
       CLAIM,
@@ -189,6 +198,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("check the channel before re-approving"),
+      "outcome_unknown",
       { status: "publishing", attemptCount: 1 },
       "unknown",
       CLAIM,
@@ -213,6 +223,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("check the channel before re-approving"),
+      "outcome_unknown",
       { status: "publishing", attemptCount: 1 },
       "unknown",
       // No claim of OUR own: the row being resolved is the predecessor's, and
@@ -275,6 +286,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("vk"),
+      "no_adapter",
       { status: "queued", attemptCount: 0 },
       "failed",
       // This path runs before `claimSend`, so there is no claim to name.
@@ -354,6 +366,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       expect.stringContaining("Channel c1 not found"),
+      "credentials_missing",
       { status: "publishing", attemptCount: 1 },
       "failed",
       CLAIM,
@@ -383,6 +396,7 @@ describe("PublishService.handle", () => {
       "o1",
       "a1",
       UNREADABLE_CREDENTIALS_MESSAGE,
+      "credentials_unreadable",
       { status: "publishing", attemptCount: 1 },
       "failed",
       CLAIM,
@@ -572,7 +586,8 @@ describe("PublishService.handle", () => {
     expect(repo.markFailed).toHaveBeenCalledWith(
       "o1",
       "a1",
-      expect.stringContaining("chatId"), // names the offending field, not an opaque platform 400
+      expect.stringContaining("chatId"),
+      "credentials_invalid", // names the offending field, not an opaque platform 400
       { status: "publishing", attemptCount: 1 },
       "failed",
       CLAIM,
@@ -590,6 +605,7 @@ describe("PublishService.markExhausted", () => {
       "o1",
       "a1",
       "Retries exhausted",
+      "retries_exhausted",
       { status: "publishing", attemptCount: 0 },
       "failed",
       // The dead-letter delivery is a different run of the process: it holds no
@@ -658,5 +674,173 @@ describe("PublishService.markExhausted", () => {
     await expect(
       service.markExhausted({ adaptationId: "a1", orgId: "o1" }),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * THE BOUND. A worker that comes back from a day-long outage must not publish
+ * yesterday's post as though it were today's, and must not publish tomorrow's
+ * early either.
+ *
+ * Everything here is the COMPARISON. `lateBySeconds` arrives on the loaded row
+ * as one field because Postgres computed it in `load`'s own statement — the
+ * clock belongs to the database and must not become a seam here (see
+ * `publish.repository.ts`'s `nowSql`), so the number is supplied rather than
+ * mocked, and `publish.repository.spec.ts` proves it against a real clock.
+ */
+describe("PublishService.handle and a schedule that came and went", () => {
+  const MAX_SECONDS = env.PUBLISH_MAX_LATENESS_HOURS * 3600;
+
+  /** A slot in the past, `secondsLate` ago — the row an outage leaves behind. */
+  function late(secondsLate: number) {
+    return {
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() - secondsLate * 1000),
+      lateBySeconds: secondsLate,
+    };
+  }
+
+  it("fails a post that missed its slot by more than the bound, and sends NOTHING", async () => {
+    const { repo } = fixture(late(26 * 3600));
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("Missed its scheduled slot"),
+      "schedule_missed",
+      { status: "publishing", attemptCount: 1 },
+      "failed",
+      // AND THE CLAIM. The check lives AFTER `claimSend`, so this attempt holds
+      // one and the receipt is its resolution — not a second row, and not a
+      // claim left in flight to block every future attempt at this adaptation.
+      CLAIM,
+    );
+    // Never a retry, and never an `unknown`: nothing was told to the platform.
+    expect(repo.recordTransient).not.toHaveBeenCalled();
+    expect(repo.releaseSend).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The check is BELOW `claimSend`, and this is the assertion that says so.
+   *
+   * Hoisted one line above it, a refused claim — which means an earlier attempt
+   * may already have posted — would be answered "missed its slot, never sent",
+   * and `failed` is the one verdict that invites a re-approve. The mutation is
+   * in the design's list; this is what kills it.
+   */
+  it("reports an unknown outcome, NOT a missed slot, when the claim is refused", async () => {
+    const { repo } = fixture(late(26 * 3600));
+    repo.claimSend = vi.fn().mockResolvedValue(null);
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("check the channel before re-approving"),
+      "outcome_unknown",
+      { status: "publishing", attemptCount: 1 },
+      "unknown",
+      undefined,
+    );
+  });
+
+  it("freezes the hours and the slot into the sentence it stores", async () => {
+    const scheduledAt = new Date("2026-09-10T09:00:00.000Z");
+    const { repo } = fixture({ status: "scheduled", scheduledAt, lateBySeconds: 26 * 3600 });
+    const service = new PublishService(repo as never, () => publisherStub(vi.fn()), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+
+    const message = (repo.markFailed as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as string;
+    // The slot and the lateness AT REFUSAL — `scheduled_at` is never cleared on
+    // failure, so a reader that recomputed the number later would watch it grow
+    // for ever and disagree with the sentence beside it.
+    expect(message).toContain("2026-09-10T09:00:00.000Z");
+    expect(message).toContain("26.0 h");
+    expect(message).toContain(`${(env.PUBLISH_MAX_LATENESS_HOURS).toFixed(1)} h limit`);
+  });
+
+  it("publishes a post that is late by less than the bound", async () => {
+    const { repo } = fixture(late(3600));
+    const publish = vi.fn().mockResolvedValue({ externalId: "1", externalUrl: null });
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The boundary itself, both sides of it. `>` and not `>=`: a post late by
+   * EXACTLY the bound is within it, and a mutation to `>=` fails the first of
+   * these two.
+   */
+  it("treats the bound as inclusive", async () => {
+    for (const [secondsLate, sends] of [
+      [MAX_SECONDS, true],
+      [MAX_SECONDS + 1, false],
+    ] as const) {
+      const { repo } = fixture(late(secondsLate));
+      const publish = vi.fn().mockResolvedValue({ externalId: "1", externalUrl: null });
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(publish.mock.calls.length > 0, `late by ${secondsLate}s`).toBe(sends);
+    }
+  });
+
+  /**
+   * "Publish now" has no slot to have missed, and a null must never be read as
+   * a zero. The mutation that drops the null exemption fails here.
+   */
+  it("never calls an unscheduled delivery stale, however long it waited", async () => {
+    const { repo } = fixture({ scheduledAt: null, lateBySeconds: null });
+    const publish = vi.fn().mockResolvedValue({ externalId: "1", externalUrl: null });
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * THE NEGATIVE ARM: a human moved the slot FORWARD while this job was already
+   * active. The old job must touch nothing — not the platform, not the status,
+   * not the attempt count, and above all not a send claim, which left standing
+   * would make the NEW job report an unknown outcome about a post nobody sent.
+   *
+   * "Nothing called" is the assertion, and it is why this half is asked BEFORE
+   * `markPublishing` while its sibling is asked after `claimSend`.
+   */
+  it("returns untouched when the slot has been moved into the future", async () => {
+    const { repo } = fixture({
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 3_600_000),
+      lateBySeconds: -3600,
+    });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markPublishing).not.toHaveBeenCalled();
+    expect(repo.claimSend).not.toHaveBeenCalled();
+    expect(repo.markFailed).not.toHaveBeenCalled();
+    expect(repo.releaseSend).not.toHaveBeenCalled();
+    expect(repo.markPublished).not.toHaveBeenCalled();
   });
 });

@@ -120,6 +120,9 @@ const UNZONED_TABLES = [
 /** The migration that adds the ledger's outcome column, proved additive below. */
 const OUTCOME_MIGRATION = "0012_ledger_call_outcome";
 
+/** The migration that gives a failed delivery a coded reason, proved additive below. */
+const FAILURE_REASON_MIGRATION = "0019_missed_slot_has_a_name";
+
 /**
  * Every column 0009 pins, with a value that is not in its set.
  *
@@ -149,6 +152,11 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
   // still refusing a misspelling. A value outside the set would read as
   // `completed` to both readers of the ledger: silently free.
   { table: "usage_ledger", column: "outcome", bogus: "unkown" },
+  // 0019's, nullable for the same reason and refusing a misspelling for a
+  // sharper one: every reader of this column is a `Record<PublishFailureReason,
+  // …>` or a comparison against one member, so a value outside the set reads as
+  // "no reason recorded" — i.e. as a row that failed before the column existed.
+  { table: "adaptations", column: "failure_reason", bogus: "schedule_mised" },
 ];
 
 /**
@@ -1153,6 +1161,80 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, outcome: null })));
+      expect(column.rows[0]).toMatchObject({
+        is_nullable: "YES",
+        data_type: "text",
+        column_default: null,
+      });
+      expect(refusedBogus).toBe(CHECK_VIOLATION);
+      expect(acceptedReal).toBeNull();
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * 0019 lands a nullable column and a CHECK on `adaptations` — the busiest
+   * table a running deployment has, and the one whose rows a self-hoster's
+   * screens are looking at while the migration runs.
+   *
+   * ROWS THAT FAILED BEFORE IT KEEP THE MEANING THEY HAD. They come back with
+   * `failure_reason` NULL, which is what the screens already render from
+   * `last_error`. Back-filling a guess — `platform_rejected` is the tempting
+   * one — would put a claim about a platform onto rows that may never have
+   * reached one, and nothing can retroactively learn which class a delivery in
+   * somebody else's database belonged to.
+   *
+   * AND THE CHECK HOLDS IN BOTH DIRECTIONS. A misspelling is refused; the real
+   * value is stored. A test that only planted the bogus row would also pass if
+   * the CHECK were `false`, or if the column had never arrived at all.
+   */
+  it("gives a failed delivery its coded reason without touching a row", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(FAILURE_REASON_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: pg.QueryResultRow[];
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the column were already here, "written before the migration" would
+        // be a lie and everything below would prove nothing.
+        const pre = await pool.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'adaptations' AND column_name = 'failure_reason'",
+        );
+        expect(pre.rows).toHaveLength(0);
+
+        await seedEveryTable(pool, "org_failure_reason");
+        // The row this column exists to disambiguate: a delivery that failed
+        // before anybody could say WHY in anything but prose.
+        await pool.query(
+          `UPDATE adaptations SET status = 'failed', last_error = 'Telegram 400: chat not found'
+             WHERE org_id = 'org_failure_reason'`,
+        );
+        seeded = (await pool.query("SELECT * FROM adaptations ORDER BY id")).rows;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const rows = await after.query("SELECT * FROM adaptations ORDER BY id");
+      const column = await after.query(
+        "SELECT is_nullable, data_type, column_default FROM information_schema.columns WHERE table_name = 'adaptations' AND column_name = 'failure_reason'",
+      );
+      const refusedBogus = await refusal(
+        after,
+        "UPDATE adaptations SET failure_reason = 'schedule_mised' WHERE org_id = 'org_failure_reason'",
+      );
+      const acceptedReal = await refusal(
+        after,
+        "UPDATE adaptations SET failure_reason = 'schedule_missed' WHERE org_id = 'org_failure_reason'",
+      );
+      await after.end();
+
+      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, failure_reason: null })));
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
         data_type: "text",

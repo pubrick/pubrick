@@ -127,6 +127,13 @@
       "when": 1789153971727,
       "tag": "0018_partially_published",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789153999999,
+      "tag": "0019_missed_slot_has_a_name",
+      "breakpoints": true
     }
   ]
 }

@@ -282,9 +282,10 @@ each one in full.
 | 2026-09-04 | `WEB_PORT` | no | host port for the web app (default `3000`) — **set it and `PUBLIC_ORIGIN` must match** |
 | 2026-09-04 | `API_HOST_PORT` | no | localhost-only debug mapping for the api (default `3001`) |
 | 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
+| 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried — do not go under about half an hour. No off switch: `0` is refused, and "effectively never" is `8760` |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot
-miss them. The six optional ones are the ones worth reading: an `.env` written
+miss them. The seven optional ones are the ones worth reading: an `.env` written
 in August leaves registration on its self-closing default and the shipped ports
 unchanged, which is a sane instance — but not necessarily the one you meant.
 

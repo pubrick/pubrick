@@ -11,6 +11,7 @@ import {
 import {
   isUnreadableCiphertext,
   PUBLISH_QUEUE_OPTIONS,
+  type PublishFailureReason,
   type PublishJob,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
@@ -91,8 +92,45 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
 export const PUBLISH_STOP_TIMEOUT_MS =
   TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS + 10_000;
 
+/**
+ * Seconds as hours, to one decimal, for a sentence a person reads.
+ *
+ * One decimal rather than none because the bound itself can be fractional
+ * (`PUBLISH_MAX_LATENESS_HOURS` admits 0.25), and "late by 0 h, past the 0 h
+ * limit" is not a sentence anybody can act on.
+ */
+function formatHours(seconds: number): string {
+  return (seconds / 3600).toFixed(1);
+}
+
 function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+/**
+ * A permanent error that already knows WHICH CLASS it is.
+ *
+ * Three of the reasons on `PUBLISH_FAILURE_REASONS` are raised inside one `try`
+ * and caught by one `catch` — unreadable ciphertext, a channel row that is
+ * gone, credentials the adapter's schema refuses — and by the time the catch
+ * runs, the only thing telling them apart is the sentence, which is exactly
+ * what the column exists so that nobody has to read. Carrying the code on the
+ * throw is the alternative to re-deriving it from prose.
+ *
+ * It extends `PermanentPublishError` rather than replacing it, so every
+ * `instanceof` on the way out — the catch below, and anything a future caller
+ * writes — keeps working unchanged. An error that is NOT one of these is the
+ * platform's own refusal out of `publisher.publish()`: `platform_rejected`,
+ * which is the default at the catch and the one class whose free text must
+ * survive, because Telegram writes it.
+ */
+class ClassifiedPermanentError extends PermanentPublishError {
+  constructor(
+    message: string,
+    readonly failureReason: PublishFailureReason,
+  ) {
+    super(message);
+  }
 }
 
 /** Postgres unique_violation. */
@@ -175,6 +213,41 @@ export class PublishService {
       return;
     }
 
+    // THE SLOT MOVED INTO THE FUTURE WHILE THIS JOB WAS ALREADY RUNNING, and
+    // this job must touch nothing at all.
+    //
+    // It is reachable, not hypothetical. An overdue row is still `scheduled`,
+    // which `UNSCHEDULABLE_STATUSES` does not refuse, so a person can re-approve
+    // it with a NEW time mid-outage. `approve` cancels by payload — but a job
+    // already `active` keeps running, and `scheduled` is claimable, so without
+    // this the woken worker would claim the re-scheduled row and post it HOURS
+    // EARLY, which is the same injury as posting it a day late.
+    //
+    // THIS HALF IS ASKED BEFORE ANYTHING IS CLAIMED, unlike its sibling below,
+    // and the two placements are not an inconsistency. The LATE half must come
+    // after `claimSend` because it makes a terminal statement ("never sent")
+    // that an unresolved claim would make a lie. This half makes no statement:
+    // it leaves the row exactly as the person just set it — `scheduled`, at the
+    // time they chose, with the attempt count they were given and no claim
+    // taken — and a job for the new slot provably exists, because `approve`
+    // enqueued it in the same transaction as the new time. Claiming the attempt
+    // first and then "returning untouched" would be neither: `markPublishing`
+    // would have moved the row to `publishing` and bumped its count, and the
+    // claim left standing would make the NEW job report an unknown outcome
+    // about a post nobody sent.
+    //
+    // No tolerance on the comparison, and none is needed: both sides are one
+    // Postgres clock (`load`'s `lateBySeconds`), and pg-boss delivers only at
+    // `start_after <= now()`, so a negative value means a human moved the slot.
+    if (adaptation.lateBySeconds !== null && adaptation.lateBySeconds < 0) {
+      this.logger.log(
+        `Skipping publish for adaptation ${job.adaptationId}: its slot has been moved into the ` +
+          `future (${formatHours(-adaptation.lateBySeconds)} h from now); the job enqueued with ` +
+          "that new time is the one that will send it",
+      );
+      return;
+    }
+
     const publisher = this.lookup(adaptation.platform);
     if (!publisher) {
       // Fenced on the row EXACTLY as it was loaded a moment ago, because this
@@ -187,6 +260,7 @@ export class PublishService {
         job.orgId,
         job.adaptationId,
         `No adapter for platform ${adaptation.platform}`,
+        "no_adapter",
         { status: adaptation.status, attemptCount: adaptation.attemptCount },
       );
       return;
@@ -233,6 +307,46 @@ export class PublishService {
       );
       return;
     }
+
+    // TOO LATE TO BE THE POST SOMEBODY SCHEDULED — the bound, checked HERE and
+    // deliberately not one line higher.
+    //
+    // Above `claimSend`, a refused claim means an earlier attempt may already
+    // have posted and is recorded `unknown`; answering "missed its slot, never
+    // sent" about such a row would be a verdict this pipeline is built not to
+    // guess, and an invitation to re-approve into a duplicate. Below it, the
+    // claim is ours, nothing has been told to the platform, and the branch is
+    // shape-identical to the permanent-error branch further down: record the
+    // failure with its claim, and RETURN. Never throw — a rethrow would have
+    // pg-boss retry a job that can only ever reach this same line again
+    // (CLAUDE.md, Publishing).
+    //
+    // `>`, not `>=`: a post that is late by EXACTLY the bound is within it.
+    //
+    // The sentence is FROZEN at the moment of refusal, hours and slot spelled
+    // out. `scheduled_at` is never cleared on failure, so a reader that
+    // recomputed the lateness later would watch it grow for ever and disagree
+    // with the very row it is printed next to.
+    const maxLatenessSeconds = env.PUBLISH_MAX_LATENESS_HOURS * 3600;
+    if (adaptation.lateBySeconds !== null && adaptation.lateBySeconds > maxLatenessSeconds) {
+      const missed =
+        `Missed its scheduled slot: this post was due at ${adaptation.scheduledAt?.toISOString()} ` +
+        `and nothing could deliver it until ${formatHours(adaptation.lateBySeconds)} h later, past ` +
+        `the ${formatHours(maxLatenessSeconds)} h limit. Nothing was sent — publish it now if it is ` +
+        "still worth sending.";
+      this.logger.warn(`${missed} orgId=${job.orgId} adaptationId=${job.adaptationId}`);
+      await this.safeMarkFailed(
+        job.orgId,
+        job.adaptationId,
+        missed,
+        "schedule_missed",
+        fence,
+        "failed",
+        claim,
+      );
+      return;
+    }
+
     const text = adaptation.body ?? adaptation.itemBody;
 
     // Everything that can still be safely retried lives in this try — nothing
@@ -272,11 +386,17 @@ export class PublishService {
         // "the key is gone" are different things to do about it, and a shared
         // sentence for both would be the same mistake in the other direction.
         if (isUnreadableCiphertext(credentialsError)) {
-          throw new PermanentPublishError(UNREADABLE_CREDENTIALS_MESSAGE);
+          throw new ClassifiedPermanentError(
+            UNREADABLE_CREDENTIALS_MESSAGE,
+            "credentials_unreadable",
+          );
         }
         const message =
           credentialsError instanceof Error ? credentialsError.message : String(credentialsError);
-        throw new PermanentPublishError(`Could not load credentials: ${message}`);
+        throw new ClassifiedPermanentError(
+          `Could not load credentials: ${message}`,
+          "credentials_missing",
+        );
       }
       // Validate against the adapter's own schema before sending, the same way
       // the api's connection test does. Stored credentials can be malformed
@@ -290,8 +410,9 @@ export class PublishService {
         const detail = parsed.error.issues
           .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
           .join("; ");
-        throw new PermanentPublishError(
+        throw new ClassifiedPermanentError(
           `Stored credentials are not valid for platform ${adaptation.platform}: ${detail}`,
+          "credentials_invalid",
         );
       }
       result = await publisher.publish(parsed.data, { text }, { baseUrl: this.baseUrl });
@@ -313,7 +434,24 @@ export class PublishService {
         // Nothing was accepted by the platform on this branch (publish()
         // itself rejected it, or we never got as far as calling it) — no
         // duplicate-post risk here, unlike recordPublished below.
-        await this.safeMarkFailed(job.orgId, job.adaptationId, message, fence, "failed", claim);
+        //
+        // WHICH CLASS comes with the throw, not from reading the sentence back:
+        // the three credential failures above are raised inside this same try
+        // and are indistinguishable here by anything except their prose, which
+        // is the reading the coded column exists to end. Anything else reaching
+        // this line came out of `publisher.publish()` — the platform's own
+        // permanent refusal.
+        const failureReason =
+          error instanceof ClassifiedPermanentError ? error.failureReason : "platform_rejected";
+        await this.safeMarkFailed(
+          job.orgId,
+          job.adaptationId,
+          message,
+          failureReason,
+          fence,
+          "failed",
+          claim,
+        );
         return;
       }
       // Transient, which now means KNOWN-not-posted: the platform's own
@@ -377,10 +515,16 @@ export class PublishService {
     if (!adaptation) return;
     if (adaptation.status !== "publishing") return;
 
-    await this.safeMarkFailed(job.orgId, job.adaptationId, "Retries exhausted", {
-      status: "publishing",
-      attemptCount: adaptation.attemptCount,
-    });
+    await this.safeMarkFailed(
+      job.orgId,
+      job.adaptationId,
+      "Retries exhausted",
+      "retries_exhausted",
+      {
+        status: "publishing",
+        attemptCount: adaptation.attemptCount,
+      },
+    );
   }
 
   /**
@@ -477,7 +621,15 @@ export class PublishService {
       `confirmed (${detail}). A copy may already be live — check the channel before re-approving, ` +
       "because re-approving will send again.";
     this.logger.error(`${reason} orgId=${orgId} adaptationId=${adaptationId}`);
-    await this.safeMarkFailed(orgId, adaptationId, reason, fence, "unknown", claim);
+    await this.safeMarkFailed(
+      orgId,
+      adaptationId,
+      reason,
+      "outcome_unknown",
+      fence,
+      "unknown",
+      claim,
+    );
   }
 
   /**
@@ -604,12 +756,23 @@ export class PublishService {
     orgId: string,
     adaptationId: string,
     reason: string,
+    failureReason: PublishFailureReason,
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
   ): Promise<void> {
     try {
-      if (!(await this.repo.markFailed(orgId, adaptationId, reason, fence, outcome, claim))) {
+      if (
+        !(await this.repo.markFailed(
+          orgId,
+          adaptationId,
+          reason,
+          failureReason,
+          fence,
+          outcome,
+          claim,
+        ))
+      ) {
         // Not an error, and emphatically not something to retry or force: the
         // row moved out from under this attempt, which only the api does and
         // only because a human rejected or re-approved. Their decision is the

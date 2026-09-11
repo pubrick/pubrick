@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -22,6 +24,48 @@ type AdaptationStatus = import("@pubrick/shared").AdaptationStatus;
  * markExhausted twice is a true no-op the second time) can only be proven
  * against real SQL, not a vi.fn() stub.
  */
+/**
+ * WHOSE CLOCK MEASURES THE LATENESS — asserted against the source, because no
+ * behavioural test on one machine can.
+ *
+ * The whole point of computing `now() - scheduled_at` in Postgres is that a
+ * worker-side `new Date()` puts TWO MACHINES on the two sides of the
+ * comparison that decides whether a post still belongs in somebody's channel:
+ * a worker whose clock runs ahead fails posts that are on time, one that runs
+ * behind sends posts that are a day late. On a developer's box, and in CI, the
+ * two clocks are the same clock — so replacing the SQL with
+ * `Date.now() - row.scheduledAt.getTime()` passes every test in this file, in
+ * `publish.service.spec.ts` and in `publish.e2e.spec.ts`. Measured, not
+ * assumed.
+ *
+ * `scheduled_at` is `timestamptz` since migration 0014, so the zone-shaped test
+ * that would catch the OTHER clock defect (`packages/db/src/timestamp-zone.test.ts`)
+ * cannot catch this one either: an instant is an instant from either side.
+ * What is left to pin is the statement itself, which is what this does — the
+ * same move `apps/api/src/env-declaration.guard.spec.ts` makes for a rule no
+ * type and no runtime can hold. It runs without a database on purpose: the
+ * property is about the code, and a guard that skipped itself on an unset
+ * TEST_DATABASE_URL would be exactly the dark tier this repo already has a
+ * lesson about.
+ */
+describe("the lateness of a slot is measured by the database", () => {
+  it("computes lateBySeconds from Postgres's now(), never from the worker's clock", () => {
+    // `process.cwd()` is this package's root under vitest, the same anchor
+    // `apps/api/src/env-declaration.guard.spec.ts` uses; `import.meta` is not
+    // available, because this package typechecks as CommonJS.
+    const source = readFileSync(
+      path.join(process.cwd(), "src", "publish", "publish.repository.ts"),
+      "utf8",
+    );
+    const load = source.slice(source.indexOf("async load("), source.indexOf("async credentials("));
+    expect(load).toContain("lateBySeconds");
+    expect(load).toMatch(/lateBySeconds:[\s\S]*?extract\(epoch from now\(\)/);
+    // And not from here. `Date.now()` and `new Date()` are both spellings of
+    // the same mistake.
+    expect(load).not.toMatch(/Date\.now\(\)|new Date\(/);
+  });
+});
+
 /** The other tenant's bot token. A different value, so "whose row came back" is readable. */
 const STRANGER_CREDENTIALS = { botToken: "9:z", chatId: "-9" };
 
@@ -293,6 +337,15 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     return row;
   }
 
+  /** The coded reason, read on its own: nullable, and both values matter. */
+  async function failureReasonOf(adaptationId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ failureReason: schema.adaptations.failureReason })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    return row?.failureReason ?? null;
+  }
+
   /** Its delivery log, in a stable order. */
   async function publicationRows(adaptationId: string) {
     return db
@@ -338,7 +391,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // The fence is the one this row's own attempt holds, so `org_id` is the
     // only thing left that can refuse these writes — which is the point.
     const fence = { status: "publishing", attemptCount: 1 } as const;
-    await repo.markFailed(strangerOrgId, adaptationId, "not your delivery", fence);
+    await repo.markFailed(
+      strangerOrgId,
+      adaptationId,
+      "not your delivery",
+      "platform_rejected",
+      fence,
+    );
     await repo.recordTransient(strangerOrgId, adaptationId, "not your retry", fence);
     // Even naming the claim by its own primary key, a stranger cannot release
     // it: `org_id` is still in the predicate.
@@ -381,6 +440,133 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // service, because in the service this filter is masked: `load` refusing is
     // exactly what stops `credentials` from ever being asked.
     expect(await repo.load(strangerOrgId, mine)).toBeUndefined();
+  });
+
+  /**
+   * HOW LATE THE SLOT IS, measured by the database in the same statement that
+   * reads the row — the fact `handle()` could not previously ask, and the reason
+   * a worker back from a day-long outage published yesterday's post.
+   *
+   * The clock is BACKDATED, never mocked: `now()` is not injectable in the
+   * worker and must not become so, because the comparison belongs to the
+   * database (two machines on the two sides of it is the defect `nowSql` exists
+   * to prevent). So the seed writes a `scheduled_at` in the past and the
+   * assertion is over a WINDOW — seed and read are separate statements, and a
+   * rounded equality flakes on a slow box.
+   */
+  it("load says how late the slot is, on Postgres's clock", async () => {
+    const adaptationId = await seedAdaptation("scheduled");
+    await db
+      .update(schema.adaptations)
+      .set({ scheduledAt: sql`now() - interval '26 hours'` })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    const loaded = await repo.load(orgId, adaptationId);
+    expect(loaded?.lateBySeconds).toBeGreaterThan(26 * 3600 - 60);
+    expect(loaded?.lateBySeconds).toBeLessThan(26 * 3600 + 60);
+    // And the slot itself, which the refusal sentence names.
+    expect(loaded?.scheduledAt).toBeInstanceOf(Date);
+  });
+
+  it("load calls an hour-old slot an hour late, and a future one NEGATIVE", async () => {
+    const hourOld = await seedAdaptation("scheduled");
+    await db
+      .update(schema.adaptations)
+      .set({ scheduledAt: sql`now() - interval '1 hour'` })
+      .where(eq(schema.adaptations.id, hourOld));
+    const late = (await repo.load(orgId, hourOld))?.lateBySeconds as number;
+    expect(late).toBeGreaterThan(3600 - 60);
+    expect(late).toBeLessThan(3600 + 60);
+
+    // The arm that stops an old job publishing a re-scheduled row HOURS EARLY.
+    const ahead = await seedAdaptation("scheduled");
+    await db
+      .update(schema.adaptations)
+      .set({ scheduledAt: sql`now() + interval '1 hour'` })
+      .where(eq(schema.adaptations.id, ahead));
+    const early = (await repo.load(orgId, ahead))?.lateBySeconds as number;
+    expect(early).toBeLessThan(-3600 + 60);
+  });
+
+  /**
+   * NULL, not zero. "Publish now" has no slot to have missed, and a zero here
+   * would make every unscheduled delivery exactly-on-time — which is the same
+   * number an inclusive bound treats as sendable, so the bug would hide.
+   */
+  it("load reports no lateness at all for an unscheduled delivery", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const loaded = await repo.load(orgId, adaptationId);
+    expect(loaded?.scheduledAt).toBeNull();
+    expect(loaded?.lateBySeconds).toBeNull();
+  });
+
+  /**
+   * THE CODED REASON, written by the writer that fails the row and cleared by
+   * the writer that moves it on. Both halves, because a nullable column written
+   * by one branch and cleared by none is a stale flag.
+   */
+  it("markFailed stores the reason code beside the sentence, and markPublished clears it", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markFailed(
+      orgId,
+      adaptationId,
+      "Telegram 400: chat not found",
+      "platform_rejected",
+      {
+        status: "queued",
+        attemptCount: 0,
+      },
+    );
+    expect(await failureReasonOf(adaptationId)).toBe("platform_rejected");
+
+    // The re-approve the screen offers, then a successful send.
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markPublished(orgId, adaptationId, { externalId: "1", externalUrl: null });
+    expect(await failureReasonOf(adaptationId)).toBeNull();
+  });
+
+  /** And the attempt that STARTS clears the previous attempt's verdict. */
+  it("markPublishing clears the reason a previous attempt left", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markFailed(orgId, adaptationId, "missed", "schedule_missed", {
+      status: "queued",
+      attemptCount: 0,
+    });
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    await repo.markPublishing(orgId, adaptationId);
+    expect(await failureReasonOf(adaptationId)).toBeNull();
+  });
+
+  /**
+   * The reason MOVES rather than accumulating: a row that missed its slot, was
+   * re-approved and then failed for a different cause must read as that cause.
+   * Leaving `schedule_missed` standing beside a credentials sentence is the
+   * exact defect the column was added not to reproduce one column over.
+   */
+  it("replaces the previous reason rather than keeping it", async () => {
+    const adaptationId = await seedAdaptation("scheduled");
+    await repo.markFailed(orgId, adaptationId, "missed its slot", "schedule_missed", {
+      status: "scheduled",
+      attemptCount: 0,
+    });
+    expect(await failureReasonOf(adaptationId)).toBe("schedule_missed");
+
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await repo.markFailed(orgId, adaptationId, "bad credentials", "credentials_invalid", {
+      status: "queued",
+      attemptCount: 1,
+    });
+    expect(await failureReasonOf(adaptationId)).toBe("credentials_invalid");
   });
 
   it("credentials decrypt only for the org that owns the channel", async () => {
@@ -462,7 +648,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markFailed on a fresh (queued) adaptation: attempt_count advances by exactly one and a failed publications row is written", async () => {
     const adaptationId = await seedAdaptation("queued");
 
-    await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", {
+    await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", "no_adapter", {
       status: "queued",
       attemptCount: 0,
     });
@@ -513,7 +699,9 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
 
-    expect(await repo.markFailed(orgId, adaptationId, "Retries exhausted", fence)).toBe(false);
+    expect(
+      await repo.markFailed(orgId, adaptationId, "Retries exhausted", "retries_exhausted", fence),
+    ).toBe(false);
 
     expect(await adaptationRow(adaptationId)).toMatchObject({
       status: "queued",
@@ -540,9 +728,9 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ attemptCount: 1 })
       .where(eq(schema.adaptations.id, adaptationId));
 
-    expect(await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", fence)).toBe(
-      false,
-    );
+    expect(
+      await repo.markFailed(orgId, adaptationId, "No adapter for platform vk", "no_adapter", fence),
+    ).toBe(false);
 
     expect(await adaptationRow(adaptationId)).toMatchObject({
       status: "queued",
@@ -569,7 +757,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     });
 
     expect(
-      await repo.markFailed(orgId, adaptationId, "Retries exhausted", {
+      await repo.markFailed(orgId, adaptationId, "Retries exhausted", "retries_exhausted", {
         status: "publishing",
         attemptCount: attempt as number,
       }),
@@ -647,7 +835,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       expect(row?.attemptCount).toBe(1);
     }
 
-    await repo.markFailed(orgId, adaptationId, "Forbidden", {
+    await repo.markFailed(orgId, adaptationId, "Forbidden", "platform_rejected", {
       status: "publishing",
       attemptCount: 1,
     });
@@ -707,14 +895,20 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("the index is PARTIAL: any number of failed publications rows for one adaptation are fine", async () => {
     const adaptationId = await seedAdaptation("queued");
 
-    await repo.markFailed(orgId, adaptationId, "first", { status: "queued", attemptCount: 0 });
+    await repo.markFailed(orgId, adaptationId, "first", "platform_rejected", {
+      status: "queued",
+      attemptCount: 0,
+    });
     // A re-approve between the two attempts, which is the only way one
     // adaptation legitimately fails twice — and the fence follows the row.
     await db
       .update(schema.adaptations)
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
-    await repo.markFailed(orgId, adaptationId, "second", { status: "queued", attemptCount: 1 });
+    await repo.markFailed(orgId, adaptationId, "second", "platform_rejected", {
+      status: "queued",
+      attemptCount: 1,
+    });
 
     const pubs = await db
       .select()
@@ -778,7 +972,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);
 
     // A failed attempt is not a delivery.
-    await repo.markFailed(orgId, adaptationId, "nope", { status: "queued", attemptCount: 0 });
+    await repo.markFailed(orgId, adaptationId, "nope", "platform_rejected", {
+      status: "queued",
+      attemptCount: 0,
+    });
     expect(await repo.hasPublished(orgId, adaptationId)).toBe(false);
 
     await db
@@ -1037,7 +1234,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
   it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
     const adaptationId = await seedAdaptation("queued");
-    await repo.markFailed(orgId, adaptationId, "first attempt", {
+    await repo.markFailed(orgId, adaptationId, "first attempt", "platform_rejected", {
       status: "queued",
       attemptCount: 0,
     });
@@ -1089,7 +1286,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     await repo.markPublishing(orgId, adaptationId);
     await repo.claimSend(orgId, adaptationId);
 
-    await repo.markFailed(orgId, adaptationId, "Forbidden", {
+    await repo.markFailed(orgId, adaptationId, "Forbidden", "platform_rejected", {
       status: "publishing",
       attemptCount: 1,
     });
@@ -1112,6 +1309,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       orgId,
       adaptationId,
       "outcome unknown, check the channel",
+      "outcome_unknown",
       { status: "publishing", attemptCount: 1 },
       "unknown",
     );
@@ -1161,6 +1359,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       orgId,
       adaptationId,
       "unknown outcome",
+      "outcome_unknown",
       { status: "publishing", attemptCount: 1 },
       "unknown",
     );
@@ -1199,6 +1398,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       orgId,
       adaptationId,
       "outcome unknown",
+      "outcome_unknown",
       {
         status: "publishing",
         attemptCount: 1,
@@ -1252,6 +1452,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       orgId,
       adaptationId,
       "outcome unknown",
+      "outcome_unknown",
       {
         status: "publishing",
         attemptCount: 1,
@@ -1549,7 +1750,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const [first, second] = adaptationIds as [string, string];
 
     expect(
-      await repo.markFailed(orgId, first, "Telegram: chat not found", {
+      await repo.markFailed(orgId, first, "Telegram: chat not found", "platform_rejected", {
         status: "queued",
         attemptCount: 0,
       }),
@@ -1560,7 +1761,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await itemStatus(itemId)).toBe("approved");
 
     expect(
-      await repo.markFailed(orgId, second, "Telegram: chat not found", {
+      await repo.markFailed(orgId, second, "Telegram: chat not found", "platform_rejected", {
         status: "queued",
         attemptCount: 0,
       }),

@@ -3,6 +3,7 @@ import {
   CONTENT_ORIGINS,
   CONTENT_STATUSES,
   PUBLICATION_STATUSES,
+  PUBLISH_FAILURE_REASONS,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -127,6 +128,27 @@ export const adaptations = pgTable(
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
     attemptCount: integer("attempt_count").notNull().default(0),
     lastError: text("last_error"),
+    /**
+     * WHY the delivery ended, as a code — the class of failure, beside the
+     * `last_error` sentence about it.
+     *
+     * Nullable, and `null` is not an "other" bucket: every terminal write of
+     * `status` names one of `PUBLISH_FAILURE_REASONS`, and every write that
+     * moves the row off a verdict clears this in the same statement that clears
+     * `lastError` (a ratchet over `.set({ status:` asserts exactly that —
+     * `adaptation-failure-reason.test.ts`). What `null` means is "this row's
+     * verdict predates the column", i.e. rows that failed before migration
+     * 0019, which the screens still render from `last_error` as they always
+     * did.
+     *
+     * A COLUMN RATHER THAN A SENTENCE, because a reader that has to ask which
+     * KIND of failure this was cannot ask `last_error`: it is free text, printed
+     * verbatim, and written by the platform on the one class where it must
+     * remain free (`platform_rejected`). Keying behaviour off a worker
+     * sentence's prefix is a defect this product has already shipped once —
+     * `apps/web/src/lib/adaptations.ts` carries the note.
+     */
+    failureReason: text("failure_reason", { enum: PUBLISH_FAILURE_REASONS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
@@ -201,6 +223,13 @@ export const adaptations = pgTable(
      */
     enumCheck("adaptations_status_check", t.status, ADAPTATION_STATUSES),
     enumCheck("adaptations_origin_check", t.origin, CONTENT_ORIGINS),
+    /**
+     * Nullable, which the CHECK admits for free (`NULL in (…)` is NULL, and a
+     * CHECK admits NULL) — so the constraint lands on a live table with no
+     * back-fill and no preflight, while still refusing a misspelling that every
+     * `Record<PublishFailureReason, …>` reader would silently stop seeing.
+     */
+    enumCheck("adaptations_failure_reason_check", t.failureReason, PUBLISH_FAILURE_REASONS),
     /**
      * The parent key of `content_versions`' composite foreign key — see
      * `contentVersions` in generation.ts, which is where the invariant it
