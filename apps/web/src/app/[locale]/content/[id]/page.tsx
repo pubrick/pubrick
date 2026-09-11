@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  isOutstandingAdaptation,
   MAX_BODY_LENGTH,
   REFINE_VERBS,
   type RefineProposal,
@@ -683,10 +684,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    *   `queued` or `publishing` (`IN_FLIGHT_ADAPTATION_STATUSES`, via
    *   `itemSettled` above). Nothing else keeps it ticking.
    * - `apps/api/.../content.repository.ts` — refine is refused unless the item
-   *   is `draft | rejected | failed` (`EDITABLE_ITEM_STATUSES`, through
-   *   `refinableItem`). Approving moves the item OUT of that set before any
-   *   adaptation is queued, and `reject` resets every outstanding adaptation to
-   *   `pending` in the same transaction that writes `rejected`.
+   *   is `draft | rejected | partially_published | failed` (`EDITABLE_ITEM_STATUSES`,
+   *   through `refinableItem`, which shares `pinnedItemRefusal` with `update`
+   *   so the two can never answer differently). Approving moves the item OUT of
+   *   that set before any adaptation is queued, and `reject` resets every
+   *   outstanding adaptation to `pending` in the same transaction that writes
+   *   the item's new status. `partially_published` being IN the set costs this
+   *   argument nothing: such an item has no delivery outstanding, which is what
+   *   the fold and `reject` both mean by it, so the poll is not ticking.
    * - `apps/worker/.../publish.repository.ts` — `recomputeItemStatus` puts the
    *   item back into that set (`failed`) only when EVERY adaptation has failed,
    *   which is to say when none is in flight.
@@ -849,6 +854,51 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   const isPublished = item.status === "published";
   /**
+   * THE THREE FACTS A PARTLY DELIVERED POST'S CONTROLS ARE DRAWN FROM, derived
+   * from `item.adaptations` rather than from `item.status` — because the state
+   * the api's reject gate splits on is not a status at all.
+   *
+   * `{published, queued}` is an item whose OWN status is still `approved`
+   * (nothing has promoted it; the second delivery has not ended), and it is
+   * exactly where reject still does something: it cancels the outstanding job.
+   * `{published, failed}` is `partially_published` and is where reject is a
+   * 409. One status covers both halves of the first pair and neither of the
+   * second, so reading `item.status` here would disable the button in the one
+   * place it works and offer it in the one place it cannot.
+   *
+   * `deliveryOutcome`, not `status`, for the live half: they answer the same
+   * for `published` (the outcome differs from the column only on the failure
+   * that may have landed), and using the field the rest of this screen labels
+   * deliveries from keeps one reading of "this channel has the post".
+   */
+  const liveChannels = item.adaptations.filter((a) => a.deliveryOutcome === "published");
+  const hasOutstanding = item.adaptations.some((a) => isOutstandingAdaptation(a.status));
+  /** Live somewhere, but not a published ITEM — the state reject decides on. */
+  const partlyLive = !isPublished && liveChannels.length > 0;
+  /**
+   * What "Publish now" will actually send, which is what its label may claim.
+   *
+   * `approve` re-targets `pending`, `failed` and `scheduled`
+   * (`ContentRepository.approve`), and SKIPS a row whose last finished attempt
+   * ended `unknown` — the post may already be live there and re-sending would
+   * put a second copy in someone's channel. So `unknown` is excluded here too:
+   * counting it would promise a send this screen's own button refuses to make.
+   *
+   * The design (§4.4) wrote this as "channels that FAILED", which was the only
+   * shape that could reach `partially_published` when it was written. Reject
+   * now produces another one — it cancels an outstanding delivery back to
+   * `pending` and leaves the item here — and on that post a count of failures
+   * is zero while the button still has a channel to send to. The count follows
+   * what the press does.
+   */
+  const resendableChannels = item.adaptations.filter(
+    (a) =>
+      a.deliveryOutcome === "pending" ||
+      a.deliveryOutcome === "failed" ||
+      a.deliveryOutcome === "scheduled",
+  );
+  const partialSendCount = item.status === "partially_published" ? resendableChannels.length : 0;
+  /**
    * A render-time snapshot of "now", NOT a live clock: neither this nor
    * `scheduledAtIsPast` below ticks on its own between renders. That is fine
    * for `min` (the picker reads it fresh each time it opens) but makes
@@ -882,7 +932,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        */
       primaryAction={
         <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
-          {t("approveNow")}
+          {/*
+            The same button, saying what it will do to THIS post. "Publish now"
+            on a post that is already live in one channel reads as "publish it
+            again", which is the one thing approve cannot do — and the reader
+            with a half-sent post is precisely the one who needs to know that
+            pressing it touches only the channels that have nothing.
+
+            Falls back to the ordinary label at zero rather than claiming a
+            send to no channels: an item whose only remaining half ended
+            `unknown` has nothing approve will target, and the api refuses it.
+          */}
+          {partialSendCount > 0
+            ? t("approveNowPartial", { count: partialSendCount })
+            : t("approveNow")}
         </Button>
       }
     >
@@ -975,6 +1038,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <Card className="mb-6">
         <SourceStrip input={item.runInput} />
+        {/*
+          WHAT EDITING COSTS ON A HALF-SENT POST, said before it is paid.
+
+          `PATCH /api/content/:id` rewrites `content_items.body` and files the
+          NEW text as the human version, so once this post is edited the
+          product's own history no longer holds what already went out: that
+          survives only as the delivery receipt and the live post itself. The
+          text was made editable here deliberately — reject is no longer the way
+          out, and the commonest permanent failure IS the text — so the price is
+          stated rather than hidden (design §4.3).
+
+          It names the CHANNELS rather than saying "some channels", because the
+          reader's next move is to go and look at one, and it is above the
+          editor rather than beside Save so it is read before the typing, not
+          after it.
+        */}
+        {item.status === "partially_published" && liveChannels.length > 0 && (
+          <p className="mb-3 text-sm text-fg-tertiary">
+            {t("editAfterDelivery", {
+              channels: liveChannels.map((a) => channelLabel(a.channelId)).join(", "),
+            })}
+          </p>
+        )}
         <div ref={editorRef}>
           {/*
             ONE control, in the card's header, always mounted — never a toolbar
@@ -1238,9 +1324,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ContentRepository.requireNotPublished). Offering the buttons anyway is
         offering a choice that no longer exists, so they are disabled and the
         reason is spelled out rather than left to be discovered by clicking.
+
+        A PARTLY LIVE post splits Reject in two, following the api's own gate.
+        With a delivery still outstanding the button is the only thing in this
+        product that can stop it, so it stays pressable and says what it will
+        do — it cancels the half that has not gone and leaves the live one
+        alone, which is not what the word "Reject" promises. With nothing
+        outstanding there is nothing to cancel, the api answers 409, and the
+        button is disabled with the reason above it. Approve is untouched in
+        both: it is the action that works here.
       */}
       <Card className="mb-6">
         {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
+        {partlyLive && !hasOutstanding && (
+          <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
+        )}
         <div className="flex flex-wrap items-end gap-3">
           <Input
             id="scheduledAt"
@@ -1258,8 +1356,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           >
             {t("approveScheduled")}
           </Button>
-          <Button variant="danger" onClick={reject} disabled={isPublished}>
-            {t("reject")}
+          <Button
+            variant="danger"
+            onClick={reject}
+            disabled={isPublished || (partlyLive && !hasOutstanding)}
+          >
+            {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
           </Button>
         </div>
       </Card>

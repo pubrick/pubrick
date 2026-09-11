@@ -14,13 +14,17 @@ section numbers.
 | [0004](0004-provenance-lens.md) | The provenance lens | Increment 2a — the sentence-dimming editor overlay, the splitter, the per-channel counter | "the provenance-lens design/spec" |
 | [0005](0005-authorship-per-sentence.md) | Authorship, per sentence | Increment 2b-1 — the publish gate and origin badge reasoning per sentence, ahead of the refine verbs | "the authorship-per-sentence spec/design" |
 | [0006](0006-api-can-call-a-model.md) | The API can call a model | Increment 2b-2a — provider resolution, cancellation and abort accounting for an editor-side model call | not yet cited by name in code comments as of this copy |
-| [0007](0007-partial-delivery-design.md) | Partial delivery: what a half-sent post is | Issue #16 — what an item whose channels disagree IS, the `unknown` refusal and its human resolver, `nextItemStatus` as the one promotion rule | not yet cited by name in code comments as of this copy |
+| [0007](0007-partial-delivery-design.md) | Partial delivery: what a half-sent post is | Issue #16 — what an item whose channels disagree IS, the `unknown` refusal and its human resolver, `nextItemStatus` as the one promotion rule | shipped; cited by section number (§4.2, §4.3, §4.4) in the content repository and the item screen |
 
-`0007` is the one entry here that is not finished: **T1 shipped** — the
-`unknown` refusal, the resolver and the shared fold — and the rest of it,
-`partially_published` itself included, has not. Its front matter still says
-DECIDED, not implemented; the status is pending until the remaining tasks land,
-and until then the code is the answer about what exists.
+`0007` has shipped in full: the `unknown` refusal and its resolver, the
+`partially_published` status with its migration and backfill, the reject gate,
+and the item screen's labels, gates and disclosure. Two of its decisions were
+changed by review while landing and the CODE is the answer on both — reject on
+a fan-out with a delivery still outstanding CANCELS that delivery and leaves the
+item `partially_published`, rather than refusing (§4.2 wrote only the refusal);
+and "Publish now" counts every channel `approve` will target, not only the
+failed ones (§4.4 predates the state reject now produces). Its front matter
+still says DECIDED, not implemented.
 
 Each document's own front matter says what shipped and, where later work
 changed the schema or the code it describes, an inline editorial note says

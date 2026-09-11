@@ -1150,6 +1150,46 @@ describe("failures come first, and look like failures (Finding 3)", () => {
     if (!fineRow) throw new Error("draft item <li> not found");
     expect(within(fineRow).queryByRole("link", { name: en.Content.tryAgain })).toBeNull();
   });
+
+  /**
+   * A HALF-SENT POST IS NOT A FAILURE, and this list must not draw it as one.
+   *
+   * The danger title and Try again are keyed on the literal `item.status ===
+   * "failed"`, and the temptation on adding a fourth terminal-ish status is to
+   * widen that literal. Here it would be wrong twice: part of this post IS
+   * live, so red overstates it; and "Try again" is a one-click retry on a list,
+   * which is exactly the press this product refuses to offer for a fan-out
+   * whose remaining halves may include a delivery nobody can speak for. The
+   * retry lives on the item screen, where the count says what it will send and
+   * the unknown row is excluded from it.
+   *
+   * Pinned rather than left to the literal: nothing else fails if the flag
+   * quietly grows a second member.
+   */
+  it("does not draw a partly published post as a failure", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Half-sent post", "partially_published", [
+        adaptation({ id: "a1", status: "published" }),
+        adaptation({ id: "a2", status: "failed" }),
+      ]),
+      item("c2", "Broken post", "failed", [adaptation({ status: "failed" })]),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    const half = await screen.findByRole("link", { name: "Half-sent post" });
+    expect(half.className).not.toContain("text-danger");
+    const halfRow = half.closest("li");
+    if (!halfRow) throw new Error("partly published item <li> not found");
+    expect(within(halfRow).queryByRole("link", { name: en.Content.tryAgain })).toBeNull();
+
+    // ...while the post that really did fail keeps both, so this is a pin on
+    // the flag's reach and not on the flag being gone.
+    const brokenRow = screen.getByRole("link", { name: "Broken post" }).closest("li");
+    if (!brokenRow) throw new Error("failed item <li> not found");
+    expect(within(brokenRow).getByRole("link", { name: en.Content.tryAgain })).toBeInTheDocument();
+  });
 });
 
 describe("an outcome nobody knows, on the list (Finding 2)", () => {

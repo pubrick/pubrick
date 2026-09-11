@@ -6979,6 +6979,18 @@ describe.skipIf(!url)("content e2e", () => {
       expect(patched.body.body).toBe("Short enough now");
       expect(patched.body.status).toBe("partially_published");
 
+      // REFINE FOLLOWS EDITING through the same predicate
+      // (`pinnedItemRefusal`, shared by `update` and `refinableItem`), so the
+      // status gate must ADMIT this item. It is refused for an unrelated
+      // reason — no model wrote anything here — and that refusal is the proof
+      // the status gate passed: a pinned item answers `content_pinned_*`
+      // before the AI-draft check is ever reached.
+      const refineRefusal = await agent
+        .post(`/api/content/${itemId}/refine`)
+        .send({ verb: "shorten", start: 0, end: 5 })
+        .expect(409);
+      expect(refineRefusal.body.code).toBe("refine_needs_ai_draft");
+
       const refusal = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(409);
       // Its own code: this item is `partially_published`, not `published`, and
       // the approve below is the action the reader is being pointed at.

@@ -2652,6 +2652,24 @@ describe("a post whose channels disagreed", () => {
     });
   }
 
+  /** The other half of the fan-out: a second channel to name in a sentence. */
+  const second: Channel = { id: "ch2", platform: "telegram", name: "Second channel" };
+
+  /**
+   * `{published, queued}` — the state whose ITEM status is still `approved`,
+   * because the second delivery has not ended. Reject is the only control that
+   * can stop that delivery, so this is the shape where the button must work.
+   */
+  function stillGoingOutItem() {
+    return makeItem({
+      status: "approved",
+      adaptations: [
+        makeAdaptation({ id: "a1", status: "published", externalUrl: "https://t.me/main/42" }),
+        makeAdaptation({ id: "a2", channelId: "ch2", status: "queued" }),
+      ],
+    });
+  }
+
   it("wears the brick of something waiting on a person, not approve's blue", async () => {
     installBaseHandlers({ current: partlyPublishedItem() }, []);
 
@@ -2666,5 +2684,121 @@ describe("a post whose channels disagreed", () => {
     // went out at all.
     expect(badge.className).not.toContain("var(--status-published-bg)");
     expect(badge.className).not.toContain("var(--status-failed-bg)");
+  });
+  /**
+   * REJECT IS PRESSABLE WHILE SOMETHING IS STILL GOING OUT, and says what it
+   * does there. It cancels the delivery that has not left and leaves the live
+   * post alone — which is not what "Reject" promises, so the word changes with
+   * the act. Disabling it here (which an earlier gate effectively did, by
+   * refusing the request) takes away the only send-stopper this product has.
+   */
+  it("offers Reject as a cancel while a channel is still on its way out", async () => {
+    installBaseHandlers({ current: stillGoingOutItem() }, [], undefined, [channel, second]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const button = await screen.findByRole("button", {
+      name: en.Publish.rejectCancelOutstanding,
+    });
+    expect(button).toBeEnabled();
+    // The refusal sentence belongs to the OTHER half of the split; showing it
+    // here would tell a person with a live send that there is nothing to stop.
+    expect(screen.queryByText(en.Publish.partlyLiveNothingToStop)).not.toBeInTheDocument();
+  });
+
+  /**
+   * ...AND IS CLOSED, WITH THE REASON, once nothing is. The api answers 409
+   * here, so an enabled button is a control that can only ever fail — and the
+   * reason it fails is not guessable from a disabled button alone.
+   */
+  it("closes Reject with the reason once nothing is left to stop", async () => {
+    installBaseHandlers({ current: partlyPublishedItem() }, [], undefined, [channel, second]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const button = await screen.findByRole("button", { name: en.Publish.reject });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(en.Publish.partlyLiveNothingToStop)).toBeInTheDocument();
+  });
+
+  /**
+   * THE PRIMARY BUTTON SAYS WHAT PRESSING IT WILL SEND. "Publish now" beside a
+   * post that is already live in one channel reads as "publish it again",
+   * which is the one thing approve cannot do.
+   */
+  it("says how many channels Publish now will send to", async () => {
+    installBaseHandlers({ current: partlyPublishedItem() }, [], undefined, [channel, second]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    // The rendered sentence, not the ICU source: what is being pinned is that
+    // the plural is resolved and the number is the one channel approve will
+    // actually target.
+    await screen.findByRole("button", { name: "Send to the 1 channel that did not go out" });
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+  });
+
+  /**
+   * AN UNKNOWN DELIVERY IS NOT IN THE COUNT, because approve will not send it:
+   * the post may already be live there and a re-send puts a second copy in
+   * someone's channel. A label that counted it would promise a send this
+   * screen's own button refuses to make.
+   */
+  it("leaves a delivery nobody can speak for out of the count", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "partially_published",
+          adaptations: [
+            makeAdaptation({ id: "a1", status: "published", externalUrl: "https://t.me/main/42" }),
+            makeAdaptation({ id: "a2", channelId: "ch2", status: "failed" }),
+            makeAdaptation({
+              id: "a3",
+              channelId: "ch3",
+              status: "failed",
+              deliveryOutcome: "unknown",
+            }),
+          ],
+        }),
+      },
+      [],
+      undefined,
+      [channel, second, { id: "ch3", platform: "telegram", name: "Third channel" }],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    // One, not two: the unknown row is excluded even though its column says
+    // `failed`.
+    await screen.findByRole("button", { name: /the 1 channel that did not go out/ });
+    expect(screen.queryByRole("button", { name: /the 2 channels/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * EDITING A HALF-SENT POST OVERWRITES THE ONLY COPY THE PRODUCT KEEPS of
+   * what already went out, and the person doing it has to be told which
+   * channels have the old text — before they type, not after they save.
+   */
+  it("names the channels that already have the previous text, above the editor", async () => {
+    installBaseHandlers({ current: partlyPublishedItem() }, [], undefined, [channel, second]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const sentence = await screen.findByText(/already received the previous text/);
+    expect(sentence).toHaveTextContent("Telegram · Main channel");
+    // The channel that did NOT get it must not be named: the sentence is a
+    // list of where to go and look.
+    expect(sentence).not.toHaveTextContent("Second channel");
+  });
+
+  /** An ordinary draft says none of this. */
+  it("says nothing about previous text on a post that has never gone out", async () => {
+    installBaseHandlers({ current: makeItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    expect(screen.queryByText(/already received the previous text/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
   });
 });

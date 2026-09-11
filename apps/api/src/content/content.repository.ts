@@ -97,8 +97,8 @@ const ITEM_COLUMNS = {
  */
 const EDITABLE_ITEM_STATUSES = [
   "draft",
-  "rejected",
   "partially_published",
+  "rejected",
   "failed",
 ] as const satisfies readonly ContentStatus[];
 
