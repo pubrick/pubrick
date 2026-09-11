@@ -155,3 +155,13 @@ the log recorded two SURVIVED verdicts for a mutation that had not happened.
 It was caught because the script crashed visibly, not because the verdict
 looked wrong. Rule: every agent's scratch lives in a directory named for its
 task; a mutation log states the path it ran from.
+
+## 2026-09-11 — review reports in the session scratchpad die with the machine
+
+Nine review reports and the increment's follow-up list lived in the
+session's `/private/tmp` scratchpad. A reboot emptied it; the next fix agent
+found "the review file does not exist" and worked from the brief's summary
+of it. Nothing was lost that had not been copied into a brief, by luck. Rule:
+a report another agent will read is written under the repository
+(`.superpowers/sdd/reviews/`, gitignored), never under `/tmp`; the ledger
+names the path.
