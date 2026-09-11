@@ -32,10 +32,13 @@
  */
 export function isApplePlatform(nav: Navigator = navigator): boolean {
   const modern = (nav as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
-  const platform = modern?.platform ?? nav.platform ?? "";
-  // "macOS" (userAgentData), "MacIntel" (navigator.platform), and the iPad
-  // Safari that reports "iPad" while asking for a desktop site.
-  return /^(mac|iphone|ipad|ipod)/i.test(platform);
+  // `||`, not `??`: an EMPTY `userAgentData.platform` (a browser that ships
+  // the object but withholds the value) must fall through to the frozen
+  // answer, or a Mac reads as "not Apple" and Ctrl+K is taken again.
+  const platform = modern?.platform || nav.platform || "";
+  // "macOS" / "iOS" (userAgentData), "MacIntel" (navigator.platform, incl.
+  // iPadOS asking for a desktop site), "iPhone" / "iPad" / "iPod".
+  return /^(mac|ios|iphone|ipad|ipod)/i.test(platform);
 }
 
 /**
@@ -43,8 +46,16 @@ export function isApplePlatform(nav: Navigator = navigator): boolean {
  *
  * The other modifier is required to be absent for the same reason the choice
  * is made at all: `Ctrl+⌘+K` on a Mac is not this app's shortcut, and taking
- * it would be the `metaKey || ctrlKey` bug wearing a different hat.
+ * it would be the `metaKey || ctrlKey` bug wearing a different hat. `Alt` is
+ * excluded too: on Windows, AltGr arrives as `ctrlKey && altKey`, so a
+ * `Ctrl`-only test would take a keyboard layout's own third-level key; on a
+ * Mac `⌥` composes characters and `⌘⌥K` is nobody's shortcut here.
  */
-export function hasPlatformAccelerator(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+export function hasPlatformAccelerator(event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+}): boolean {
+  if (event.altKey) return false;
   return isApplePlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }

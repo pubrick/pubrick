@@ -1917,6 +1917,35 @@ describe("asking the model to revise a selection (Task 8)", () => {
       expect(document.activeElement).toHaveTextContent(en.Publish.refineProposalTitle);
     });
 
+    it("leaves a reader who moved on while the model worked where they are", async () => {
+      let release: (value: RefineProposal) => void = () => {};
+      const inFlight = new Promise<RefineProposal>((resolve) => {
+        release = resolve;
+      });
+      installBaseHandlers({ current: refinable() }, [], (path, method) =>
+        method === "POST" && path === "/api/content/c1/refine" ? inFlight : undefined,
+      );
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByLabelText(en.Publish.bodyLabel);
+      selectInBody(0, SELECTED.length);
+      await chooseVerb("shorten");
+      expect(document.activeElement).toHaveTextContent(en.Publish.refineWorking);
+
+      // The reader tabs away to the schedule field while the call is in flight.
+      const elsewhere = screen.getByLabelText(en.Publish.scheduleLabel);
+      elsewhere.focus();
+      expect(document.activeElement).toBe(elsewhere);
+
+      await act(async () => {
+        release(proposal);
+      });
+
+      // The card arrived; focus was not taken from where the reader put it.
+      expect(await screen.findByText(en.Publish.refineProposalTitle)).toBeInTheDocument();
+      expect(document.activeElement).toBe(elsewhere);
+    });
+
     it("hands focus to the body after an Accept, where the merged text now is", async () => {
       const merged = "Merged by the server, character for character.";
       const served = { current: refinable({ refineProposal: proposal }) };

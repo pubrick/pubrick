@@ -506,6 +506,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
     if (!refineHandedFocus.current) return;
     refineHandedFocus.current = false;
+    // Only hand focus on if it is still where this screen put it. A reader
+    // who tabbed to the schedule field while the model worked has moved on;
+    // yanking them back is the trap `menu.tsx` names, wearing a new hat.
+    if (document.activeElement !== refineStatusRef.current) return;
     if (proposalHeadingRef.current) proposalHeadingRef.current.focus();
     else document.getElementById("body")?.focus();
   }, [refineBusy]);
