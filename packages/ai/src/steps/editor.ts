@@ -19,7 +19,8 @@ import { planMaterial } from "./writer.js";
  * canonical one every other reader of `content_items.body` assumes.
  */
 export const editSchema = z.object({
-  body: z.string().transform(normalizeNewlines).pipe(z.string().min(1).max(MAX_BODY_LENGTH)),
+  // `overwrite`, not `transform().pipe()` — see writer.ts.
+  body: z.string().overwrite(normalizeNewlines).min(1).max(MAX_BODY_LENGTH),
   changes: z.array(z.string().min(1)),
 });
 export type EditOutput = z.infer<typeof editSchema>;

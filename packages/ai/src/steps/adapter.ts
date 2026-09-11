@@ -127,17 +127,16 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
   // repair loop reads is the PIPE's path, so wrapping the bound changes
   // nothing about how an overflow is detected or worded.
   const schema = z.object({
+    // `overwrite`, not `transform().pipe()` — the pipe erased `maxLength`
+    // from the JSON Schema the provider is sent, which for THIS step is the
+    // platform limit the model most needs to be told. See writer.ts.
     body: z
       .string()
-      .transform(normalizeNewlines)
-      .pipe(
-        z
-          .string()
-          .min(1)
-          .max(limit, {
-            message: `the body must be at most ${limit} characters to fit this channel`,
-          }),
-      ),
+      .overwrite(normalizeNewlines)
+      .min(1)
+      .max(limit, {
+        message: `the body must be at most ${limit} characters to fit this channel`,
+      }),
   });
 
   const step = defineStep<AdapterInput, AdaptationOutput>({

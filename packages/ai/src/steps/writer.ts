@@ -26,7 +26,10 @@ import type { RunStepContext, Step } from "./types.js";
  * refused for characters the product is about to drop.
  */
 export const draftSchema = z.object({
-  body: z.string().transform(normalizeNewlines).pipe(z.string().min(1).max(MAX_BODY_LENGTH)),
+  // `overwrite`, not `transform().pipe()`: the second erases `minLength` /
+  // `maxLength` from the JSON Schema the provider is sent (measured), so the
+  // model would no longer be TOLD the bound it is held to.
+  body: z.string().overwrite(normalizeNewlines).min(1).max(MAX_BODY_LENGTH),
 });
 export type DraftOutput = z.infer<typeof draftSchema>;
 
