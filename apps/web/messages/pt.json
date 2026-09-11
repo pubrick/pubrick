@@ -42,6 +42,7 @@
   },
   "Ui": {
     "advanced": "Avançado",
+    "advancedDirtyHint": "Contém algo que você digitou",
     "close": "Fechar"
   },
   "Brands": {

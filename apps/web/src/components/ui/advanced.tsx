@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
+import { useId } from "react";
 import { IconChevronRight } from "./icons";
 
 export type AdvancedProps = {
@@ -9,6 +10,19 @@ export type AdvancedProps = {
   dirty?: boolean;
   label?: string;
   className?: string;
+  /**
+   * Open state, when the SCREEN needs a say in it — pass neither this nor
+   * `onOpenChange` and the native `<details>` behaves exactly as it always
+   * has, which is what every other caller relies on.
+   *
+   * It exists for one reason: a refusal may only name something the reader can
+   * see (constitution), and the compose screen's primary action refuses over
+   * what this section holds. Left shut, that sentence points at a box nobody
+   * can see. A screen that opens it has to own the state, because a reader who
+   * then closes it must be able to.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 /**
@@ -22,25 +36,52 @@ export type AdvancedProps = {
  * default — a brick dot renders beside the label so collapsed non-default
  * state is never invisible (also constitution rule 2).
  */
-export function Advanced({ children, dirty = false, label, className }: AdvancedProps) {
+export function Advanced({
+  children,
+  dirty = false,
+  label,
+  className,
+  open,
+  onOpenChange,
+}: AdvancedProps) {
   const t = useTranslations("Ui");
   const resolvedLabel = label ?? t("advanced");
+  const hintId = useId();
 
   return (
     <details
+      open={open}
+      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
       className={["group rounded-card border border-border bg-panel", className]
         .filter(Boolean)
         .join(" ")}
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
+      <summary
+        aria-describedby={dirty ? hintId : undefined}
+        className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden"
+      >
         <span className="flex items-center gap-2">
           {resolvedLabel}
           {dirty && (
-            <span
-              aria-hidden="true"
-              data-testid="advanced-dirty-dot"
-              className="h-1.5 w-1.5 rounded-full bg-accent"
-            />
+            <>
+              <span
+                aria-hidden="true"
+                data-testid="advanced-dirty-dot"
+                className="h-1.5 w-1.5 rounded-full bg-accent"
+              />
+              {/*
+                The dot's meaning, for a reader who cannot see paint. The dot
+                itself is `aria-hidden` and correctly so — it is decoration —
+                which left a shut section holding 8 000 characters entirely
+                absent from what a screen reader announces, on a screen whose
+                primary action then refuses over that content. Described on the
+                TRIGGER because the trigger is what a reader lands on while the
+                section is shut, and it is the trigger that is being described.
+              */}
+              <span id={hintId} className="sr-only">
+                {t("advancedDirtyHint")}
+              </span>
+            </>
           )}
         </span>
         <IconChevronRight

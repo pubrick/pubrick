@@ -42,6 +42,7 @@
   },
   "Ui": {
     "advanced": "Дополнительно",
+    "advancedDirtyHint": "Здесь есть то, что вы ввели",
     "close": "Закрыть"
   },
   "Brands": {

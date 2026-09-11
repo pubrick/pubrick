@@ -865,6 +865,38 @@ describe("'Create post' while the Source section holds something (Task 5 Step 3)
     expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
   });
 
+  /**
+   * A REFUSAL MUST NAME SOMETHING THE READER CAN SEE (constitution: a primary
+   * action says why it refused). This one names "the Source section" while that
+   * section is shut over the very text it is refusing about — so a person who
+   * collapsed it an hour ago is told a box they cannot see is in their way, and
+   * the only visible trace was a 6-pixel dot that is `aria-hidden`.
+   *
+   * Opening it is the smallest honest fix: the sentence and the thing it is
+   * about are then on screen together.
+   */
+  it("opens the Source section it refuses about, so the sentence names something visible", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, { material: ARTICLE_PASTE });
+    // Shut again, which is the state the defect lives in: the paste is in
+    // there, and nothing a reader can see says so.
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(false);
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).not.toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toBeVisible();
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(ARTICLE_PASTE);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
   it("refuses over a link alone, which no post can carry either", async () => {
     // §2.4 on the create path. `contentCreateSchema` drops `sourceUrl` exactly
     // as it drops `material`, so before this guard the link went nowhere, the

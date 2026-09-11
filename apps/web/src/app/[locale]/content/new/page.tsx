@@ -52,6 +52,18 @@ export default function NewContentPage() {
   // should flash while we still do not know which of the two is true.
   const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  /**
+   * Whether the Source disclosure is open — held HERE because the screen's
+   * primary action has to be able to open it.
+   *
+   * A refusal may only name something the reader can see (constitution). This
+   * screen's refusal names the Source section over material that section is
+   * shut on, and the only visible trace of that material is a six-pixel dot
+   * that is `aria-hidden` — so a person who collapsed it is told a box they
+   * cannot see is in their way. The reader still owns the control: `onOpenChange`
+   * writes their own toggles back, so nothing traps it open.
+   */
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -158,6 +170,8 @@ export default function NewContentPage() {
     // and a link is a value someone typed just as much as a paste is.
     if (hasMaterial || hasSourceUrl) {
       setError(t(canGenerate ? "sourceBlocksCreate" : "sourceBlocksCreateNoAi"));
+      // ...and put what the sentence is about on screen beside it.
+      setSourceOpen(true);
       return;
     }
     if (channelIds.size === 0) {
@@ -374,7 +388,12 @@ export default function NewContentPage() {
             can hold 8 000 characters while collapsed, and the screen's primary
             action refuses over them.
           */}
-          <Advanced label={t("sourceTitle")} dirty={hasMaterial || hasSourceUrl}>
+          <Advanced
+            label={t("sourceTitle")}
+            dirty={hasMaterial || hasSourceUrl}
+            open={sourceOpen}
+            onOpenChange={setSourceOpen}
+          >
             <div className="flex flex-col gap-4">
               <Textarea
                 id="material"
