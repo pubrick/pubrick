@@ -3958,14 +3958,22 @@ describe.skipIf(!url)("content e2e", () => {
      * `created_at` with `now()` and hands out a random `id`, so through the
      * route there is no tie to break and no way to put the oldest row first.
      *
-     * THIS TEST CANNOT, BY ITSELF, TELL THE CLAUSE FROM THE PLANNER, and that
-     * is measured rather than suspected: `content_items_org_id_created_at_id_idx`
-     * leads on `org_id` and continues in exactly this order, so an org-scoped
-     * read plans as an Index Only Scan over it and arrives sorted with the
-     * `ORDER BY` deleted — the mutation survives all 570 tests of this package.
-     * The clause itself is pinned in `content-list-cost.e2e.spec.ts`, on the
-     * text of the statement, where no index can stand in for it. What this test
-     * holds is the CONTRACT: the order a caller is promised, tie included.
+     * THE IDS ARE ASSIGNED SO THAT THE TWO KEYS DISAGREE. Sorted ascending and
+     * handed out `tieLow, tieHigh, oldest`, the OLDEST row carries the LARGEST
+     * id — so `ORDER BY id DESC` alone answers `oldest, tieHigh, tieLow`, which
+     * is not what is expected below. Assigned the other way round (ascending
+     * into `oldest, tieLow, tieHigh`, as this test first had it) an id-only
+     * order produces the expected answer exactly, and the test passes while
+     * saying nothing about `created_at` at all.
+     *
+     * IT STILL CANNOT TELL THE CLAUSE FROM THE PLANNER. Deleting the `ORDER BY`
+     * leaves whatever plan the statistics of the moment buy — measured on this
+     * seed, a bitmap heap scan plus a sort, which returns these three rows in
+     * insertion order and can change with the next `ANALYZE`. The clause itself
+     * is pinned in `content-list-cost.e2e.spec.ts`, on the text of the
+     * statement and on its plan, where no accident can stand in for it. What
+     * this test holds is the CONTRACT: the order a caller is promised, tie
+     * included.
      */
     it("answers newest first, breaking a tie on created_at by id", async () => {
       const agent = await orgAgent();
@@ -3973,8 +3981,9 @@ describe.skipIf(!url)("content e2e", () => {
       const { createDb, schema } = await import("@pubrick/db");
       const seed = createDb(url as string);
       // Ascending, so the roles below are assigned by a known order rather than
-      // by whatever two random uuids happen to compare as.
-      const [oldest, tieLow, tieHigh] = [randomUUID(), randomUUID(), randomUUID()].sort();
+      // by whatever three random uuids happen to compare as — and assigned so
+      // the oldest row holds the largest id (see the docstring).
+      const [tieLow, tieHigh, oldest] = [randomUUID(), randomUUID(), randomUUID()].sort();
       const tied = new Date("2026-09-10T08:00:00.000Z");
       try {
         const [brandRow] = (
