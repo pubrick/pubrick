@@ -474,6 +474,64 @@ describe("rendering by adaptation status (Step 1)", () => {
     // And NOT the calm blue sentence: two lines about one slot, one of which
     // says nothing is wrong, is worse than either alone.
     expect(resultsList()).not.toHaveTextContent(`${en.Publish.scheduledFor} `);
+    // Nothing on this screen re-reads a `scheduled` row, so the line cannot
+    // clear itself — including after the post has gone out. It says so.
+    expect(alert).toHaveTextContent("Reload to check");
+  });
+
+  /**
+   * AND NOT WHILE THE DISPATCH IS STILL HEALTHY. A row is `scheduled` until a
+   * handler writes `markPublishing`, which is a poll away at best; with no
+   * margin, opening this page seconds after a perfectly ordinary slot painted
+   * review-brick and a `role="alert"` accusing the system of an outage. A
+   * minute past the slot is inside the queue's own dispatch window.
+   */
+  it("says nothing while a just-passed slot is still within the dispatch window", async () => {
+    const scheduledAt = new Date(Date.now() - 60 * 1000).toISOString();
+    const item = makeItem({
+      adaptations: [makeAdaptation({ status: "scheduled", scheduledAt })],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await within(resultsList()).findByText(
+      `${en.Publish.scheduledFor} ${new Date(scheduledAt).toLocaleString("en")}`,
+    );
+    expect(within(resultsList()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * ONE EVENT, ONE MESSAGE — the same rule that routes `outcome_unknown` to the
+   * resolver instead of giving it a red sentence of its own.
+   *
+   * A row that MISSED its slot is `failed` and still carries `scheduled_at`
+   * (only `approve` clears it), so an overdue line not scoped to `scheduled`
+   * would say "Missed its slot by 26.0 h" and "its slot has passed and nothing
+   * has delivered it yet" about the same slot, one of them implying the outcome
+   * is still open. The scope was untested: widening it to `!== "published"`
+   * left the web suite green.
+   */
+  it("does not add the overdue line to a row that has already failed for missing its slot", async () => {
+    const scheduledAt = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+    const item = makeItem({
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          failureReason: "schedule_missed",
+          lateBySeconds: 26 * 3600,
+          scheduledAt,
+        }),
+      ],
+    });
+    installBaseHandlers({ current: item }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const alerts = await within(resultsList()).findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("Missed its slot by 26.0 h");
+    expect(resultsList()).not.toHaveTextContent("has passed and nothing has delivered it");
   });
 });
 

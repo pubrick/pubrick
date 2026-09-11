@@ -97,6 +97,41 @@ export const PUBLISH_ABANDONED_AFTER_SECONDS =
 export const PUBLISH_SUPERVISE_INTERVAL_SECONDS = 60;
 
 /**
+ * pg-boss's fetch cadence: how long a job whose `startAfter` has come round can
+ * sit before a worker picks it up (`pollingIntervalSeconds`, pg-boss's own
+ * default — `main.ts` does not set it). Named rather than inlined for the same
+ * reason as the supervise interval above: the window below has to pay it.
+ */
+export const PUBLISH_POLLING_INTERVAL_SECONDS = 2;
+
+/**
+ * HOW LONG AFTER ITS SLOT A `scheduled` ROW IS STILL PERFECTLY HEALTHY — the
+ * dispatch window, and the margin a screen must allow before it calls a slot
+ * overdue.
+ *
+ * An approved post is a pg-boss job with `startAfter = scheduled_at`, and the
+ * row stops being `scheduled` when the handler writes `markPublishing`. Between
+ * those two instants nothing is wrong and nothing is late: the job waits out a
+ * poll, and if the host taking it dies before that write, pg-boss's expiry plus
+ * one supervise interval is how long it takes for anybody to notice and hand
+ * the job to another worker. All three are this queue's own numbers, so the
+ * margin is derived from them rather than guessed as "a few minutes" — tuning
+ * the queue moves the margin with it.
+ *
+ * It exists because the item screen paints an overdue slot in review-brick with
+ * `role="alert"`, read off the BROWSER's clock, and with no margin that alarm
+ * fires for every healthy dispatch — open the page seconds after a slot and the
+ * product accuses itself of an outage — and for every reader whose laptop clock
+ * runs fast. The number is not a verdict about the post: the worker's own bound
+ * (`PUBLISH_MAX_LATENESS_HOURS`) is what fails one, on the database's clock, and
+ * it is hours where this is minutes.
+ */
+export const SCHEDULED_DISPATCH_WINDOW_SECONDS =
+  PUBLISH_POLLING_INTERVAL_SECONDS +
+  PUBLISH_QUEUE_OPTIONS.expireInSeconds +
+  PUBLISH_SUPERVISE_INTERVAL_SECONDS;
+
+/**
  * THE WORST CASE THIS SYSTEM CAN INFLICT ON ITS OWN SCHEDULE — every second a
  * job can spend between becoming due and the last moment a handler could still
  * legitimately be sending it, with no outage involved at all.

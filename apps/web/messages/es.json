@@ -125,7 +125,7 @@
       "human": "Escrito por una persona"
     },
     "unknownOutcome": "Se envió a {channel}, pero la plataforma nunca lo confirmó. Revisa ese canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
-    "scheduledOverdue": "Su franja ({date}) ya pasó y todavía nada lo ha entregado.",
+    "scheduledOverdue": "Su franja ({date}) ya pasó y todavía nada lo ha entregado. Recarga para comprobarlo.",
     "failureReason": {
       "scheduleMissed": "Perdió su franja por {hours} h. No se envió nada: ¿publicar ahora?",
       "scheduleMissedNoHours": "Perdió su franja programada. No se envió nada: ¿publicar ahora?",

@@ -1,4 +1,8 @@
-import { DELIVERY_OUTCOMES, PUBLISH_FAILURE_REASONS } from "@pubrick/shared";
+import {
+  DELIVERY_OUTCOMES,
+  PUBLISH_FAILURE_REASONS,
+  SCHEDULED_DISPATCH_WINDOW_SECONDS,
+} from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import en from "../../messages/en.json";
@@ -15,6 +19,7 @@ import {
   failureSentence,
   hasAdaptationInFlight,
   isAdaptationInFlight,
+  isScheduleOverdue,
 } from "./adaptations";
 
 /** Walks a dotted message key into the `Content` namespace of `en.json`. */
@@ -412,5 +417,35 @@ describe("failureSentence", () => {
   it("says nothing at all when there is neither a reason nor a sentence", () => {
     const { t } = recorder();
     expect(failureSentence(row(), t, "#news")).toBeNull();
+  });
+});
+
+/**
+ * THE ALARM HAS A MARGIN, AND THE MARGIN IS THE QUEUE'S OWN NUMBER.
+ *
+ * A `scheduled` row stays `scheduled` until a handler writes `markPublishing`,
+ * so "the slot has passed" and "something is wrong" are not the same instant.
+ * Without the window this predicate fired for every healthy dispatch — and for
+ * every clock running fast — in review-brick, with `role="alert"`.
+ */
+describe("when a scheduled slot counts as overdue", () => {
+  const slot = new Date("2026-09-12T09:00:00.000Z");
+  const at = (secondsPast: number) => slot.getTime() + secondsPast * 1000;
+
+  it("is quiet while the dispatch window is still running", () => {
+    expect(isScheduleOverdue(slot.toISOString(), at(1))).toBe(false);
+    expect(isScheduleOverdue(slot.toISOString(), at(SCHEDULED_DISPATCH_WINDOW_SECONDS))).toBe(
+      false,
+    );
+  });
+
+  it("says so once the window has gone by with nothing delivered", () => {
+    expect(isScheduleOverdue(slot.toISOString(), at(SCHEDULED_DISPATCH_WINDOW_SECONDS + 1))).toBe(
+      true,
+    );
+  });
+
+  it("is never true before the slot itself", () => {
+    expect(isScheduleOverdue(slot.toISOString(), at(-3600))).toBe(false);
   });
 });

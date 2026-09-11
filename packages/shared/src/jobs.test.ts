@@ -3,8 +3,10 @@ import {
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
   PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
+  PUBLISH_POLLING_INTERVAL_SECONDS,
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
+  SCHEDULED_DISPATCH_WINDOW_SECONDS,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 
@@ -84,5 +86,40 @@ describe("the staleness bound is out of reach of the system's own delays", () =>
   it("derives the abandoned window from the attempt ceiling", () => {
     expect(PUBLISH_ABANDONED_GRACE_SECONDS).toBe(PUBLISH_QUEUE_OPTIONS.expireInSeconds);
     expect(PUBLISH_ABANDONED_AFTER_SECONDS).toBe(PUBLISH_QUEUE_OPTIONS.expireInSeconds * 2);
+  });
+});
+
+/**
+ * THE DISPATCH WINDOW — the margin a screen has to allow before it calls a
+ * `scheduled` slot overdue.
+ *
+ * Derived, not chosen: the item screen's overdue alarm reads the BROWSER's
+ * clock, so with no margin it fires for every healthy dispatch and for every
+ * fast laptop clock. What it must outlast is this queue's own numbers — a poll,
+ * an attempt's expiry, and the supervise interval it takes to notice one — and
+ * it must stay far below the bound that actually FAILS a post, which is hours
+ * and is the database's verdict rather than a browser's.
+ */
+describe("how long a scheduled slot may be past due and still be healthy", () => {
+  it("outlasts a whole attempt the queue has not yet given up on", () => {
+    expect(SCHEDULED_DISPATCH_WINDOW_SECONDS).toBeGreaterThan(
+      PUBLISH_QUEUE_OPTIONS.expireInSeconds,
+    );
+    expect(SCHEDULED_DISPATCH_WINDOW_SECONDS).toBe(
+      PUBLISH_POLLING_INTERVAL_SECONDS +
+        PUBLISH_QUEUE_OPTIONS.expireInSeconds +
+        PUBLISH_SUPERVISE_INTERVAL_SECONDS,
+    );
+  });
+
+  /**
+   * And it is a MARGIN, not a second verdict: the worker's bound is what fails
+   * a post, and a window anywhere near it would have the screen calling an
+   * outage on posts the system is still entitled to deliver.
+   */
+  it("stays far below the bound that fails a post", () => {
+    expect(SCHEDULED_DISPATCH_WINDOW_SECONDS).toBeLessThan(
+      (PUBLISH_MAX_LATENESS_HOURS_DEFAULT * 3600) / 10,
+    );
   });
 });

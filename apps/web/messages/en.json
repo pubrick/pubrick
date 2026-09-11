@@ -125,7 +125,7 @@
       "human": "Human-written"
     },
     "unknownOutcome": "Sent to {channel}, but the platform never confirmed it. Check that channel before approving again — approving sends another copy.",
-    "scheduledOverdue": "Its slot — {date} — has passed and nothing has delivered it yet.",
+    "scheduledOverdue": "Its slot — {date} — has passed and nothing has delivered it yet. Reload to check.",
     "failureReason": {
       "scheduleMissed": "Missed its slot by {hours} h. Nothing was sent — publish now?",
       "scheduleMissedNoHours": "Missed its scheduled slot. Nothing was sent — publish now?",

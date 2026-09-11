@@ -29,6 +29,7 @@ import {
   type DeliveryOutcome,
   failureSentence,
   hasAdaptationInFlight,
+  isScheduleOverdue,
 } from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
@@ -1551,7 +1552,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               })()}
             {a.status === "scheduled" &&
               a.scheduledAt &&
-              (new Date(a.scheduledAt).getTime() < Date.now() ? (
+              (isScheduleOverdue(a.scheduledAt) ? (
                 /*
                   THE SLOT HAS PASSED AND NOTHING HAS DELIVERED IT — the only
                   thing that makes an outage visible WHILE it is happening.
@@ -1565,6 +1566,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   is looking at has passed for THEM. The verdict that fails the
                   post is the worker's, on the database's clock, and this says
                   nothing about it.
+
+                  NOT THE INSTANT THE SLOT PASSES — `isScheduleOverdue` allows
+                  the queue's own dispatch window first. A row is `scheduled`
+                  until a handler writes `markPublishing`, so with no margin this
+                  alarm fired for every healthy dispatch and for every clock
+                  running fast, in review-brick, with `role="alert"`.
+
+                  AND IT SAYS "reload": `scheduled` is deliberately outside the
+                  poll set (`lib/adaptations.ts` — a due time days away is not
+                  something to ask about every two seconds), so nothing on this
+                  screen clears this line by itself, including after the post has
+                  gone out. Telling the reader that is honest; polling a slot
+                  that may be a week off to avoid saying it is not.
                 */
                 <span role="alert" className="text-sm text-[var(--status-review-fg)]">
                   {tc("scheduledOverdue", {

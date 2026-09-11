@@ -4,6 +4,7 @@ import type {
   DeliveryOutcome,
   PublishFailureReason,
 } from "@pubrick/shared";
+import { SCHEDULED_DISPATCH_WINDOW_SECONDS } from "@pubrick/shared";
 import type { StatusBadgeStatus } from "@/components/ui/status-badge";
 
 /**
@@ -120,6 +121,30 @@ export function hasAdaptationInFlight(
  * pressed the button.
  */
 export const CONTENT_LIST_POLL_INTERVAL_MS = 5000;
+
+/**
+ * HAS THIS SLOT COME AND GONE WITH NOTHING DELIVERED — asked of the browser's
+ * clock, which is the right clock here (nothing is being decided; the question
+ * is whether the time THIS reader is looking at has passed for them) and the
+ * wrong one to alarm off without a margin.
+ *
+ * THE MARGIN IS THE DISPATCH WINDOW, and it is `@pubrick/shared`'s number
+ * rather than a few minutes picked here: an approved post is a pg-boss job with
+ * `startAfter = scheduled_at`, and the row is `scheduled` until a handler
+ * writes `markPublishing` — a poll away at best, and an expiry plus a supervise
+ * interval away if the host that took the job died before that write. Without
+ * it, opening the item page seconds after a perfectly healthy slot painted a
+ * `role="alert"` accusing the system of an outage, and a laptop clock an hour
+ * fast painted every slot in the next hour the same way.
+ *
+ * Deliberately NOT the worker's own bound: `PUBLISH_MAX_LATENESS_HOURS` decides
+ * whether a post still goes out, on the database's clock, and it is hours where
+ * this is minutes. This says only "long enough that something should have
+ * happened by now".
+ */
+export function isScheduleOverdue(scheduledAt: string, now: number = Date.now()): boolean {
+  return now - new Date(scheduledAt).getTime() > SCHEDULED_DISPATCH_WINDOW_SECONDS * 1000;
+}
 
 /**
  * WHY A DELIVERY FAILED, in the reader's language — one sentence per member of

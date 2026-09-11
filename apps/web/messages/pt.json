@@ -125,7 +125,7 @@
       "human": "Escrito por uma pessoa"
     },
     "unknownOutcome": "Foi enviado para {channel}, mas a plataforma nunca confirmou. Verifique esse canal antes de aprovar de novo: aprovar envia outra cópia.",
-    "scheduledOverdue": "O horário ({date}) já passou e nada o entregou ainda.",
+    "scheduledOverdue": "O horário ({date}) já passou e nada o entregou ainda. Recarregue para verificar.",
     "failureReason": {
       "scheduleMissed": "Perdeu o horário por {hours} h. Nada foi enviado — publicar agora?",
       "scheduleMissedNoHours": "Perdeu o horário agendado. Nada foi enviado — publicar agora?",
