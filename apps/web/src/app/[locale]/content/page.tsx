@@ -466,7 +466,7 @@ export default function ContentQueuePage() {
                 the link. The group above this card is still headed "Failed" and
                 the badge still reads Failed — the difference is that the row
                 now says WHICH failure, so a missed slot ("publish now?") and a
-                dead credential ("reconnect it in Settings") stop looking like
+                dead credential ("reconnect it on the brand's page") stop looking like
                 the same red chip.
 
                 The same sentence as the item screen, from the same catalogue

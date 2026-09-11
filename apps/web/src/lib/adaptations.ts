@@ -202,8 +202,11 @@ function lateHours(seconds: number): string {
  * 3. Nothing, for a failure that recorded neither.
  *
  * `channel` is the label the calling screen already resolved; the sentences
- * that send a reader to Settings name it, because "reconnect the channel" is
- * not an instruction anybody can follow without knowing which one.
+ * that send a reader to the brand screen name it, because "reconnect the
+ * channel" is not an instruction anybody can follow without knowing which one
+ * — and the brand screen is where channels are added, edited and reconnected
+ * (`app/[locale]/brands/[id]/page.tsx`). Not Settings, which holds appearance,
+ * the AI provider, the account and the workspace, and has no channel on it.
  */
 export function failureSentence(
   delivery: FailedDelivery,

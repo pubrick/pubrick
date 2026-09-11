@@ -2,6 +2,9 @@ import { DELIVERY_OUTCOMES, PUBLISH_FAILURE_REASONS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import en from "../../messages/en.json";
+import es from "../../messages/es.json";
+import pt from "../../messages/pt.json";
+import ru from "../../messages/ru.json";
 import {
   ADAPTATION_STATUSES,
   CONTENT_BADGE_STATUS,
@@ -159,8 +162,8 @@ describe("every failure reason has a sentence", () => {
   /**
    * The map is not an alphabet soup: each of the nine is named here against the
    * English sentence it must produce, so a mutation that swaps two keys — a
-   * missed slot captioned "reconnect the channel in Settings" — is red rather
-   * than merely different.
+   * missed slot captioned "reconnect the channel on the brand's page" — is red
+   * rather than merely different.
    */
   it.each([
     ["schedule_missed", "Missed its slot"],
@@ -175,6 +178,49 @@ describe("every failure reason has a sentence", () => {
   ] as const)("%s reads about %s", (reason, fragment) => {
     const text = messageAt(en.Content, failureReasonKey(reason));
     expect(text).toContain(fragment);
+  });
+});
+
+/**
+ * THE SCREEN IT SENDS THE READER TO HAS TO BE THE SCREEN THAT CAN DO IT.
+ *
+ * The three credential sentences are the only ones that ask for an action, and
+ * they used to ask for it in Settings. Channels are not in Settings: they are
+ * on the brand's own page (`app/[locale]/brands/[id]/page.tsx` — add, edit,
+ * test connection, remove), and Settings holds appearance, the AI provider,
+ * the account and the workspace. The shell offers exactly three destinations,
+ * so the sentence named the wrong one of three for the one class of failure
+ * where the reader has something to do about it.
+ *
+ * Asserted per LOCALE and against the app's own nav words rather than against
+ * the English string, because the destination is what has to be right in all
+ * four — a page test can only see one of them, and it was a page test asserting
+ * the word "Settings" that let this ship.
+ */
+describe("a credential failure sends the reader to the brand screen", () => {
+  const LOCALES = [
+    // The settings word is given as a STEM: Russian inflects it inside the
+    // sentence ("в настройках"), so the nav label itself would never match.
+    { name: "en", messages: en, settingsStem: "settings" },
+    { name: "ru", messages: ru, settingsStem: "настройк" },
+    { name: "es", messages: es, settingsStem: "ajustes" },
+    { name: "pt", messages: pt, settingsStem: "configuraç" },
+  ] as const;
+
+  const CREDENTIAL_REASONS = [
+    "credentials_unreadable",
+    "credentials_missing",
+    "credentials_invalid",
+  ] as const;
+
+  it.each(LOCALES)("$name names Brands and never Settings", ({ messages, settingsStem }) => {
+    const brands = messages.Nav.brands.toLowerCase();
+    for (const reason of CREDENTIAL_REASONS) {
+      const sentence = messageAt(messages.Content, failureReasonKey(reason))?.toLowerCase();
+      expect(sentence).toBeDefined();
+      expect(sentence).toContain(brands);
+      expect(sentence).not.toContain(settingsStem);
+    }
   });
 });
 

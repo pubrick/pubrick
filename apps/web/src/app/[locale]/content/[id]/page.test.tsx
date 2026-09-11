@@ -323,7 +323,7 @@ describe("rendering by adaptation status (Step 1)", () => {
     expect(alert).not.toHaveTextContent("past the 6.0 h limit");
   });
 
-  it("sends a dead credential to Settings and names the channel", async () => {
+  it("sends a dead credential to the brand screen and names the channel", async () => {
     const item = makeItem({
       adaptations: [
         makeAdaptation({
@@ -339,7 +339,11 @@ describe("rendering by adaptation status (Step 1)", () => {
 
     const alert = await within(resultsList()).findByRole("alert");
     expect(alert).toHaveTextContent("not what the platform expects");
-    expect(alert).toHaveTextContent("Settings");
+    // The DESTINATION, not merely a word: channels are added, edited and
+    // reconnected on the brand's page, and Settings — the screen this used to
+    // name — has no channel list at all.
+    expect(alert).toHaveTextContent("Brands");
+    expect(alert).not.toHaveTextContent("Settings");
     expect(alert).toHaveTextContent("Main channel");
     expect(alert).not.toHaveTextContent("Stored credentials for this channel are invalid");
   });
