@@ -84,6 +84,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   let strangerOrgId: string;
   let strangerChannelId: string;
   let strangerAdaptationId: string;
+  let ChannelNotFoundError: typeof import("./publish.repository").ChannelNotFoundError;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -97,7 +98,10 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     ({ eq, sql } = await import("drizzle-orm"));
     const { encryptJson } = await import("@pubrick/shared");
 
-    const { PublishRepository } = await import("./publish.repository");
+    const { PublishRepository, ChannelNotFoundError: notFound } = await import(
+      "./publish.repository"
+    );
+    ChannelNotFoundError = notFound;
     const { PublishService } = await import("./publish.service");
     repo = new PublishRepository();
     // No adapter lookup needed — these tests only call markFailed/markExhausted directly.
@@ -580,6 +584,14 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // bot token to another org's post.
     await expect(repo.credentials(strangerOrgId, channelId)).rejects.toThrow(
       `Channel ${channelId} not found for org ${strangerOrgId}`,
+    );
+    // The CLASS, not only the sentence: `PublishService` reserves
+    // `credentials_missing` — "the channel is no longer connected, add it
+    // again" — for this throw alone and rethrows every other failure of this
+    // statement as transient. A plain `Error` here would put that sentence back
+    // on a dropped connection.
+    await expect(repo.credentials(strangerOrgId, channelId)).rejects.toBeInstanceOf(
+      ChannelNotFoundError,
     );
   });
 

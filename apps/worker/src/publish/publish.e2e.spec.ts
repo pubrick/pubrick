@@ -450,6 +450,36 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     expect(publication?.externalId).toBeNull();
   }, 25_000);
 
+  /**
+   * `credentials_missing` IS DEFENSIVE, AND THIS IS WHY NO SCREEN CAN SHOW IT.
+   *
+   * The reason says "the channel this post was for is no longer connected" and
+   * the sentence tells the reader to add it again. It is now written on exactly
+   * one path — `ChannelNotFoundError` out of `repo.credentials()` — and that
+   * path cannot leave a row behind for anybody to read: `adaptations.channel_id`
+   * is `ON DELETE CASCADE` and channels are hard-deleted, so the delete that
+   * makes the channel missing takes the adaptation with it. The code stays
+   * because a worker must still name what it hit; the SENTENCE is unreachable,
+   * and that is a property of the schema, not of a comment.
+   *
+   * Asserted here rather than reasoned about in prose: if a future change makes
+   * the adaptation survive its channel (a soft delete, `SET NULL`), this goes
+   * red and the sentence has to be reconsidered before a reader is told to
+   * re-add a channel they never lost.
+   */
+  it("cannot leave a row captioned 'the channel is gone': deleting the channel deletes the adaptation", async () => {
+    const chatId = `-100${Date.now()}8`;
+    const { channelId, adaptationId } = await seedQueuedAdaptation(chatId);
+
+    await db.delete(schema.channels).where(eq(schema.channels.id, channelId));
+
+    const rows = await db
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(rows).toEqual([]);
+  });
+
   it("does not retry — and so cannot post twice — when the reply is lost after the send", async () => {
     const chatId = `-100${Date.now()}4`;
     // A second call would be answered with a perfectly good success. If the

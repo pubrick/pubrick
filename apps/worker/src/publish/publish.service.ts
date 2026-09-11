@@ -16,7 +16,12 @@ import {
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { env } from "../env";
-import { type AttemptFence, PublishRepository, type SendClaim } from "./publish.repository";
+import {
+  type AttemptFence,
+  ChannelNotFoundError,
+  PublishRepository,
+  type SendClaim,
+} from "./publish.repository";
 
 export type { PublishJob } from "@pubrick/shared";
 
@@ -397,18 +402,24 @@ export class PublishService {
       try {
         credentials = await this.repo.credentials(job.orgId, adaptation.channelId);
       } catch (credentialsError) {
-        // The two failures repo.credentials() actually produces — the
-        // channel row is gone, or credentialsEncrypted fails to decrypt
-        // (wrong key / corrupted ciphertext) — are both deterministic:
-        // retrying with the same DB row and the same encryption key will
-        // fail identically every time. Classify as permanent, same as any
-        // other config/data problem, instead of letting pg-boss retry a
-        // job that can never succeed. (A genuinely transient DB blip on the
-        // SELECT itself would also land here and get misclassified as
-        // permanent, but markPublishing just wrote successfully immediately
-        // before this, so the DB was reachable moments ago — and even in
-        // that rare case, the adaptation can still be re-approved by hand,
-        // which beats risking a duplicate send by guessing the other way.)
+        // The two failures repo.credentials() DESCRIBES — the channel row is
+        // gone, or credentialsEncrypted fails to decrypt (wrong key / corrupted
+        // ciphertext) — are both deterministic: retrying with the same DB row
+        // and the same encryption key will fail identically every time. Each is
+        // classified as permanent, same as any other config/data problem,
+        // instead of letting pg-boss retry a job that can never succeed.
+        //
+        // AND NOTHING ELSE IS. This used to be a catch-all: every other failure
+        // of that statement — a dropped connection, a statement timeout, a
+        // failover — was labelled `credentials_missing`, whose sentence tells a
+        // reader the channel is no longer connected and to add it again. That
+        // is a specific claim about a channel that is fine, and the remedy it
+        // recommends cascades away every adaptation on it. A blip is transient
+        // by the house rule (CLAUDE.md, Publishing: permanent means the
+        // platform refused; everything else retries), nothing has been sent on
+        // this path — `publisher.publish()` is below it — so the error is
+        // RETHROWN and pg-boss retries. The claim is released on the way out by
+        // the transient arm of the outer catch, as every transient is.
         //
         // The SECOND of those two failures is now told apart from the first,
         // and that is the whole point. `last_error` is printed verbatim on the
@@ -420,21 +431,22 @@ export class PublishService {
         // written once in `@pubrick/shared` and used by every reader of an
         // encrypted blob.
         //
-        // Everything else keeps its prefixed message: "the channel is gone" and
-        // "the key is gone" are different things to do about it, and a shared
-        // sentence for both would be the same mistake in the other direction.
+        // The channel-gone case keeps its own sentence: "the channel is gone"
+        // and "the key is gone" are different things to do about it, and a
+        // shared sentence for both would be the same mistake in the other
+        // direction. It is no longer PREFIXED with "Could not load
+        // credentials", which was only ever there to frame node's crypto
+        // sentence; the repository's own message already says what happened.
         if (isUnreadableCiphertext(credentialsError)) {
           throw new ClassifiedPermanentError(
             UNREADABLE_CREDENTIALS_MESSAGE,
             "credentials_unreadable",
           );
         }
-        const message =
-          credentialsError instanceof Error ? credentialsError.message : String(credentialsError);
-        throw new ClassifiedPermanentError(
-          `Could not load credentials: ${message}`,
-          "credentials_missing",
-        );
+        if (credentialsError instanceof ChannelNotFoundError) {
+          throw new ClassifiedPermanentError(credentialsError.message, "credentials_missing");
+        }
+        throw credentialsError;
       }
       // Validate against the adapter's own schema before sending, the same way
       // the api's connection test does. Stored credentials can be malformed

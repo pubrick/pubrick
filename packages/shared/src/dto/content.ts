@@ -210,7 +210,18 @@ export const PUBLISH_FAILURE_REASONS = [
   "no_adapter",
   /** The stored credential blob would not decrypt — a key is gone or the ciphertext is corrupt. */
   "credentials_unreadable",
-  /** The channel row the credentials live on has been deleted. */
+  /**
+   * The channel row the credentials live on has been deleted.
+   *
+   * DEFENSIVE, and no screen can show it: `adaptations.channel_id` is
+   * `ON DELETE CASCADE` and channels are hard-deleted, so the delete that makes
+   * a channel missing takes the adaptation with it and leaves nothing to
+   * caption. It was a CATCH-ALL until 2026-09-12 — every other failure of the
+   * credentials SELECT, a dropped connection included — which put a sentence
+   * about a disconnected channel, and advice to re-add it, on rows whose
+   * channel was fine. Those are transient now and retry; this member says only
+   * what the worker actually saw.
+   */
   "credentials_missing",
   /** The stored credentials do not satisfy the adapter's own schema. */
   "credentials_invalid",

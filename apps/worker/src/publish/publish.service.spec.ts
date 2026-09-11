@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { env } from "../env";
 import {
+  ChannelNotFoundError,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
 } from "./publish.repository";
@@ -354,9 +355,23 @@ describe("PublishService.handle", () => {
     );
   });
 
-  it("fails permanently when credentials cannot be loaded (channel not found / decrypt failure) — never sends, never retries", async () => {
+  /**
+   * THE ONE FAILURE OF `repo.credentials()` THAT REALLY IS "the channel is
+   * gone", told apart from every other by its CLASS rather than by its prose.
+   *
+   * `credentials_missing`'s sentence says the channel is no longer connected
+   * and tells the reader to add it again. That is a specific claim, and it used
+   * to be stamped on a catch-all: any failure of the SELECT — a dropped
+   * connection, a statement timeout — was labelled "the channel is gone", and
+   * the remedy it recommends (re-adding a channel that is fine) cascades away
+   * every adaptation on the real one. A reason may never be more specific than
+   * the code that writes it.
+   */
+  it("fails permanently when the channel behind the credentials is gone — never sends, never retries", async () => {
     const { repo } = fixture();
-    repo.credentials = vi.fn().mockRejectedValue(new Error("Channel c1 not found for org o1"));
+    repo.credentials = vi
+      .fn()
+      .mockRejectedValue(new ChannelNotFoundError("Channel c1 not found for org o1"));
     const publish = vi.fn();
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
 
@@ -372,6 +387,35 @@ describe("PublishService.handle", () => {
       CLAIM,
     );
     expect(repo.recordTransient).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ANY OTHER FAILURE OF THE SELECT IS A DATABASE PROBLEM, AND A DATABASE
+   * PROBLEM IS TRANSIENT (CLAUDE.md, Publishing: permanent means the platform
+   * refused; everything else retries).
+   *
+   * It used to be classified permanent and captioned "the channel is no longer
+   * connected", so a five-second blip ended somebody's post for good, under a
+   * sentence about a channel that was fine. Nothing was sent on this path —
+   * `publisher.publish()` is below it — so a retry is safe, and the claim goes
+   * back before the rethrow for the same reason every transient does: holding
+   * it would turn the next delivery into a permanent "outcome unknown".
+   */
+  it("retries — never fails — when the credentials SELECT fails for any other reason", async () => {
+    const { repo } = fixture();
+    const blip = new Error("terminating connection due to administrator command");
+    repo.credentials = vi.fn().mockRejectedValue(blip);
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).rejects.toBe(blip);
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).not.toHaveBeenCalled();
+    expect(repo.releaseSend).toHaveBeenCalledWith("o1", CLAIM);
+    expect(repo.recordTransient).toHaveBeenCalledWith("o1", "a1", blip.message, {
+      status: "publishing",
+      attemptCount: 1,
+    });
   });
 
   it("records ONE answer for a blob that will not decrypt, not the crypto library's sentence", async () => {

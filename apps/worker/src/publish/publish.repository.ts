@@ -352,6 +352,29 @@ export type SweptOrphanedClaim = {
   channelPlatform: string | null;
 };
 
+/**
+ * THE CHANNEL THE CREDENTIALS LIVE ON IS GONE — the one failure of
+ * `credentials()` that really is "this channel is no longer connected".
+ *
+ * A CLASS rather than a message, because the caller classifies on it. The
+ * reason `credentials_missing` says exactly that to a reader and tells them to
+ * add the channel again, and that is destructive advice when the real cause was
+ * a dropped connection on the SELECT: re-adding cascades away every adaptation
+ * on the channel that was fine all along. Every OTHER failure of that statement
+ * is a database problem, which is transient, so the service rethrows it and
+ * pg-boss retries.
+ *
+ * Defensive in practice: `adaptations.channel_id` is `ON DELETE CASCADE` and
+ * channels are hard-deleted, so the delete that makes a channel missing takes
+ * the adaptation with it and no row survives for this reason to be written on
+ * (asserted in `publish.e2e.spec.ts`). It is still named rather than folded
+ * into the transient bucket — retrying a lookup that can never succeed would be
+ * a lie in the other direction.
+ */
+export class ChannelNotFoundError extends Error {
+  readonly name = "ChannelNotFoundError";
+}
+
 @Injectable()
 export class PublishRepository {
   /**
@@ -419,7 +442,7 @@ export class PublishRepository {
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, channelId)))
       .limit(1);
     const row = rows[0];
-    if (!row) throw new Error(`Channel ${channelId} not found for org ${orgId}`);
+    if (!row) throw new ChannelNotFoundError(`Channel ${channelId} not found for org ${orgId}`);
     return decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
   }
 
