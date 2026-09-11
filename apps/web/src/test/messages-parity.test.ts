@@ -1,3 +1,4 @@
+import { REFINE_VERBS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import en from "../../messages/en.json";
 import es from "../../messages/es.json";
@@ -119,5 +120,34 @@ describe.each([
       .filter(([, value]) => value.trim() === "")
       .map(([path]) => path);
     expect(blank).toEqual([]);
+  });
+});
+
+/**
+ * A CLOSED LIST IN `@pubrick/shared` NEEDS A LABEL PER MEMBER, in four
+ * languages, and nothing in the web app would say so.
+ *
+ * `REFINE_VERBS` is the rule book's array — the proposal table's CHECK
+ * constraint reads it, the model's role lines read it, and the item screen maps
+ * over it to build the verb menu. Adding a fourth verb there is a one-line
+ * change that compiles, passes typecheck (`t()` takes a template string), and
+ * ships a menu item reading `Publish.refineVerb.sharper` to every reader:
+ * next-intl's fallback for a missing key is the key path itself. Parity above
+ * cannot see it either — three locales missing a key the reference also lacks
+ * are at perfect parity.
+ *
+ * So the totality is asserted against the LIST rather than against English:
+ * a fourth member fails here until four sentences exist for it.
+ */
+describe("Publish.refineVerb covers REFINE_VERBS", () => {
+  it.each([
+    ["en", en],
+    ["es", es],
+    ["ru", ru],
+    ["pt", pt],
+  ])("%s has exactly one label per verb, and no orphan", (_locale, messages) => {
+    const labels = (messages as unknown as { Publish: { refineVerb: Record<string, string> } })
+      .Publish.refineVerb;
+    expect(Object.keys(labels).sort()).toEqual([...REFINE_VERBS].sort());
   });
 });

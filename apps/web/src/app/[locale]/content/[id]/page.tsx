@@ -9,7 +9,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button, buttonClasses } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
 } from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
+import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 
@@ -113,6 +114,19 @@ type ContentItem = {
 const NO_AI_VERSIONS: readonly string[] = [];
 
 /**
+ * The three refine round trips, as a closed list — the notice each one shows
+ * is a TOTAL record over it, so a fourth (refine an override, 2b-2) cannot be
+ * added without deciding what the reader is told while it runs.
+ */
+type RefineAction = "propose" | "accept" | "discard";
+
+const REFINE_BUSY_MESSAGE: Record<RefineAction, string> = {
+  propose: "refineWorking",
+  accept: "refineAccepting",
+  discard: "refineDiscarding",
+};
+
+/**
  * When this screen may stop asking: when nothing on it can change without a
  * human (see `hasAdaptationInFlight`).
  *
@@ -192,19 +206,25 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     null,
   );
   /**
-   * A refine round trip is under way — a propose, an Accept or a Discard.
+   * WHICH refine round trip is under way, or `null` — a propose, an Accept or
+   * a Discard.
    *
-   * One flag for all three because they are one conversation: none of them may
-   * overlap another, and the controls they belong to are the same card. It is
-   * also the whole of the double-press guard, and that is enough rather than
-   * merely convenient: a click is a DISCRETE event, so React flushes this state
-   * before the next click is dispatched, and every control it governs is
+   * One piece of state for all three because they are one conversation: none of
+   * them may overlap another, and the controls they belong to are the same
+   * card. It is the whole of the double-press guard, and that is enough rather
+   * than merely convenient: a click is a DISCRETE event, so React flushes this
+   * state before the next click is dispatched, and every control it governs is
    * `disabled` by the time a second press could land. The reason to care is
    * that the api SUPERSEDES a second proposal rather than refusing it, so the
    * cost of a double press is a second paid model call and no error anyone
    * would see.
+   *
+   * The ACTION and not a boolean, because the notice has to be true: only a
+   * propose asks the model anything, and "Asking the model…" over a Discard is
+   * a sentence about a call that is not happening — on the one control whose
+   * every press the reader is being asked to think of as paid.
    */
-  const [refineBusy, setRefineBusy] = useState(false);
+  const [refineBusy, setRefineBusy] = useState<RefineAction | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -341,21 +361,56 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * the two reasons it is. One sentence of UI, and an entire class of
    * divergence gone.
    *
-   * The draft moving is also what makes a staged proposal stale: its offsets
-   * were measured in the saved body. The card says so rather than disappearing
-   * (the server's nearest-occurrence rule may well still find the anchor), and
-   * the two facts are one comparison so they cannot disagree.
+   * ...and a post the model never wrote is refused for a third reason, here
+   * rather than after a round trip. `POST /refine` answers
+   * `refine_needs_ai_draft` when the item has no `ai` `full` master version,
+   * and `content_items.origin` is exactly that fact: the generate worker writes
+   * the column and that version row in ONE transaction
+   * (`generate.repository.ts`), and nothing else writes either. So the reason
+   * is knowable from the payload already on screen, and the same sentence the
+   * api would have refused with is reused rather than re-written — a second
+   * wording for one refusal is how the disabled control and the 409 start
+   * disagreeing.
    */
   const draftMoved = item !== null && bodyDraft !== item.body;
   const proposal = item?.refineProposal ?? null;
-  const refineBlockedReason = refineBusy
-    ? t("refineWorking")
-    : draftMoved
-      ? t("refineUnsaved")
-      : selection === null
-        ? t("refineNoSelection")
-        : null;
+  const refineBlockedReason =
+    refineBusy !== null
+      ? t(REFINE_BUSY_MESSAGE[refineBusy])
+      : item !== null && item.origin !== "ai"
+        ? te("refine_needs_ai_draft")
+        : draftMoved
+          ? t("refineUnsaved")
+          : selection === null
+            ? t("refineNoSelection")
+            : null;
   const canRefine = item !== null && refineBlockedReason === null;
+
+  /**
+   * STALE MEANS THE ANCHOR IS GONE, not that the editor is dirty.
+   *
+   * The proposal's offsets were measured in the SAVED body, and `selectedText`
+   * is what the api sliced out of it with them. So the honest test is whether
+   * that slice still reads the same in the body the api is holding now — which
+   * is what `draftMoved` alone cannot see: press Save with a proposal on
+   * screen and `bodyDraft === item.body` again, the dirty marker clears, Try
+   * again re-enables, and the offsets now index a body that no longer exists.
+   * A press at that point is a paid model call on text the reader never
+   * selected.
+   *
+   * `draftMoved` stays in the test as the OTHER half: the reader's unsaved
+   * edits are not in `item.body` yet, so the slice still matches while what
+   * they are looking at has already moved.
+   *
+   * Accept stays reachable through it either way — the api re-locates the
+   * anchor nearest its stored offset and may well still find it. Try again is
+   * the one that cannot: it would ask the model about the stored range, in a
+   * body that range no longer describes.
+   */
+  const proposalStale =
+    item !== null &&
+    proposal !== null &&
+    (draftMoved || item.body.slice(proposal.start, proposal.end) !== proposal.selectedText);
 
   /**
    * The editor card, for the one question the ⌘K listener has to ask: is the
@@ -376,12 +431,33 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const verbMenuRef = useRef<HTMLSpanElement>(null);
 
   /**
-   * ⌘K (and Ctrl+K), scoped twice: to this card, and to a selection.
+   * The refine status line, and the reason it is always mounted.
+   *
+   * It is where focus goes while a round trip runs — see the effect below —
+   * and an element that unmounts cannot hold focus. It is also what the
+   * disabled control points `aria-describedby` at, so the reason a screen
+   * reader is given for "Refine, dimmed" is the same sentence a sighted reader
+   * is looking at, rather than nothing at all.
+   */
+  const refineStatusRef = useRef<HTMLParagraphElement>(null);
+  const refineStatusId = useId();
+  /** The proposal card's heading — where the answer lands, so where focus goes. */
+  const proposalHeadingRef = useRef<HTMLElement>(null);
+  const refineStaleId = useId();
+
+  /**
+   * ⌘K on a Mac, Ctrl+K elsewhere — scoped twice more: to this card, and to a
+   * selection.
    *
    * Attached while the editor is mounted, and only ACTING when focus is inside
    * it — the shortcut belongs to the editor, not to the screen. `preventDefault`
    * only on the presses it takes: a browser whose own Ctrl+K is a search box
    * should keep it everywhere this screen has nothing to do with the key.
+   *
+   * `hasPlatformAccelerator` rather than `metaKey || ctrlKey`, and the
+   * difference is a whole editing command: on macOS `Ctrl+K` is the text
+   * field's own kill-line, so accepting both would take it away inside the very
+   * textarea the shortcut exists to refine.
    *
    * There is no collision to arbitrate. The app's only other `keydown`
    * listeners belong to `Menu` and `Modal`, both attach while open and both
@@ -389,7 +465,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    */
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "k" || !(event.metaKey || event.ctrlKey)) return;
+      if (event.key !== "k" || !hasPlatformAccelerator(event)) return;
       if (!editorRef.current?.contains(document.activeElement)) return;
       if (!canRefine) return;
       event.preventDefault();
@@ -398,6 +474,41 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [canRefine]);
+
+  /**
+   * FOCUS HAS TO BE HANDED SOMEWHERE, because every refine press destroys its
+   * own control.
+   *
+   * Picking a verb ends inside `Menu`, which returns focus to its trigger
+   * (`menu.tsx`'s `close(true)`, the contract the role promises) — and the very
+   * next thing `propose` does is set `refineBusy`, which swaps that trigger for
+   * a disabled `Button`. Accept and Discard do the same to themselves: a
+   * focused element that becomes `disabled` is blurred. All three therefore
+   * landed on `document.body`, which for a keyboard or screen-reader user is
+   * the whole screen lost at the moment something started happening on their
+   * behalf.
+   *
+   * So the rule is explicit rather than incidental: a press hands focus to the
+   * status line (a live region, already saying what is happening), and the end
+   * of the round trip hands it to whichever of the two places the answer is —
+   * the proposal card if one is on screen, and the body itself if the card has
+   * just been merged in or thrown away.
+   *
+   * `refineHandedFocus` is what keeps this to presses made HERE: a proposal
+   * arriving on the first read is not a place the reader asked to be sent.
+   */
+  const refineHandedFocus = useRef(false);
+  useEffect(() => {
+    if (refineBusy !== null) {
+      refineHandedFocus.current = true;
+      refineStatusRef.current?.focus();
+      return;
+    }
+    if (!refineHandedFocus.current) return;
+    refineHandedFocus.current = false;
+    if (proposalHeadingRef.current) proposalHeadingRef.current.focus();
+    else document.getElementById("body")?.focus();
+  }, [refineBusy]);
 
   async function saveBody() {
     setActionError(null);
@@ -484,6 +595,37 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * Every other mutation on this screen reloads on SUCCESS only, which is right
    * for them: their refusals say nothing about state the screen is rendering.
    */
+  /**
+   * WHY `applyToItem` IS SAFE HERE, and what would make it unsafe.
+   *
+   * All three refine handlers write their result straight into the rendered
+   * item instead of awaiting a re-read. That is a race in general: a poll tick
+   * issued BEFORE the mutation can land after it, and `setData` from the poll
+   * overwrites what the mutation just applied — resurrecting a discarded
+   * proposal, or dropping a staged one, with no error and no way for the reader
+   * to tell.
+   *
+   * It cannot happen on this screen today, and the reason is a coincidence
+   * between three files rather than anything this component enforces:
+   *
+   * - `lib/adaptations.ts` — the poll runs only while some adaptation is
+   *   `queued` or `publishing` (`IN_FLIGHT_ADAPTATION_STATUSES`, via
+   *   `itemSettled` above). Nothing else keeps it ticking.
+   * - `apps/api/.../content.repository.ts` — refine is refused unless the item
+   *   is `draft | rejected | failed` (`EDITABLE_ITEM_STATUSES`, through
+   *   `refinableItem`). Approving moves the item OUT of that set before any
+   *   adaptation is queued, and `reject` resets every outstanding adaptation to
+   *   `pending` in the same transaction that writes `rejected`.
+   * - `apps/worker/.../publish.repository.ts` — `recomputeItemStatus` puts the
+   *   item back into that set (`failed`) only when EVERY adaptation has failed,
+   *   which is to say when none is in flight.
+   *
+   * So "the poll is ticking" and "a refine is possible" are disjoint. If any of
+   * those three ever changes — a refine allowed on an `approved` item, a fourth
+   * in-flight status, a partial-failure rollup — this needs a real guard
+   * (a generation counter on the poll, or awaiting `reload()` instead), not a
+   * bigger comment.
+   */
   async function refineFailed(err: unknown) {
     handleError(err);
     await reload();
@@ -496,7 +638,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * the product's evidence that a model wrote a sentence.
    */
   async function propose(verb: RefineVerb, range: { start: number; end: number }) {
-    setRefineBusy(true);
+    setRefineBusy("propose");
     setActionError(null);
     try {
       const staged = await api<RefineProposal>(`/api/content/${id}/refine`, {
@@ -510,7 +652,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     } catch (err) {
       await refineFailed(err);
     } finally {
-      setRefineBusy(false);
+      setRefineBusy(null);
     }
   }
 
@@ -529,7 +671,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * editor showing the text the api has just replaced.
    */
   async function acceptProposal(staged: RefineProposal) {
-    setRefineBusy(true);
+    setRefineBusy("accept");
     setActionError(null);
     try {
       const merged = await api<ContentItem>(`/api/content/${id}/refine/${staged.id}/accept`, {
@@ -541,7 +683,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     } catch (err) {
       await refineFailed(err);
     } finally {
-      setRefineBusy(false);
+      setRefineBusy(null);
     }
   }
 
@@ -551,7 +693,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * `errorMessage` can translate.
    */
   async function discardProposal(staged: RefineProposal) {
-    setRefineBusy(true);
+    setRefineBusy("discard");
     setActionError(null);
     try {
       await apiVoid(`/api/content/${id}/refine/${staged.id}`, { method: "DELETE" });
@@ -559,7 +701,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     } catch (err) {
       await refineFailed(err);
     } finally {
-      setRefineBusy(false);
+      setRefineBusy(null);
     }
   }
 
@@ -751,9 +893,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             two would nest and the markup would be invalid.
           */}
           <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-            {refineBlockedReason && (
-              <span className="text-sm text-fg-tertiary">{refineBlockedReason}</span>
-            )}
+            {/*
+              ALWAYS MOUNTED, hidden only when there is nothing to say. It is a
+              live region (a round trip starts and ends without anything else
+              on screen moving), it is where focus is handed while one runs, and
+              an element that unmounts can do neither.
+            */}
+            <p
+              ref={refineStatusRef}
+              id={refineStatusId}
+              role="status"
+              tabIndex={-1}
+              className={
+                refineBlockedReason ? "text-sm text-fg-tertiary focus:outline-none" : "hidden"
+              }
+            >
+              {refineBlockedReason}
+            </p>
             {canRefine ? (
               <span ref={verbMenuRef}>
                 <Menu
@@ -774,7 +930,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 />
               </span>
             ) : (
-              <Button variant="secondary" size="sm" disabled>
+              /*
+                Described by the line above rather than merely sitting next to
+                it: "Refine, dimmed" with no reason is what a screen reader
+                otherwise announces, on the control whose whole job here is to
+                say why it cannot be pressed.
+              */
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled
+                aria-describedby={refineBlockedReason ? refineStatusId : undefined}
+              >
                 {t("refine")}
               </Button>
             )}
@@ -814,7 +981,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       {proposal && (
         <Card className="mb-6">
           <div className="mb-3 flex flex-wrap items-baseline gap-2">
-            <strong className="text-sm font-semibold text-fg">{t("refineProposalTitle")}</strong>
+            {/*
+              Focusable only as a DESTINATION (`tabIndex={-1}`, never a tab
+              stop): the card arrives without anything the reader pressed still
+              being on screen, so the press has to hand focus here — see the
+              focus effect.
+            */}
+            <strong
+              ref={proposalHeadingRef}
+              tabIndex={-1}
+              className="text-sm font-semibold text-fg focus:outline-none"
+            >
+              {t("refineProposalTitle")}
+            </strong>
             <span className="text-sm text-fg-secondary">{t(`refineVerb.${proposal.verb}`)}</span>
           </div>
           <p className="text-sm text-fg-tertiary">{t("refineSelectedTitle")}</p>
@@ -838,8 +1017,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             offset and may well still find it; asking again is what cannot be
             done against a body the api has not been given.
           */}
-          {draftMoved && (
-            <p role="status" className="mb-3 text-sm text-[var(--status-review-fg)]">
+          {proposalStale && (
+            <p
+              id={refineStaleId}
+              role="status"
+              className="mb-3 text-sm text-[var(--status-review-fg)]"
+            >
               {t("refineStale")}
             </p>
           )}
@@ -848,7 +1031,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="secondary"
               size="sm"
               onClick={() => acceptProposal(proposal)}
-              disabled={refineBusy}
+              disabled={refineBusy !== null}
             >
               {t("refineAccept")}
             </Button>
@@ -864,7 +1047,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => propose(proposal.verb, proposal)}
-              disabled={refineBusy || draftMoved}
+              disabled={refineBusy !== null || proposalStale}
+              aria-describedby={proposalStale ? refineStaleId : undefined}
             >
               {t("refineRetry")}
             </Button>
@@ -872,7 +1056,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => discardProposal(proposal)}
-              disabled={refineBusy}
+              disabled={refineBusy !== null}
             >
               {t("refineDiscard")}
             </Button>

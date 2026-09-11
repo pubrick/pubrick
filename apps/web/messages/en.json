@@ -176,6 +176,8 @@
     "refineNoSelection": "Select part of the body to refine it.",
     "refineUnsaved": "Refine works on the saved post — save the body first.",
     "refineWorking": "Asking the model…",
+    "refineAccepting": "Applying the suggestion…",
+    "refineDiscarding": "Discarding the suggestion…",
     "refineProposalTitle": "Suggested rewrite",
     "refineSelectedTitle": "What you selected",
     "refineSuggestionTitle": "The model's suggestion",

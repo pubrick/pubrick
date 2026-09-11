@@ -176,6 +176,8 @@
     "refineNoSelection": "Selecione parte do texto para refinar.",
     "refineUnsaved": "Refinar atua sobre a publicação salva — salve o texto primeiro.",
     "refineWorking": "Consultando o modelo…",
+    "refineAccepting": "Aplicando a sugestão…",
+    "refineDiscarding": "Descartando a sugestão…",
     "refineProposalTitle": "Reescrita sugerida",
     "refineSelectedTitle": "O que você selecionou",
     "refineSuggestionTitle": "A sugestão do modelo",

@@ -1729,6 +1729,244 @@ describe("asking the model to revise a selection (Task 8)", () => {
     expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
   });
 
+  /**
+   * THE ONE A DIRTY-EDITOR MARKER CANNOT CATCH.
+   *
+   * Save the body with a proposal on screen and `bodyDraft === item.body`
+   * again: a marker that only asks "has the editor moved" clears itself, Try
+   * again re-enables, and the proposal's offsets now index a body that no
+   * longer exists. Pressing it is a paid model call about text the reader never
+   * selected. The test is the anchor: does the saved body still read
+   * `selectedText` at `[start, end)`.
+   */
+  it("keeps the card stale after a Save moves the text out from under its offsets", async () => {
+    const REWRITTEN = `Rewritten opening. ${BODY}`;
+    const served = { current: refinable({ refineProposal: proposal }) };
+    installBaseHandlers(served, [], (path, method) => {
+      if (method === "PATCH" && path === "/api/content/c1") {
+        // What the api holds afterwards: the new body, and the SAME staged
+        // proposal — a save does not drop one (only accept and discard do).
+        served.current = refinable({ body: REWRITTEN, refineProposal: proposal });
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+    expect(screen.queryByText(en.Publish.refineStale)).not.toBeInTheDocument();
+
+    fireEvent.change(bodyField(), { target: { value: REWRITTEN } });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveBody }));
+
+    // The editor is clean again — this is exactly the state `draftMoved` calls
+    // unmoved, and the offsets are wrong in it.
+    await waitFor(() => expect(bodyField()).toHaveValue(REWRITTEN));
+    expect(screen.getByText(en.Publish.refineStale)).toBeInTheDocument();
+    // Try again is the press that cannot survive it: it would ask the model
+    // about the stored range in a body that range no longer describes.
+    expect(screen.getByRole("button", { name: en.Publish.refineRetry })).toBeDisabled();
+    // ...and it says why, to a screen reader too.
+    expect(
+      screen.getByRole("button", { name: en.Publish.refineRetry }).getAttribute("aria-describedby"),
+    ).toBe(screen.getByText(en.Publish.refineStale).id);
+    // Accept stays reachable: the api re-locates the anchor nearest its stored
+    // offset and may well still find it.
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
+  });
+
+  /**
+   * The double-press guard, on each of the card's three buttons.
+   *
+   * The Refine trigger has its own test above; these three are where the guard
+   * was written and never observed. Accept is the expensive one to get wrong —
+   * the api merges and writes a fragment row — and Try again is a second paid
+   * model call the server supersedes rather than refuses.
+   */
+  describe.each([
+    ["refineAccept" as const, `/api/content/c1/refine/${PROPOSAL_ID}/accept`, "item" as const],
+    ["refineRetry" as const, "/api/content/c1/refine", "proposal" as const],
+  ])("a second press of %s while one is in flight", (labelKey, path, answers) => {
+    it("sends nothing", async () => {
+      let release: (value: unknown) => void = () => {};
+      const inFlight = new Promise((resolve) => {
+        release = resolve;
+      });
+      const calls: Call[] = [];
+      installBaseHandlers(
+        { current: refinable({ refineProposal: proposal }) },
+        calls,
+        (p, method) => (method === "POST" && p === path ? inFlight : undefined),
+      );
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByText(proposal.proposal);
+
+      const user = userEvent.setup();
+      const button = screen.getByRole("button", { name: en.Publish[labelKey] });
+      await user.click(button);
+      await waitFor(() => expect(button).toBeDisabled());
+      await user.click(button);
+
+      expect(calls.filter((c) => c.method === "POST" && c.path === path)).toHaveLength(1);
+
+      // Released with the shape THAT route answers with — an item for Accept,
+      // a proposal for Try again — so the component's own unmount path runs
+      // rather than a half-rendered one.
+      await act(async () => {
+        release(answers === "item" ? refinable({ refineProposal: null }) : proposal);
+      });
+    });
+  });
+
+  it("sends nothing on a second press of Discard while one is in flight", async () => {
+    let release: () => void = () => {};
+    mockApiVoid.mockImplementation((path: string) =>
+      path === `/api/content/c1/refine/${PROPOSAL_ID}`
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(),
+    );
+    installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    const user = userEvent.setup();
+    const button = screen.getByRole("button", { name: en.Publish.refineDiscard });
+    await user.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    await user.click(button);
+
+    // Counted on the DELETE alone: `apiVoid` also carries the read receipt
+    // (`POST /opened`) that every render of this screen fires once.
+    expect(
+      mockApiVoid.mock.calls.filter(
+        ([called]) => called === `/api/content/c1/refine/${PROPOSAL_ID}`,
+      ),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      release();
+    });
+  });
+
+  /**
+   * WHAT THE NOTICE SAYS HAS TO BE TRUE. Only a propose asks the model
+   * anything; Accept merges a row the model already wrote and Discard deletes
+   * it. "Asking the model…" over either is a sentence about a paid call that is
+   * not happening, on the one control whose every press the reader is told to
+   * think of as money.
+   */
+  it("does not claim to be asking the model while a Discard is in flight", async () => {
+    let release: () => void = () => {};
+    mockApiVoid.mockImplementation((path: string) =>
+      path === `/api/content/c1/refine/${PROPOSAL_ID}`
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(),
+    );
+    installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(proposal.proposal);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineDiscard }));
+
+    expect(await screen.findByText(en.Publish.refineDiscarding)).toBeInTheDocument();
+    expect(screen.queryByText(en.Publish.refineWorking)).not.toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
+  });
+
+  /**
+   * FOCUS SURVIVES THE PRESS.
+   *
+   * Picking a verb ends inside `Menu`, which returns focus to its trigger — and
+   * `refineBusy` replaces that trigger the same tick. `document.body` is where
+   * focus landed, which for a keyboard or screen-reader user is the whole
+   * screen lost at the moment something started happening for them.
+   */
+  describe("where focus goes", () => {
+    it("hands focus to the status line on a verb pick, and to the card that arrives", async () => {
+      let release: (value: RefineProposal) => void = () => {};
+      const inFlight = new Promise<RefineProposal>((resolve) => {
+        release = resolve;
+      });
+      installBaseHandlers({ current: refinable() }, [], (path, method) =>
+        method === "POST" && path === "/api/content/c1/refine" ? inFlight : undefined,
+      );
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByLabelText(en.Publish.bodyLabel);
+      selectInBody(0, SELECTED.length);
+      await chooseVerb("shorten");
+
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toHaveTextContent(en.Publish.refineWorking);
+
+      await act(async () => {
+        release(proposal);
+      });
+
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toHaveTextContent(en.Publish.refineProposalTitle);
+    });
+
+    it("hands focus to the body after an Accept, where the merged text now is", async () => {
+      const merged = "Merged by the server, character for character.";
+      const served = { current: refinable({ refineProposal: proposal }) };
+      installBaseHandlers(served, [], (path, method) => {
+        if (method === "POST" && path === `/api/content/c1/refine/${PROPOSAL_ID}/accept`) {
+          served.current = refinable({ body: merged, refineProposal: null });
+          return served.current;
+        }
+        return undefined;
+      });
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByText(proposal.proposal);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.refineAccept }));
+
+      await waitFor(() => expect(bodyField()).toHaveValue(merged));
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toBe(bodyField());
+    });
+  });
+
+  /**
+   * A HAND-WRITTEN POST IS REFUSED HERE, not after a round trip.
+   *
+   * `POST /refine` answers `refine_needs_ai_draft` for an item with no `ai`
+   * `full` master version, and `content_items.origin` is that fact — the
+   * worker writes the column and the version row in one transaction. So the
+   * screen can say it before the press, and it says it in the api's own words
+   * rather than inventing a second wording for one refusal.
+   */
+  it("refuses a hand-written post up front, in the words the api would have used", async () => {
+    // `refinable()` sets `origin: "ai"`; this is the default item, untouched.
+    installBaseHandlers({ current: makeItem({ body: BODY }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByLabelText(en.Publish.bodyLabel);
+    // Everything else a refine needs is in place, so this is the only reason
+    // left: saved body, live selection.
+    selectInBody(0, SELECTED.length);
+
+    expect(refineControl()).toBeDisabled();
+    expect(screen.getByText(en.Errors.refine_needs_ai_draft)).toBeInTheDocument();
+    expect(screen.queryByText(en.Publish.refineNoSelection)).not.toBeInTheDocument();
+    // Named to a screen reader, not merely printed beside the control.
+    expect(refineControl().getAttribute("aria-describedby")).toBe(
+      screen.getByText(en.Errors.refine_needs_ai_draft).id,
+    );
+  });
+
   it("asks again with the same verb and the same range on Try again", async () => {
     const calls: Call[] = [];
     installBaseHandlers(
@@ -1748,27 +1986,48 @@ describe("asking the model to revise a selection (Task 8)", () => {
     await waitFor(() => expect(proposeCalls(calls)).toHaveLength(1));
     // The proposal's OWN range, not a live selection — there is none: the
     // reader has been reading a card, not the textarea.
-    expect(JSON.parse(proposeCalls(calls)[0]?.body ?? "{}")).toEqual({
-      verb: proposal.verb,
-      start: proposal.start,
-      end: proposal.end,
-    });
+    const sent = JSON.parse(proposeCalls(calls)[0]?.body ?? "{}");
+    expect(sent).toEqual({ verb: proposal.verb, start: proposal.start, end: proposal.end });
+    // ...and through the schema the api validates with, for the reason the
+    // first propose test gives: a literal alone cannot see a field renamed on
+    // the wire, and Try again builds its own body rather than reusing that one.
+    expect(refineRequestSchema.parse(sent)).toEqual(sent);
     expect(await screen.findByText("Shorter still.")).toBeInTheDocument();
   });
 
   /**
-   * The shortcut, scoped twice: to the editor card, and to a selection. A
-   * `keydown` on `document` that ignored either would fire from the schedule
-   * field, or open a menu of verbs with nothing to apply them to.
+   * The shortcut, scoped three times: to the platform's own accelerator, to the
+   * editor card, and to a selection. A `keydown` on `document` that ignored any
+   * of them would fire from the schedule field, open a menu of verbs with
+   * nothing to apply them to, or — the expensive one — swallow `Ctrl+K` on a
+   * Mac, where it is the text field's kill-line.
    */
   describe("the ⌘K shortcut", () => {
+    /**
+     * The platform, as `navigator` reports it — the source `lib/hotkey.ts`
+     * actually reads, not a mock of the decision. jsdom answers `""` by
+     * default, so every test here says which machine it is on rather than
+     * inheriting one.
+     */
+    function onPlatform(platform: string): void {
+      Object.defineProperty(window.navigator, "platform", {
+        value: platform,
+        configurable: true,
+      });
+    }
+
     async function renderRefinable(): Promise<void> {
       installBaseHandlers({ current: refinable() }, []);
       await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
       await screen.findByLabelText(en.Publish.bodyLabel);
     }
 
-    it("opens the verb menu when the editor holds focus and a selection", async () => {
+    afterEach(() => {
+      onPlatform("");
+    });
+
+    it("opens the verb menu on ⌘K on a Mac, when the editor holds focus and a selection", async () => {
+      onPlatform("MacIntel");
       await renderRefinable();
       const field = selectInBody(0, SELECTED.length);
 
@@ -1783,7 +2042,44 @@ describe("asking the model to revise a selection (Task 8)", () => {
       ).toBeInTheDocument();
     });
 
+    /**
+     * The one `metaKey || ctrlKey` gets wrong, and it is not a near-miss:
+     * `Ctrl+K` inside a Cocoa text control is kill-line, so taking it deletes
+     * an editing command from the very textarea this feature exists to refine.
+     */
+    it("leaves Ctrl+K to the field on a Mac, where it is the kill-line", async () => {
+      onPlatform("MacIntel");
+      await renderRefinable();
+      const field = selectInBody(0, SELECTED.length);
+
+      expect(fireEvent.keyDown(field, { key: "k", ctrlKey: true })).toBe(true);
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("opens the verb menu on Ctrl+K off a Mac", async () => {
+      onPlatform("Win32");
+      await renderRefinable();
+      const field = selectInBody(0, SELECTED.length);
+
+      expect(fireEvent.keyDown(field, { key: "k", ctrlKey: true })).toBe(false);
+
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    // `Meta` off a Mac is the OS key. An app has no business claiming it.
+    it("leaves ⌘K to the OS off a Mac", async () => {
+      onPlatform("Win32");
+      await renderRefinable();
+      const field = selectInBody(0, SELECTED.length);
+
+      expect(fireEvent.keyDown(field, { key: "k", metaKey: true })).toBe(true);
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
     it("leaves the key to the browser with the editor focused and nothing selected", async () => {
+      onPlatform("MacIntel");
       await renderRefinable();
       const field = bodyField();
       field.focus();
@@ -1797,6 +2093,7 @@ describe("asking the model to revise a selection (Task 8)", () => {
     });
 
     it("does nothing when focus has left the editor, selection or no", async () => {
+      onPlatform("MacIntel");
       await renderRefinable();
       selectInBody(0, SELECTED.length);
       const elsewhere = screen.getByRole("button", { name: en.Publish.reject });
