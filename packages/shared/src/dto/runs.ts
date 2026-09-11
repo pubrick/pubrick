@@ -376,8 +376,8 @@ export function isRunFailure(value: unknown): value is RunFailure {
  * inference, so the column, the browser and the worker cannot describe it
  * differently.
  *
- * `kind` is discriminated from the start so a watched source can add
- * `"topic"` without a migration.
+ * `kind` is discriminated from the start so a second kind can be added
+ * without a migration.
  */
 export const briefRunInputSchema = z.object({
   kind: z.literal("brief"),

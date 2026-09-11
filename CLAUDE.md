@@ -256,8 +256,10 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   the limit measures what is stored. Any new body-bearing DTO does the same;
   `DimmedTextarea` normalises again on the way to the screen for text that
   arrived by another road, and that belt is not a substitute for the boundary.
-- **The fact-checker verifies nothing** until increment 3 gives it sources: it
-  lists claims. No instruction, schema, endpoint or UI string may suggest a check
+- **The fact-checker verifies nothing.** The rule holds until something is
+  **designed** to verify — not until a date. 3a gives the step a source (a
+  person's own pasted material, attributed by URL) and it still verifies
+  nothing: no instruction, schema, endpoint or UI string may suggest a check
   happened. `CLAIMS_TO_VERIFY_LABEL` (`@pubrick/shared`, re-exported by
   `@pubrick/ai`) is the phrase: the step's own prompt interpolates it, and the
   English label `Runs.step.factcheck` is pinned to it — case-insensitively — by
@@ -266,10 +268,17 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   half that matters, that none of them reads as a past participle ("verified
   claims").
 - **Untrusted text never reaches `instructions`.** The brief, earlier steps'
-  output, and (increment 3) fetched article text are nonce-fenced material in
+  output, and article text a person supplies are nonce-fenced material in
   `prompt`; only org configuration and this package's step rules are
   instructions. Define steps with `defineStep` — it is what keeps that boundary,
   the schema sent to the model, and the ledger attribution from drifting apart.
+- **A `type="url"`/`type="email"` control never goes inside a collapsed
+  disclosure.** An invalid, unfocusable native input blocks the whole form's
+  submit with no visible error — the browser refuses silently while the
+  section holding the offending field stays closed. The compose screen's
+  source URL field uses `inputMode="url"` with a plain `Input`, not
+  `type="url"`, for exactly this reason (`apps/web/src/app/[locale]/content/new/page.tsx`);
+  the scheme rule is enforced in the schema and reported inline instead.
 - **No test may call a provider.** Use `MockLanguageModelV4` from `ai/test`
   (its `doGenerate` must return TEXT content, or the `Output.object` path throws
   `NoOutputGeneratedError`) or the worker's `test/scripted-model`; the single

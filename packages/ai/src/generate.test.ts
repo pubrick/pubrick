@@ -328,8 +328,8 @@ describe("generateStructured", () => {
 
   describe("the prompt boundary", () => {
     // v7 keeps instructions out of the message list as prompt-injection
-    // hardening. Increment 3 puts fetched article text into `prompt`; if the two
-    // channels were ever swapped, that untrusted text would arrive as system
+    // hardening. Article text a person supplies also goes into `prompt`; if the
+    // two channels were ever swapped, that untrusted text would arrive as system
     // instructions. This is a security boundary, so it is pinned by structure —
     // asserting on the stringified prompt would pass either way, because the
     // system message is inside it.

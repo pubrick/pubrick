@@ -27,7 +27,7 @@
   },
   "Landing": {
     "title": "Pubrick",
-    "tagline": "The open-source AI content factory: it watches your sources, drafts on-brand content, waits for your approval, and publishes everywhere.",
+    "tagline": "The open-source AI content factory: paste a story and it drafts on-brand content with your own AI key. Nothing goes out until you approve it.",
     "goToBrands": "Go to brands",
     "signOut": "Sign out",
     "login": "Log in",

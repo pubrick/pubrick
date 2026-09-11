@@ -249,6 +249,25 @@ the compose brief. Inside the editor it is still the two. §5.2's staging rule i
 untouched by this: a run lands a `draft`, and approval remains the explicit
 human act.
 
+**Shipped decision — paste a story (increment 3a, 2026-09-11).** The brief
+field is not the only compose-time input: a collapsed **Advanced** disclosure
+beneath it (`apps/web/src/app/[locale]/content/new/page.tsx`) holds a material
+textarea and an optional source-address field. Generate now runs from
+whichever of a brief or a pasted story the person filled in — the two are not
+alternatives offered side by side but one Generate that reads what is actually
+there, and "Create post" refuses whenever `Advanced` holds unsaved material or
+an unsaved address, over the whole section rather than half of it. The address
+is recorded and shown on the resulting draft as a link a reader may open —
+attribution, not the server fetching or verifying anything at that address,
+because attribution and verification are not the same claim (see
+`CLAUDE.md`'s fact-checker rule). One control convention this
+screen fixed for every future disclosure: **a `type="url"`/`type="email"`
+input never goes inside a collapsed section.** An invalid, unfocusable native
+control blocks the whole form's submit with no visible error while its
+section is closed — the source-address field uses `inputMode="url"` on a
+plain text input instead, with the scheme rule enforced in the schema and
+reported inline.
+
 **Shipped decision — refine verbs (2026-09-11, increment 2b-2).** What shipped
 is a **stationary control**, not a selection toolbar: one "Refine" button, always
 mounted in the editor card's header, never a menu that materialises where the

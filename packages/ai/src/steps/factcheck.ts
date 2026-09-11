@@ -36,13 +36,16 @@ export type FactcheckInput = { body: string };
 /**
  * Step 4 — list the claims, check none of them.
  *
- * With no sources and no retrieval in this increment, this step **verifies
- * nothing**: it reads the draft and lists what a person would have to confirm
- * before publishing. The list rides with the draft into the review queue under
- * the heading `CLAIMS_TO_VERIFY_LABEL`, and no string anywhere — instructions,
- * schema, API or UI — may suggest a check happened. Increment 3 makes it real
- * against the source article; until then, saying otherwise would be the exact
- * slop this product exists to oppose.
+ * With no retrieval, this step **verifies nothing**: it reads the draft and
+ * lists what a person would have to confirm before publishing. The list rides
+ * with the draft into the review queue under the heading
+ * `CLAIMS_TO_VERIFY_LABEL`, and no string anywhere — instructions, schema, API
+ * or UI — may suggest a check happened. A run started from a pasted story
+ * gives the step a single source, but a single source is attribution, not
+ * verification: this rule is unconditional, not "unconditional until a
+ * source exists". *Found in the source* would be the honest upgrade, and is
+ * deliberately not taken here — saying otherwise would be the exact slop
+ * this product exists to oppose.
  */
 export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = defineStep({
   name: "factcheck",

@@ -104,8 +104,11 @@ because on Gemini 3.x thinking tokens bill at the output rate, so dropping it
 would understate cost.
 
 **`pipeline_runs`** — one row per generation.
-`id`, `org_id`, `brand_id`, `input jsonb` (`{kind: "brief", text, channelIds}`
-— `kind` exists so increment 3 adds `"topic"` without a migration),
+`id`, `org_id`, `brand_id`, `input jsonb` — a discriminated union on `kind`,
+which is why the second member below needed no migration: a `brief` member
+(`{kind: "brief", text, channelIds}`) and a `source` member (`{kind: "source",
+text, sourceUrl, material, channelIds}`, with `text` nullable — the person's
+own instructions about the material, not the material itself),
 `status` (`queued | running | succeeded | failed | cancelled`),
 `current_step` text, `steps jsonb` (checkpoint map, §5), `content_item_id`
 (nullable, set on success), `error` text, `dismissed_at` timestamp null,
@@ -194,8 +197,8 @@ call failed" ledger row possible: the recorder buffers the event and decides
 **Prompt boundary.** v7 rejects system messages inside `messages`/`prompt` by
 default as prompt-injection hardening; instructions go in the separate
 `instructions` field. Brand voice and step instructions are `instructions`; the
-brief — and in increment 3 the fetched article text — are `prompt`. That
-boundary is established now, before untrusted source text exists.
+brief — and article text a person supplies — are `prompt`. That boundary is
+established now, before untrusted source text exists.
 
 **Provider resolution.** `resolveModel(credential, modelId?)` builds the model
 from an **already-decrypted** credential. An earlier draft had
@@ -406,8 +409,10 @@ schema and a `run(ctx)`; the service iterates them.
    nothing: it extracts factual claims and flags those that would need
    checking, and that list rides with the draft into the queue. The UI names it
    **claims to verify**, never "fact-checked" — claiming verification that did
-   not happen is exactly the slop this product opposes. It becomes real
-   verification in increment 3, against the source article.
+   not happen is exactly the slop this product opposes. The rule holds until
+   something is **designed** to verify — not until a date: a person's own
+   pasted material, attributed by URL, ships in 3a and this step still
+   verifies nothing against it.
 5. **Adapter** — one call per selected channel, producing the per-channel body
    within that platform's limit (§4), written to `adaptations.body` with
    `origin = 'ai'` and its own first version row.

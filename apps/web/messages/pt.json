@@ -27,7 +27,7 @@
   },
   "Landing": {
     "title": "Pubrick",
-    "tagline": "A fábrica de conteúdo com IA de código aberto: acompanha suas fontes, redige conteúdo fiel à sua marca, aguarda sua aprovação e publica em todo lugar.",
+    "tagline": "A fábrica de conteúdo com IA de código aberto: cole uma notícia e ela redige conteúdo fiel à sua marca com sua própria chave de IA. Nada é publicado até você aprovar.",
     "goToBrands": "Ir para marcas",
     "signOut": "Sair",
     "login": "Entrar",
