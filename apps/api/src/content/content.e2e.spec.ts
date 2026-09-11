@@ -6980,7 +6980,9 @@ describe.skipIf(!url)("content e2e", () => {
       expect(patched.body.status).toBe("partially_published");
 
       const refusal = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(409);
-      expect(refusal.body.code).toBe("content_already_published");
+      // Its own code: this item is `partially_published`, not `published`, and
+      // the approve below is the action the reader is being pointed at.
+      expect(refusal.body.code).toBe("content_partially_published");
       expect(await itemStatus(itemId)).toBe("partially_published");
 
       const reApproved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);

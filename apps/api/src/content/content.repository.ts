@@ -2446,8 +2446,13 @@ export class ContentRepository {
       .limit(1);
     if (live.length === 0) return false;
     if (reach.hasOutstanding) return true;
+    // ITS OWN CODE, not `content_already_published`. This item is not
+    // published — it is `partially_published`, or about to be — and the older
+    // code's sentence says both that the post "has already been published"
+    // (beside a badge reading "Partly published") and that approve is refused,
+    // when approve is the action that works here. See `errors.ts`.
     throw conflict(
-      "content_already_published",
+      "content_partially_published",
       "This content has already been published to one of its channels; it can no longer be " +
         "rejected. Nothing will re-send it on its own, so leaving it as it is stops it",
     );

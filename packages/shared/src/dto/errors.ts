@@ -85,6 +85,24 @@ export const API_ERROR_CODES = [
   // ── content: the decision cannot be made ──────────────────────────────────
   /** Approve or reject on a post that is already live somewhere. */
   "content_already_published",
+  /**
+   * REJECT ON A POST THAT IS PART LIVE AND PART OVER — a different refusal from
+   * the one above, and a separate code because one sentence cannot be true of
+   * both.
+   *
+   * `content_already_published` says "this post has already been published",
+   * which is a lie beside a badge reading "Partly published", and it says
+   * approve is refused too — when approve is exactly the action that works
+   * here: it re-sends the halves that failed and cannot touch the live one.
+   * This code's sentence names both the state and the two things left to do
+   * (design §4.2: leave it, or send the rest).
+   *
+   * ONLY REJECT EMITS IT, and only when nothing is outstanding. With a send
+   * still in flight reject is ACCEPTED and cancels it
+   * (`ContentRepository.reject`), so there is no refusal to name; approve goes
+   * through the item's own status, which for such a post is never `published`.
+   */
+  "content_partially_published",
   /** Approve on a post whose every channel has since been deleted. */
   "content_no_channels_left",
   /**

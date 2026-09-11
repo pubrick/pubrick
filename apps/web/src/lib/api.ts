@@ -88,6 +88,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   adaptation_pinned_publishing: "adaptation_pinned_publishing",
   adaptation_pinned_published: "adaptation_pinned_published",
   content_already_published: "content_already_published",
+  content_partially_published: "content_partially_published",
   content_no_channels_left: "content_no_channels_left",
   unread_ai_draft: "unread_ai_draft",
   unread_ai_draft_open_only: "unread_ai_draft_open_only",

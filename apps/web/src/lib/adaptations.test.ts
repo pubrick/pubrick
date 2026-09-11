@@ -76,6 +76,25 @@ describe("the status unions", () => {
   it("keeps every content status colored", () => {
     expect(Object.keys(CONTENT_BADGE_STATUS).sort()).toEqual([...CONTENT_STATUSES].sort());
   });
+
+  /**
+   * THE KEY BEING MANDATORY IS NOT THE CLAIM. `Record<ContentStatus, …>` forces
+   * a new status to be given SOME colour and cannot say which, so the one
+   * decision this status exists to carry — that a half-sent post must not wear
+   * `approved`'s blue, the colour of work in flight, when nothing is in flight
+   * — was revertible in silence: the mutation to `"scheduled"` survived the
+   * whole web suite 3/3.
+   *
+   * Asserted as a RELATION rather than as the literal `"review"` alone: what
+   * matters is that it differs from `approved`, and pinning only the literal
+   * would go green again if `approved` were one day painted brick too.
+   */
+  it("does not paint a half-sent post in approve's colour", () => {
+    expect(CONTENT_BADGE_STATUS.partially_published).toBe("review");
+    expect(CONTENT_BADGE_STATUS.partially_published).not.toBe(CONTENT_BADGE_STATUS.approved);
+    expect(CONTENT_BADGE_STATUS.partially_published).not.toBe(CONTENT_BADGE_STATUS.published);
+    expect(CONTENT_BADGE_STATUS.partially_published).not.toBe(CONTENT_BADGE_STATUS.failed);
+  });
 });
 
 /**

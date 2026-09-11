@@ -2630,3 +2630,41 @@ describe("asking the model to revise a selection (Task 8)", () => {
     });
   });
 });
+
+/**
+ * A PARTLY PUBLISHED POST, on the one screen that decides its fate.
+ *
+ * The status's whole user-visible claim is its COLOUR: it exists to stop a
+ * half-sent post wearing `approved`'s blue, the colour of work in flight, when
+ * nothing is in flight. The `Record<ContentStatus, …>` annotation on
+ * `CONTENT_BADGE_STATUS` makes the KEY mandatory and says nothing at all about
+ * the value — reverting it to `"scheduled"` (the blue) survived the whole web
+ * suite 3/3 before this test existed.
+ */
+describe("a post whose channels disagreed", () => {
+  function partlyPublishedItem() {
+    return makeItem({
+      status: "partially_published",
+      adaptations: [
+        makeAdaptation({ id: "a1", status: "published", externalUrl: "https://t.me/main/42" }),
+        makeAdaptation({ id: "a2", channelId: "ch2", status: "failed", lastError: "too long" }),
+      ],
+    });
+  }
+
+  it("wears the brick of something waiting on a person, not approve's blue", async () => {
+    installBaseHandlers({ current: partlyPublishedItem() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const badge = await screen.findByText(en.Content.status.partially_published);
+    expect(badge.className).toContain("var(--status-review-bg)");
+    // The lie this status was added to end: `approved`'s blue on a post that
+    // has stopped moving.
+    expect(badge.className).not.toContain("var(--status-scheduled-bg)");
+    // Nor the green of a post that is all there, nor the red of one that never
+    // went out at all.
+    expect(badge.className).not.toContain("var(--status-published-bg)");
+    expect(badge.className).not.toContain("var(--status-failed-bg)");
+  });
+});

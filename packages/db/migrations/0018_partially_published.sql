@@ -50,11 +50,13 @@
 -- correctly when that delivery lands.
 --
 -- ROLLING DEPLOY. Unlike 0017 this one is visible the moment it commits — the
--- api starts answering `partially_published` at once — and a web bundle that
--- predates it renders no badge colour and a raw message key. `docs/self-hosting.md`
--- §Upgrade says to deploy web before this migration for anyone rolling services
--- one at a time. Nothing the WORKER reads changes shape, so "worker first is
--- always safe" stays true.
+-- api starts answering `partially_published` at once — and on a web bundle that
+-- predates it such a post is not merely unlabelled: the queue's sections are
+-- derived from that bundle's own status list, so a post in none of them is
+-- drawn in no section at all and disappears from the queue until web is
+-- upgraded. `docs/self-hosting.md` §Upgrade says to deploy web BEFORE this
+-- migration for anyone rolling services one at a time. Nothing the WORKER reads
+-- changes shape, so "worker first is always safe" stays true.
 ALTER TABLE "content_items" DROP CONSTRAINT "content_items_status_check";--> statement-breakpoint
 ALTER TABLE "content_items" ADD CONSTRAINT "content_items_status_check" CHECK ("content_items"."status" in ('draft', 'approved', 'partially_published', 'rejected', 'published', 'failed'));--> statement-breakpoint
 UPDATE "content_items" ci SET status = 'partially_published'

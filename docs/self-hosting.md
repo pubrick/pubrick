@@ -309,8 +309,11 @@ whose channels disagreed — one live, one permanently refused — now has a sta
 of its own, and that migration BACKFILLS it onto posts that are already in that
 state, so the api starts answering `partially_published` the moment the
 migration commits. A web bundle from before the upgrade has no colour and no
-translated word for it: such a post renders with no status badge at all and a
-raw message key where its label should be. `docker compose up -d --build`
+translated word for it, and the damage is worse than a missing label: the
+queue's sections are DERIVED from that bundle's own list of statuses, so a post
+whose status is in none of them lands in no section and is not drawn at all.
+It disappears from the one screen people look at — filter chip included, so
+there is no way to reach it — until web is upgraded. `docker compose up -d --build`
 rebuilds everything together and needs no care here either; only a
 service-at-a-time roll has to put web first.
 

@@ -342,6 +342,7 @@
     "adaptation_pinned_publishing": "Esta publicación se está publicando ahora mismo y no se puede editar. Recházala primero.",
     "adaptation_pinned_published": "La publicación de este canal ya se ha publicado y no se puede editar.",
     "content_already_published": "Esta publicación ya se ha publicado; ya no se puede aprobar ni rechazar.",
+    "content_partially_published": "Parte de esta publicación ya está en directo; déjala como está o envía el resto.",
     "delivery_outcome_unknown": "La plataforma nunca confirmó esta publicación, así que puede que ya haya una copia publicada. Abre el canal y di lo que encontraste antes de enviarla de nuevo.",
     "delivery_outcome_already_known": "El resultado de este envío ya se conoce, así que no queda nada que decir sobre él.",
     "content_no_channels_left": "Esta publicación ya no tiene canales donde publicarse: se han eliminado todos los canales para los que se escribió.",
