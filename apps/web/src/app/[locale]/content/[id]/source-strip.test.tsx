@@ -103,10 +103,18 @@ describe("the source strip on a draft", () => {
     expect(block.className).toContain("overflow-y-auto");
   });
 
-  it("draws no link for a stored value that is not a URL at all", () => {
+  /**
+   * ONE COLUMN, ONE ANSWER. The receipt prints a stored value it cannot parse
+   * as plain text; the strip used to print nothing at all, because the block
+   * was gated on `sourceHost` returning a host. Two screens reading one column
+   * and saying different things about it is how a reader learns not to trust
+   * either.
+   */
+  it("shows a stored value that is not a URL as text, exactly as the receipt does", () => {
     render(<SourceStrip input={{ ...sourceInput(), sourceUrl: "not a url" } as RunInput} />);
 
     expect(screen.getByText(en.Runs.pastedLabel)).toBeInTheDocument();
+    expect(screen.getByText("not a url")).toBeInTheDocument();
     expect(screen.queryByRole("link")).toBeNull();
   });
 

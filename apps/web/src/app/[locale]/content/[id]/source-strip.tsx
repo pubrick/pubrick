@@ -36,8 +36,15 @@ export function SourceStrip({ input }: { input: RunInput | null }) {
   /**
    * `example.com`, not the whole address — through `sourceHost`, which is this
    * product's ONE host derivation (the queue strip's, and the one the watched
-   * sources gate's SQL is written to agree with). `null` for a stored value
-   * that is not a URL, and then there is simply nothing to link.
+   * sources gate's SQL is written to agree with).
+   *
+   * `null` for a stored value that is not a URL, and then the RAW value is
+   * drawn instead, as plain text. The receipt already does exactly that
+   * (`content/runs/[id]/page.tsx`), and this block used to be gated on a host
+   * being derivable — so one column had two answers on two screens, one of
+   * them silence. The DTO refuses such a value, so only a row written by hand
+   * reaches this branch; a screen that renders nothing for it is a screen that
+   * hides what the row says.
    */
   const host = sourceHost(input.sourceUrl);
 
@@ -48,7 +55,7 @@ export function SourceStrip({ input }: { input: RunInput | null }) {
     >
       <p>
         <span>{t("pastedLabel")}</span>
-        {input.sourceUrl !== null && host !== null && (
+        {input.sourceUrl !== null && (
           <>
             {" — "}
             {/*
@@ -68,7 +75,7 @@ export function SourceStrip({ input }: { input: RunInput | null }) {
                 {host}
               </a>
             ) : (
-              <span className="break-all">{host}</span>
+              <span className="break-all">{host ?? input.sourceUrl}</span>
             )}
           </>
         )}
