@@ -618,7 +618,53 @@ export class PublishService {
    */
   async sweepAbandoned(): Promise<void> {
     await this.sweepAbandonedAdaptations();
+    await this.sweepStranded();
     await this.sweepOrphanedClaims();
+  }
+
+  /**
+   * THE THIRD PASS, on the same tick and deliberately with no cadence of its
+   * own: rows whose job pg-boss's retention DELETED out from under them.
+   *
+   * It shares `SWEEP_CRON` with the two passes either side of it because it is
+   * the same recovery — end what no job can ever finish — and because the thing
+   * it recovers from has already been true for hours by the time it is a
+   * candidate at all: a poll five minutes wide adds a rounding error to a
+   * latency measured in days. A `PUBLISH_STRANDED_SWEEP_*` variable would be an
+   * operator-facing knob on a number that cannot matter, and one more setting
+   * that can be set wrong.
+   *
+   * SEQUENTIAL, not `Promise.all`, and that is the locking rule rather than a
+   * style: two bulk writers of `adaptations` running at once would be two
+   * transactions walking overlapping-in-principle sets, and the whole of
+   * `docs/lock-order.md`'s "same table, two transactions" section is about not
+   * doing that. Run one after the other they are two transactions that never
+   * meet.
+   *
+   * Caught separately, like its siblings, so a failure in one still lets the
+   * others run; never rethrown, because nothing is waiting on this tick and a
+   * rethrow only asks pg-boss to redeliver it.
+   */
+  private async sweepStranded(): Promise<void> {
+    try {
+      for (const adaptation of await this.repo.sweepStranded()) {
+        // `error`, like its sibling, and never routine: a post a person
+        // approved was going to go out and now never will, and the product only
+        // found out by scanning for it.
+        this.logger.error(
+          `SWEPT STRANDED DELIVERY: adaptation ${adaptation.id} was waiting for a queue job that ` +
+            `no longer exists anywhere; failed it as "${adaptation.reason}" with outcome ` +
+            `"${adaptation.outcome}"` +
+            (adaptation.outcome === "unknown"
+              ? " — an unresolved send claim means a post MAY be live; check the channel before re-approving."
+              : " — nothing had reached the platform.") +
+            ` orgId=${adaptation.orgId} channelId=${adaptation.channelId}`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`STRANDED-DELIVERY SWEEP FAILED: ${message}`);
+    }
   }
 
   /** Claims whose adaptation is gone — unreachable from the sweep above. */

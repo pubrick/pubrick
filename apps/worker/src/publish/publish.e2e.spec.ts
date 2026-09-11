@@ -1239,4 +1239,261 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       expect(pubs.map((row) => row.status).sort()).toEqual(["published", "unknown"]);
     }, 25_000);
   });
+
+  /**
+   * THE ROW NOBODY WILL EVER FAIL — the sweep for a job that no longer exists.
+   *
+   * The block above recovers an attempt that started and stopped. This one
+   * recovers a delivery that never started at all. pg-boss DELETES a waiting
+   * job once `keep_until = start_after + retention` passes (14 days by
+   * default), so a post approved for a slot the worker slept through loses its
+   * job outright — and the adaptation is left `scheduled`, or `queued` for a
+   * "Publish now", with nothing anywhere that will ever move it. `scheduled` is
+   * in `approve`'s target list, so a person who notices can re-approve it;
+   * `queued` is not in any human path at all, which is the trap `publishing`
+   * used to be.
+   *
+   * The verdict forks exactly as the sweep above forks, and for the same
+   * reason: a `scheduled` row CAN hold a live `in_flight` claim (reject leaves
+   * the claim standing, a re-approve puts the row back), and calling such a row
+   * "never sent" is the invitation to re-approve into a duplicate.
+   */
+  describe("stranded-schedule sweep (no job left anywhere)", () => {
+    /** A queue with no registered consumer, so a job parked here stays parked. */
+    const STRANDED_QUEUE = "publish-stranded-e2e";
+    let seq = 0;
+
+    beforeAll(async () => {
+      await boss.createQueue(STRANDED_QUEUE);
+      await db.execute(sql`delete from pgboss.job where name = ${STRANDED_QUEUE}`);
+    });
+
+    /**
+     * A row the api left behind and the queue then lost: `scheduled` for a slot
+     * `ageSeconds` ago, or `queued` and silent that long, with no job naming it.
+     *
+     * Only the clock is faked. The claim, when one is asked for, is taken
+     * through the real repository in the real order — `markPublishing`,
+     * `claimSend`, and then the status put back where a reject and a re-approve
+     * would have left it, which is the one shape that produces a `scheduled`
+     * row with a live claim on it.
+     */
+    async function stranded(
+      status: "scheduled" | "queued",
+      ageSeconds: number,
+      claim = false,
+      /**
+       * How long ago the row was last WRITTEN, when that differs from its slot.
+       * The two clocks are separable on purpose: a post approved yesterday for
+       * a slot next month is silent and not late, and reading `updated_at` for
+       * a `scheduled` row would fail it the moment the bound passed since the
+       * approve.
+       */
+      silentForSeconds = ageSeconds,
+    ): Promise<{ adaptationId: string; itemId: string; chatId: string }> {
+      seq += 1;
+      const chatId = `-200${Date.now()}${seq}`;
+      const { adaptationId } = await seedQueuedAdaptation(chatId);
+      if (claim) {
+        expect(await repo.markPublishing(orgId, adaptationId, null)).not.toBeNull();
+        expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+      }
+      await db
+        .update(schema.adaptations)
+        .set({
+          status,
+          scheduledAt:
+            status === "scheduled" ? sql`now() - make_interval(secs => ${ageSeconds})` : null,
+          updatedAt: sql`now() - make_interval(secs => ${silentForSeconds})`,
+        })
+        .where(eq(schema.adaptations.id, adaptationId));
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      return { adaptationId, itemId: row?.contentItemId as string, chatId };
+    }
+
+    async function rowOf(adaptationId: string) {
+      const [row] = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      return row;
+    }
+
+    async function itemStatusOf(itemId: string) {
+      const [row] = await db
+        .select()
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, itemId));
+      return row?.status;
+    }
+
+    async function publicationsOf(adaptationId: string) {
+      return db
+        .select()
+        .from(schema.publications)
+        .where(eq(schema.publications.adaptationId, adaptationId));
+    }
+
+    /**
+     * The queue's own table, named rather than assumed. `sweepStranded` reads
+     * `pgboss.job` directly — `state` and `data->>'adaptationId'` — which is
+     * pg-boss's public contract for this product (`cancelPublish` finds jobs by
+     * the same payload, and the abandoned sweep has read the same two columns
+     * since it shipped) but is still somebody else's schema. Pinned against a
+     * REAL boss instance, so a pg-boss upgrade that renames either one fails
+     * here, naming the column, instead of turning both sweeps into permanent
+     * no-ops that quietly strand every row they were written to recover.
+     */
+    it("reads the two pgboss.job columns the sweep's predicate names", async () => {
+      const { rows } = await db.execute(
+        `SELECT column_name, data_type FROM information_schema.columns
+          WHERE table_schema = 'pgboss' AND table_name = 'job'
+            AND column_name IN ('state', 'data')
+          ORDER BY column_name`,
+      );
+      expect(rows.map((row) => (row as { column_name: string }).column_name)).toEqual([
+        "data",
+        "state",
+      ]);
+      expect((rows[1] as { data_type: string }).data_type).toBe("USER-DEFINED");
+    });
+
+    it("fails a scheduled row whose job retention deleted, and takes the item with it", async () => {
+      const { adaptationId, itemId, chatId } = await stranded("scheduled", 26 * 3600);
+
+      await service.sweepAbandoned();
+
+      const row = await rowOf(adaptationId);
+      expect(row?.status).toBe("failed");
+      expect(row?.failureReason).toBe("schedule_missed");
+      expect(row?.lastError).toContain("nothing was delivered");
+      // The slot itself is NOT cleared: it is what the screen measures the
+      // lateness from, and what makes "Publish now" a decision rather than a
+      // guess.
+      expect(row?.scheduledAt).not.toBeNull();
+      // The parent item goes with it — this adaptation is its only one, so an
+      // item left `approved` beside a delivery nothing will ever make is the
+      // same stuck screen one level up.
+      expect(await itemStatusOf(itemId)).toBe("failed");
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs).toHaveLength(1);
+      expect(pubs[0]).toMatchObject({ status: "failed" });
+      expect(sendCounts.get(chatId) ?? 0).toBe(0);
+    });
+
+    it("fails a stranded queued row as send_abandoned — it never had a slot to miss", async () => {
+      const { adaptationId } = await stranded("queued", 26 * 3600);
+
+      await service.sweepAbandoned();
+
+      const row = await rowOf(adaptationId);
+      expect(row?.status).toBe("failed");
+      // NOT `schedule_missed`: "Publish now" writes `scheduled_at = null`, so
+      // there is no slot, no lateness for the screen to print, and the sentence
+      // "missed its slot by — h" would be a lie with a blank in it.
+      expect(row?.failureReason).toBe("send_abandoned");
+      expect(row?.scheduledAt).toBeNull();
+    });
+
+    it("leaves a scheduled row whose job is still waiting in the queue", async () => {
+      const { adaptationId } = await stranded("scheduled", 26 * 3600);
+      const jobId = await boss.send(STRANDED_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+
+      try {
+        await service.sweepAbandoned();
+        expect((await rowOf(adaptationId))?.status).toBe("scheduled");
+      } finally {
+        await boss.cancel(STRANDED_QUEUE, jobId);
+      }
+    });
+
+    /**
+     * The other direction of the same predicate, and the one a wrong column
+     * would pass without: a job that names SOME adaptation of this org must not
+     * protect a different one. Keyed on `data->>'orgId'` — or on nothing at all
+     * — this row survives, and the sweep never recovers anything on a database
+     * with any live publish job on it.
+     */
+    it("is not protected by a job naming a different adaptation of the same org", async () => {
+      const { adaptationId } = await stranded("scheduled", 26 * 3600);
+      const other = await stranded("scheduled", 26 * 3600);
+      const jobId = await boss.send(STRANDED_QUEUE, { adaptationId: other.adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+
+      try {
+        await service.sweepAbandoned();
+        expect((await rowOf(adaptationId))?.status).toBe("failed");
+        expect((await rowOf(other.adaptationId))?.status).toBe("scheduled");
+      } finally {
+        await boss.cancel(STRANDED_QUEUE, jobId);
+      }
+    });
+
+    /**
+     * The grace, bracketed with absolute numbers rather than derived from
+     * `boundHours`: a fixture computed from the constant moves with it and pins
+     * nothing. One hour past a six-hour bound is a post that is merely late and
+     * whose job is between `startAfter` and the handler's first write; a second
+     * ago is a post approved a second ago. Neither is stranded, and a sweep
+     * with no grace at all takes both.
+     */
+    it.each([
+      ["a slot one hour ago", -3600],
+      ["a slot one second ago", -1],
+    ])("leaves a scheduled row with %s", async (_label, offsetSeconds) => {
+      expect(boundHours).toBe(6);
+      const { adaptationId } = await stranded("scheduled", -offsetSeconds);
+      await service.sweepAbandoned();
+      expect((await rowOf(adaptationId))?.status).toBe("scheduled");
+    });
+
+    /**
+     * WHICH CLOCK A SCHEDULED ROW IS MEASURED BY, which no fixture that
+     * backdates both columns together can say. This is a post approved a day
+     * ago for a slot a month out — silent for far longer than the bound, and
+     * not late by a second. Measured by `updated_at`, as its `queued` sibling
+     * correctly is, the sweep fails a delivery whose slot has not arrived: the
+     * worst thing in this file, since `failed` is what the screen shows and
+     * nothing will put the post back.
+     */
+    it("leaves a scheduled row approved long ago whose slot is still ahead", async () => {
+      const { adaptationId } = await stranded("scheduled", -30 * 24 * 3600, false, 24 * 3600);
+      await service.sweepAbandoned();
+      expect((await rowOf(adaptationId))?.status).toBe("scheduled");
+    });
+
+    it("leaves a queued row approved a second ago", async () => {
+      const { adaptationId } = await stranded("queued", 1);
+      await service.sweepAbandoned();
+      expect((await rowOf(adaptationId))?.status).toBe("queued");
+    });
+
+    /**
+     * The claimed arm, on the row §2 of the design says produces it: an attempt
+     * claimed the send and was killed, a human rejected (which touches no
+     * publications row), and they re-approved with a time. The row is
+     * `scheduled` with a live claim standing on it — and the one thing this
+     * sweep must never say about it is "never sent".
+     */
+    it("records outcome_unknown for a stranded row that still holds an in-flight claim", async () => {
+      const { adaptationId } = await stranded("scheduled", 26 * 3600, true);
+
+      await service.sweepAbandoned();
+
+      const row = await rowOf(adaptationId);
+      expect(row?.status).toBe("failed");
+      expect(row?.failureReason).toBe("outcome_unknown");
+      expect(row?.lastError).toContain("check the channel before re-approving");
+      const pubs = await publicationsOf(adaptationId);
+      expect(pubs).toHaveLength(1);
+      expect(pubs[0]?.status).toBe("unknown");
+      // Resolved, not left standing: an in-flight row that outlives everything
+      // blocks `claimSend` for ever.
+      expect(pubs[0]?.status).not.toBe("in_flight");
+    });
+  });
 });

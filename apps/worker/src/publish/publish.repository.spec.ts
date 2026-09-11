@@ -1235,7 +1235,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
    * `ORDER BY` caused. Written with explicit ids because that is the only way to
    * make the two orders disagree on purpose.
    */
-  async function seedReversedHeapOrder() {
+  async function seedReversedHeapOrder(status: AdaptationStatus = "publishing") {
     const [item] = await db
       .insert(schema.contentItems)
       .values({ orgId, brandId, body: "Two channels", status: "approved" })
@@ -1253,13 +1253,19 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
         orgId,
         contentItemId: itemId,
         channelId: channels[index] as string,
-        status: "publishing",
+        status,
         attemptCount: 1,
       });
     }
-    // Older than one whole attempt window plus its grace: candidates for the sweep.
+    // Older than one whole attempt window plus its grace: candidates for
+    // `sweepAbandoned`. A day is also past `PUBLISH_MAX_LATENESS_HOURS`, so a
+    // `scheduled` set seeded here is a candidate for `sweepStranded` too — and
+    // the slot has to move with the silence, since that sweep measures a
+    // scheduled row by `scheduled_at` and not by `updated_at`.
     await db.execute(
-      `UPDATE adaptations SET updated_at = now() - interval '1 day' WHERE content_item_id = '${itemId}'`,
+      `UPDATE adaptations SET updated_at = now() - interval '1 day',
+              scheduled_at = CASE WHEN status = 'scheduled' THEN now() - interval '1 day' END
+        WHERE content_item_id = '${itemId}'`,
     );
     return { itemId, adaptationIds: ids };
   }
@@ -1721,6 +1727,70 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(sweptOutcome.status, "the sweep was the deadlock victim").toBe("fulfilled");
     // Nothing was swept: `reject` held `low` throughout, so the sweep's own
     // re-check under the lock is what decides — and `high` is genuinely stale.
+    expect(await adaptationStatus(high)).toBe("failed");
+  });
+
+  /**
+   * THE NEW COUNTERPARTY, and the reason `docs/lock-order.md` grew an edge with
+   * this change rather than the one before it.
+   *
+   * `sweepStranded` is a bulk write over `scheduled` and `queued` rows — a
+   * candidate set `ContentRepository.approve` walks as well as `reject`, since
+   * `lockAdaptations(…, ["pending","failed","scheduled"])` is approve's own
+   * ordered walk. `sweepAbandoned` never contended with approve at all: nothing
+   * re-approves a `publishing` row. So this pass has a counterparty its sibling
+   * did not, and an unordered bulk UPDATE against approve's ascending walk is
+   * the same cycle this project has already closed twice.
+   *
+   * The two rows are inserted high-id-first so heap order IS the reverse of id
+   * order — the premise, exactly as in the sweep test above. Both transactions
+   * must commit; before the ordering, one of them dies with 40P01, and when it
+   * is the api's, a person approving a post gets a 500.
+   */
+  it("sweepStranded locks in id order, so it cannot deadlock against approve's ordered lock", async () => {
+    const { itemId, adaptationIds } = await seedReversedHeapOrder("scheduled");
+    const [low, high] = [...adaptationIds].sort() as [string, string];
+
+    const approving = await pool.connect();
+    let sweptOutcome: PromiseSettledResult<unknown>;
+    let approveError: string | null = null;
+    try {
+      // The api's `approve`, mid-scan: it holds the first row of its ordered
+      // walk and has not yet reached the second.
+      await approving.query("BEGIN");
+      await approving.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [low]);
+
+      const sweeping = repo.sweepStranded();
+      // The sweeper is now parked on a row lock — on `high` before the
+      // ordering, on `low` after it. Passing `sweeping` makes "the sweep
+      // rejected instead of blocking" say so at this line, rather than time out
+      // as if the lock were merely slow.
+      await waitForLockWaiters("%make_interval%", 1, sweeping);
+
+      // ...and approve walks on to the rest of its ordered set.
+      approveError = await approving
+        .query(
+          `SELECT id FROM adaptations
+            WHERE content_item_id = $1 AND status IN ('pending','failed','scheduled')
+            ORDER BY id FOR UPDATE`,
+          [itemId],
+        )
+        .then(
+          () => null,
+          (error: { code?: string }) => String(error.code),
+        );
+      await approving.query("COMMIT");
+      [sweptOutcome] = await Promise.allSettled([sweeping]);
+    } finally {
+      await approving.query("ROLLBACK").catch(() => {});
+      approving.release();
+    }
+
+    expect(approveError, "approve was the deadlock victim — a 500 for approving a post").toBeNull();
+    expect(sweptOutcome.status, "the sweep was the deadlock victim").toBe("fulfilled");
+    // Nothing more is asserted about `low`: `approve` held it throughout, so
+    // the sweep's own re-check under the lock decides it. `high` was never
+    // contended and is genuinely stranded.
     expect(await adaptationStatus(high)).toBe("failed");
   });
 

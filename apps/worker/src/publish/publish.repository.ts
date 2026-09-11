@@ -328,6 +328,71 @@ const ABANDONED_FAILED_ERROR =
 export type SweptAdaptation = { id: string; orgId: string; outcome: "failed" | "unknown" };
 
 /**
+ * HOW LONG PAST ITS SLOT — or past the approve, for a "Publish now" — a row
+ * with NO JOB has been stranded rather than merely waiting.
+ *
+ * `PUBLISH_MAX_LATENESS_HOURS`, the bound the worker already checks at send
+ * time, and deliberately not a grace of this sweep's own. The two are one
+ * question asked from two sides: past that bound a delivery is refused as
+ * `schedule_missed` whether the job arrives or not, so a row that has reached
+ * it has nothing left to wait for and a second number would only be a second
+ * thing to get wrong.
+ *
+ * IT CANNOT RACE A NORMAL ENQUEUE, and that is a property of the schema rather
+ * than of the number. `approve` inserts the job in the SAME TRANSACTION as the
+ * status and the slot (`ContentRepository.approve` -> `QueueService.
+ * enqueuePublish`, which runs on the caller's connection), so "the row exists
+ * and no job names it" is never a window between two commits: it is true only
+ * after pg-boss's retention DELETED a waiting job (`keep_until = start_after +
+ * retention`, 14 days) or after somebody removed one by hand. The bound is the
+ * margin on top of that, and it is floored at boot — `apps/worker/src/env.ts`
+ * refuses any value at or under the queue's whole retry chain plus
+ * `PUBLISH_ABANDONED_AFTER_SECONDS` — so it can never be configured down into
+ * the window where a live delivery is still legitimately in progress.
+ *
+ * Read through `env` at call time rather than captured at module load, for the
+ * same reason `credentials` reads its key ring there: one place holds the
+ * configured value.
+ */
+function strandedAfterSeconds(): number {
+  return env.PUBLISH_MAX_LATENESS_HOURS * 3600;
+}
+
+/**
+ * What a row swept by `sweepStranded` says happened — three sentences over the
+ * same two verdicts as `sweepAbandoned`, because the two statuses it recovers
+ * are two different injuries.
+ *
+ * The claimed one is word-for-word its sibling's: a claim that outlived its
+ * attempt means a post may be out there, and that is the same fact about a
+ * `scheduled` row as about a `publishing` one.
+ */
+const STRANDED_UNKNOWN_ERROR = ABANDONED_UNKNOWN_ERROR;
+
+/** The slot came and went with nothing left that could ever deliver it. */
+const STRANDED_SCHEDULE_ERROR =
+  "The scheduled slot came and went: the queue job that would have delivered this post is no " +
+  "longer anywhere in the queue, and nothing was delivered. Publish now to send it anyway.";
+
+/**
+ * The same, for a row that never had a slot. "Publish now" writes
+ * `scheduled_at = null`, so there is no missed slot to name and no lateness a
+ * screen could print.
+ */
+const STRANDED_QUEUED_ERROR =
+  "This delivery was queued and the queue job that would have sent it is no longer anywhere in " +
+  "the queue; nothing was delivered. Publish now to send it again.";
+
+/** One stranded adaptation: which trap it was in, and which verdict it got. */
+export type StrandedAdaptation = {
+  id: string;
+  orgId: string;
+  channelId: string;
+  reason: Extract<PublishFailureReason, "schedule_missed" | "send_abandoned" | "outcome_unknown">;
+  outcome: "failed" | "unknown";
+};
+
+/**
  * What an ORPHANED claim ends as: a receipt whose adaptation was deleted out
  * from under it while it was still in flight.
  *
@@ -1080,6 +1145,204 @@ export class PublishRepository {
       }
 
       return swept.map((row) => ({ id: row.id, orgId: row.orgId, outcome: row.outcome }));
+    });
+  }
+
+  /**
+   * Terminate every `scheduled` or `queued` adaptation that NO PG-BOSS JOB
+   * NAMES ANY MORE — the row nobody will ever fail.
+   *
+   * THE HOLE THIS CLOSES is the one the staleness design calls seam 4, and it
+   * is not the sibling above's. `sweepAbandoned` recovers an attempt that
+   * STARTED and stopped; this recovers a delivery that never started at all.
+   * pg-boss DELETES a waiting job once `keep_until = start_after + retention`
+   * passes — 14 days by default, and `plans.js` deletes the row rather than
+   * failing it — so a post approved for a slot the worker slept through simply
+   * loses its job. The adaptation is left exactly where `approve` put it, with
+   * nothing anywhere that will ever move it again, and the two statuses differ
+   * only in how badly:
+   *
+   *  - `scheduled` is in `approve`'s target list, so a person who NOTICES can
+   *    re-approve it. The screen says "Scheduled for Tuesday 09:00" in blue,
+   *    for ever, and does not poll.
+   *  - `queued` is in nobody's target list — `approve` takes
+   *    `["pending","failed","scheduled"]` — so a stranded one is unreachable by
+   *    every human path in the product. That is exactly the trap `publishing`
+   *    used to be, one status over.
+   *
+   * WHY IT IS A SIBLING OF `sweepAbandoned` AND NOT A THIRD ARM INSIDE IT. The
+   * two passes share a shape and agree on nothing else: different statuses,
+   * different clocks (`scheduled_at` for a slot, `updated_at` for silence),
+   * different bounds (`PUBLISH_MAX_LATENESS_HOURS` against
+   * `PUBLISH_ABANDONED_AFTER_SECONDS`) and different verdicts. Folded into one
+   * statement, the predicate becomes a three-way disjunction that the ordered
+   * sub-select then has to repeat verbatim — and the safety of both passes
+   * rests on a reader being able to check that those two copies say the same
+   * thing. There is a locking reason too, and it is the stronger one: separate
+   * methods run in separate transactions, so neither ever holds one pass's rows
+   * while asking for the other's. One transaction that swept `publishing` rows
+   * and then `scheduled` ones would take `adaptations` in two ascending runs
+   * rather than one, against a `reject` that walks `queued`, `scheduled` and
+   * `publishing` in a SINGLE ascending walk — which is a cycle, and precisely
+   * the kind this file has already paid for twice (`docs/lock-order.md`).
+   *
+   * THE VERDICT FORKS EXACTLY AS ITS SIBLING'S DOES, for the same reason and on
+   * the same evidence. A `scheduled` row CAN hold a live `in_flight` claim: an
+   * attempt is killed between `claimSend` and its outcome, a human rejects
+   * (`reject` writes `pending` and touches no `publications` row), and they
+   * re-approve with a time — leaving the claim standing on a row `sweepAbandoned`
+   * cannot see (it is scoped to `publishing`) and `sweepOrphanedClaims` cannot
+   * see either (it is scoped to `adaptation_id IS NULL`). Such a row gets
+   * `outcome_unknown` and the "check the channel" sentence. Only a row with no
+   * claim is told it was never sent, which is what makes the `failed` this
+   * writes safe to re-approve.
+   *
+   * AND THE TWO UNCLAIMED ARMS DO NOT SHARE A REASON CODE. A `scheduled` row
+   * missed a slot: `schedule_missed`, the same code the worker's own bound
+   * writes, and the screen prints the hours from `scheduled_at`, which this
+   * statement deliberately leaves in place. A `queued` row never had a slot —
+   * "Publish now" writes `scheduled_at = null` — so `schedule_missed` would be
+   * a claim about a time that does not exist, rendered as "missed its slot by
+   * — h". It gets `send_abandoned`, whose own definition is the true sentence
+   * about it: nothing reached the platform and no job is left to retry it.
+   * (The design's reason table put both arms on `schedule_missed`; the code is
+   * the answer, per that document's own preamble.)
+   *
+   * `attempt_count` is NOT bumped, on the same rule as its sibling and with
+   * less to count: no attempt ever ran. `approve` advances the count itself
+   * when the operator re-approves, so the next job still gets a fresh id.
+   *
+   * It takes the same ascending-id `WHERE id IN (SELECT … ORDER BY id FOR
+   * UPDATE)` sub-select as every other multi-row writer of this table, and the
+   * COUNTERPARTY IS NEW: this candidate set is walked by
+   * `ContentRepository.approve` (`lockAdaptations(…, ["pending","failed",
+   * "scheduled"])`) as well as by `reject`, and `sweepAbandoned` never
+   * contended with approve at all — nothing re-approves a `publishing` row. See
+   * `docs/lock-order.md`, where that edge is written down.
+   *
+   * The predicate is repeated on the outer UPDATE, like its sibling's, so a row
+   * the api moved while the sweep was parked on its lock fails the second look
+   * and is not swept. NOT org-scoped: a maintenance pass over the whole table,
+   * reading nothing out to anybody.
+   */
+  async sweepStranded(): Promise<StrandedAdaptation[]> {
+    const seconds = strandedAfterSeconds();
+    // Evaluated three times in the one statement — the sentence, the reason
+    // code and the publications outcome — and every time against the same
+    // snapshot, so the three on one row cannot disagree.
+    const claimed = sql`exists (
+      select 1
+        from publications p
+       where p.adaptation_id = ${schema.adaptations.id}
+         and p.status = 'in_flight'
+    )`;
+    // `state < 'completed'` is pg-boss's own spelling for "not terminal", and
+    // `data->>'adaptationId'` is the payload the api enqueues
+    // (`QueueService.enqueuePublish`) and finds jobs by when it cancels one.
+    // The same two columns `sweepAbandoned` has read since it shipped; pinned
+    // against a real boss instance in `publish.e2e.spec.ts`.
+    const noLiveJob = sql`not exists (
+      select 1
+        from ${sql.raw(PGBOSS_SCHEMA)}.job j
+       where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+         and j.data->>'adaptationId' = ${schema.adaptations.id}::text
+    )`;
+    // A `scheduled` row is measured by its SLOT and a `queued` row by its
+    // silence, because those are the two clocks the api actually sets. Reading
+    // `updated_at` for both would sweep a row scheduled for next month the
+    // moment the bound passed since it was approved; reading `scheduled_at` for
+    // both would never sweep a `queued` row at all, since its slot is null.
+    const stranded = sql`(
+      (${schema.adaptations.status} = 'scheduled'
+        and ${schema.adaptations.scheduledAt} < now() - make_interval(secs => ${seconds}))
+      or (${schema.adaptations.status} = 'queued'
+        and ${schema.adaptations.updatedAt} < now() - make_interval(secs => ${seconds}))
+    )`;
+    const reason = sql<StrandedAdaptation["reason"]>`case
+      when ${claimed} then 'outcome_unknown'
+      when ${schema.adaptations.status} = 'scheduled' then 'schedule_missed'
+      else 'send_abandoned'
+    end`;
+    return db.transaction(async (tx) => {
+      const swept = await tx
+        .update(schema.adaptations)
+        .set({
+          status: "failed",
+          lastError: sql`case
+            when ${claimed} then ${STRANDED_UNKNOWN_ERROR}
+            when ${schema.adaptations.status} = 'scheduled' then ${STRANDED_SCHEDULE_ERROR}
+            else ${STRANDED_QUEUED_ERROR}
+          end`,
+          failureReason: reason,
+          // `scheduled_at` is deliberately left alone: it is what the api
+          // measures the lateness from for the screen's sentence, and clearing
+          // it would turn "missed its slot by 26 h" into a reason with no
+          // number the moment this sweep touched the row.
+          updatedAt: nowSql(),
+        })
+        .where(
+          and(
+            stranded,
+            noLiveJob,
+            // The lock order, taken by a sub-select because an UPDATE cannot
+            // carry an ORDER BY. Sorted, then locked: ascending id, the one
+            // order every walker of this table uses — `approve` included.
+            sql`${schema.adaptations.id} in (
+              select a.id from adaptations a
+               where (
+                     (a.status = 'scheduled'
+                       and a.scheduled_at < now() - make_interval(secs => ${seconds}))
+                  or (a.status = 'queued'
+                       and a.updated_at < now() - make_interval(secs => ${seconds}))
+                 )
+                 and not exists (
+                   select 1
+                     from ${sql.raw(PGBOSS_SCHEMA)}.job j
+                    where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
+                      and j.data->>'adaptationId' = a.id::text
+                 )
+               order by a.id
+                 for update of a
+            )`,
+          ),
+        )
+        .returning({
+          id: schema.adaptations.id,
+          orgId: schema.adaptations.orgId,
+          channelId: schema.adaptations.channelId,
+          contentItemId: schema.adaptations.contentItemId,
+          attemptCount: schema.adaptations.attemptCount,
+          lastError: schema.adaptations.lastError,
+          reason: schema.adaptations.failureReason,
+          outcome: sql<"failed" | "unknown">`case when ${claimed} then 'unknown' else 'failed' end`,
+        });
+
+      for (const row of swept) {
+        // Both arms, not only the claimed one. With a claim this RESOLVES it,
+        // which is the other half of the recovery — an `in_flight` row that
+        // outlives everything blocks `claimSend` for ever, so an operator who
+        // checks the channel and re-approves deliberately could never send
+        // again. Without one it appends the receipt every terminal path in this
+        // file appends, carrying `attempt_count` as it stands: zero, for a
+        // delivery on which no attempt was ever made.
+        await resolveClaim(tx, row.orgId, row.id, {
+          channelId: row.channelId,
+          status: row.outcome,
+          externalId: null,
+          externalUrl: null,
+          error: row.lastError,
+          attempt: row.attemptCount,
+        });
+        await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+      }
+
+      return swept.map((row) => ({
+        id: row.id,
+        orgId: row.orgId,
+        channelId: row.channelId,
+        reason: row.reason as StrandedAdaptation["reason"],
+        outcome: row.outcome,
+      }));
     });
   }
 
