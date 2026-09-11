@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHttpUrl } from "./external-url";
+import { isHttpUrl, isLinkableUrl } from "./external-url";
 
 describe("isHttpUrl", () => {
   it("accepts http and https, case-insensitively on the scheme", () => {
@@ -21,7 +21,6 @@ describe("isHttpUrl", () => {
     expect(isHttpUrl("not a url")).toBe(false);
   });
 });
-import { isLinkableUrl } from "./external-url";
 
 describe("isLinkableUrl", () => {
   it("accepts a public https t.me link", () => {
