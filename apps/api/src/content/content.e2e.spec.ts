@@ -3943,6 +3943,73 @@ describe.skipIf(!url)("content e2e", () => {
     });
 
     /**
+     * THE CHANNEL STRIP IS IN CREATION ORDER, on the card and on the item.
+     *
+     * The screen renders `item.adaptations.map(...)` straight through
+     * (`apps/web/src/app/[locale]/content/page.tsx`), so the order these rows
+     * come back in IS the order of the channel strip a reader sees — and
+     * neither read asked for one. This commit's whole argument about the cards
+     * applies one level down, and harder since the batched read: the strip of
+     * ONE item now depends on a scan over every item on the page, so a second
+     * draft written by somebody else could reshuffle the first one's channels.
+     * `lockAdaptations` already orders these rows for a reason of its own.
+     *
+     * The item is created through the route with one channel, and the second
+     * row is written afterwards with an OLDER `created_at` — so insertion
+     * order, physical order and creation order are three different answers, and
+     * a strip that came back the way the rows were written would name the wrong
+     * channel first.
+     *
+     * Both paths, because they are two queries: the list's batched
+     * `adaptationsForMany` and the item's `adaptationsFor`.
+     */
+    it("lists an item's channels in the order they were created, not the planner's", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const second = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "123:abc", chatId: "-1009876543210" },
+        })
+        .expect(201);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Two channels", body: CARD_BODY, channelIds: [channelId] })
+        .expect(201);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const seed = createDb(url as string);
+      try {
+        const [row] = (await seed.db.execute(`SELECT org_id FROM brands WHERE id = '${brandId}'`))
+          .rows as { org_id: string }[];
+        const orgId = row?.org_id as string;
+        // Written last, created first: the route stamped the row above with
+        // `now()`, and this one is backdated a day.
+        await seed.db.insert(schema.adaptations).values({
+          orgId,
+          contentItemId: created.body.id as string,
+          channelId: second.body.id as string,
+          createdAt: new Date("2026-09-09T08:00:00.000Z"),
+        });
+      } finally {
+        await seed.pool.end();
+      }
+
+      const [card] = (await agent.get("/api/content").expect(200)).body as {
+        adaptations: { channelId: string }[];
+      }[];
+      expect(card?.adaptations.map((a) => a.channelId)).toEqual([second.body.id, channelId]);
+
+      const fetched = (await agent.get(`/api/content/${created.body.id}`).expect(200)).body as {
+        adaptations: { channelId: string }[];
+      };
+      expect(fetched.adaptations.map((a) => a.channelId)).toEqual([second.body.id, channelId]);
+    });
+
+    /**
      * NEWEST FIRST, TIES BROKEN BY `id`, AND THE SAME BOTH TIMES.
      *
      * `list` had no `ORDER BY` at all, so the answer was the planner's — which

@@ -886,6 +886,16 @@ export class ContentRepository {
     private readonly refiner: RefineCaller,
   ) {}
 
+  /**
+   * One item's channel strip, IN THE ORDER THE CHANNELS WERE ADDED.
+   *
+   * `created_at, id`, the same order `lockAdaptations` and the version reads
+   * use, and for the same reason each time: the item screen and the queue card
+   * render these rows straight through, so the order they come back in is the
+   * order a reader sees, and without a clause it is the planner's. The `id`
+   * tiebreak is not decoration here either — `POST /api/content` inserts every
+   * channel's adaptation in ONE statement, where `now()` is a single value.
+   */
   private async adaptationsFor(orgId: string, contentItemId: string) {
     return db
       .select(ADAPTATION_COLUMNS)
@@ -895,7 +905,8 @@ export class ContentRepository {
           eq(schema.adaptations.orgId, orgId),
           eq(schema.adaptations.contentItemId, contentItemId),
         ),
-      );
+      )
+      .orderBy(asc(schema.adaptations.createdAt), asc(schema.adaptations.id));
   }
 
   /**
@@ -939,7 +950,13 @@ export class ContentRepository {
           eq(schema.adaptations.orgId, orgId),
           inArray(schema.adaptations.contentItemId, contentItemIds),
         ),
-      );
+      )
+      // The same `created_at, id` as the single-item read above, and it has to
+      // be stated rather than inherited: grouping preserves the order rows
+      // ARRIVE in, and one page's rows arrive from a scan over every item on
+      // it — so without this, one draft's channel strip depends on what other
+      // drafts are on the same page.
+      .orderBy(asc(schema.adaptations.createdAt), asc(schema.adaptations.id));
     for (const row of rows) byItem.get(row.contentItemId)?.push(row);
     return byItem;
   }
