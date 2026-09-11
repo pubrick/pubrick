@@ -19,6 +19,127 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
+/**
+ * Where the owner reads the gate query (`docs/specs/0003-ai-generation-engine.md`
+ * §12), and the heading the fence sits under.
+ *
+ * Found by walking up from the working directory rather than from
+ * `import.meta.url`: `apps/api` compiles as CommonJS (`tsc` refuses
+ * `import.meta` under it) while vitest runs the file as ESM, so neither
+ * `__dirname` nor `import.meta` exists in both.
+ *
+ * The walk stops at the repository root — the directory holding
+ * `pnpm-workspace.yaml` — and the stop is CHECKED, not assumed. Without it the
+ * loop stops at the first ancestor that happens to hold `docs/specs`, which for
+ * a worktree placed beneath another pubrick checkout (this owner's habit) is
+ * the PARENT checkout: a §12 renamed here would then silently be validated
+ * against the neighbour's document.
+ */
+const GATE_DOC = (() => {
+  const relative = join("docs", "specs", "0003-ai-generation-engine.md");
+  for (let dir = process.cwd(); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml"))) {
+      const candidate = join(dir, relative);
+      if (existsSync(candidate)) return candidate;
+      throw new Error(`${relative} is missing from the workspace root ${dir}`);
+    }
+    if (dirname(dir) === dir) throw new Error(`no pnpm-workspace.yaml above ${process.cwd()}`);
+  }
+})();
+const GATE_SECTION = "## 12. The gate before increment 3b, and the query that measures it";
+
+/**
+ * This file's copy of the gate query, byte for byte as §12 carries it.
+ *
+ * §12 supersedes the watched-sources design's copy (at `cf2077e6`), whose
+ * volume clause counted raw URLs: one article pasted with a `#:~:text=` or a
+ * `utm_source` scored as several stories, which is the person the design's §5
+ * wrote the clause to exclude. The document says so; this is the copy that runs.
+ *
+ * `String.raw` because `'^www\.'` must survive into the SQL: written as an
+ * ordinary template literal, JavaScript eats the backslash, the regex becomes
+ * `^www.` — any character — and `wwwXexample.com` would fold too.
+ */
+const GATE_SQL = String.raw`-- Per org, per week: the distinct stories a watcher could have fetched (the
+-- threshold), the runs they cost and how many of those failed (context), the
+-- URL-less pastes (context, not evidence), and the hosts.
+with pastes as (
+  select org_id,
+         date_trunc('week', created_at) as week,
+         status,
+         input->>'sourceUrl' as url,
+         -- The address with the fragment, the query and the scheme cut away.
+         split_part(split_part(split_part(input->>'sourceUrl', '#', 1), '?', 1),
+                    '://', 2) as trimmed
+  from pipeline_runs
+  where input->>'kind' = 'source'
+),
+source_runs as (
+  select org_id, week, status, url,
+         nullif(regexp_replace(lower(split_part(trimmed, '/', 1)), '^www\.', '')
+                || rtrim(regexp_replace(trimmed, '^[^/]*', ''), '/'), '') as story,
+         nullif(regexp_replace(
+           lower(split_part(split_part(url, '://', 2), '/', 1)),
+           '^www\.', ''), '') as host
+  from pastes
+)
+select org_id,
+       week,
+       count(distinct story)                     as watchable_stories,
+       count(*) filter (where url is not null)   as watchable_runs,
+       count(*) filter (where url is not null
+                          and status in ('failed', 'cancelled')) as failed_runs,
+       count(*) filter (where url is null)       as urlless_runs,
+       array_agg(distinct host) filter (where host is not null) as hosts
+from source_runs
+group by 1, 2
+order by 1, 2;
+`;
+
+/**
+ * The fenced `sql` block under §12's heading, as the document carries it.
+ *
+ * The slice is bounded by the NEXT `## ` heading, not by the end of the file.
+ * §12 is last today; a §13 carrying its own `sql` fence, plus a fence renamed
+ * or removed here, would otherwise extract §13's query and fail while naming
+ * the wrong section.
+ */
+function gateSqlFromDoc(): string {
+  const doc = readFileSync(GATE_DOC, "utf8");
+  const at = doc.indexOf(GATE_SECTION);
+  expect(at, `${GATE_DOC} no longer has the section holding the gate query`).toBeGreaterThan(-1);
+  const after = doc.slice(at + GATE_SECTION.length);
+  const end = after.indexOf("\n## ");
+  const section = end === -1 ? after : after.slice(0, end);
+  const fence = /```sql\n([\s\S]*?)```/.exec(section)?.[1];
+  expect(fence, `${GATE_SECTION} no longer contains a fenced sql block`).toBeDefined();
+  return fence as string;
+}
+
+/**
+ * The parity ratchet reads two files and touches no database, so it runs
+ * WHEREVER the suite runs — outside the `skipIf` below. The parity assertion is
+ * the thing that stops the owner reading a threshold off a paragraph whose SQL
+ * no test has ever executed; it is the last assertion that should be allowed to
+ * vanish when `TEST_DATABASE_URL` is unset.
+ */
+describe("the gate query the document carries", () => {
+  it("runs the same query the document tells the owner to run", () => {
+    expect(gateSqlFromDoc()).toBe(GATE_SQL);
+  });
+
+  /** The threshold is a number in prose; prose is what goes stale first. */
+  it("keeps the threshold, and the date it was chosen, beside the query", () => {
+    const doc = readFileSync(GATE_DOC, "utf8");
+    const section = doc.slice(doc.indexOf(GATE_SECTION));
+    expect(section).toContain("five distinct URLs a week");
+    expect(section).toContain("four consecutive weeks");
+    expect(section).toContain("three of those four weeks");
+    expect(section).toContain("chosen, not measured");
+    expect(section).toContain("2026-09-11, branch `feat/paste-a-story`");
+  });
+});
+
 describe.skipIf(!url)("runs e2e", () => {
   let app: INestApplication;
 
@@ -1305,79 +1426,16 @@ describe.skipIf(!url)("runs e2e", () => {
    */
   describe("the number 3b's gate will be decided from", () => {
     /**
-     * Where the owner reads the query, and the heading the fence sits under.
-     *
-     * Found by walking up from the working directory rather than from
-     * `import.meta.url`: `apps/api` compiles as CommonJS (`tsc` refuses
-     * `import.meta` under it) while vitest runs the file as ESM, so neither
-     * `__dirname` nor `import.meta` exists in both. The walk stops at the
-     * repository root, which is the one directory that holds `docs/specs`.
-     */
-    const GATE_DOC = (() => {
-      const relative = join("docs", "specs", "0003-ai-generation-engine.md");
-      for (let dir = process.cwd(); ; dir = dirname(dir)) {
-        const candidate = join(dir, relative);
-        if (existsSync(candidate)) return candidate;
-        if (dirname(dir) === dir) throw new Error(`${relative} is not above ${process.cwd()}`);
-      }
-    })();
-    const GATE_SECTION = "## 12. The gate before increment 3b, and the query that measures it";
-
-    /**
-     * This file's copy of the gate query, byte for byte as §12 carries it (and
-     * as the watched-sources design carries it at `cf2077e6`).
-     *
-     * `String.raw` because `'^www\.'` must survive into the SQL: written as an
-     * ordinary template literal, JavaScript eats the backslash, the regex
-     * becomes `^www.` — any character — and `wwwXexample.com` would fold too.
-     */
-    const GATE_SQL = String.raw`-- Per org, per week: the distinct stories a watcher could have fetched (the
--- threshold), the runs they cost and how many of those failed (context), the
--- URL-less pastes (context, not evidence), and the hosts.
-with source_runs as (
-  select org_id,
-         date_trunc('week', created_at) as week,
-         status,
-         input->>'sourceUrl' as url,
-         nullif(regexp_replace(
-           lower(split_part(split_part(input->>'sourceUrl', '://', 2), '/', 1)),
-           '^www\.', ''), '') as host
-  from pipeline_runs
-  where input->>'kind' = 'source'
-)
-select org_id,
-       week,
-       count(distinct url)                       as watchable_stories,
-       count(*) filter (where url is not null)   as watchable_runs,
-       count(*) filter (where url is not null
-                          and status in ('failed', 'cancelled')) as failed_runs,
-       count(*) filter (where url is null)       as urlless_runs,
-       array_agg(distinct host) filter (where host is not null) as hosts
-from source_runs
-group by 1, 2
-order by 1, 2;
-`;
-
-    /** The fenced `sql` block under §12's heading, as the document carries it. */
-    function gateSqlFromDoc(): string {
-      const doc = readFileSync(GATE_DOC, "utf8");
-      const at = doc.indexOf(GATE_SECTION);
-      expect(at, `${GATE_DOC} no longer has the section holding the gate query`).toBeGreaterThan(
-        -1,
-      );
-      const fence = /```sql\n([\s\S]*?)```/.exec(doc.slice(at))?.[1];
-      expect(fence, `${GATE_SECTION} no longer contains a fenced sql block`).toBeDefined();
-      return fence as string;
-    }
-
-    /**
      * `sourceHost` (`apps/web/src/lib/runs.ts`), copied — the same three calls
      * over the same WHATWG parser Node and the browser share.
      *
      * Copied rather than imported: `apps/web` is an application, not a
-     * package, and the point here is not to re-pin that function (its own
-     * suite does) but to measure the two derivations against ONE stored value
-     * and record where they part company.
+     * package, and the point here is not to re-pin that function but to measure
+     * the two derivations against ONE stored value and record where they part
+     * company. Nothing compares this copy with the original, so what keeps it
+     * honest is that `apps/web/src/lib/runs.test.ts` pins each of the five
+     * divergent shapes below by name. Change one side without the other and
+     * that suite fails.
      */
     function webSourceHost(url: string): string | null {
       try {
@@ -1414,27 +1472,66 @@ order by 1, 2;
       return run.id;
     }
 
-    /** A row no writer in this build can produce. See the nested-key test. */
-    async function rawRun(orgId: string, brandId: string, input: unknown): Promise<string> {
+    /**
+     * A row the ordinary create path cannot produce: a shape no writer in this
+     * build can write (see the nested-key test), or a `created_at` in the past,
+     * which is the only way to put two runs in two different weeks — the column
+     * is `defaultNow()` and no endpoint accepts it.
+     */
+    async function rawRun(
+      orgId: string,
+      brandId: string,
+      input: unknown,
+      createdAt?: string,
+    ): Promise<string> {
       const { createDb } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       const rows = await db.execute(
-        sql`INSERT INTO pipeline_runs (org_id, brand_id, input, status)
-              VALUES (${orgId}, ${brandId}, ${JSON.stringify(input)}::jsonb, 'succeeded')
-            RETURNING id`,
+        createdAt === undefined
+          ? sql`INSERT INTO pipeline_runs (org_id, brand_id, input, status)
+                  VALUES (${orgId}, ${brandId}, ${JSON.stringify(input)}::jsonb, 'succeeded')
+                RETURNING id`
+          : sql`INSERT INTO pipeline_runs (org_id, brand_id, input, status, created_at)
+                  VALUES (${orgId}, ${brandId}, ${JSON.stringify(input)}::jsonb, 'succeeded',
+                          ${createdAt}::timestamp)
+                RETURNING id`,
       );
       await pool.end();
       return (rows.rows[0] as { id: string }).id;
     }
 
+    /** The input a source run stores, as the DTO writes it. */
+    function sourceInput(sourceUrl: string): Record<string, unknown> {
+      return {
+        kind: "source",
+        text: null,
+        sourceUrl,
+        material: "Somebody else's article, pasted.",
+        channelIds: [randomUUID()],
+      };
+    }
+
     type GateRow = {
       org_id: string;
+      week: string | Date;
       watchable_stories: string;
       watchable_runs: string;
       failed_runs: string;
       urlless_runs: string;
       hosts: string[] | null;
     };
+
+    /**
+     * The `week` bucket as a calendar day. `created_at` is `timestamp` WITHOUT
+     * time zone, and the driver hands a zoneless value back as a Date built
+     * from the stored wall clock in the local zone — so local getters read that
+     * wall clock back, and no zone conversion can move the day.
+     */
+    function weekDay(week: string | Date): string {
+      const d = week instanceof Date ? week : new Date(week);
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      return `${d.getFullYear()}-${month}-${String(d.getDate()).padStart(2, "0")}`;
+    }
 
     /** Runs the DOCUMENT's query and returns this org's row. */
     async function runGate(orgId: string): Promise<GateRow[]> {
@@ -1492,10 +1589,12 @@ order by 1, 2;
       expect(grouped, "one org, one week, one row").toHaveLength(1);
       const row = grouped[0] as GateRow;
 
-      // Eight URLs, all distinct, INCLUDING the failed and the cancelled one:
-      // the work a poller takes over is the fetching, and the fetch happened
-      // before the run did.
-      expect(Number(row.watchable_stories)).toBe(8);
+      // Eight pastes, INCLUDING the failed and the cancelled one: the work a
+      // poller takes over is the fetching, and the fetch happened before the
+      // run did. SEVEN stories, not eight — `https://example.com?q=1` and
+      // `https://example.com#frag` are one page reached two ways, and the
+      // `story` column says so even while the `host` column still splits them.
+      expect(Number(row.watchable_stories)).toBe(7);
       expect(Number(row.watchable_runs)).toBe(8);
       expect(Number(row.failed_runs)).toBe(2);
       expect(Number(row.urlless_runs)).toBe(1);
@@ -1518,6 +1617,78 @@ order by 1, 2;
       expect([...(row.hosts as string[])].sort()).toEqual(
         [...new Set(SHAPES.map((s) => s.sql))].sort(),
       );
+    });
+
+    /**
+     * The threshold is written in weeks — "five distinct URLs A WEEK, for four
+     * consecutive WEEKS" — and nothing but this test says the query buckets by
+     * one. Every other seed here is created inside a single `it`, so all of its
+     * rows land in one bucket whatever the bucket is: `month`, `year` or no
+     * truncation at all would leave them green.
+     *
+     * `created_at` is `defaultNow()` and no endpoint accepts it, so the three
+     * rows go in raw. Sunday 23:59 and Monday 00:00 are seeded adjacent because
+     * the ISO Monday boundary is the one the four-week window is counted over.
+     */
+    it("buckets by ISO week, starting on Monday", async () => {
+      const agent = await orgAgent();
+      const { brandId } = await brandWithChannel(agent);
+      const orgId = await orgIdOfBrand(brandId);
+
+      await rawRun(orgId, brandId, sourceInput("https://a.example.com/sun"), "2026-09-06 23:59:00");
+      await rawRun(orgId, brandId, sourceInput("https://b.example.com/mon"), "2026-09-07 00:00:00");
+      await rawRun(orgId, brandId, sourceInput("https://c.example.com/one"), "2026-09-21 12:00:00");
+      await rawRun(orgId, brandId, sourceInput("https://c.example.com/two"), "2026-09-23 12:00:00");
+
+      const grouped = await runGate(orgId);
+      // A fortnight apart is two buckets, and Sunday is not in Monday's:
+      // `month` would return one row, `year` one, no truncation four.
+      expect(grouped.map((r) => weekDay(r.week))).toEqual([
+        "2026-08-31",
+        "2026-09-07",
+        "2026-09-21",
+      ]);
+      expect(grouped.map((r) => Number(r.watchable_stories))).toEqual([1, 1, 2]);
+    });
+
+    /**
+     * C1: the volume clause counts STORIES, and a story is not a spelling.
+     *
+     * One article, pasted six ways. The fragment is not a hypothetical: Chrome's
+     * "Copy link to highlight" — the default right-click after selecting article
+     * text, which is this increment's paste gesture — mints a fresh
+     * `#:~:text=…` per selection, and a newsletter link carries `utm_*`. Counted
+     * raw these score five or six "stories", meet the threshold exactly, and
+     * open the gate on a person who returned to the DRAFT and never to the
+     * source — the person the design's §5 wrote the clause to exclude.
+     *
+     * This also pins `distinct` itself: with every other seed's URLs pairwise
+     * different, `count(url)` and `count(distinct story)` would agree.
+     */
+    it("counts one article pasted six ways as one story", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const orgId = await orgIdOfBrand(brandId);
+
+      const spellings = [
+        "https://blog.example.com/a",
+        "https://blog.example.com/a", // the same paste twice: one story, two runs
+        "https://blog.example.com/a/", // a trailing slash
+        "http://blog.example.com/a", // the other scheme
+        "https://blog.example.com/a#:~:text=hello", // Copy link to highlight
+        "https://blog.example.com/a?utm_source=nl", // a newsletter's link
+      ];
+      for (const spelling of spellings) await sourceRun(agent, brandId, channelId, spelling);
+
+      const grouped = await runGate(orgId);
+      expect(grouped).toHaveLength(1);
+      const row = grouped[0] as GateRow;
+      expect(Number(row.watchable_stories)).toBe(1);
+      expect(Number(row.watchable_runs)).toBe(6);
+      // The ratio §5 leaned on: re-drafting shows as few stories over many
+      // runs, and a reader can see it. `count(url)` would make these equal.
+      expect(Number(row.watchable_stories)).toBeLessThan(Number(row.watchable_runs));
+      expect(row.hosts).toEqual(["blog.example.com"]);
     });
 
     /**
@@ -1611,8 +1782,20 @@ order by 1, 2;
       expect(row.hosts).toEqual(["example.com"]);
       expect(nestedId).not.toBe(honest);
 
-      // And the two reasons no writer in this build can produce that row.
+      // And the reason no writer in this build can produce that row. Be exact
+      // about WHICH reason: zod strips unknown keys rather than rejecting them,
+      // so this is refused because the TOP-LEVEL key is absent, not because a
+      // nested one is present. An input carrying both is accepted and the
+      // nested one dropped — the stored shape is right either way, which is
+      // why the mandatory top-level key is the whole of the guarantee.
       expect(runInputSchema.safeParse(nested).success).toBe(false);
+      const both = runInputSchema.safeParse({
+        ...nested,
+        sourceUrl: "https://example.com/top-level",
+      });
+      expect(both.success).toBe(true);
+      expect(both.data).not.toHaveProperty("attribution");
+      expect((both.data as { sourceUrl: string }).sourceUrl).toBe("https://example.com/top-level");
       // `.nullable()`, NOT `.optional()`: the key is mandatory, so "absent" is
       // refused as loudly as "nested" is. `jsonb ->> 'k'` cannot tell an absent
       // key from a null one, so the gate never has to ask.
@@ -1633,26 +1816,6 @@ order by 1, 2;
           channelIds: [randomUUID()],
         }).success,
       ).toBe(true);
-    });
-
-    /**
-     * The document and this file carry ONE query. Without this, the owner could
-     * read a threshold off a paragraph whose SQL no test has ever run, which is
-     * the failure mode the whole section was written against.
-     */
-    it("runs the same query the document tells the owner to run", () => {
-      expect(gateSqlFromDoc()).toBe(GATE_SQL);
-    });
-
-    /** The threshold is a number in prose; prose is what goes stale first. */
-    it("keeps the threshold, and the date it was chosen, beside the query", () => {
-      const doc = readFileSync(GATE_DOC, "utf8");
-      const section = doc.slice(doc.indexOf(GATE_SECTION));
-      expect(section).toContain("five distinct URLs a week");
-      expect(section).toContain("four consecutive weeks");
-      expect(section).toContain("three of those four weeks");
-      expect(section).toContain("chosen, not measured");
-      expect(section).toContain("2026-09-11, branch `feat/paste-a-story`");
     });
   });
 });

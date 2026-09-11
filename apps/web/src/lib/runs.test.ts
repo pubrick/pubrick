@@ -376,6 +376,31 @@ describe("sourceHost", () => {
     expect(sourceHost(null)).toBeNull();
   });
 
+  /**
+   * The five shapes where this parser and the gate's SQL part company, and the
+   * five rows of the divergence table in `0003` §12 — which is the table the
+   * whole "every divergence splits a site, none merges two" argument rests on.
+   *
+   * The api's gate suite carries a hand copy of this function and measures the
+   * two derivations against one stored value; nothing compares that copy with
+   * this original, so the copy is only honest while THESE are pinned. Without
+   * them, `new URL(url).host` in place of `.hostname` — ports retained —
+   * leaves both suites green and silently falsifies the table's first row.
+   */
+  it.each([
+    [
+      "https://example.com:8443/a",
+      "example.com",
+      "the port: the parser drops it, split_part keeps",
+    ],
+    ["https://example.com?q=1", "example.com", "a query with no path"],
+    ["https://example.com#frag", "example.com", "a fragment with no path"],
+    ["https://user:pw@example.com/a", "example.com", "userinfo"],
+    ["https://пример.рф/a", "xn--e1afmkfd.xn--p1ai", "an IDN, which the parser punycodes"],
+  ])("reads %s as %s, where the gate's SQL reads more (%s)", (url, host) => {
+    expect(sourceHost(url)).toBe(host);
+  });
+
   it("answers null rather than throwing on a value no request could have stored", () => {
     // The DTO refuses these, and this app does not parse the api's body: a row
     // written by hand still has to draw a strip rather than blank the screen.

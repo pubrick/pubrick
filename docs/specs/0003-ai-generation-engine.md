@@ -713,27 +713,48 @@ a month of demand from a month of broken deployment.
 
 **URL-less pastes do not count toward the threshold.** A paywalled article, a
 PDF or a Slack message records material a poller could never have fetched.
-`count(distinct url)` skips SQL NULL of its own accord, so they stay out without
-a `filter`; they are reported separately, as context rather than evidence.
+`count(distinct story)` skips SQL NULL of its own accord, so they stay out
+without a `filter`; they are reported separately, as context rather than
+evidence.
+
+**The threshold counts stories, and a story is not a URL spelling.** One
+article can be pasted as `…/a`, `…/a/`, `http://…/a`, `…/a#:~:text=hello` and
+`…/a?utm_source=nl` — and those are not exotic: Chrome's "Copy link to
+highlight", the default right-click after selecting article text, mints a fresh
+`#:~:text=…` per selection, and newsletter links carry `utm_*`. Counted raw,
+five excerpts from one page score five "stories" and meet the volume clause
+exactly — the person §5 wrote the clause to exclude, who returned to the draft
+and never to the source. So the `story` column folds the spellings: the
+fragment, the query string and the scheme are cut away, the host is lowercased
+and de-`www.`'d, and one trailing slash or many are trimmed off the path.
 
 ```sql
 -- Per org, per week: the distinct stories a watcher could have fetched (the
 -- threshold), the runs they cost and how many of those failed (context), the
 -- URL-less pastes (context, not evidence), and the hosts.
-with source_runs as (
+with pastes as (
   select org_id,
          date_trunc('week', created_at) as week,
          status,
          input->>'sourceUrl' as url,
-         nullif(regexp_replace(
-           lower(split_part(split_part(input->>'sourceUrl', '://', 2), '/', 1)),
-           '^www\.', ''), '') as host
+         -- The address with the fragment, the query and the scheme cut away.
+         split_part(split_part(split_part(input->>'sourceUrl', '#', 1), '?', 1),
+                    '://', 2) as trimmed
   from pipeline_runs
   where input->>'kind' = 'source'
+),
+source_runs as (
+  select org_id, week, status, url,
+         nullif(regexp_replace(lower(split_part(trimmed, '/', 1)), '^www\.', '')
+                || rtrim(regexp_replace(trimmed, '^[^/]*', ''), '/'), '') as story,
+         nullif(regexp_replace(
+           lower(split_part(split_part(url, '://', 2), '/', 1)),
+           '^www\.', ''), '') as host
+  from pastes
 )
 select org_id,
        week,
-       count(distinct url)                       as watchable_stories,
+       count(distinct story)                     as watchable_stories,
        count(*) filter (where url is not null)   as watchable_runs,
        count(*) filter (where url is not null
                           and status in ('failed', 'cancelled')) as failed_runs,
@@ -743,6 +764,33 @@ from source_runs
 group by 1, 2
 order by 1, 2;
 ```
+
+**The query string is dropped whole, and that is a choice with a cost.** No
+allowlist of tracking parameters is attempted: a regex that knew `utm_source`
+from `id` would be half a URL parser, and the next tracking parameter would not
+be in it. Dropping the lot means a site that names its articles
+`example.com/article.php?id=123` collapses to **one** story a week however many
+it published. The error therefore runs toward **under**-counting, which is the
+direction the rest of this section already runs in: the gate is a floor, and a
+floor that is missed is answered by waiting another week. Over-counting cannot
+be answered at all, because the number arrives looking right.
+
+The path keeps its case: `/A` and `/a` are two stories, because on a
+case-sensitive server they are two pages. Only the host is folded, and only the
+host is folded in `host` too, so the two columns agree on that one axis.
+
+A row whose `sourceUrl` carries no `://` at all leaves `story` NULL while `url`
+stays non-NULL, so it counts as a watchable *run* and not as a story — missed,
+not faked. The DTO's `z.url()` keeps such a row out of the product; this is what
+the query would do if one arrived.
+
+**This supersedes the design's copy of the query.**
+`2026-09-04-pubrick-watched-sources-design.md` §5 (at `cf2077e6`) carries the
+earlier text, whose volume clause was `count(distinct url)` over the raw column
+— written in the belief that "one intent is one URL", which the spellings above
+falsify. The design's reasoning about *what* to count stands unchanged; only the
+expression that counts it has moved on, and this section is the copy the test
+executes.
 
 `lower()` runs **inside** the `www.` strip, not outside it. The other way round
 the strip is matched against un-lowered input, so `www.example.com` folds to
@@ -768,9 +816,10 @@ draft's two-clause rule a one-clause rule.
 - **`pipeline_runs.created_at` is `timestamp` *without* time zone.**
   `date_trunc('week', …)` on a zoneless value is arithmetic on the stored wall
   clock, so the reading session's zone does not enter into it; what is lost is
-  *whose* clock that was, since `defaultNow()` renders `now()` in the database
-  server's zone and nothing records which zone that is. Over a four-week window
-  that moves at most a few rows across a boundary.
+  *whose* clock that was, since `defaultNow()` on a zoneless column renders
+  `now()` in the zone of the connection that inserted the row — the api's, not a
+  property of the server — and nothing records which zone that was. Over a
+  four-week window that moves at most a few rows across a boundary.
 
 ### What this query counts as a host, and what the queue screen shows
 
@@ -805,8 +854,13 @@ down — under an `attribution` object, say — would leave this expression NULL
 every row, and the run would be counted in `urlless_runs` as though the person
 had pasted from a PDF. The query cannot tell those apart, so the DTO does:
 `sourceRunInputSchema.sourceUrl` is `.nullable()` and **not** `.optional()`, so
-the key is mandatory and top-level on every stored source run, and
-`runInputSchema` refuses a nested spelling outright. The pin is
+the key is mandatory and top-level on every stored source run. That is the whole
+of the guarantee, and it is worth being exact about how it works: zod strips
+unknown keys rather than rejecting them, so `runInputSchema` refuses the nested
+spelling because the **top-level key is missing**, not because a nested one is
+present. An input carrying both is accepted and the nested one dropped — which
+stores the right shape either way, and is why "absent" has to be refused as
+loudly as "nested". The pin is
 `apps/api/src/runs/runs.e2e.spec.ts`, which seeds such a row by raw insert,
 shows the query miscounting it, and shows the DTO refusing to produce one.
 
