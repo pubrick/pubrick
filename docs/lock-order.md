@@ -241,7 +241,7 @@ has nothing to do with id order and reverses freely as rows are updated. Two
 transactions walking the same set in opposite orders deadlock each other.
 
 So: **every multi-row lock over `adaptations` or `pipeline_runs` is taken in
-ascending `id`.** All seven of them, and there is no eighth:
+ascending `id`.** All eight of them, and there is no ninth:
 
 | statement | how it orders |
 |---|---|
@@ -251,10 +251,11 @@ ascending `id`.** All seven of them, and there is no eighth:
 | `ContentRepository.lockAdaptations` (`approve`, `reject`) | `ORDER BY id FOR UPDATE` |
 | `AiCredentialsRepository.delete`, the org's queued runs | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF r)` |
 | `PublishRepository.sweepAbandoned`, the abandoned adaptations | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF a)` |
+| `PublishRepository.sweepStranded`, the `scheduled`/`queued` rows with no job | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF a)` |
 | `GenerateRepository.sweepAbandoned`, the abandoned runs | `WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF r)` |
 
 A bulk `UPDATE` cannot carry an `ORDER BY` of its own, which is why the last
-three take their locks in a sub-select and repeat their predicate on the outer
+four take their locks in a sub-select and repeat their predicate on the outer
 statement. That repetition is load-bearing twice over: the sub-select's
 `FOR UPDATE` re-evaluates its own `WHERE` after acquiring each row lock, and the
 outer `UPDATE` re-evaluates the predicate again — so a row a live attempt has
@@ -445,8 +446,44 @@ whose order — `adaptations` → the `publications` insert's `FOR KEY SHARE` on
 
 Stated rather than left silent, because "this change adds no lock" is exactly
 the claim the two cycles at the top of this file were each built out of. The
-next increment on this path — a sweep for `scheduled` and `queued` rows that no
-pg-boss job will ever move — DOES add an edge: a bulk write over a candidate set
-`ContentRepository.approve` walks with `lockAdaptations(…, ["pending", "failed",
-"scheduled"])`, which `sweepAbandoned` never contended with. That edge belongs
-in this file with that change, not with this one.
+next increment on this path does add an edge, and it is the section below.
+
+## The stranded-delivery sweep, and the edge it adds
+
+`PublishRepository.sweepStranded` (worker, 2026-09-12) ends every `scheduled`
+or `queued` adaptation that no pg-boss job names any more — the row retention
+deleted a waiting job out from under. It is a **multi-row writer of
+`adaptations`, and it takes its rows in ascending `id`**, through the same
+`WHERE id IN (SELECT … ORDER BY id FOR UPDATE OF a)` sub-select as its two
+siblings in the table above, with its predicate repeated on the outer `UPDATE`
+for the reason stated there. It acquires nothing else beyond what its sibling
+already acquires: the `publications` receipt it writes takes `FOR KEY SHARE` on
+`channels` through the foreign key, and `recomputeItemStatus` then takes
+`content_items` — `adaptations` → `channels` → `content_items`, the canonical
+tail, unchanged.
+
+**The counterparty is new, and that is the whole of this entry.**
+`sweepAbandoned` walks `publishing` rows, which `ContentRepository.reject` also
+walks and which nothing else in the product re-approves. This candidate set is
+walked by **`approve` as well**: `lockAdaptations(…, ["pending", "failed",
+"scheduled"])` is approve's own ordered walk, and `reject`'s set
+(`queued`/`scheduled`/`publishing`) overlaps it from the other side. So
+`POST /api/content/:id/approve` — a person pressing Approve or Publish now — is
+a counterparty this file has never had to consider for a sweep before, and an
+unordered bulk `UPDATE` against its ascending walk is the same cycle
+`sweepAbandoned` was measured producing against `reject`. Reproduced here too,
+the same way and on a real database: with the `ORDER BY` removed, the sweep and
+an approve-shaped ordered walk over two adaptations whose heap order reverses
+their id order deadlock, and the sweep dies with `40P01`
+(`publish.repository.spec.ts`, *"sweepStranded locks in id order, so it cannot
+deadlock against approve's ordered lock"*).
+
+**Two sweeps, two transactions, and never one.** `PublishService.sweepAbandoned`
+runs the two passes one after the other rather than together, and that is a
+lock-order decision rather than a style one. A single transaction sweeping
+`publishing` rows and then `scheduled`/`queued` ones would take `adaptations` in
+**two** ascending runs — every id of the first set, then ids that may be lower
+from the second — against a `reject` that takes `queued`, `scheduled` AND
+`publishing` in ONE ascending walk. Two ascending runs inside one transaction
+are not an ascending walk, which is the whole content of the rule above. Kept
+apart, they are two transactions that never hold each other's rows.

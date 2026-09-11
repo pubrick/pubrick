@@ -289,6 +289,13 @@ miss them. The seven optional ones are the ones worth reading: an `.env` written
 in August leaves registration on its self-closing default and the shipped ports
 unchanged, which is a sane instance — but not necessarily the one you meant.
 
+The same bound is what the worker's five-minute maintenance sweep uses to decide
+that a scheduled or queued post whose queue job has been deleted by retention is
+stranded rather than waiting. That sweep has **no environment variable of its
+own** and needs none: it rides the cadence the abandoned-attempt sweep already
+runs on, and the thing it recovers from has been true for hours by the time a
+row is a candidate, so a poll five minutes wide adds a rounding error to it.
+
 **Deploy the worker before the api, or both at once.** `docker compose up -d
 --build` rebuilds both together and needs no further care. If you roll services
 one at a time — a second host, an orchestrator, a manual restart — the order
