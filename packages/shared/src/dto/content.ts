@@ -693,8 +693,12 @@ export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
  *
  * `strictObject`, unlike the run's, because the narrowing IS the promise: a
  * plain object silently strips an unexpected key, so `body` finding its way
- * back onto the list would parse happily here and ship in production. It costs
- * nothing — this shape is the api's own allowlist, not a foreign payload.
+ * back onto the list would parse happily and the test asserting its absence
+ * would go on passing. NOTHING AT RUNTIME PARSES WITH THIS — the api answers
+ * with the repository's rows and the web casts `api<ContentItem[]>` — so what
+ * the strictness buys is a failing test in the api's own e2e, which is the
+ * only guard this narrowing has and enough of one. It costs nothing: this
+ * shape is the api's own allowlist, not a foreign payload.
  *
  * `bodyIsAiVerbatim` is the whole-text provenance verdict, computed by the
  * server with the same `allSentencesAi` the publish gate runs, so a card shows

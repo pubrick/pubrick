@@ -36,7 +36,11 @@ two-channel item, 2 000 for a 500-item response.
 type does not (`apps/web/src/app/[locale]/content/page.tsx:97-110`), and
 `deriveOrigin` needs only `origin`, `adaptations[].origin` and
 `bodyIsAiVerbatim` (`apps/web/src/lib/origin.ts:78-90`). Every body is read,
-serialised and shipped to draw a badge that never looks at it.
+serialised and shipped to a browser that never looks at it — the SERVER does,
+and that is the correction T1 made to this paragraph: `list` computes
+`bodyIsAiVerbatim` as `allSentencesAi(item.body, …)`, so the body cannot come
+off the SELECT. The 44 % is a saving on the wire and on the five-second poll,
+not on the database read.
 
 ### The numbers
 
@@ -179,7 +183,7 @@ Three seams to get right, none of them in the query:
 
 | # | Task | Files | Tests / mutations |
 |---|---|---|---|
-| **T1** | Slim list projection: `CONTENT_LIST_COLUMNS` without `body`, beside `ITEM_COLUMNS` | `content.repository.ts:39-54,764` | e2e: list row has no `body`; item response still does. Mutation: put `body` back → a test must fail |
+| **T1** | ~~Slim list projection~~ **Slim list RESPONSE**: `list` selects `body` (the `bodyIsAiVerbatim` badge is computed from it) and strips it before the wire; `contentListItemDtoSchema` is the strict shape of what is left. Shipped without a second column allowlist — one that is not the SELECT is a lie | `content.repository.ts:39-54,764` | e2e: list row has no `body`; item response still does. Mutation: put `body` back → a test must fail |
 | **T2** | One adaptations query per response: `= ANY(ids)` + group in JS, `ADAPTATION_COLUMNS` reused verbatim | `content.repository.ts:694-703,769-780` | Statement-count test (wrap the pool as this design did): `3` for any N. Mutations: drop the `orgId` predicate; group by the wrong key; return `[]` for an item with no adaptations vs. omitting it |
 | **T3** | Deterministic order + index: `ORDER BY created_at DESC, id DESC`, migration adding `(org_id, created_at DESC, id DESC)` | `content.repository.ts:764`, `packages/db/src/schema/content-items.ts:62`, new migration | Test: two items with the *same* `created_at` come back in a stable order across repeated reads. Mutation: drop the `id` tiebreak |
 | **T4** | Cursor: `?limit=&cursor=`, encode/decode in `@pubrick/shared`, refuse a malformed cursor with `invalid_request` | `content.controller.ts:37-40`, `content.repository.ts:750`, `packages/shared/src/dto/content.ts` | Round-trip: pages partition the set, no gaps, no repeats across a concurrent insert. Tenancy: another org's cursor yields this org's rows or a refusal, never theirs. Mutations: `<` → `<=`; drop `limit` clamp |

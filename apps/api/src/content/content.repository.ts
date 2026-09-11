@@ -38,22 +38,30 @@ import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.cal
 import { REFINE_STEP } from "./refine.step";
 
 /**
- * WHAT A CARD IS — every column of an item except the text of it.
+ * EVERY COLUMN OF AN ITEM THE API READS — one allowlist, and `body` is in it.
  *
- * This is what `GET /api/content` returns per row, and it is the api's half of
- * `contentListItemDtoSchema` (`@pubrick/shared`): the queue draws a title, a
- * status, an origin badge and a channel strip, and no reader of the list has
- * ever opened `body`. It arrived anyway, for every item the organisation owns —
- * 342 326 of the 774 722 bytes design 0009 measured on a 500-item queue, 44 %
- * of a response the browser re-reads every five seconds while anything is
- * publishing.
+ * An earlier draft of this commit declared a second constant beside this one,
+ * `ITEM_LIST_COLUMNS` without the text, called it what `GET /api/content`
+ * selects, and then never selected it: `list` read these columns and dropped
+ * the body in JS. A constant that names the projection without being the
+ * projection is worse than no constant, so it is gone and this docstring says
+ * plainly what happens.
  *
- * A SECOND ALLOWLIST BESIDE THE FIRST, the move `RUN_LIST_COLUMNS` vs
- * `RUN_DETAIL_COLUMNS` already made one repository over, and for the same
- * reason: what one row costs and what a whole list costs are different
- * questions, and a single allowlist can only answer one of them.
+ * A SLIM LIST PROJECTION IS NOT AVAILABLE HERE, and that is a dependency rather
+ * than an omission. Every card carries `bodyIsAiVerbatim`, which is
+ * `allSentencesAi` asked of the item's own text — the same formula the publish
+ * gate runs — so there is no answering it without the body. Selecting the
+ * card's columns and reading the bodies separately would move the same bytes
+ * out of Postgres in two round trips instead of one.
+ *
+ * So what design 0009 measured is saved ON THE WIRE and nowhere else: `list`
+ * strips `body` from every row before it returns, which was 44 % of a response
+ * the browser re-reads every five seconds while anything is publishing. The
+ * database read is the size it always was. The wire shape has its own
+ * declaration in `@pubrick/shared` — `contentListItemDtoSchema`, a
+ * `strictObject` — which is what a test can hold the stripping to.
  */
-const ITEM_LIST_COLUMNS = {
+const ITEM_COLUMNS = {
   id: schema.contentItems.id,
   brandId: schema.contentItems.brandId,
   title: schema.contentItems.title,
@@ -67,11 +75,6 @@ const ITEM_LIST_COLUMNS = {
   origin: schema.contentItems.origin,
   createdAt: schema.contentItems.createdAt,
   updatedAt: schema.contentItems.updatedAt,
-};
-
-/** One item, for `GET /api/content/:id` — the card's columns plus the text. */
-const ITEM_COLUMNS = {
-  ...ITEM_LIST_COLUMNS,
   body: schema.contentItems.body,
 };
 
@@ -1033,7 +1036,8 @@ export class ContentRepository {
       // a title, a status, a badge and a channel strip (`apps/web/src/app/
       // [locale]/content/page.tsx`, whose `ContentItem` type has never had a
       // `body`). So the saving is the WIRE and the browser's five-second poll,
-      // not the database read — see `ITEM_LIST_COLUMNS`.
+      // not the database read — see `ITEM_COLUMNS`. This line IS the list's
+      // projection; there is no narrower SELECT behind it.
       const { body, ...card } = item;
       return {
         ...card,
