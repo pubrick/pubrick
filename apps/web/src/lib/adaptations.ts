@@ -275,3 +275,24 @@ export function failureSentence(
       return t(FAILURE_REASON_KEYS[reason], { channel });
   }
 }
+
+/**
+ * How many LATER pages one tick may re-read, beside page 1.
+ *
+ * The refresh set is bounded by in-flight work — a page with nothing moving on
+ * it is not re-read at all — and that was once argued to be enough on its own.
+ * It is not: nothing caps deliveries. `MAX_CONCURRENT_RUNS` caps GENERATION
+ * runs (an admission cap on spend), while a page is held unsettled by
+ * ADAPTATION status, and approving thirty posts puts thirty adaptations in
+ * flight across as many pages as they land on. `PUBLISH_QUEUE_OPTIONS` then
+ * keeps a failing one there for up to `retryDelayMax` — an hour — between
+ * attempts.
+ *
+ * So the tick is capped instead, at this plus page 1. The number is small
+ * because the api's `pg.Pool` holds ten connections for the whole
+ * installation — sign-in and every other screen included — and this fan-out
+ * goes out simultaneously, once every five seconds, PER TAB. The set is walked
+ * round-robin rather than always taking the oldest, so a page beyond the cap
+ * is re-read a tick or two later rather than never.
+ */
+export const MAX_REFRESHED_LATER_PAGES = 3;

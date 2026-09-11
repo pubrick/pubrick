@@ -76,7 +76,13 @@ next 50 is **one `Load more`**, never numbered pages:
   alone is the opposite failure, because the stop rule is asked about every
   loaded page, so a card sending on page 2 is a thing the poll watches for and
   can never see. The refresh set is bounded by in-flight work rather than by
-  presses, and collapses to page 1 alone the instant everything settles. A row
+  presses, and collapses to page 1 alone the instant everything settles — and
+  in-flight work is not itself bounded (nothing caps deliveries per
+  organisation, and a failing one holds its page for up to an hour between
+  retries), so the tick takes at most THREE later pages and resumes where it
+  stopped on the next one. Four simultaneous requests a tick, against a
+  connection pool of ten shared with every other screen. A later page that
+  could not be re-read keeps the rows it has and does not blind page 1. A row
   that page 1 has taken over from a later page is drawn once, from page 1's
   newer copy; a row pushed past the boundary by a new post is not drawn again
   until the screen is reloaded — `Load more` asks for the boundary BELOW the

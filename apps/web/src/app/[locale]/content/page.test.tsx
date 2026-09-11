@@ -8,7 +8,7 @@ import { runDtoSchema, type SourceRunListInput } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTENT_LIST_POLL_INTERVAL_MS } from "@/lib/adaptations";
+import { CONTENT_LIST_POLL_INTERVAL_MS, MAX_REFRESHED_LATER_PAGES } from "@/lib/adaptations";
 import type { ContentOrigin } from "@/lib/origin";
 import { OPEN_RUNS_POLL_INTERVAL_MS, type Run } from "@/lib/runs";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -2008,6 +2008,343 @@ describe("paging (0009 T5)", () => {
       expect(
         within(card).queryByText(en.Content.adaptationStatus.publishing),
       ).not.toBeInTheDocument();
+    });
+
+    /**
+     * A REQUEST HELD MID-FLIGHT, ANSWERED FROM THE QUEUE AS IT WAS WHEN ASKED.
+     *
+     * Every defect below lives in the window between a tick dispatching a
+     * later page's refresh and that answer landing, so the tests have to be
+     * able to open that window and do something inside it. The first matching
+     * request is the one held; the rest of the suite's reads go through
+     * untouched.
+     */
+    function holdFirstRead(matches: (path: string) => boolean) {
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+      let release: (() => void) | undefined;
+      let held = false;
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        const answer = await paged(...args);
+        if (!held && matches(String(args[0]))) {
+          held = true;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return answer;
+      });
+      return async () => {
+        await act(async () => {
+          release?.();
+        });
+      };
+    }
+
+    /**
+     * THE CHIP A READER IS ALREADY ON IS NOT A FILTER CHANGE.
+     *
+     * `Segmented` calls `onChange` on every click and every arrow key,
+     * including on the selected chip — so the default "All", the one press
+     * with no visible consequence, used to throw the loaded pages away while
+     * leaving the filter where it was. With a tick's later-page refresh in the
+     * air that is the worst of both: the answer's own guard (the filter has
+     * not moved) passes, and it lands on a ref that was just emptied.
+     */
+    it("keeps the loaded pages when the chip pressed is the one already selected", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Second post", "published", [adaptation({ status: "published" })])],
+          [item("c3", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+
+      // The tick's refresh of page 3 — the SECOND loaded later page, so a
+      // write-back keyed by index would put its answer at index 1 of an empty
+      // array and leave a hole at 0.
+      const release = holdFirstRead((path) => path.includes("cursor=c2"));
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.filterAll }));
+      });
+      await release();
+
+      // The screen is still there — a sparse array reaching `loadedQueue`
+      // throws out of this component's render body — and so is the page the
+      // press did not ask to lose.
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Second post" })).toBeInTheDocument();
+
+      // ...and it is still being watched, which is the half a surviving card
+      // alone does not prove.
+      pages.current = [
+        pages.current[0] as ContentItem[],
+        pages.current[1] as ContentItem[],
+        [item("c3", "Going out", "published", [adaptation({ status: "published" })])],
+      ];
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      const card = screen.getByRole("link", { name: "Going out" }).closest("li") as HTMLElement;
+      expect(within(card).getByText(en.Content.adaptationStatus.published)).toBeInTheDocument();
+    });
+
+    /**
+     * ...AND `LOAD MORE` DOES NOT VANISH, which is what the reader loses when
+     * the same press half-resets the paging state.
+     *
+     * `laterCursor` reset to `null` while a resurrected page makes
+     * `laterPages.length` non-zero is a boundary nothing can recompute: the
+     * control disappears with no error and nothing to press, until a reload.
+     */
+    it("leaves Load more where it was when the already-selected chip is pressed", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+          [item("c3", "Third post", "draft")],
+        ],
+      };
+      installPages(calls, pages);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+
+      const release = holdFirstRead((path) => path.includes("cursor=c1"));
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.filterAll }));
+      });
+      await release();
+
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: en.Content.loadMore })).toBeInTheDocument();
+    });
+
+    /**
+     * A REFRESH IS WRITTEN BACK BY THE CURSOR THAT ASKED FOR IT, NOT BY WHERE
+     * THAT PAGE SAT WHEN THE REQUEST LEFT.
+     *
+     * An index into `laterPagesRef.current` is only valid for the array the
+     * request was dispatched against, and A → B → A puts the filter back where
+     * it started while the ref has been emptied twice — so the answer's own
+     * guard passes and the index names a slot of an array that no longer has
+     * one. A page that is no longer loaded is simply not written.
+     */
+    it("drops a held refresh for a page the filter change threw away, and does not crash", async () => {
+      const calls: Call[] = [];
+      const all = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Second post", "published", [adaptation({ status: "published" })])],
+          [item("c3", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, all);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+
+      const release = holdFirstRead((path) => path.includes("cursor=c2"));
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+
+      // A → B → A: a different queue, and then back. Both presses empty the
+      // loaded pages; the second puts the filter back to what the held answer
+      // was asked under.
+      all.current = [
+        [item("c4", "Approved post", "approved", [adaptation({ status: "published" })])],
+      ];
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.status.approved }));
+      });
+      await act(async () => {});
+      all.current = [
+        [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+      ];
+      await act(async () => {
+        fireEvent.click(screen.getByRole("tab", { name: en.Content.filterAll }));
+      });
+      await act(async () => {});
+      await release();
+
+      // The page the reader walked away from stays away, and the screen lives.
+      expect(screen.getByRole("link", { name: "First post" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Going out" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Second post" })).not.toBeInTheDocument();
+    });
+
+    /**
+     * PAGE 1'S ANSWER IS NOT THROWN AWAY BECAUSE A LATER PAGE FAILED.
+     *
+     * The two reads are independent facts about two stretches of the queue,
+     * and `Promise.all` made them one: for as long as one later page kept
+     * failing, the half the reader is looking at stopped updating and the
+     * screen said the queue could not be read.
+     */
+    it("draws page 1's new post even when a later page's refresh fails", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "First post", "published", [adaptation({ status: "published" })])],
+          [item("c2", "Going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+
+      // Every later page's cursor now 500s; page 1 gains a post.
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        if (String(args[0]).includes("cursor=")) {
+          calls.push({ path: String(args[0]), method: "GET" });
+          throw new ApiError(500, "boom");
+        }
+        return paged(...args);
+      });
+      pages.current = [
+        [
+          item("c5", "Brand new post", "approved", [adaptation({ status: "publishing" })]),
+          item("c1", "First post", "published", [adaptation({ status: "published" })]),
+        ],
+        pages.current[1] as ContentItem[],
+      ];
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+
+      expect(screen.getByRole("link", { name: "Brand new post" })).toBeInTheDocument();
+      // ...and the later page keeps the rows it has rather than emptying.
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+      // The failure is said once, not once a tick.
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 3);
+      expect(screen.getAllByRole("alert")).toHaveLength(1);
+    });
+
+    /**
+     * ...AND A 4xx ON A LATER PAGE DOES NOT STOP PAGE 1'S POLL.
+     *
+     * `usePoll` stops for good on a permanent refusal, which is right about
+     * the thing it is polling — page 1. Merging a later page's refusal into
+     * that answer handed it a verdict about a different request, and the card
+     * the reader was watching stopped being re-read at all.
+     */
+    it("keeps polling page 1 when a later page answers a permanent refusal", async () => {
+      const calls: Call[] = [];
+      const pages = {
+        current: [
+          [item("c1", "Going out", "approved", [adaptation({ status: "publishing" })])],
+          [item("c2", "Also going out", "approved", [adaptation({ status: "publishing" })])],
+        ],
+      };
+      installPages(calls, pages);
+      const paged = mockApiPage.getMockImplementation() as (
+        ...args: unknown[]
+      ) => Promise<{ rows: unknown[]; nextCursor: string | null }>;
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+      });
+      expect(screen.getByRole("link", { name: "Also going out" })).toBeInTheDocument();
+
+      mockApiPage.mockImplementation(async (...args: unknown[]) => {
+        if (String(args[0]).includes("cursor=")) {
+          calls.push({ path: String(args[0]), method: "GET" });
+          throw new ApiError(403, "gone");
+        }
+        return paged(...args);
+      });
+
+      const before = contentReads(calls).length;
+      await advance(CONTENT_LIST_POLL_INTERVAL_MS * 4);
+      // Page 1 was read on every one of those ticks.
+      const pageOneReads = contentReads(calls)
+        .slice(before)
+        .filter((c) => !c.path.includes("cursor="));
+      expect(pageOneReads.length).toBeGreaterThanOrEqual(4);
+      expect(screen.getByRole("link", { name: "Going out" })).toBeInTheDocument();
+    });
+
+    /**
+     * THE FAN-OUT PER TICK IS CAPPED, AND THE CAP ROTATES.
+     *
+     * `pg.Pool(10)` is shared with sign-in and every other screen, nothing
+     * caps deliveries per organisation, and a failing one holds its page
+     * unsettled for up to an hour between retries — so "as many requests as
+     * there are unsettled pages" is not a bound. Capped, the tick is at most
+     * `MAX_REFRESHED_LATER_PAGES + 1` requests; rotating, every unsettled page
+     * is still re-read within a few ticks rather than the oldest ones being
+     * watched for ever and the rest never.
+     */
+    it("refreshes at most the cap of later pages a tick, and rotates over the rest", async () => {
+      const calls: Call[] = [];
+      const later = 10;
+      const pages = {
+        current: [
+          [item("c0", "First post", "published", [adaptation({ status: "published" })])],
+          ...Array.from({ length: later }, (_, i) => [
+            item(`c${i + 1}`, `Going out ${i + 1}`, "approved", [
+              adaptation({ status: "publishing" }),
+            ]),
+          ]),
+        ],
+      };
+      installPages(calls, pages);
+
+      render(<ContentQueuePage />);
+      await act(async () => {});
+      for (let i = 0; i < later; i += 1) {
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: en.Content.loadMore }));
+        });
+      }
+      expect(screen.getByRole("link", { name: `Going out ${later}` })).toBeInTheDocument();
+
+      const ticks = Math.ceil(later / MAX_REFRESHED_LATER_PAGES);
+      const seen = new Set<string>();
+      for (let tick = 0; tick < ticks; tick += 1) {
+        const before = contentReads(calls).length;
+        await advance(CONTENT_LIST_POLL_INTERVAL_MS);
+        const added = contentReads(calls).slice(before);
+        expect(added.length).toBeLessThanOrEqual(MAX_REFRESHED_LATER_PAGES + 1);
+        for (const call of added) {
+          const match = /cursor=(c\d+)/.exec(call.path);
+          if (match?.[1]) seen.add(match[1]);
+        }
+      }
+      // Every unsettled page has had its turn.
+      expect(seen.size).toBe(later);
     });
   });
 });

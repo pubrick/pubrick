@@ -23,6 +23,7 @@ import {
   type DeliveryOutcome,
   failureSentence,
   hasAdaptationInFlight,
+  MAX_REFRESHED_LATER_PAGES,
 } from "@/lib/adaptations";
 import { ApiError, api, apiPage, type ErrorCode, errorMessage, type Page } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
@@ -231,6 +232,18 @@ export default function ContentQueuePage() {
     },
     [router, locale, t, te],
   );
+  /**
+   * ...reachable from the poll's fetcher, which must not depend on it.
+   *
+   * `fetchContent` is a `usePoll` effect dependency, so its identity has to
+   * move with `status` and with nothing else — and `handleError` closes over
+   * the translator, whose identity this screen does not control. A ref carries
+   * the current one across without making the poll restart on every render.
+   */
+  const handleErrorRef = useRef(handleError);
+  useEffect(() => {
+    handleErrorRef.current = handleError;
+  }, [handleError]);
 
   /**
    * The pages loaded by `Load more`, page 2 onwards — page 1 is the poll's own
@@ -250,6 +263,13 @@ export default function ContentQueuePage() {
    */
   const [laterPages, setLaterPages] = useState<LaterPage[]>([]);
   const laterPagesRef = useRef<LaterPage[]>([]);
+  /**
+   * Where the next tick starts walking the unsettled pages — the round-robin
+   * half of `MAX_REFRESHED_LATER_PAGES`. A ref because it is bookkeeping no
+   * render reads, and because the tick has to see the value as of when it
+   * leaves, not as of the render that scheduled it.
+   */
+  const refreshFrom = useRef(0);
   /** The cursor for the page after the last one loaded, or null at the end. */
   const [laterCursor, setLaterCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -300,24 +320,32 @@ export default function ContentQueuePage() {
   );
 
   /**
-   * PAGE 1, PLUS EVERY LATER PAGE THAT STILL HOLDS SOMETHING MOVING — AND ONLY
-   * THOSE.
+   * PAGE 1, PLUS THE LATER PAGES THAT STILL HOLD SOMETHING MOVING — AT MOST
+   * `MAX_REFRESHED_LATER_PAGES` OF THEM A TICK, IN TURN.
    *
    * The predicate and the fetcher have to read the same set, and that is the
-   * whole of this. `contentSettled` above asks about every loaded page, so a
-   * fetcher that can only ever rewrite page 1 makes a `publishing` card on
-   * page 2 a value the poll reads and cannot change: the stop rule never comes
-   * true, the card never finishes, and the tab pays a request every five
-   * seconds for the rest of its life without ever being able to deliver the
-   * update it is paying for.
+   * whole of the first half. `contentSettled` above asks about every loaded
+   * page, so a fetcher that can only ever rewrite page 1 makes a `publishing`
+   * card on page 2 a value the poll reads and cannot change: the stop rule
+   * never comes true, the card never finishes, and the tab pays a request every
+   * five seconds for the rest of its life without ever being able to deliver
+   * the update it is paying for.
    *
-   * Bounded by IN-FLIGHT WORK, not by how many times `Load more` was pressed:
-   * `MAX_CONCURRENT_RUNS` keeps the number of pages holding something
-   * unfinished at one or two in practice, and the set collapses to "page 1
-   * alone" — one request a tick, which is what shipped — the instant everything
-   * settles. Re-reading every loaded page unconditionally is the other thing,
-   * and it is the unbounded read this design removed arriving one press at a
-   * time.
+   * Bounded twice over, because in-flight work is not itself bounded — see
+   * `MAX_REFRESHED_LATER_PAGES` for why, and for the pool this protects. A page
+   * with nothing moving on it is not re-read at all, so a quiet queue collapses
+   * to "page 1 alone", one request a tick, which is what shipped; and when many
+   * pages ARE moving the tick takes the cap's worth of them and resumes where
+   * it stopped next time, so nothing is watched for ever and nothing is never
+   * watched.
+   *
+   * PAGE 1 IS NOT HOSTAGE TO THE OTHERS. `Promise.allSettled` for the later
+   * pages: they are separate facts about separate stretches of the queue, and
+   * joining their fates meant one failing page blinded the half the reader is
+   * actually looking at — and, on a 4xx, stopped `usePoll` for page 1 too, on a
+   * verdict about a different request. A page that could not be re-read keeps
+   * the rows it has, and the failure is reported through the same alert every
+   * other refusal on this screen uses.
    *
    * A refresh does NOT move the `Load more` boundary: `laterCursor` names the
    * position below the last page loaded, and re-reading a page by its own entry
@@ -328,27 +356,56 @@ export default function ContentQueuePage() {
    */
   const fetchContent = useCallback(async () => {
     const at = statusRef.current;
-    const stale = laterPagesRef.current
-      .map((page, index) => ({ index, page }))
-      .filter(({ page }) => !queueSettled(page.rows));
-    const [first, ...refreshed] = await Promise.all([
+    const unsettled = laterPagesRef.current.filter((page) => !queueSettled(page.rows));
+    const from = unsettled.length > 0 ? refreshFrom.current % unsettled.length : 0;
+    const stale = Array.from(
+      { length: Math.min(unsettled.length, MAX_REFRESHED_LATER_PAGES) },
+      (_, i) => unsettled[(from + i) % unsettled.length] as LaterPage,
+    );
+    refreshFrom.current = from + stale.length;
+    const [first, refreshed] = await Promise.all([
       apiPage<ContentItem>(listUrl(null), { cache: "no-store" }),
-      ...stale.map(({ page }) => apiPage<ContentItem>(listUrl(page.cursor), { cache: "no-store" })),
+      Promise.allSettled(
+        stale.map((page) => apiPage<ContentItem>(listUrl(page.cursor), { cache: "no-store" })),
+      ),
     ]);
-    // Written by INDEX onto the ref as it is now, so a `Load more` that landed
-    // while these were away keeps its appended page — and dropped entirely if
-    // the filter moved, because then these are pages of a queue nobody is
-    // looking at. The ref is written before the state for the same reason
-    // `loadMore` writes it first: `contentSettled` runs on the value returned
-    // here, before the next render.
-    if (statusRef.current === at && refreshed.length > 0) {
+    // WRITTEN BACK BY CURSOR, WHICH IS THE ONLY THING THAT IDENTIFIES A PAGE.
+    // `laterPagesRef.current` is mutable state a reset can empty and a
+    // `Load more` can extend while these requests are away, so a position in it
+    // is only valid for the array the request was dispatched against — writing
+    // by index left a HOLE when the array had shrunk, and a sparse array
+    // reaching `loadedQueue` throws out of this component's render. An answer
+    // for a page that is no longer loaded is simply dropped, which is the
+    // honest outcome and covers every reset, including ones nobody has thought
+    // of yet. The whole write is dropped if the filter moved, because then
+    // these are pages of a queue nobody is looking at. The ref is written
+    // before the state for the same reason `loadMore` writes it first:
+    // `contentSettled` runs on the value returned here, before the next render.
+    if (statusRef.current === at && stale.length > 0) {
       const next = [...laterPagesRef.current];
-      stale.forEach(({ index, page }, i) => {
+      let changed = false;
+      let failure: unknown;
+      stale.forEach((page, i) => {
         const answer = refreshed[i];
-        if (answer !== undefined) next[index] = { cursor: page.cursor, rows: answer.rows };
+        if (answer === undefined) return;
+        if (answer.status === "rejected") {
+          failure ??= answer.reason;
+          return;
+        }
+        const slot = next.findIndex((p) => p.cursor === page.cursor);
+        if (slot === -1) return;
+        next[slot] = { cursor: page.cursor, rows: answer.value.rows };
+        changed = true;
       });
-      laterPagesRef.current = next;
-      setLaterPages(next);
+      if (changed) {
+        laterPagesRef.current = next;
+        setLaterPages(next);
+      }
+      // One sentence for the tick, not one per failed page: they are all the
+      // same event to a reader, and `setActionError` with the same string is a
+      // no-op, so a page that keeps failing does not re-render the list every
+      // five seconds to say so again.
+      if (failure !== undefined) handleErrorRef.current(failure);
     }
     return first as Page<ContentItem>;
   }, [listUrl]);
@@ -369,6 +426,12 @@ export default function ContentQueuePage() {
    * `fetchContent`'s identity moves with `status`.
    */
   function changeStatus(next: string) {
+    // THE CHIP ALREADY SELECTED IS NOT A FILTER CHANGE. `Segmented` calls this
+    // on every click and every arrow key, the selected chip included, and the
+    // reset below is a real loss: the pages the reader walked to, and the
+    // boundary `Load more` reads from. Pressing the chip you are on does
+    // nothing, which is what it looks like it does.
+    if (statusRef.current === next) return;
     statusRef.current = next;
     laterPagesRef.current = [];
     setLaterPages([]);
