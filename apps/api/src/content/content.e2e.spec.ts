@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { MAX_BODY_LENGTH, MAX_REFINE_CALLS_PER_HOUR } from "@pubrick/shared";
+import {
+  contentDetailDtoSchema,
+  contentListItemDtoSchema,
+  MAX_BODY_LENGTH,
+  MAX_REFINE_CALLS_PER_HOUR,
+} from "@pubrick/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -3897,6 +3902,109 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
       // The adaptation PATCH answers with the adaptation row itself.
       expect(override.body.body).toBe("Override one.\nOverride two.");
+    });
+  });
+
+  /**
+   * WHAT A QUEUE CARD IS, AND IN WHAT ORDER THE CARDS ARRIVE — the two halves
+   * of design 0009's first commit that a caller can see.
+   */
+  describe("the shape of the queue", () => {
+    /** Long enough that its absence from a list row is unmistakable. */
+    const CARD_BODY = "Nous ouvrons à sept heures et le café est déjà prêt.";
+
+    /**
+     * The list row has no `body`; the item still does.
+     *
+     * Both halves through the SHARED schemas rather than by hand, so the two
+     * ends of the wire are held to one declaration: `contentListItemDtoSchema`
+     * is `strictObject`, which is what makes a `body` finding its way back onto
+     * the list a failed parse here instead of 44 % of a response nobody reads.
+     * The parse also fails the other way — a column the card does need going
+     * missing — which `expect(...).not.toHaveProperty` alone could never see.
+     */
+    it("draws a card without the text, while the item it opens keeps it", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "A card", body: CARD_BODY, channelIds: [channelId] })
+        .expect(201);
+
+      const listed = (await agent.get("/api/content").expect(200)).body as unknown[];
+      expect(listed).toHaveLength(1);
+      const card = contentListItemDtoSchema.parse(listed[0]);
+      expect(card.id).toBe(created.body.id);
+      expect(card).not.toHaveProperty("body");
+      expect(card.adaptations[0]?.channelId).toBe(channelId);
+
+      const fetched = (await agent.get(`/api/content/${card.id}`).expect(200)).body;
+      expect(contentDetailDtoSchema.parse(fetched).body).toBe(CARD_BODY);
+    });
+
+    /**
+     * NEWEST FIRST, TIES BROKEN BY `id`, AND THE SAME BOTH TIMES.
+     *
+     * `list` had no `ORDER BY` at all, so the answer was the planner's — which
+     * on a small table is the physical order of the rows and looks like a
+     * decision. The three items below are written in an order that is none of
+     * the three: physically first is the OLDEST, and the two newest share a
+     * `created_at` to the microsecond, which is what the generate worker's
+     * single-transaction write produces. Planner order is `a, b, c`; the answer
+     * is `c, b, a`.
+     *
+     * Written straight into the table because both facts being asserted are
+     * facts about columns a caller cannot set: `POST /api/content` stamps
+     * `created_at` with `now()` and hands out a random `id`, so through the
+     * route there is no tie to break and no way to put the oldest row first.
+     *
+     * THIS TEST CANNOT, BY ITSELF, TELL THE CLAUSE FROM THE PLANNER, and that
+     * is measured rather than suspected: `content_items_org_id_created_at_id_idx`
+     * leads on `org_id` and continues in exactly this order, so an org-scoped
+     * read plans as an Index Only Scan over it and arrives sorted with the
+     * `ORDER BY` deleted — the mutation survives all 570 tests of this package.
+     * The clause itself is pinned in `content-list-cost.e2e.spec.ts`, on the
+     * text of the statement, where no index can stand in for it. What this test
+     * holds is the CONTRACT: the order a caller is promised, tie included.
+     */
+    it("answers newest first, breaking a tie on created_at by id", async () => {
+      const agent = await orgAgent();
+      const { brandId } = await brandWithChannel(agent);
+      const { createDb, schema } = await import("@pubrick/db");
+      const seed = createDb(url as string);
+      // Ascending, so the roles below are assigned by a known order rather than
+      // by whatever two random uuids happen to compare as.
+      const [oldest, tieLow, tieHigh] = [randomUUID(), randomUUID(), randomUUID()].sort();
+      const tied = new Date("2026-09-10T08:00:00.000Z");
+      try {
+        const [brandRow] = (
+          await seed.db.execute(`SELECT org_id FROM brands WHERE id = '${brandId}'`)
+        ).rows as { org_id: string }[];
+        const orgId = brandRow?.org_id as string;
+        await seed.db.insert(schema.contentItems).values([
+          {
+            id: oldest,
+            orgId,
+            brandId,
+            body: "Written first, and the oldest of the three.",
+            createdAt: new Date("2026-09-09T08:00:00.000Z"),
+          },
+          { id: tieLow, orgId, brandId, body: "Second.", createdAt: tied },
+          { id: tieHigh, orgId, brandId, body: "Third.", createdAt: tied },
+        ]);
+      } finally {
+        await seed.pool.end();
+      }
+
+      const ids = async () =>
+        ((await agent.get("/api/content").expect(200)).body as { id: string }[]).map(
+          (item) => item.id,
+        );
+      expect(await ids()).toEqual([tieHigh, tieLow, oldest]);
+      // A read of an unchanged queue that answers differently the second time
+      // is the same defect as the wrong order, and the tiebreak is what rules
+      // it out for the two rows one `created_at` cannot separate.
+      expect(await ids()).toEqual([tieHigh, tieLow, oldest]);
     });
   });
 

@@ -1,0 +1,1 @@
+CREATE INDEX "content_items_org_id_created_at_id_idx" ON "content_items" USING btree ("org_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);

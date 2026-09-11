@@ -29,7 +29,7 @@ import {
   type RunInput,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
@@ -37,11 +37,26 @@ import { QueueService } from "../queue/queue.service";
 import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
 
-const ITEM_COLUMNS = {
+/**
+ * WHAT A CARD IS — every column of an item except the text of it.
+ *
+ * This is what `GET /api/content` returns per row, and it is the api's half of
+ * `contentListItemDtoSchema` (`@pubrick/shared`): the queue draws a title, a
+ * status, an origin badge and a channel strip, and no reader of the list has
+ * ever opened `body`. It arrived anyway, for every item the organisation owns —
+ * 342 326 of the 774 722 bytes design 0009 measured on a 500-item queue, 44 %
+ * of a response the browser re-reads every five seconds while anything is
+ * publishing.
+ *
+ * A SECOND ALLOWLIST BESIDE THE FIRST, the move `RUN_LIST_COLUMNS` vs
+ * `RUN_DETAIL_COLUMNS` already made one repository over, and for the same
+ * reason: what one row costs and what a whole list costs are different
+ * questions, and a single allowlist can only answer one of them.
+ */
+const ITEM_LIST_COLUMNS = {
   id: schema.contentItems.id,
   brandId: schema.contentItems.brandId,
   title: schema.contentItems.title,
-  body: schema.contentItems.body,
   status: schema.contentItems.status,
   /**
    * Who wrote this text. Exposed because the origin badge is DERIVED, not
@@ -52,6 +67,12 @@ const ITEM_COLUMNS = {
   origin: schema.contentItems.origin,
   createdAt: schema.contentItems.createdAt,
   updatedAt: schema.contentItems.updatedAt,
+};
+
+/** One item, for `GET /api/content/:id` — the card's columns plus the text. */
+const ITEM_COLUMNS = {
+  ...ITEM_LIST_COLUMNS,
+  body: schema.contentItems.body,
 };
 
 /**
@@ -875,6 +896,52 @@ export class ContentRepository {
   }
 
   /**
+   * The channel strips of MANY items at once, keyed by item — one query for a
+   * whole list, where `list` used to make one per card.
+   *
+   * `= ANY($ids)` (drizzle's `inArray`), exactly what `itemAiEvidence` below
+   * already does, and grouped in JS. The old shape was `items.map(async …)`
+   * over `adaptationsFor`: 500 statements for a 500-item queue, fired at once
+   * through a `Promise.all` at a `pg.Pool` that has TEN clients and is shared
+   * with better-auth and every other repository — so one long queue in one tab
+   * put a thousand statements in front of every other request in the process.
+   * Wall time was never the complaint (110 ms warm, measured); the pool was.
+   *
+   * `ADAPTATION_COLUMNS` VERBATIM, which is the point rather than a
+   * convenience: `deliveryOutcome` and `externalUrl` are `sql` templates with
+   * exactly one definition each, read by this list, by `get` and by
+   * `updateAdaptation`'s RETURNING, and a verdict the three could answer
+   * differently is the defect that field exists to prevent (see its own
+   * docstring, and CLAUDE.md's "one provenance question, two references").
+   * Their correlated subqueries still run once per adaptation ROW; what this
+   * removes is the round TRIP per item.
+   *
+   * Every requested id gets an entry, empty array included. A missing key and
+   * an empty one are the same card — a draft whose channels were all deleted —
+   * and `list` must not turn one into a row with no `adaptations` field at all.
+   */
+  private async adaptationsForMany(
+    orgId: string,
+    contentItemIds: string[],
+  ): Promise<Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>> {
+    const byItem = new Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>(
+      contentItemIds.map((id) => [id, []]),
+    );
+    if (contentItemIds.length === 0) return byItem;
+    const rows = await db
+      .select(ADAPTATION_COLUMNS)
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          inArray(schema.adaptations.contentItemId, contentItemIds),
+        ),
+      );
+    for (const row of rows) byItem.get(row.contentItemId)?.push(row);
+    return byItem;
+  }
+
+  /**
    * The item-level `ai` version evidence for many items at once, keyed by item.
    *
    * `list` needs the badge's answer for every card, and the badge's answer is
@@ -932,23 +999,48 @@ export class ContentRepository {
           eq(schema.contentItems.status, status as ContentStatus),
         )
       : eq(schema.contentItems.orgId, orgId);
-    const items = await db.select(ITEM_COLUMNS).from(schema.contentItems).where(where);
-    const aiEvidence = await this.itemAiEvidence(
-      orgId,
-      items.map((item) => item.id),
-    );
-    return Promise.all(
-      items.map(async (item) => {
-        // The gate's question, on the card. See `get` for why the badge is a
-        // boolean the server computes rather than a comparison the browser runs.
-        const evidence = aiEvidence.get(item.id) ?? NO_AI_EVIDENCE;
-        return {
-          ...item,
-          bodyIsAiVerbatim: allSentencesAi(item.body, evidence.rows, evidence.firstFullBody),
-          adaptations: await this.adaptationsFor(orgId, item.id),
-        };
-      }),
-    );
+    const items = await db
+      .select(ITEM_COLUMNS)
+      .from(schema.contentItems)
+      .where(where)
+      // NEWEST FIRST, TIES BROKEN BY `id`. This query had no `ORDER BY` of any
+      // kind, so the queue's card order was whatever the planner returned —
+      // stable enough on a small table to pass for a decision, and a promise
+      // nothing was keeping. The tiebreak is not decoration: the generate
+      // worker writes an item inside one transaction, where `now()` is a
+      // single value, and two drafts stamped in the same one would otherwise
+      // swap places between two reads of an unchanged queue. It is also what
+      // a `LIMIT` needs before it can mean anything, which is 0009's second
+      // commit; `content_items_org_id_created_at_id_idx` (migration 0020) is
+      // this exact sort.
+      .orderBy(desc(schema.contentItems.createdAt), desc(schema.contentItems.id));
+    const itemIds = items.map((item) => item.id);
+    // Two independent reads of the same page, so they go together: neither
+    // needs the other's answer, and the pool is the resource being spared.
+    const [aiEvidence, adaptations] = await Promise.all([
+      this.itemAiEvidence(orgId, itemIds),
+      this.adaptationsForMany(orgId, itemIds),
+    ]);
+    return items.map((item) => {
+      // The gate's question, on the card. See `get` for why the badge is a
+      // boolean the server computes rather than a comparison the browser runs.
+      const evidence = aiEvidence.get(item.id) ?? NO_AI_EVIDENCE;
+      // `body` is READ and not RETURNED, and the two halves of that have
+      // different reasons. It is read because the badge below is
+      // `allSentencesAi` asked of this very text — the same formula the publish
+      // gate runs — and there is no answering that without the body. It is not
+      // returned because nothing on the queue screen renders it: the card shows
+      // a title, a status, a badge and a channel strip (`apps/web/src/app/
+      // [locale]/content/page.tsx`, whose `ContentItem` type has never had a
+      // `body`). So the saving is the WIRE and the browser's five-second poll,
+      // not the database read — see `ITEM_LIST_COLUMNS`.
+      const { body, ...card } = item;
+      return {
+        ...card,
+        bodyIsAiVerbatim: allSentencesAi(body, evidence.rows, evidence.firstFullBody),
+        adaptations: adaptations.get(item.id) ?? [],
+      };
+    });
   }
 
   /**

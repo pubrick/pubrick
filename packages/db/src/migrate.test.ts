@@ -69,6 +69,18 @@ const REFINE_PROPOSALS_MIGRATION = "0016_refine_proposals";
 const PARTIAL_MIGRATION = "0018_partially_published";
 
 /**
+ * The index the queue's order is read through, proved additive AND non-vacuous
+ * below.
+ *
+ * Tagged 0020 rather than 0017, which was the next free number when it was
+ * generated: two designs ahead of this one have claimed 0017/0018 and 0019 on
+ * branches that have not landed, and a tag collision is a merge conflict in the
+ * one file where the resolution is not obvious. The journal already skips 0010,
+ * so a gap is not a novelty here.
+ */
+const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
+
+/**
  * Every timestamp column in the database that carries a zone, in the order
  * `information_schema` sorts them. Written out rather than derived from the
  * schema: the point of the assertion is that the DATABASE matches a decision
@@ -835,6 +847,86 @@ describe.skipIf(!url)("runMigrations", () => {
       // all-NULL entry. Whoever lets a refine target an adaptation writes that
       // column, and adds the index in the same change.
       expect([...byName.keys()]).not.toContain("usage_ledger_adaptation_id_idx");
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * 0020 adds the index the queue's `ORDER BY created_at DESC, id DESC` is read
+   * through, and nothing else — so, exactly as with 0007 above, an end-state
+   * assertion alone would be unable to tell it from an empty file. Its ABSENCE
+   * at the migration before is asserted first, and the rows it indexes are real
+   * and compared field for field afterwards: `CREATE INDEX` takes a lock and
+   * rewrites nothing, and this is the assertion that says so.
+   *
+   * The DESCENDING declaration is part of what is pinned. A plain
+   * `(org_id, created_at, id)` btree can serve this sort backwards, so the two
+   * are not distinguishable by a query plan — they ARE distinguishable by what
+   * the schema says the queue's order is, and the keyset page that reads it
+   * next seeks in exactly this direction.
+   */
+  it("adds the queue's order index without touching the rows it indexes", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(QUEUE_ORDER_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: pg.QueryResultRow[];
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const pre = await pool.query(
+          "SELECT indexname FROM pg_indexes WHERE tablename = 'content_items'",
+        );
+        // If an earlier migration already created it, "0020 added it" would be
+        // a lie and the assertion below would pass over an empty file.
+        expect(pre.rows.map((r) => r.indexname)).not.toContain(
+          "content_items_org_id_created_at_id_idx",
+        );
+
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('org_order', 'Ordered', 'ordered')",
+        );
+        const brand = await pool.query(
+          "INSERT INTO brands (org_id, name) VALUES ('org_order', 'Brand') RETURNING id",
+        );
+        // Two drafts sharing a `created_at` to the microsecond — the shape the
+        // generate worker's single-transaction write produces, and the whole
+        // reason the index carries `id` as well.
+        const items = await pool.query(
+          `INSERT INTO content_items (org_id, brand_id, title, body, created_at)
+             VALUES ('org_order', $1, 'One', 'the first body', '2026-09-09 08:00:00+00'),
+                    ('org_order', $1, 'Two', 'the second body', '2026-09-10 08:00:00+00'),
+                    ('org_order', $1, 'Three', 'the third body', '2026-09-10 08:00:00+00')
+           RETURNING id, title, body, status, origin, created_at`,
+          [brand.rows[0].id],
+        );
+        seeded = [...items.rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      const rows = await after.query(
+        "SELECT id, title, body, status, origin, created_at FROM content_items ORDER BY id",
+      );
+      const idx = await after.query(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'content_items'",
+      );
+      await after.end();
+
+      expect(rows.rows).toEqual(seeded);
+      const byName = new Map(idx.rows.map((r) => [r.indexname as string, r.indexdef as string]));
+      // Presence first, then shape: an empty 0020 leaves `get` undefined, and
+      // `toContain` on undefined reports an argument-type complaint rather than
+      // the missing index.
+      expect([...byName.keys()]).toContain("content_items_org_id_created_at_id_idx");
+      const definition = byName.get("content_items_org_id_created_at_id_idx");
+      expect(definition).toContain("org_id");
+      expect(definition).toContain("created_at DESC");
+      expect(definition).toContain("id DESC");
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();

@@ -63,6 +63,28 @@ export const contentItems = pgTable(
     index("content_items_org_id_idx").on(t.orgId),
     index("content_items_brand_id_idx").on(t.brandId),
     /**
+     * THE ORDER THE QUEUE IS READ IN — newest first, ties broken by `id`.
+     *
+     * `ContentRepository.list` had no `ORDER BY` at all until design 0009: the
+     * queue's card order was whatever the planner returned, which is stable
+     * enough on a small table to look deliberate and is not a promise. Now it
+     * sorts `created_at DESC, id DESC`, and this index is that sort — the
+     * leading `org_id` because every read of this table is one tenant's, and
+     * the trailing `id` because `created_at` is not a total order: the generate
+     * worker writes an item and its adaptations in ONE transaction, where
+     * `now()` is identical across every row it touches.
+     *
+     * `content_items_org_id_idx` is the prefix of this one and is therefore
+     * redundant as a filter index — left standing all the same, because
+     * dropping it is a decision about every other reader of this table and not
+     * part of making the queue's order deterministic.
+     *
+     * It is also what the keyset page of 0009's second commit will seek with;
+     * an index built for a sort the product does not have yet would be
+     * speculative, and this one is paid for by the sort that lands with it.
+     */
+    index("content_items_org_id_created_at_id_idx").on(t.orgId, t.createdAt.desc(), t.id.desc()),
+    /**
      * Both value sets pinned in the database as well as in the types — see
      * `enumCheck`. `status` is the sharper of the two: `PINNED_ITEM_MESSAGE` in
      * apps/api is a `Record` over the statuses in which text is pinned, written

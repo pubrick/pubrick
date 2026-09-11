@@ -649,3 +649,89 @@ export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
 export function isDeliveryOutcome(value: unknown): value is DeliveryOutcome {
   return typeof value === "string" && (DELIVERY_OUTCOMES as readonly string[]).includes(value);
 }
+
+/**
+ * ONE CHANNEL'S DELIVERY AS THE API HANDS IT OVER — every field of
+ * `ADAPTATION_COLUMNS` (`apps/api`), by the name the allowlist gives it.
+ *
+ * The wire shape, after JSON: timestamps are strings. Two of the fields are not
+ * columns at all — `externalUrl` is pulled off the `publications` receipt and
+ * `deliveryOutcome` is computed from it — and they are declared here for the
+ * reason `runDtoSchema` gives about `unrecordedCalls`: a field on this schema
+ * is a field the api MUST return, and one that stops being selected fails a
+ * parse instead of arriving in a browser as `undefined` and rendering as
+ * nothing.
+ */
+export const adaptationDtoSchema = z.strictObject({
+  id: z.string().uuid(),
+  contentItemId: z.string().uuid(),
+  channelId: z.string().uuid(),
+  /** The per-channel override, or `null` when this channel ships the item's own body. */
+  body: z.string().nullable(),
+  status: z.enum(ADAPTATION_STATUSES),
+  origin: z.enum(CONTENT_ORIGINS),
+  scheduledAt: z.string().nullable(),
+  attemptCount: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  externalUrl: z.string().nullable(),
+  deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
+});
+export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
+
+/**
+ * ONE CARD OF THE QUEUE — `GET /api/content`, one element.
+ *
+ * **THERE IS NO `body` HERE, AND THAT IS THE DECLARATION.** The queue screen
+ * draws a title, a status, an origin badge and a channel strip; it has never
+ * had a `body` on its own `ContentItem` type
+ * (`apps/web/src/app/[locale]/content/page.tsx`) and no reader of this list has
+ * ever opened one. Every body arrived anyway, for every item an organisation
+ * owns — 342 326 of the 774 722 bytes design 0009 measured on a 500-item queue,
+ * 44 % of a response the browser re-reads every five seconds while anything is
+ * publishing. `runListInputSchema` is the same move one list over, where the
+ * thing cut was a pasted article.
+ *
+ * `strictObject`, unlike the run's, because the narrowing IS the promise: a
+ * plain object silently strips an unexpected key, so `body` finding its way
+ * back onto the list would parse happily here and ship in production. It costs
+ * nothing — this shape is the api's own allowlist, not a foreign payload.
+ *
+ * `bodyIsAiVerbatim` is the whole-text provenance verdict, computed by the
+ * server with the same `allSentencesAi` the publish gate runs, so a card shows
+ * the same badge as the screen it opens. The verdict crosses the wire; the
+ * version text it was reached from never does.
+ */
+export const contentListItemDtoSchema = z.strictObject({
+  id: z.string().uuid(),
+  brandId: z.string().uuid(),
+  title: z.string().nullable(),
+  status: z.enum(CONTENT_STATUSES),
+  origin: z.enum(CONTENT_ORIGINS),
+  bodyIsAiVerbatim: z.boolean(),
+  adaptations: z.array(adaptationDtoSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ContentListItemDto = z.infer<typeof contentListItemDtoSchema>;
+
+/**
+ * THE SAME ITEM WITH ITS TEXT — `GET /api/content/:id`, and what every mutation
+ * on the resource answers with.
+ *
+ * Extended from the card rather than restated, so the two shapes cannot drift:
+ * the list's narrowing is a size decision about a poll, not a statement about
+ * what a draft is, and one item asked for by id is exactly where the text
+ * belongs — the editor renders it, the provenance lens splits it, and the
+ * refine endpoint slices the server's copy of it.
+ *
+ * `catchall` re-opens what the card closed, deliberately: that response carries
+ * several things this schema does not describe (the lens's `ai` version bodies,
+ * the run a draft came from, a staged refine proposal), and declaring them here
+ * would be a second, driftable copy of shapes that already have owners. What is
+ * asserted is the difference between the two responses — this one carries the
+ * body, the list does not.
+ */
+export const contentDetailDtoSchema = contentListItemDtoSchema
+  .extend({ body: z.string() })
+  .catchall(z.unknown());
+export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;
