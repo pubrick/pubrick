@@ -165,3 +165,20 @@ of it. Nothing was lost that had not been copied into a brief, by luck. Rule:
 a report another agent will read is written under the repository
 (`.superpowers/sdd/reviews/`, gitignored), never under `/tmp`; the ledger
 names the path.
+
+## 2026-09-12 — a migration that lands second can be the one that never runs
+
+Three branches each generated a migration; drizzle applies an entry only when
+its journal `when` exceeds the last applied `created_at`. Land the branch with
+the newer `when` first and the older one is skipped on every database that
+took the first — silently, exit 0. Reproduced by the 0009 review. Rule: land
+migrations in tag order, refresh `when` on rebase, and let the journal
+ratchet (`migrate.test.ts`) refuse a non-monotonic journal.
+
+## 2026-09-12 — `git checkout -B <existing>` from another worktree moves the branch
+
+Branch pointers are shared across worktrees. Creating "a fresh branch" with
+`-B` on a name another worktree's design commits lived on reset that branch to
+`main`; the commits survived only in the reflog. Rule: `-B` only for a name
+that does not exist (`git branch --list` first); to start from `main` on a new
+line, pick a new name.
