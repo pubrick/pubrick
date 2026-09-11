@@ -2775,6 +2775,95 @@ describe("a post whose channels disagreed", () => {
   });
 
   /**
+   * THE COUNT IS `pending` PLUS `failed`, and both halves are pinned.
+   *
+   * `pending` is the shape REJECT leaves behind — it cancels the outstanding
+   * delivery back to `pending` and writes the item `partially_published` — and
+   * on that post a count of failures alone reads 0 while the button still has
+   * a channel to send to. `failed` is the shape the fold leaves behind. A
+   * fixture carrying one of each says "2", so dropping either disjunct says
+   * "1" and this goes red.
+   */
+  it("counts the channel reject cancelled as well as the one that failed", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "partially_published",
+          adaptations: [
+            makeAdaptation({ id: "a1", status: "published", externalUrl: "https://t.me/main/42" }),
+            // Cancelled by a reject of this same fan-out: no longer on its way
+            // out, never went out, and approve will target it.
+            makeAdaptation({ id: "a2", channelId: "ch2", status: "pending" }),
+            makeAdaptation({ id: "a3", channelId: "ch3", status: "failed", lastError: "too long" }),
+          ],
+        }),
+      },
+      [],
+      undefined,
+      [channel, second, { id: "ch3", platform: "telegram", name: "Third channel" }],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await screen.findByRole("button", { name: /the 2 channels that did not go out/ });
+    expect(screen.queryByRole("button", { name: /the 1 channel/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A REFUSED REJECT RE-READS THE ITEM, so the label that earned the 409
+   * cannot stay on screen offering the press again.
+   *
+   * `{published, scheduled}` is the shape where nothing else repairs it: a
+   * scheduled delivery is deliberately not an in-flight status, so the poll is
+   * not running, and the due time may be days away. The job lands, the api
+   * starts answering 409, and without the re-read the button keeps saying
+   * "Cancel what has not gone out" until someone reloads the tab by hand.
+   */
+  it("re-reads the item when a reject is refused, so the stale label goes", async () => {
+    const served = { current: stillGoingOutItem() };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content/c1/reject") {
+          // The scheduled send landed between this screen's last read and the
+          // press: nothing is outstanding any more, so the api refuses.
+          served.current = partlyPublishedItem();
+          throw new ApiError(
+            409,
+            "Part of this post is already published and nothing is still on its way out",
+            false,
+            "content_partially_published",
+          );
+        }
+        return undefined;
+      },
+      [channel, second],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const button = await screen.findByRole("button", {
+      name: en.Publish.rejectCancelOutstanding,
+    });
+    const readsBefore = calls.filter((c) => c.method === "GET" && c.path === "/api/content/c1");
+
+    await userEvent.setup().click(button);
+
+    expect(await screen.findByText(en.Errors.content_partially_published)).toBeInTheDocument();
+    // The label flips to the word that matches what the api now answers...
+    await screen.findByRole("button", { name: en.Publish.reject });
+    expect(
+      screen.queryByRole("button", { name: en.Publish.rejectCancelOutstanding }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.reject })).toBeDisabled();
+    expect(screen.getByText(en.Publish.partlyLiveNothingToStop)).toBeInTheDocument();
+    // ...and it flipped because the screen ASKED, not because it assumed.
+    const readsAfter = calls.filter((c) => c.method === "GET" && c.path === "/api/content/c1");
+    expect(readsAfter.length).toBe(readsBefore.length + 1);
+  });
+
+  /**
    * EDITING A HALF-SENT POST OVERWRITES THE ONLY COPY THE PRODUCT KEEPS of
    * what already went out, and the person doing it has to be told which
    * channels have the old text — before they type, not after they save.
@@ -2789,6 +2878,39 @@ describe("a post whose channels disagreed", () => {
     // The channel that did NOT get it must not be named: the sentence is a
     // list of where to go and look.
     expect(sentence).not.toHaveTextContent("Second channel");
+  });
+
+  /**
+   * ...AND NEITHER DOES A POST THAT IS ALL THERE. The sentence is about a
+   * SAVE that will replace the only copy of what went out, and on a
+   * `published` item the editor is closed and nothing is going to be saved —
+   * so the warning would be a price nobody is being asked to pay.
+   */
+  it("says nothing about previous text on a post that went out everywhere", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({ id: "a1", status: "published", externalUrl: "https://t.me/main/42" }),
+            makeAdaptation({
+              id: "a2",
+              channelId: "ch2",
+              status: "published",
+              externalUrl: "https://t.me/second/7",
+            }),
+          ],
+        }),
+      },
+      [],
+      undefined,
+      [channel, second],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Publish.alreadyPublished);
+
+    expect(screen.queryByText(/already received the previous text/)).not.toBeInTheDocument();
   });
 
   /** An ordinary draft says none of this. */

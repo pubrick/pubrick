@@ -199,7 +199,7 @@
     "approveNowPartial": "Enviar {count, plural, one {para # canal que não saiu} other {para # canais que não saíram}}",
     "rejectCancelOutstanding": "Cancelar o que ainda não saiu",
     "partlyLiveNothingToStop": "Parte desta publicação já está no ar e nada mais está a caminho, portanto não há o que interromper. Corrija o texto e envie o resto, ou deixe como está.",
-    "editAfterDelivery": "{channels} já recebeu o texto anterior. Salvar substitui a cópia mantida aqui; o que saiu permanece apenas no canal.",
+    "editAfterDelivery": "O texto anterior já saiu para: {channels}. Salvar substitui a cópia mantida aqui; o que saiu permanece apenas no canal.",
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — link indisponível",
     "markDelivered": "Marcar como entregue",

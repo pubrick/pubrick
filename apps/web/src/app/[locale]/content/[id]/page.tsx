@@ -604,7 +604,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await api(`/api/content/${id}/reject`, { method: "POST", body: JSON.stringify({}) });
       await reload();
     } catch (err) {
+      /*
+       * RE-READ ON THE REFUSAL TOO, like `refineFailed` above and for the same
+       * reason: a 409 here means the screen's picture is out of date, and
+       * without a read it stays out of date offering the press that just
+       * failed.
+       *
+       * This button's label and its `disabled` are both computed from
+       * `hasOutstanding`, so a stale screen offers "Cancel what has not gone
+       * out" over a fan-out where nothing is outstanding any more — a control
+       * that can now only 409. Nothing else repairs it in the one shape where
+       * it matters: `scheduled` is deliberately not an in-flight status, so
+       * the poll is not running, and a due time may be days away. The tab sits
+       * open, the job lands, and the label is wrong until someone reloads by
+       * hand.
+       */
       handleError(err);
+      await reload();
     }
   }
 
@@ -890,12 +906,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * `pending` and leaves the item here — and on that post a count of failures
    * is zero while the button still has a channel to send to. The count follows
    * what the press does.
+   *
+   * `scheduled` is in `approve`'s target set and NOT here, because it cannot
+   * occur on an item this label is shown over (`partialSendCount` below is
+   * gated on `partially_published`). Exactly three things write that status —
+   * the fold, whose every non-live row is `failed`; `reject`, whose every
+   * outstanding row it just cancelled to `pending`; and 0018's backfill, which
+   * is the fold transcribed. The only writer that mints `scheduled` is
+   * `approve`, and it writes the ITEM `approved` in the same transaction, so a
+   * timed approve moves the post out of this status rather than into it. A
+   * disjunct for it would be unreachable code whose sentence is also false:
+   * "did not go out" reads as "and will not", while a scheduled job is sitting
+   * on its `startAfter` and WILL go out on its own.
    */
   const resendableChannels = item.adaptations.filter(
-    (a) =>
-      a.deliveryOutcome === "pending" ||
-      a.deliveryOutcome === "failed" ||
-      a.deliveryOutcome === "scheduled",
+    (a) => a.deliveryOutcome === "pending" || a.deliveryOutcome === "failed",
   );
   const partialSendCount = item.status === "partially_published" ? resendableChannels.length : 0;
   /**

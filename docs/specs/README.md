@@ -16,15 +16,31 @@ section numbers.
 | [0006](0006-api-can-call-a-model.md) | The API can call a model | Increment 2b-2a — provider resolution, cancellation and abort accounting for an editor-side model call | not yet cited by name in code comments as of this copy |
 | [0007](0007-partial-delivery-design.md) | Partial delivery: what a half-sent post is | Issue #16 — what an item whose channels disagree IS, the `unknown` refusal and its human resolver, `nextItemStatus` as the one promotion rule | shipped; cited by section number (§4.2, §4.3, §4.4) in the content repository and the item screen |
 
-`0007` has shipped in full: the `unknown` refusal and its resolver, the
-`partially_published` status with its migration and backfill, the reject gate,
-and the item screen's labels, gates and disclosure. Two of its decisions were
-changed by review while landing and the CODE is the answer on both — reject on
-a fan-out with a delivery still outstanding CANCELS that delivery and leaves the
-item `partially_published`, rather than refusing (§4.2 wrote only the refusal);
-and "Publish now" counts every channel `approve` will target, not only the
-failed ones (§4.4 predates the state reject now produces). Its front matter
-still says DECIDED, not implemented.
+`0007` has shipped WITH THE THREE DEVIATIONS BELOW: the `unknown` refusal and
+its resolver, the `partially_published` status with its migration and backfill,
+the reject gate, and the item screen's labels, gates and disclosure are all in
+the code. Three of its decisions were changed by review while landing, and the
+CODE is the answer on all three:
+
+1. **Reject cancels rather than refuses.** On a fan-out with a delivery still
+   outstanding, reject CANCELS that delivery and leaves the item
+   `partially_published`; it refuses (409) only once nothing is left to stop.
+   §4.2 wrote only the refusal, which would have taken away the one
+   send-stopper the product has.
+2. **"Publish now" counts `pending` as well as `failed`.** The label counts
+   every channel `approve` will target minus the `unknown` rows it skips, which
+   on the post reject just made is a `pending` row and no failures at all. §4.4
+   predates that state. `scheduled` is in `approve`'s set and deliberately NOT
+   in the count: no writer can leave a `scheduled` row on a
+   `partially_published` item, and "did not go out" would be false of one.
+3. **The queue does not hoist `partially_published`, and does not flag it.**
+   §4.1 asked for both. The order stays the lifecycle one — Failed · Drafts ·
+   Approved · Partly published · Rejected · Published — because the head is
+   "failures first" and a half-successful post is not a failure; and the red
+   flag with its one-click "Try again" is exactly the press this product
+   refuses over a fan-out that may hold an `unknown` row.
+
+Its front matter still says DECIDED, not implemented.
 
 Each document's own front matter says what shipped and, where later work
 changed the schema or the code it describes, an inline editorial note says

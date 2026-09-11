@@ -168,8 +168,19 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
    * cleanup of a job that may legitimately be gone (already completed, already
    * cancelled, aged out of retention). What must NOT happen is the adaptation
    * staying deliverable, and that is decided by the status write this shares a
-   * transaction with — plus the worker's own check that the parent item is not
-   * rejected.
+   * transaction with. `reject` puts the row back to `pending`, which is not in
+   * `CLAIMABLE_STATUSES` (`apps/worker/.../publish.repository.ts`), so
+   * `markPublishing` will not hand it to a worker however the job row ended
+   * up; deleting a brand or a channel takes the adaptation row with it; and
+   * `approve` cancels precisely in order to re-enqueue, which is the one
+   * caller that WANTS the row deliverable again.
+   *
+   * This used to name a second layer — the worker's own check that the parent
+   * item is not `rejected` (`publish.service.ts`). That check is still there
+   * and still fires for a reject of a post nothing has published, but a reject
+   * of a HALF-LIVE fan-out now writes the item `partially_published` instead,
+   * so it is no longer a defence this method can count on. Claimability is the
+   * gate that holds in every shape.
    *
    * The caller must still advance `attempt_count` afterwards: a cancelled
    * pg-boss row keeps its id, so re-enqueueing at the same attempt count would

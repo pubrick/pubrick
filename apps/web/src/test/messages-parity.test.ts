@@ -151,3 +151,147 @@ describe("Publish.refineVerb covers REFINE_VERBS", () => {
     expect(Object.keys(labels).sort()).toEqual([...REFINE_VERBS].sort());
   });
 });
+
+/**
+ * A PLURAL THAT IS A PLURAL IN ENGLISH ONLY passes every check above.
+ *
+ * `placeholders()` matches `/\{(\w+)\}/`, which does not match
+ * `{count, plural, …}` — so all four locales report "no arguments" for a
+ * pluralised message, and a translation that flattened it to one sentence, or
+ * dropped a category, would sail through key parity, argument parity and the
+ * blank check together. What the reader gets is a number glued to the wrong
+ * noun ("2 канал"), or — for a dropped category — `intl-messageformat`
+ * falling back to `other` in cases the language does not spell that way.
+ *
+ * Two things are asserted, both against the LOCALE's own requirements rather
+ * than against English's shape:
+ *
+ * 1. the same message takes the same PLURAL arguments in every locale, so a
+ *    plural cannot be quietly dropped in translation; and
+ * 2. every plural argument spells the categories that locale needs. Russian
+ *    needs four (`one` 1, 21; `few` 2-4; `many` 5-20, 0; `other` fractions);
+ *    English, Spanish and Portuguese need `one` and `other`. This is the
+ *    minimum the catalogue's own sentences already distinguish, not a claim
+ *    to have transcribed CLDR — a locale that later needs another category
+ *    gets a line here.
+ */
+const REQUIRED_PLURAL_CATEGORIES: Record<string, string[]> = {
+  en: ["one", "other"],
+  es: ["one", "other"],
+  pt: ["one", "other"],
+  ru: ["few", "many", "one", "other"],
+};
+
+/**
+ * Every `{name, plural, …}` argument in a message, with the categories it
+ * spells — brace-counted rather than regexed, because a plural's options
+ * contain braces of their own (`#`-bearing sub-messages, and nested plurals in
+ * `unrecordedCalls`).
+ */
+function pluralArgs(value: string): { name: string; categories: Set<string> }[] {
+  const found: { name: string; categories: Set<string> }[] = [];
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "{") continue;
+    const head = /^\{\s*(\w+)\s*,\s*plural\s*,/.exec(value.slice(i));
+    if (!head) continue;
+    const body = balanced(value, i);
+    if (body === null) continue;
+    const options = value.slice(i + (head[0] as string).length, body);
+    // A LIST, not a map keyed by name: `Runs.unrecordedCalls` pluralises
+    // `count` TWICE in one sentence, and keying by name would let a second
+    // block with missing categories hide behind a complete first one.
+    found.push({ name: head[1] as string, categories: categories(options) });
+    // The options are re-scanned by the outer loop, so a nested plural inside
+    // one of them is found on its own.
+  }
+  return found;
+}
+
+/** Index of the `}` closing the `{` at `open`, or null if it is unbalanced. */
+function balanced(value: string, open: number): number | null {
+  let depth = 0;
+  for (let i = open; i < value.length; i++) {
+    if (value[i] === "{") depth++;
+    else if (value[i] === "}" && --depth === 0) return i;
+  }
+  return null;
+}
+
+/** The category keywords at the top level of a plural's option list. */
+function categories(options: string): Set<string> {
+  const names = new Set<string>();
+  let i = 0;
+  while (i < options.length) {
+    while (i < options.length && /\s/.test(options[i] as string)) i++;
+    const start = i;
+    while (i < options.length && options[i] !== "{") i++;
+    if (i >= options.length) break;
+    // `offset:N` rides in front of the first category rather than on a block
+    // of its own, so the keyword is the LAST word before the brace.
+    const words = options
+      .slice(start, i)
+      .split(/\s+/)
+      .filter((word) => word !== "" && !word.startsWith("offset:"));
+    const close = balanced(options, i);
+    if (close === null) break;
+    const keyword = words[words.length - 1];
+    if (keyword !== undefined) names.add(keyword);
+    i = close + 1;
+  }
+  return names;
+}
+
+const referencePlurals = new Map(
+  flatEntries(en as Messages).map(([path, value]) => [
+    path,
+    pluralArgs(value)
+      .map((arg) => arg.name)
+      .sort(),
+  ]),
+);
+
+describe.each([
+  ["en", en],
+  ["es", es],
+  ["ru", ru],
+  ["pt", pt],
+])("messages/%s.json pluralises what en.json pluralises", (locale, messages) => {
+  it("keeps every plural a plural, with the categories this language needs", () => {
+    const required = REQUIRED_PLURAL_CATEGORIES[locale] as string[];
+    const wrong = flatEntries(messages as Messages)
+      .map(([path, value]) => {
+        const args = pluralArgs(value);
+        return {
+          path,
+          expectedArgs: referencePlurals.get(path) ?? [],
+          actualArgs: args.map((arg) => arg.name).sort(),
+          missingCategories: args
+            .flatMap((arg) =>
+              required.filter((c) => !arg.categories.has(c)).map((c) => `${arg.name}: ${c}`),
+            )
+            .sort(),
+        };
+      })
+      .filter(
+        (row) =>
+          JSON.stringify(row.expectedArgs) !== JSON.stringify(row.actualArgs) ||
+          row.missingCategories.length > 0,
+      );
+    expect(wrong).toEqual([]);
+  });
+});
+
+describe("the plural ratchet can see a plural at all", () => {
+  it("finds the arguments and categories of a nested, offset-bearing plural", () => {
+    const args = pluralArgs(
+      "{count, plural, offset:1 =0 {none} one {# thing and {extra, plural, one {# more} other {# more}}} other {# things}}",
+    );
+    expect(args.map((arg) => arg.name).sort()).toEqual(["count", "extra"]);
+    const count = args.find((arg) => arg.name === "count");
+    expect([...(count as { categories: Set<string> }).categories].sort()).toEqual([
+      "=0",
+      "one",
+      "other",
+    ]);
+  });
+});
