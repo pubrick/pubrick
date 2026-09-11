@@ -1883,7 +1883,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await itemStatus(itemId)).toBe("approved");
 
     expect(
-      await repo.markFailed(orgId, refused, "Telegram: message is too long", {
+      await repo.markFailed(orgId, refused, "Telegram: message is too long", "platform_rejected", {
         status: "queued",
         attemptCount: 0,
       }),
