@@ -122,6 +122,6 @@ describe("the source strip on a draft", () => {
     render(<SourceStrip input={sourceInput({ text: null })} />, { locale: "ru" });
 
     expect(screen.getByText("Черновик по вставленному тексту")).toBeInTheDocument();
-    expect(screen.getByText("Без брифа — черновик по источнику.")).toBeInTheDocument();
+    expect(screen.getByText("Без брифа — черновик по вставленному тексту.")).toBeInTheDocument();
   });
 });

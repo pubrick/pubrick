@@ -268,7 +268,7 @@
     "briefLabel": "Brief",
     "materialLabel": "Pasted text",
     "sourceLabel": "Source",
-    "noBrief": "No brief — drafted from the source.",
+    "noBrief": "No brief — drafted from the pasted text.",
     "pastedLabel": "Drafted from pasted text",
     "stepsTitle": "Steps",
     "step": {

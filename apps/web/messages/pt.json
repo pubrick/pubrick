@@ -268,7 +268,7 @@
     "briefLabel": "Briefing",
     "materialLabel": "Texto colado",
     "sourceLabel": "Fonte",
-    "noBrief": "Sem briefing: redigido a partir da fonte.",
+    "noBrief": "Sem briefing: redigido a partir do texto colado.",
     "pastedLabel": "Redigido a partir de texto colado",
     "stepsTitle": "Etapas",
     "step": {

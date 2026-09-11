@@ -268,7 +268,7 @@
     "briefLabel": "Brief",
     "materialLabel": "Texto pegado",
     "sourceLabel": "Fuente",
-    "noBrief": "Sin brief: redactado a partir de la fuente.",
+    "noBrief": "Sin brief: redactado a partir del texto pegado.",
     "pastedLabel": "Redactado a partir de texto pegado",
     "stepsTitle": "Pasos",
     "step": {
