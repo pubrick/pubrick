@@ -91,6 +91,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_no_channels_left: "content_no_channels_left",
   unread_ai_draft: "unread_ai_draft",
   unread_ai_draft_open_only: "unread_ai_draft_open_only",
+  delivery_outcome_unknown: "delivery_outcome_unknown",
+  delivery_outcome_already_known: "delivery_outcome_already_known",
   schedule_in_past: "schedule_in_past",
   schedule_already_queued: "schedule_already_queued",
   schedule_already_publishing: "schedule_already_publishing",

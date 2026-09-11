@@ -67,6 +67,20 @@ belongs to. The one exception is the delete trigger above, which holds the
 channel — and the canonical order already puts every adaptation of a channel
 *before* that channel, so the two can never wait on each other.
 
+That "only ever written under the lock of the adaptation it belongs to" now has
+a writer in the OTHER process, and it holds to it. `ContentRepository.
+assertDelivery` — the api's resolver for a delivery whose outcome nobody knows —
+takes the adaptation row `FOR UPDATE`, updates it, inserts the receipt (whose
+foreign keys take `FOR KEY SHARE` on `channels`, and on `user` for
+`asserted_by`), and only then locks `content_items` to promote the item. That is
+`markPublished`'s own sequence, `adaptations` → `channels` → `content_items`, so
+it adds no acquisition this order did not already have and no edge: a resolver
+and a landing delivery on one adaptation serialise on the adaptation row, which
+`content.e2e.spec.ts` proves against a real database under *"settling a delivery
+nobody can speak for"*. `user` is not in the order for `organization`'s reason —
+an implicit `FOR KEY SHARE` on a row nothing else holds while asking for
+anything, conflicting only with a delete of the account itself.
+
 **`organization`** sits above everything (a tenant delete cascades into all of
 it). Application code never takes it EXPLICITLY together with anything else;
 it is taken implicitly, `FOR KEY SHARE`, by every insert carrying an `org_id`
@@ -300,9 +314,11 @@ disagree with — and **their sets cannot overlap**: the sweep's set is
 `adaptation_id IS NULL`, and the only things that null that column are the two
 cascades, each of which destroys the channel in the same statement that orphans
 the claim. There is no state in which a publication has lost its adaptation and
-still has a channel left to delete. If a third writer of this table ever appears,
-or a caller starts walking it in `id` order, give both of these the sub-select
-shape rather than re-deriving this paragraph.
+still has a channel left to delete. If a third MULTI-ROW writer of this table
+ever appears, or a caller starts walking it in `id` order, give both of these the
+sub-select shape rather than re-deriving this paragraph. The api's delivery
+resolver is not one: it inserts a single receipt, by construction under the lock
+of the one adaptation it belongs to, so it has no row order to disagree about.
 
 **`channels`.** `GenerateRepository.finish` takes `FOR KEY SHARE` on every
 surviving channel of the run, unordered; `DELETE FROM brands`'s cascade takes

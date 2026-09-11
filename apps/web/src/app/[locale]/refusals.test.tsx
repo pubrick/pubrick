@@ -235,6 +235,55 @@ describe("the post screen", () => {
   });
 
   /**
+   * THE RESOLVER'S OWN REFUSAL, and the reason it needs its own case: it is
+   * reached from a control no other test on this screen can press — the button
+   * only exists on a delivery whose outcome nobody knows.
+   *
+   * The two verdict buttons are also where a person is most likely to be
+   * refused twice in a row: the loser of two simultaneous presses gets exactly
+   * this, and being told "the outcome is already known" in English is being
+   * told nothing.
+   */
+  it("says in Spanish that a delivery's outcome is already settled", async () => {
+    const sentence = "This delivery's outcome is already known";
+    const inDoubt = {
+      ...item,
+      status: "failed",
+      adaptations: [
+        {
+          id: "a1",
+          contentItemId: ITEM_ID,
+          channelId: CHANNEL_ID,
+          body: null,
+          status: "failed",
+          deliveryOutcome: "unknown",
+          origin: "human",
+          scheduledAt: null,
+          attemptCount: 1,
+          lastError: "the worker wrote a sentence here",
+          externalUrl: null,
+          assertedByName: null,
+          assertedAt: null,
+        },
+      ],
+    };
+    serve((url, method) => {
+      if (method === "POST" && url === `/api/content/${ITEM_ID}/adaptations/a1/delivery`) {
+        return jsonResponse(409, refusalBody(409, "delivery_outcome_already_known", sentence));
+      }
+      if (method === "GET" && url === `/api/content/${ITEM_ID}`) return jsonResponse(200, inDoubt);
+      return undefined;
+    });
+
+    await renderItem("es");
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: es.Publish.markDelivered }));
+
+    await expectShown(es.Errors.delivery_outcome_already_known, sentence);
+  });
+
+  /**
    * The screen's SECOND route to a rendered sentence. The poll is a separate
    * call into `errorMessage` from the one every button goes through, so a
    * translator dropped from it survives both tests above — and this is the path

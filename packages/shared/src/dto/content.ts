@@ -32,6 +32,45 @@ export const ADAPTATION_STATUSES = [
 export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
 
 /**
+ * WHAT A CONTENT ITEM'S STATUS BECOMES once its deliveries have moved — the
+ * ONE definition of the promotion rule, for every caller in every tier.
+ *
+ * A pure fold over an item's adaptation statuses. `undefined` means "leave the
+ * item where it is": a fan-out with a delivery still outstanding has not
+ * decided anything yet, and neither has an item with no adaptations at all.
+ *
+ * IT LIVES IN THE RULE BOOK BECAUSE THREE CALLERS NEED IT AND THEY ARE NOT ONE
+ * PROCESS. The worker's bookkeeping promotes an item when a delivery lands
+ * (`recomputeItemStatus`, apps/worker/src/publish/publish.repository.ts); the
+ * api promotes it when a person settles an unknown delivery by hand
+ * (`ContentRepository.assertDelivery`). Two lock dances, one verdict — and a
+ * verdict restated at each site is a verdict that will answer differently on
+ * one screen, which is the same argument `deliveryOutcome` and
+ * `bodyIsAiVerbatim` are computed once for.
+ *
+ * NOT A DATABASE FUNCTION, and that was considered. `runMigrations` is the
+ * api's (`apps/api/src/main.ts`) and nothing else applies DDL, so a worker
+ * deployed against a database that has not been migrated yet would throw
+ * `42883` AFTER the platform call succeeded — stranding the claim and minting
+ * exactly the `unknown` outcomes this rule exists to reduce, and inverting
+ * `docs/self-hosting.md` §Upgrade's "worker first is always safe".
+ *
+ * THE EMPTY ARRAY IS LOAD-BEARING, not a courtesy. An item whose channels have
+ * all been deleted has no adaptation left to speak for it, and `every` over an
+ * empty array is `true` for BOTH arms — so the guard is what stops such an item
+ * being promoted to `published` (the first arm tested) about posts nobody sent.
+ * Anything transcribing this fold into SQL owes the same guard, which is why
+ * the transcription uses `exists` rather than `bool_and` (`NULL` over an empty
+ * set, and `NULL` is not `true`).
+ */
+export function nextItemStatus(statuses: readonly AdaptationStatus[]): ContentStatus | undefined {
+  if (statuses.length === 0) return undefined;
+  if (statuses.every((status) => status === "published")) return "published";
+  if (statuses.every((status) => status === "failed")) return "failed";
+  return undefined;
+}
+
+/**
  * A DELIVERY THAT STILL HAS A PUBLISH JOB BEHIND IT — and therefore the exact
  * set of rows a canceller must cancel and a worker may still send.
  *
@@ -402,6 +441,28 @@ export const contentApproveSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
 });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
+
+/**
+ * WHAT A PERSON SAW WHEN THEY OPENED THE CHANNEL — the body of
+ * `POST /api/content/:id/adaptations/:adaptationId/delivery`.
+ *
+ * One boolean, because the question is one question: an attempt whose answer
+ * never came back is either live in the channel or it is not, and only a human
+ * who looked can say which. `true` records a delivery nobody can produce a
+ * platform id for; `false` records that nothing arrived, which puts the
+ * delivery back in reach of "Publish now".
+ *
+ * NO FREE TEXT, no external id, no link. A caller that could supply an id
+ * could author the product's evidence that a platform accepted a post, which
+ * is the same boundary `refineRequestSchema` draws when it sends offsets
+ * instead of the selected text. What the receipt carries instead is WHO said
+ * so (`publications.asserted_by`, from the session) and when, which is what
+ * the item screen renders in place of a link it does not have.
+ */
+export const deliveryAssertionSchema = z.object({
+  delivered: z.boolean(),
+});
+export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
 
 /**
  * WHAT HAPPENED TO ONE CHANNEL'S POST — the `deliveryOutcome` the api reports

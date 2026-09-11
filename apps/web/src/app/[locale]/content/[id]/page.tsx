@@ -55,6 +55,20 @@ type Adaptation = {
   attemptCount: number;
   lastError: string | null;
   externalUrl: string | null;
+  /**
+   * WHO SAID THIS POST WAS DELIVERED, when no platform did, and when they said
+   * it — the api's join onto the delivery receipt's `asserted_by`.
+   *
+   * Null on every delivery a platform answered for, which is almost all of
+   * them. Without it a delivery somebody vouched for by hand is a `published`
+   * adaptation with no link, and this screen renders that as
+   * `linkUnavailable` — "published — link unavailable", which claims a
+   * platform-confirmed delivery whose link went missing. That is exactly what a
+   * human assertion is not, and naming the person is the only place the
+   * difference shows.
+   */
+  assertedByName: string | null;
+  assertedAt: string | null;
 };
 
 type ContentItem = {
@@ -585,6 +599,33 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     setActionError(null);
     try {
       await api(`/api/content/${id}/reject`, { method: "POST", body: JSON.stringify({}) });
+      await reload();
+    } catch (err) {
+      handleError(err);
+    }
+  }
+
+  /**
+   * WHAT THE READER FOUND WHEN THEY OPENED THE CHANNEL.
+   *
+   * Offered only on a delivery whose outcome nobody knows, and it is the
+   * counterpart of the refusal beside it: "Publish now" will not re-send such a
+   * row, because the post may already be live, so without this the only way to
+   * finish the post would be to delete the channel. `true` records a delivery
+   * nobody has a link for; `false` puts the delivery back within reach of
+   * "Publish now".
+   *
+   * Reloads on success, like every other mutation here: the answer changes the
+   * adaptation, the item's own status and the sentence this row will print, and
+   * the api returns all three together.
+   */
+  async function assertDelivery(adaptationId: string, delivered: boolean) {
+    setActionError(null);
+    try {
+      await api(`/api/content/${id}/adaptations/${adaptationId}/delivery`, {
+        method: "POST",
+        body: JSON.stringify({ delivered }),
+      });
       await reload();
     } catch (err) {
       handleError(err);
@@ -1232,11 +1273,30 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 >
                   {t("viewPost")}
                 </a>
+              ) : a.externalUrl ? (
+                // A link whose scheme we will not put in an href: show what was
+                // recorded, rather than nothing.
+                <span className="text-sm text-fg-tertiary">{a.externalUrl}</span>
               ) : (
-                // No link, or one whose scheme we will not put in an href:
-                // show what was recorded when there is something to show.
+                /*
+                  NO LINK, AND TWO REASONS THERE MIGHT NOT BE ONE — they must
+                  not read the same.
+
+                  `linkUnavailable` ("published — link unavailable") describes a
+                  delivery a PLATFORM confirmed whose link went missing. A
+                  delivery a PERSON vouched for never had one and never could:
+                  the answer that would have carried it never arrived, and they
+                  settled it by opening the channel and looking. Printing the
+                  platform's sentence over their word would be the screen
+                  claiming a confirmation nobody ever got.
+                */
                 <span className="text-sm text-fg-tertiary">
-                  {a.externalUrl ?? t("linkUnavailable")}
+                  {a.assertedByName
+                    ? t("assertedDelivery", {
+                        name: a.assertedByName,
+                        date: new Date(a.assertedAt ?? "").toLocaleString(locale),
+                      })
+                    : t("linkUnavailable")}
                 </span>
               ))}
             {/*
@@ -1255,9 +1315,37 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               instruction they cannot follow.
             */}
             {a.deliveryOutcome === "unknown" && (
-              <p role="alert" className="text-sm text-[var(--status-review-fg)]">
-                {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
-              </p>
+              <>
+                <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                  {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
+                </p>
+                {/*
+                  THE WAY OUT OF "nobody knows", and the only one there is. The
+                  paragraph above tells the reader to go and look; these record
+                  what they found, which is what lets the post be finished at
+                  all — "Publish now" skips a delivery in doubt rather than
+                  posting a second copy of it.
+
+                  Both are secondary: the screen's one primary action is
+                  "Publish now" at the top, and a per-row decision about one
+                  channel is not competing with it. The hint sits above them
+                  because "Mark as delivered" ASSERTS A FACT under the reader's
+                  own name — it records that they saw the post, it does not go
+                  and look — and a button that files somebody's word as evidence
+                  should say so before it is pressed, not after.
+                */}
+                <p className="text-sm text-fg-tertiary">
+                  {t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => assertDelivery(a.id, true)}>
+                    {t("markDelivered")}
+                  </Button>
+                  <Button variant="secondary" onClick={() => assertDelivery(a.id, false)}>
+                    {t("markNotDelivered")}
+                  </Button>
+                </div>
+              </>
             )}
             {a.deliveryOutcome === "failed" && a.lastError && (
               <p role="alert" className="text-sm text-danger">

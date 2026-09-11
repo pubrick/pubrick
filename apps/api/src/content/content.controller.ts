@@ -20,6 +20,8 @@ import {
   contentApproveSchema,
   contentCreateSchema,
   contentUpdateSchema,
+  type DeliveryAssertion,
+  deliveryAssertionSchema,
   type RefineRequest,
   refineRequestSchema,
 } from "@pubrick/shared";
@@ -160,6 +162,42 @@ export class ContentController {
     @Param("proposalId", ParseUUIDPipe) proposalId: string,
   ): Promise<void> {
     await this.content.discardRefine(orgId, id, proposalId);
+  }
+
+  /**
+   * WHAT A PERSON FOUND WHEN THEY OPENED THE CHANNEL — the resolver for a
+   * delivery whose outcome nobody knows. 200 and the item, like every other
+   * mutation on this resource, so the screen that pressed it redraws the
+   * adaptation, the recomputed item status and the "marked as delivered by"
+   * sentence from one response.
+   *
+   * A POST under the adaptation, never a PATCH on it: this does not edit the
+   * delivery, it records a NEW fact about one — a `publications` receipt,
+   * timestamped, carrying who said so. `PATCH :id/adaptations/:adaptationId`
+   * one method up writes the channel's TEXT and is refused on exactly the
+   * statuses this route acts on, which is the clearest possible sign the two
+   * are different verbs on different resources.
+   *
+   * `@UserId()` because the receipt names the person. That is the whole point
+   * of the column: without it a human's word about a post is stored in the same
+   * shape as a platform's answer, and the screen would render it as
+   * "published — link unavailable".
+   *
+   * The body is one boolean. Nothing else a caller could send is read — no
+   * external id, no link, no note — for `acceptRefine`'s reason: a caller that
+   * could supply a platform id could author the product's evidence that a
+   * platform accepted a post.
+   */
+  @Post(":id/adaptations/:adaptationId/delivery")
+  @HttpCode(200)
+  assertDelivery(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(deliveryAssertionSchema)) body: DeliveryAssertion,
+  ) {
+    return this.content.assertDelivery(orgId, id, adaptationId, body.delivered, userId);
   }
 
   @Post(":id/approve")

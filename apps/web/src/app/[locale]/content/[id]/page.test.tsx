@@ -9,6 +9,7 @@ import {
   adaptationUpdateSchema,
   allSentencesAi,
   contentApproveSchema,
+  deliveryAssertionSchema,
   MAX_BODY_LENGTH,
   refineRequestSchema,
 } from "@pubrick/shared";
@@ -45,6 +46,8 @@ type Adaptation = {
   attemptCount: number;
   lastError: string | null;
   externalUrl: string | null;
+  assertedByName: string | null;
+  assertedAt: string | null;
 };
 
 type ContentItem = {
@@ -85,6 +88,11 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     attemptCount: 0,
     lastError: null,
     externalUrl: null,
+    // Null on every delivery a platform answered for, which is what a fixture
+    // that does not say otherwise describes. The api returns both keys on
+    // every adaptation, so omitting them would be a payload it cannot produce.
+    assertedByName: null,
+    assertedAt: null,
     ...overrides,
   };
 }
@@ -1331,6 +1339,221 @@ describe("an outcome nobody knows (Finding 2)", () => {
     expect(
       within(results).queryByText(en.Content.adaptationStatus.unknown),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE WAY OUT OF "NOBODY KNOWS".
+ *
+ * The block above proves the screen says the outcome is in doubt. This one is
+ * about the half that makes that sayable at all: "Publish now" now SKIPS such a
+ * delivery rather than posting a second copy of a message that may be live, so
+ * without a way to record what the reader found, the post would be finishable
+ * only by deleting the channel.
+ */
+describe("settling a delivery nobody can speak for", () => {
+  const ASSERTED_AT = "2026-09-11T08:15:00.000Z";
+  const ASSERTER = "Ada Lovelace";
+
+  function unknownRow() {
+    return makeItem({
+      status: "failed",
+      adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
+    });
+  }
+
+  it("offers both verdicts, and says what pressing one asserts", async () => {
+    installBaseHandlers({ current: unknownRow() }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const results = resultsList();
+    expect(within(results).getByRole("button", { name: en.Publish.markDelivered })).toBeEnabled();
+    expect(
+      within(results).getByRole("button", { name: en.Publish.markNotDelivered }),
+    ).toBeEnabled();
+    // The hint names the channel and says the press records what the READER
+    // saw. A button that files somebody's word as evidence has to say so
+    // before it is pressed.
+    expect(
+      within(results).getByText(
+        en.Publish.assertDeliveryHint.replace("{channel}", "Telegram · Main channel"),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * AND ON NOTHING ELSE. A delivery that provably failed is already
+   * re-sendable, and one that published is already answered for — offering a
+   * human verdict there would let a person overwrite what a platform actually
+   * said with a guess. (The api refuses it too; this is the affordance half.)
+   */
+  it.each(["failed", "published", "queued"] as const)(
+    "offers neither verdict on a %s delivery",
+    async (status) => {
+      installBaseHandlers(
+        {
+          current: makeItem({
+            status: "approved",
+            adaptations: [makeAdaptation({ status, deliveryOutcome: status })],
+          }),
+        },
+        [],
+      );
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+      expect(screen.queryByRole("button", { name: en.Publish.markDelivered })).toBeNull();
+      expect(screen.queryByRole("button", { name: en.Publish.markNotDelivered })).toBeNull();
+    },
+  );
+
+  it.each([
+    ["markDelivered", true],
+    ["markNotDelivered", false],
+  ] as const)("sends %s as the delivered flag the api validates", async (label, delivered) => {
+    const served = { current: unknownRow() };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/delivery") {
+        served.current = makeItem({
+          status: delivered ? "published" : "failed",
+          adaptations: [
+            makeAdaptation({
+              status: delivered ? "published" : "failed",
+              deliveryOutcome: delivered ? "published" : "failed",
+              assertedByName: ASSERTER,
+              assertedAt: ASSERTED_AT,
+            }),
+          ],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish[label] }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: en.Publish.markDelivered })).toBeNull(),
+    );
+    const call = calls.find((c) => c.path === "/api/content/c1/adaptations/a1/delivery");
+    expect(call?.method).toBe("POST");
+    expect(call?.body).toBe(JSON.stringify({ delivered }));
+    // The literal pins what this screen sends; the schema — the very one the
+    // api validates with — pins that the server will accept it, so a
+    // server-side field rename fails here instead of only in production.
+    expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual({ delivered });
+  });
+
+  /**
+   * WHOSE WORD IT IS, and the sentence it replaces.
+   *
+   * A `published` adaptation with no link renders `linkUnavailable` —
+   * "published — link unavailable" — which describes a delivery a PLATFORM
+   * confirmed whose link went missing. A delivery a PERSON vouched for never
+   * had a link and never could: the answer that would have carried one never
+   * arrived. Printing the platform's sentence over their word would have the
+   * screen claim a confirmation nobody ever got, which is the whole reason the
+   * receipt records who asserted it.
+   */
+  it("names the person who vouched for a delivery instead of claiming a lost link", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              deliveryOutcome: "published",
+              externalUrl: null,
+              assertedByName: ASSERTER,
+              assertedAt: ASSERTED_AT,
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    const results = resultsList();
+    expect(
+      within(results).getByText(
+        en.Publish.assertedDelivery
+          .replace("{name}", ASSERTER)
+          .replace("{date}", new Date(ASSERTED_AT).toLocaleString("en")),
+      ),
+    ).toBeInTheDocument();
+    expect(within(results).queryByText(en.Publish.linkUnavailable)).toBeNull();
+  });
+
+  /** And a platform's own link-less delivery still says exactly what it said. */
+  it("still says the link is unavailable when no person vouched for it", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              deliveryOutcome: "published",
+              externalUrl: null,
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("heading", { name: en.Publish.resultsTitle });
+
+    expect(within(resultsList()).getByText(en.Publish.linkUnavailable)).toBeInTheDocument();
+  });
+
+  /**
+   * IN EVERY LANGUAGE THIS PRODUCT SHIPS. The sentence is the only place the
+   * difference between a platform's answer and a person's word shows, and a
+   * sentence that only exists in English shows it to a quarter of the readers.
+   */
+  it.each(["en", "es", "ru", "pt"] as const)("says whose word it is in %s", async (locale) => {
+    const messages = (await import(`../../../../../messages/${locale}.json`)).default as {
+      Publish: { assertedDelivery: string; resultsTitle: string };
+    };
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              deliveryOutcome: "published",
+              assertedByName: ASSERTER,
+              assertedAt: ASSERTED_AT,
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, { locale });
+    await screen.findByRole("heading", { name: messages.Publish.resultsTitle });
+
+    expect(
+      screen.getByText(
+        messages.Publish.assertedDelivery
+          .replace("{name}", ASSERTER)
+          .replace("{date}", new Date(ASSERTED_AT).toLocaleString(locale)),
+      ),
+    ).toBeInTheDocument();
   });
 });
 

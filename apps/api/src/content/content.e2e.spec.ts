@@ -463,6 +463,59 @@ describe.skipIf(!url)("content e2e", () => {
     }
   }
 
+  /**
+   * Waits until `count` of THIS FILE'S app backends are parked on a row lock
+   * inside a statement against `adaptations` — the interleaving as a fact
+   * rather than a hope about promise scheduling.
+   *
+   * Scoped by `application_name`, never by statement text alone: other e2e
+   * files run against this same database and reach `pg_stat_activity` with
+   * statements of their own. It RAISES when every operation that should have
+   * blocked has finished instead, because returning quietly would hand the
+   * caller a green run for an interleaving that never happened.
+   */
+  async function waitForAdaptationRowWaiters(
+    count: number,
+    inFlight: Promise<unknown>,
+  ): Promise<void> {
+    let settled = false;
+    void inFlight.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const { rows } = await db.execute(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND application_name = '${APP_NAME}'
+              AND wait_event_type = 'Lock'
+              AND query ILIKE '%adaptations%for update%'`,
+        );
+        if ((rows[0] as { n: number }).n >= count) return;
+        if (settled) {
+          throw new Error(
+            "every request that should have blocked on the adaptation row finished without " +
+              "blocking: the interleaving under test did not happen",
+          );
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`fewer than ${count} backend(s) blocked on the adaptation row`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      await pool.end();
+    }
+  }
+
   async function publishJobCount(adaptationId: string): Promise<number> {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
@@ -1964,18 +2017,38 @@ describe.skipIf(!url)("content e2e", () => {
 
     /**
      * THE OTHER HALF OF THE CONDITION. An unknown attempt leaves its receipt
-     * behind for ever. A human who did what the message asks — opened the
-     * channel, saw nothing, approved again — has an adaptation that is `queued`,
-     * and the stale receipt must not label the send that is in flight right now
-     * with the verdict of the one before it.
+     * behind for ever, and a row that is on its way out again must not be
+     * labelled with the verdict of the attempt before it — `status = 'failed'`
+     * is what scopes the receipt to the delivery being described.
+     *
+     * THE ROUTE TO THAT STATE CHANGED, and the state is seeded rather than
+     * driven now. This test used to reach `queued` by approving the unknown row
+     * — which was the defect: approving a delivery that may be live posts a
+     * second copy, so `approve` skips such a row and refuses when it is the
+     * only one left. What a person does instead is say what they found (the
+     * resolver, `settling a delivery nobody can speak for`), and either verdict
+     * files a FINISHED receipt of its own, so the unknown one stops being the
+     * last. The pairing is asserted there, on the route people actually take.
+     *
+     * The clause is kept and kept tested all the same, because it is the half
+     * that says WHICH delivery a receipt describes, and nothing else in the
+     * expression says it. `deliveryOutcome` is what `approve`'s own skip reads,
+     * so a condition that answered from a receipt two attempts old would refuse
+     * sends that are perfectly safe — the fail-safe direction, but wrong, and
+     * silently so.
      */
-    it("stops describing a re-approved adaptation with the previous attempt's verdict", async () => {
+    it("stops describing a delivery on its way out with the previous attempt's verdict", async () => {
       const agent = await orgAgent();
       const { itemId, adaptationId, channelId } = await itemWithOneChannel(agent, "Try once more");
       await seedUnknownDelivery(adaptationId, channelId);
 
-      const reApproved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
-      expect(reApproved.body.adaptations[0]).toMatchObject({
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(`UPDATE adaptations SET status = 'queued' WHERE id = '${adaptationId}'`);
+      await pool.end();
+
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(fetched.body.adaptations[0]).toMatchObject({
         status: "queued",
         deliveryOutcome: "queued",
       });
@@ -6193,6 +6266,437 @@ describe.skipIf(!url)("content e2e", () => {
         .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
         .expect(200);
       expect(approved.body.adaptations[0].status).toBe("scheduled");
+    });
+  });
+
+  /**
+   * A DELIVERY NOBODY CAN SPEAK FOR, AND THE PERSON WHO SETTLES IT.
+   *
+   * `deliveryOutcome` made an unknown ending VISIBLE — two sentences on two
+   * screens telling a reader to open the channel before approving again. This
+   * block is about the half that was still missing: advice is not a control.
+   * The adaptation column has no `unknown`, so such a row read `failed` and
+   * `approve` re-sent it like any other, putting a second copy of one post in
+   * somebody's channel from a single press.
+   *
+   * The refusal and its resolver are tested together because they only make
+   * sense together. Refusing alone would leave the post finishable only by
+   * deleting the channel: nothing else in the product moves a row off
+   * `failed`+unknown.
+   */
+  describe("settling a delivery nobody can speak for", () => {
+    /**
+     * A second channel on the same brand, so a fan-out can have one half in
+     * doubt and one half provably undelivered — the shape the whole per-row
+     * argument rests on.
+     */
+    async function secondChannel(agent: request.Agent, brandId: string): Promise<string> {
+      const channel = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "456:def", chatId: "-1009876543210" },
+        })
+        .expect(201);
+      return channel.body.id as string;
+    }
+
+    /**
+     * What `PublishService.recordUnknownOutcome` leaves behind: the adaptation
+     * `failed` with the operator's sentence, and the attempt's receipt resolved
+     * to `unknown` with no link. Seeded directly, as every worker-shaped
+     * fixture in this file is.
+     */
+    async function seedDelivery(adaptationId: string, status: "unknown" | "failed" | "published") {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id, channel_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string; channel_id: string }[];
+      await db.execute(
+        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}',
+           last_error = ${status === "published" ? "NULL" : "'the worker wrote a sentence here'"}
+         WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+         VALUES ('${row?.org_id}', '${adaptationId}', '${row?.channel_id}', '${status}', NULL, NULL, 1)`,
+      );
+      await pool.end();
+    }
+
+    /** The receipts of one adaptation, oldest first — what was actually filed. */
+    async function receipts(adaptationId: string) {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const { rows } = await db.execute(
+        `SELECT status, external_url, asserted_by FROM publications
+          WHERE adaptation_id = '${adaptationId}' ORDER BY created_at, id`,
+      );
+      await pool.end();
+      return rows as { status: string; external_url: string | null; asserted_by: string | null }[];
+    }
+
+    async function itemStatus(itemId: string): Promise<string> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const { rows } = await db.execute(`SELECT status FROM content_items WHERE id = '${itemId}'`);
+      await pool.end();
+      return (rows[0] as { status: string }).status;
+    }
+
+    /** A two-channel post, approved and then landed however the caller says. */
+    async function fanOut(agent: request.Agent) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const other = await secondChannel(agent, brandId);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Two channels, one answer missing", channelIds: [channelId, other] })
+        .expect(201);
+      const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+      return {
+        itemId: created.body.id as string,
+        inDoubt: adaptations.find((a) => a.channelId === channelId)?.id as string,
+        refused: adaptations.find((a) => a.channelId === other)?.id as string,
+      };
+    }
+
+    /** One channel, one delivery, whatever ending the caller seeds onto it. */
+    async function oneChannel(agent: request.Agent) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Maybe out there", channelIds: [channelId] })
+        .expect(201);
+      return {
+        itemId: created.body.id as string,
+        adaptationId: created.body.adaptations[0].id as string,
+        channelId,
+      };
+    }
+
+    /**
+     * THE SKIP IS PER ROW, and this is the test that says so.
+     *
+     * A four-channel post with one unknown half still has halves that provably
+     * failed, and refusing the whole request would leave the reader no way to
+     * send them. Mutating the skip to the ITEM — refuse if ANY row is unknown —
+     * makes the second channel unsendable; mutating it away entirely re-sends
+     * the first and posts the second copy this whole design exists to stop.
+     * Both are caught here, by the two job counts together.
+     */
+    it("re-sends the halves that failed and leaves the half in doubt alone", async () => {
+      const agent = await orgAgent();
+      const { itemId, inDoubt, refused } = await fanOut(agent);
+      await seedDelivery(inDoubt, "unknown");
+      await seedDelivery(refused, "failed");
+
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const byId = Object.fromEntries(
+        (approved.body.adaptations as { id: string; status: string }[]).map((a) => [
+          a.id,
+          a.status,
+        ]),
+      );
+      expect(byId[refused]).toBe("queued");
+      // Untouched: still the row nobody can speak for, still reported as such.
+      expect(byId[inDoubt]).toBe("failed");
+
+      expect(await publishJobCount(refused)).toBe(1);
+      expect(await publishJobCount(inDoubt)).toBe(0);
+    });
+
+    /**
+     * AND WHEN THE SKIP LEAVES NOTHING, IT REFUSES rather than answering 200.
+     *
+     * This project's own named defect class — an early exit reporting the same
+     * success as real work — and the expensive half of it here: the reader
+     * presses "Publish now", is told the post is on its way, and nothing was
+     * sent. Both halves are asserted, because a mutation that turns the refusal
+     * into a 200 leaves the queue exactly as empty as a correct refusal does.
+     */
+    it("refuses when the only delivery left is one nobody can speak for, and enqueues nothing", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+
+      const refusal = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(refusal.body.code).toBe("delivery_outcome_unknown");
+      expect(await publishJobCount(adaptationId)).toBe(0);
+      expect(await itemStatus(itemId)).toBe("draft");
+    });
+
+    /**
+     * "MARK AS DELIVERED" — a receipt in the ordinary shape, with one extra
+     * column.
+     *
+     * The receipt is what every downstream reader already understands: the
+     * worker's duplicate guard refuses to send where a `published` receipt
+     * exists, and `deliveryOutcome` stops saying `unknown` because the last
+     * FINISHED receipt now says `published`. `asserted_by` is the only thing
+     * that distinguishes it from a platform's own answer, and the DTO field
+     * below is what makes dropping it visible: without the column the screen
+     * renders a person's word as "published — link unavailable", claiming a
+     * confirmation nobody ever got.
+     */
+    it("records a human's word as a published receipt that names them", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+
+      const settled = await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(200);
+
+      const adaptation = settled.body.adaptations[0];
+      expect(adaptation.status).toBe("published");
+      expect(adaptation.deliveryOutcome).toBe("published");
+      // No link, and none invented: nobody ever had one.
+      expect(adaptation.externalUrl).toBeNull();
+      expect(adaptation.assertedByName).toBe("U");
+      expect(typeof adaptation.assertedAt).toBe("string");
+      // The operator's "outcome could not be confirmed" sentence is gone: after
+      // this call it can be, and printing it under the answer would contradict it.
+      expect(adaptation.lastError).toBeNull();
+
+      const filed = await receipts(adaptationId);
+      expect(filed.map((r) => r.status)).toEqual(["unknown", "published"]);
+      expect(filed[1]?.asserted_by).not.toBeNull();
+      expect(filed[1]?.external_url).toBeNull();
+
+      // The item follows the fold, exactly as a landing delivery would.
+      expect(await itemStatus(itemId)).toBe("published");
+    });
+
+    /**
+     * AND THE POST CANNOT THEN BE SENT AGAIN. The adaptation is `published`,
+     * which is history — `approve` does not target it, and an item every one of
+     * whose channels is published is refused outright.
+     *
+     * The worker's own half of this guard (`hasPublished`, which reads the
+     * receipt rather than the column) is pinned in the worker's spec, where the
+     * code is.
+     */
+    it("closes the post to further sending once a person has said it is live", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+      await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(200);
+
+      const refusal = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(refusal.body.code).toBe("content_already_published");
+      expect(await publishJobCount(adaptationId)).toBe(0);
+    });
+
+    /**
+     * "MARK AS NOT DELIVERED" — the other verdict, and the one that gives the
+     * post back.
+     *
+     * The adaptation stays `failed`, so nothing about it is claimed; what
+     * changes is that its last FINISHED receipt no longer says `unknown`, which
+     * is the exact expression `approve`'s skip consults. The second press then
+     * sends the post for the first time.
+     */
+    it("puts a delivery nothing reached back within reach of Publish now", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+
+      const settled = await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: false })
+        .expect(200);
+      expect(settled.body.adaptations[0].status).toBe("failed");
+      expect(settled.body.adaptations[0].deliveryOutcome).toBe("failed");
+      expect(settled.body.adaptations[0].assertedByName).toBe("U");
+      // Every delivery of this item has now failed for good, so the fold fails
+      // the item — the second of today's two verdicts, reached from the api.
+      expect(await itemStatus(itemId)).toBe("failed");
+
+      const filed = await receipts(adaptationId);
+      expect(filed.map((r) => r.status)).toEqual(["unknown", "failed"]);
+      expect(filed[1]?.asserted_by).not.toBeNull();
+
+      const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      expect(approved.body.adaptations[0].status).toBe("queued");
+      // And the delivery in flight is described by ITSELF, not by the attempt
+      // whose answer never came: the human's `failed` receipt is now the last
+      // finished one, so nothing is left saying `unknown` about this send.
+      expect(approved.body.adaptations[0].deliveryOutcome).toBe("queued");
+      expect(await publishJobCount(adaptationId)).toBe(1);
+    });
+
+    /**
+     * A DELIVERY WHOSE OUTCOME IS NOT IN DOUBT HAS NOTHING FOR A PERSON TO SAY.
+     *
+     * Two codes rather than one with an argument: the codes here are nullary
+     * and named by state, so one cannot mean both "in doubt" and "not in
+     * doubt". This is also the refusal the loser of two simultaneous presses
+     * gets — see the race below.
+     */
+    it("refuses a verdict about a delivery the record already answers for", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "failed");
+
+      const refusal = await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(409);
+      expect(refusal.body.code).toBe("delivery_outcome_already_known");
+      expect(await receipts(adaptationId)).toHaveLength(1);
+    });
+
+    /**
+     * AND A DELIVERY THAT HAS NOT ENDED YET is refused with the code for the
+     * status it is actually in — the same records `PATCH`'s override refusal
+     * reads, so the two routes cannot answer differently about one row.
+     * Asserting an outcome for an attempt still in flight is asserting about
+     * the wrong attempt.
+     */
+    it("refuses a verdict about a delivery that is still on its way", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+      const refusal = await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(409);
+      expect(refusal.body.code).toBe("adaptation_pinned_queued");
+      expect(await receipts(adaptationId)).toHaveLength(0);
+    });
+
+    /** Tenancy, on the route that files evidence — a stranger's row is not there. */
+    it("does not exist for another organization", async () => {
+      const owner = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(owner);
+      await seedDelivery(adaptationId, "unknown");
+
+      const stranger = await orgAgent();
+      const refusal = await stranger
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: true })
+        .expect(404);
+      expect(refusal.body.code).toBe("adaptation_not_found");
+      expect(await receipts(adaptationId)).toHaveLength(1);
+    });
+
+    /**
+     * TWO PRESSES ON ONE ROW, AND THE LOSER GETS A SENTENCE RATHER THAN A 500.
+     *
+     * Both requests read an outcome of `unknown` if nothing serialises them,
+     * both write a `published` receipt, and the second meets
+     * `publications_one_published_per_adaptation` as a raw `23505` — a 500 for
+     * a request whose only fault is being second. The row lock is what makes
+     * the loser wait; re-reading the outcome in its OWN statement afterwards is
+     * what makes it see the winner's commit, because under READ COMMITTED a
+     * statement's snapshot is taken when the statement starts and a read fused
+     * into the locking SELECT would answer from before the wait.
+     *
+     * The interleaving is pinned rather than hoped for: a third connection
+     * holds the adaptation row, so both requests are parked on it before either
+     * can read anything.
+     */
+    it("serialises two simultaneous verdicts on one delivery", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+
+      const { createDb } = await import("@pubrick/db");
+      const { pool } = createDb(url as string);
+      const holder = await pool.connect();
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
+
+      const press = () =>
+        agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered: false });
+      const both = Promise.all([press(), press()]);
+      try {
+        await waitForAdaptationRowWaiters(2, both);
+      } finally {
+        await holder.query("COMMIT");
+        holder.release();
+        await pool.end();
+      }
+
+      const [first, second] = await both;
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([200, 409]);
+      const loser = first.status === 409 ? first : second;
+      expect(loser.body.code).toBe("delivery_outcome_already_known");
+      // ONE verdict was filed, not two. Without the lock both presses read
+      // `unknown`, both file a receipt, and the count is three.
+      expect((await receipts(adaptationId)).map((r) => r.status)).toEqual(["unknown", "failed"]);
+    });
+
+    /**
+     * THE RESOLVER AGAINST A LANDING WORKER, on the same adaptation.
+     *
+     * The two take the same locks in the same order —
+     * `adaptations` → the `publications` insert's `FOR KEY SHARE` on
+     * `channels` → `content_items` — which is the whole reason the resolver
+     * needed no new lock and no new edge in `docs/lock-order.md`. Taken the
+     * other way round they are a cycle, and a cycle here is a `40P01` on a
+     * request that is merely simultaneous.
+     *
+     * The worker's half is written out as its own transaction rather than
+     * driven through the worker package, because what is under test is the
+     * ORDER of the statements, and a paused transaction between two of them is
+     * something no real handler can be asked for.
+     */
+    it("does not deadlock against a delivery landing at the same moment", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await oneChannel(agent);
+      await seedDelivery(adaptationId, "unknown");
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string }[];
+
+      const worker = await pool.connect();
+      await worker.query("BEGIN");
+      // `markPublished`'s first statement, and its row lock.
+      await worker.query("UPDATE adaptations SET status = 'published' WHERE id = $1", [
+        adaptationId,
+      ]);
+
+      const settling = agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+        .send({ delivered: false });
+      try {
+        await waitForAdaptationRowWaiters(1, settling);
+        // The rest of the worker's transaction, in its documented order:
+        // the receipt (which locks the channel through its foreign key), then
+        // the parent item.
+        await worker.query(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_url, attempt)
+             VALUES ($1, $2, $3, 'published', 'https://t.me/c/9', 2)`,
+          [row?.org_id, adaptationId, channelId],
+        );
+        await worker.query("SELECT id FROM content_items WHERE id = $1 FOR UPDATE", [itemId]);
+      } finally {
+        await worker.query("COMMIT");
+        worker.release();
+        await pool.end();
+      }
+
+      // No 40P01 on either side. The resolver was parked before the worker's
+      // second statement, so it loses and is told what the delivery turned out
+      // to be — a coded refusal, never a deadlock and never a 500.
+      const answered = await settling;
+      expect(answered.status).toBe(409);
+      expect(answered.body.code).toBe("adaptation_pinned_published");
     });
   });
 });

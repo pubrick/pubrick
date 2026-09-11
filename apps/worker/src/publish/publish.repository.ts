@@ -5,6 +5,7 @@ import {
   type AdaptationStatus,
   type ContentStatus,
   decryptJson,
+  nextItemStatus,
   OUTSTANDING_ADAPTATION_STATUSES,
   type PlatformId,
   PUBLISH_QUEUE_OPTIONS,
@@ -410,7 +411,13 @@ export class PublishRepository {
    * `adaptation.status` is not enough on its own: it can be moved back by the
    * api (re-approve, reject) or left stale by a crash between the send and the
    * bookkeeping, whereas a `published` `publications` row means a platform
-   * genuinely accepted a post for this adaptation.
+   * genuinely accepted a post for this adaptation — or that a named person
+   * asserted it did (`publications.asserted_by`, written by the api's delivery
+   * resolver when somebody opens the channel and finds the post there). Both
+   * are answers to "has this already gone out?", and the whole point of
+   * recording a human's verdict as an ordinary receipt is that this guard
+   * honours it without being taught about it: a re-approved adaptation whose
+   * post a person found live is refused here rather than posted twice.
    *
    * Note what this does and does not buy. It is a check BEFORE the send and
    * the row it looks for is written AFTER one, so on its own it cannot bound
@@ -1076,14 +1083,19 @@ export class PublishRepository {
    * sufficient because it serialises the recompute itself, and every transition
    * INTO a terminal status — the only kind that can change this function's
    * answer — happens in a transaction that must take this same parent lock:
-   * `markPublished`, `markAlreadyPublished` and `markFailed` all end here.
+   * `markPublished`, `markAlreadyPublished` and `markFailed` all end here —
+   * and so does `sweepAbandoned`, which is the FOURTH caller and the one this
+   * paragraph used to leave out: it loops this function over every swept row
+   * inside one transaction, having taken each of those rows' locks in the
+   * sub-select of its own `UPDATE`.
    * (`markPublishing` moves a sibling without the parent lock, and cannot
    * matter: nothing it writes makes an item eligible for promotion.)
    *
-   * `every`, never `some`: `some` would mark the item `published` the moment
-   * the FIRST channel lands, so an item reads delivered while its other
-   * channels are still queued — and is pinned against approve/reject while a
-   * delivery is still outstanding.
+   * `every`, never `some` — the fold's business now, and pinned by its own
+   * test: `some` would mark the item `published` the moment the FIRST channel
+   * lands, so an item reads delivered while its other channels are still queued
+   * — and is pinned against approve/reject while a delivery is still
+   * outstanding.
    */
   private async recomputeItemStatus(tx: Tx, orgId: string, contentItemId: string): Promise<void> {
     const locked = await tx
@@ -1105,11 +1117,19 @@ export class PublishRepository {
           eq(schema.adaptations.contentItemId, contentItemId),
         ),
       );
-    if (rows.length === 0) return;
-
-    let nextStatus: ContentStatus | undefined;
-    if (rows.every((r) => r.status === "published")) nextStatus = "published";
-    else if (rows.every((r) => r.status === "failed")) nextStatus = "failed";
+    // THE VERDICT ITSELF IS NOT THIS FUNCTION'S — see `nextItemStatus`
+    // (`@pubrick/shared`). What is this function's is everything around it: the
+    // parent lock above, the sibling read under it, and the write below. The
+    // api settles an unknown delivery by hand and has to promote the item from
+    // the same rule; a second `if/else` there would be a second answer free to
+    // drift, on the one screen that would show the drift.
+    //
+    // The empty-fan-out guard went with it, rather than being kept here as a
+    // second copy: an item whose channels have all been deleted decides
+    // nothing, and the fold says so once for every caller (`every` over an
+    // empty array is `true` for both arms, so the guard is what stops such an
+    // item being promoted to `published`).
+    const nextStatus = nextItemStatus(rows.map((r) => r.status));
     if (!nextStatus) return;
 
     await tx

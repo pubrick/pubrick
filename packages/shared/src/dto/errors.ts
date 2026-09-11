@@ -99,6 +99,35 @@ export const API_ERROR_CODES = [
    * two messages.
    */
   "unread_ai_draft_open_only",
+  /**
+   * APPROVE MET A DELIVERY NOBODY CAN SPEAK FOR, and had nothing else left to
+   * send.
+   *
+   * An adaptation whose last finished attempt ended `unknown` may already be
+   * live in someone's channel — the request left, the answer did not — so
+   * `approve` skips it rather than re-sending it, PER ROW: a four-channel post
+   * with one unknown half still re-sends the halves that provably failed. This
+   * is the refusal for the case where the skip leaves nothing at all to
+   * enqueue, because a 200 that did no work is this project's own named defect
+   * class (`schedule_already_queued` above records the last time it shipped).
+   *
+   * The way out is not this endpoint. Nothing else in the product moves an
+   * adaptation off `failed`+unknown, so the refusal ships with its resolver:
+   * the person opens the channel, sees whether the post is there, and says so
+   * (`POST /api/content/:id/adaptations/:adaptationId/delivery`).
+   */
+  "delivery_outcome_unknown",
+  /**
+   * The resolver, on a delivery whose outcome is NOT in doubt.
+   *
+   * A second code rather than an argument on the first, because the codes here
+   * are nullary and named by state: one code cannot mean both "in doubt" and
+   * "not in doubt". It is also the refusal two clicks on the same button race
+   * for — the loser reads the outcome under the adaptation's row lock, finds it
+   * settled, and is told so instead of meeting
+   * `publications_one_published_per_adaptation` as a raw 23505.
+   */
+  "delivery_outcome_already_known",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
   /**

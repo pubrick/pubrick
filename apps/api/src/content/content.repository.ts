@@ -17,6 +17,7 @@ import {
   isUnreadableCiphertext,
   MAX_BODY_LENGTH,
   MAX_REFINE_CALLS_PER_HOUR,
+  nextItemStatus,
   normalizeForComparison,
   normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
@@ -521,6 +522,51 @@ const ADAPTATION_COLUMNS = {
       then 'unknown'
       else adaptations.status
     end
+  )`,
+  /**
+   * WHO SAID THIS POST WAS DELIVERED, when no platform did — and WHEN they
+   * said it. Null on every delivery a platform actually answered for, which is
+   * almost all of them.
+   *
+   * WITHOUT THIS FIELD THE COLUMN IS INVISIBLE AND THE SCREEN LIES. A
+   * `published` adaptation with no `external_url` renders `linkUnavailable`
+   * ("published — link unavailable", `[id]/page.tsx`), which claims a
+   * platform-confirmed delivery whose link went missing. A human assertion is
+   * exactly what that is not: nobody ever had a link, because the answer that
+   * would have carried one never arrived — a person opened the channel, saw the
+   * post, and said so. The screen says whose word it is instead.
+   *
+   * THE SAME RECEIPT `deliveryOutcome` READS, and deliberately the same
+   * predicate: the LAST FINISHED attempt (`status <> 'in_flight'`, ordered
+   * `created_at desc`). Reading "the most recent asserted receipt" instead
+   * would be a different and wrong question — an adaptation a person marked
+   * undelivered, re-approved, and the worker then genuinely published would
+   * still name that person beside the worker's own delivery.
+   *
+   * Which is why `asserted_by` is read INSIDE the row the ordering picked
+   * rather than joined across it. An inner join to `user` would drop a receipt
+   * with no asserter and hand the `limit 1` an OLDER one, producing that exact
+   * lie by a different road.
+   *
+   * `deliveryOutcome` is unchanged by any of this, and that is the decision:
+   * a human's verdict is an ordinary outcome, so every reader that already
+   * knows what `published` and `failed` mean needs no teaching. The sentence on
+   * the screen is the only place the difference shows.
+   */
+  assertedByName: sql<string | null>`(
+    select u.name from "user" u where u.id = (
+      select p.asserted_by from publications p
+      where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+      order by p.created_at desc
+      limit 1
+    )
+  )`,
+  assertedAt: sql<Date | null>`(
+    select case when p.asserted_by is not null then p.created_at end
+    from publications p
+    where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+    order by p.created_at desc
+    limit 1
   )`,
 };
 
@@ -2547,6 +2593,29 @@ export class ContentRepository {
   }
 
   /**
+   * Which of these adaptations had an attempt whose outcome nobody knows.
+   *
+   * The same expression the wire reports (`ADAPTATION_COLUMNS.deliveryOutcome`)
+   * rather than a second reading of the receipts: the screen that warns a
+   * person not to re-send and the code that refuses to re-send must not be able
+   * to disagree about which row is in doubt.
+   *
+   * A separate statement, taken AFTER the caller's `lockAdaptations` and never
+   * folded into it. Under READ COMMITTED a statement's snapshot is taken when
+   * the statement starts, so a read fused into the locking SELECT would answer
+   * from a snapshot older than whatever that lock waited for — the exact
+   * staleness the lock was acquired to remove.
+   */
+  private async unknownDeliveries(tx: Tx, orgId: string, ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const rows = await tx
+      .select({ id: schema.adaptations.id, deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome })
+      .from(schema.adaptations)
+      .where(and(eq(schema.adaptations.orgId, orgId), inArray(schema.adaptations.id, ids)));
+    return new Set(rows.filter((row) => row.deliveryOutcome === "unknown").map((row) => row.id));
+  }
+
+  /**
    * Locks the adaptations of one item that are in `statuses`, inside the
    * caller's transaction.
    *
@@ -2689,7 +2758,52 @@ export class ContentRepository {
       // the loop, so a refusal costs no queue work.
       await this.requireHumanInvolvement(tx, orgId, id);
 
-      for (const adaptation of targets) {
+      /*
+       * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
+       * ROW.
+       *
+       * An adaptation whose last finished attempt ended `unknown` may already
+       * be live in someone's channel: the request left this process and the
+       * answer never came back, so nothing here can tell. Re-sending it is how
+       * a person ends up with two copies of one post — which is the whole
+       * reason `deliveryOutcome` exists, and which until now was defended by
+       * two sentences on two screens. Advice, not a control: the adaptation
+       * column has no `unknown`, so the row reads `failed` and `approve`
+       * targeted it like any other.
+       *
+       * Per row rather than per item, because a four-channel post with one
+       * unknown half still has provably undelivered halves, and refusing the
+       * whole request would leave the person no way to send them. The skip
+       * costs nothing it did not already cost: nothing else re-sends by itself.
+       *
+       * THE READ IS AFTER `lockAdaptations`, for the reason
+       * `requireNotPublished` gives at length: delivery state read before the
+       * lock is stale against a worker landing a moment later. It takes no new
+       * lock and changes no order (`docs/lock-order.md`).
+       *
+       * When the skip leaves NOTHING to enqueue it refuses rather than
+       * answering 200 — the same judgement `requireAdaptations` and
+       * `requireScheduleReachesEveryChannel` make, and for the same reason: a
+       * 200 that did no work is a report the reader has to discover is false.
+       * The way out is the resolver (`assertDelivery`), which this refusal
+       * shipped with — without it a person could only finish the post by
+       * deleting the channel.
+       */
+      const unknown = await this.unknownDeliveries(
+        tx,
+        orgId,
+        targets.map((target) => target.id),
+      );
+      const sendable = targets.filter((target) => !unknown.has(target.id));
+      if (sendable.length === 0 && unknown.size > 0) {
+        throw conflict(
+          "delivery_outcome_unknown",
+          "This post was sent to its channel and the platform never confirmed it, so it may " +
+            "already be live; open the channel, then say what you found before sending again",
+        );
+      }
+
+      for (const adaptation of sendable) {
         // CURRENT attempt count (before this attempt) — see publishJobId's contract.
         let attemptCount = adaptation.attemptCount;
         if (adaptation.status === "scheduled") {
@@ -2720,6 +2834,173 @@ export class ContentRepository {
     });
 
     return this.get(orgId, id);
+  }
+
+  /**
+   * A PERSON SETTLES A DELIVERY NOBODY ELSE CAN — "Mark as delivered" and
+   * "Mark as not delivered", per adaptation.
+   *
+   * WHY IT EXISTS AT ALL. An attempt whose answer never came back leaves the
+   * adaptation `failed` with an `unknown` receipt, and `approve` now skips such
+   * a row rather than posting a second copy of a message that may be live. That
+   * refusal cannot ship alone: nothing else in the product moves a row off
+   * `failed`+unknown — `reject` touches only outstanding rows, `PATCH` writes
+   * bodies, a receipt needs a delivery, and `sweepAbandoned` acts only on
+   * `publishing` rows — so the post would be finishable only by deleting the
+   * channel, against this product's own standard
+   * (`requireScheduleReachesEveryChannel`). The person opens the channel, looks,
+   * and says what they found; this records it.
+   *
+   * WHAT IT WRITES IS AN ORDINARY RECEIPT. "Delivered" is a `published`
+   * `publications` row and a `published` adaptation; "not delivered" is a
+   * `failed` receipt and an adaptation left `failed`. Nothing downstream has to
+   * be taught about human verdicts: the worker's own duplicate guard
+   * (`hasPublished`) already refuses to send where a `published` receipt exists,
+   * and `deliveryOutcome` already stops saying `unknown` once the last FINISHED
+   * receipt says something else — so "not delivered" puts the delivery back in
+   * reach of "Publish now" by the same expression that took it out. The one
+   * thing the receipt carries that a worker's does not is `asserted_by`, which
+   * is what stops the screen rendering a person's word as a platform's.
+   *
+   * THE OUTCOME IS READ UNDER THE ADAPTATION'S ROW LOCK, IN ITS OWN STATEMENT.
+   * Two presses race otherwise, both read `unknown`, and the loser meets
+   * `publications_one_published_per_adaptation` as a raw `23505` — a 500 for a
+   * request whose only fault is being second. The read is a SEPARATE statement
+   * from the lock rather than a subquery inside it, and that is load-bearing
+   * under READ COMMITTED: a statement's snapshot is taken when the statement
+   * starts, so the target list of the locking `SELECT ... FOR UPDATE` would be
+   * computed from a snapshot older than the commit it just waited for, and the
+   * loser would read the outcome it was waiting to stop reading.
+   *
+   * THE LOCK ORDER IS THE DOCUMENTED ONE, and no new edge:
+   * `adaptations` (one row) → the `publications` insert's `FOR KEY SHARE` on
+   * `channels` → `content_items`. That is `markPublished`'s own path, which is
+   * why a resolver and a landing worker on one adaptation serialise instead of
+   * deadlocking. `docs/lock-order.md` names this transaction.
+   *
+   * AND IT PROMOTES THE ITEM, because either verdict makes the row terminal and
+   * a delivery that makes a row terminal is exactly when the item is
+   * recomputed. Through `nextItemStatus` (`@pubrick/shared`) — the same fold the
+   * worker's `recomputeItemStatus` asks, not a second copy of the rule.
+   *
+   * WHAT IT REFUSES. A row with a delivery still in flight gets the pinned
+   * code for the status it is actually in (`adaptation_pinned_*`), because
+   * asserting an outcome for an attempt that has not ended yet is asserting
+   * about the wrong attempt. A row whose outcome is NOT in doubt gets
+   * `delivery_outcome_already_known`: there is nothing here for a person to
+   * know that the record does not already say, and answering 200 would let a
+   * second press overwrite a platform's own answer with a guess.
+   */
+  async assertDelivery(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    delivered: boolean,
+    userId: string,
+  ) {
+    await db.transaction(async (tx) => {
+      // `adaptations` first — the product's one lock order. One row, by primary
+      // key, so there is no multi-row ordering question to answer here.
+      const locked = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (locked.length === 0) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // UNDER the lock, and in its own statement so it reads a snapshot taken
+      // after whatever that lock waited for — see this method's own comment.
+      const current = (
+        await tx
+          .select({
+            channelId: schema.adaptations.channelId,
+            status: schema.adaptations.status,
+            attemptCount: schema.adaptations.attemptCount,
+            deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
+          })
+          .from(schema.adaptations)
+          .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+          .limit(1)
+      )[0];
+      if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // The in-flight statuses first, and the records that answer them are the
+      // ones `updateAdaptation` uses: one reading of "this delivery is not
+      // yours to decide", so the two routes cannot answer differently.
+      if (!isEditableAdaptationStatus(current.status)) {
+        throw conflict(
+          PINNED_ADAPTATION_CODE[current.status],
+          PINNED_ADAPTATION_MESSAGE[current.status],
+        );
+      }
+      if (current.deliveryOutcome !== "unknown") {
+        throw conflict(
+          "delivery_outcome_already_known",
+          "This delivery's outcome is already known, so there is nothing to say about it",
+        );
+      }
+
+      await tx
+        .update(schema.adaptations)
+        .set({
+          status: delivered ? "published" : "failed",
+          // Cleared on BOTH verdicts. The sentence stored there says the
+          // outcome could not be confirmed, and after this call it can: leaving
+          // it would have the screen print "outcome unknown" underneath the
+          // answer somebody just gave. There is no platform error to report in
+          // its place, because no platform answered.
+          lastError: null,
+        })
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+
+      await tx.insert(schema.publications).values({
+        orgId,
+        adaptationId,
+        channelId: current.channelId,
+        status: delivered ? "published" : "failed",
+        // No id and no link, on purpose and on both verdicts: nobody has one.
+        // The answer that would have carried them never arrived, and a caller
+        // is deliberately given no way to supply one — a caller that could
+        // would be authoring the product's evidence that a platform accepted a
+        // post.
+        externalId: null,
+        externalUrl: null,
+        error: null,
+        attempt: current.attemptCount,
+        assertedBy: userId,
+      });
+
+      // `content_items` last, and only now: the row is terminal either way, so
+      // this is the same promotion a landing delivery performs, through the
+      // same fold.
+      const parent = await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1)
+        .for("update");
+      if (parent.length === 0) return;
+      const siblings = await tx
+        .select({ status: schema.adaptations.status })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+          ),
+        );
+      const next = nextItemStatus(siblings.map((sibling) => sibling.status));
+      if (next) await this.setItemStatus(tx, orgId, contentItemId, next);
+    });
+
+    return this.get(orgId, contentItemId);
   }
 
   /**

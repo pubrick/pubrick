@@ -1,0 +1,37 @@
+-- 0017 — a delivery receipt can name the person who vouched for it.
+--
+-- WHY A COLUMN. An attempt whose answer never came back leaves the product
+-- unable to say whether a post is live: the request left, the reply did not,
+-- and `publications.status = 'unknown'` is the honest record of that. Nothing
+-- in the product could move such a delivery afterwards — `approve` re-sends it
+-- and may post a second copy, `reject` touches only outstanding rows, a receipt
+-- needs a delivery — so the only way to finish the post was to delete the
+-- channel. The resolver
+-- (`POST /api/content/:id/adaptations/:adaptationId/delivery`) is the way out:
+-- a person opens the channel, sees whether the post arrived, and says so.
+--
+-- What they say is written as an ordinary receipt — `published` or `failed` —
+-- so every existing reader answers correctly with no change: the worker's
+-- duplicate guard stops re-sending a post a human found live, and
+-- `deliveryOutcome` stops reporting `unknown` once the last finished receipt
+-- says otherwise. This column is what keeps such a receipt honest about its
+-- OWN provenance. Without it a human's word is stored in the same shape as a
+-- platform's answer, and the item screen renders it as "published — link
+-- unavailable": a platform-confirmed delivery whose link went missing, which
+-- is precisely what a human assertion is not.
+--
+-- `SET NULL`, NOT `CASCADE`, and the difference is the receipt itself. This
+-- table outlives what it points at — both of its existing foreign keys are
+-- nullable and `SET NULL` for that reason, and migration 0011 exists because
+-- one of them was not. A `CASCADE` here would destroy the record of a delivery
+-- because the person who vouched for it left the organisation. What their
+-- departure costs is the NAME, not the fact.
+--
+-- ADDITIVE. One nullable column and one foreign key. No row is rewritten (the
+-- column arrives null on every existing receipt, which is what a
+-- worker-written receipt means anyway), no existing value can stop being
+-- valid, and there is no CHECK and no enum for a later value to fall foul of.
+-- Nothing the WORKER reads changes shape either, so `docs/self-hosting.md`
+-- §Upgrade's "worker first is always safe" stays true unamended.
+ALTER TABLE "publications" ADD COLUMN "asserted_by" text;--> statement-breakpoint
+ALTER TABLE "publications" ADD CONSTRAINT "publications_asserted_by_user_id_fk" FOREIGN KEY ("asserted_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;

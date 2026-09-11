@@ -15,7 +15,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { organization } from "./auth.js";
+import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { enumCheck } from "./enum-check.js";
 
@@ -331,6 +331,33 @@ export const publications = pgTable(
     externalId: text("external_id"),
     externalUrl: text("external_url"),
     error: text("error"),
+    /**
+     * WHO SAID SO, when no platform did.
+     *
+     * Null on every receipt the worker writes, and that is the ordinary case:
+     * a platform accepted the post, or refused it, and the row records what it
+     * answered. It is set only by the delivery resolver
+     * (`POST /api/content/:id/adaptations/:adaptationId/delivery`), where an
+     * attempt whose answer never came back is settled by a person who opened
+     * the channel and looked.
+     *
+     * Without it the receipt would be indistinguishable from a platform's own,
+     * and the item screen would render a human's word about a post as
+     * "published — link unavailable": a platform-confirmed delivery whose link
+     * went missing, which is exactly what a human assertion is not. The api
+     * joins this to the person's name and the screen says whose word it is.
+     *
+     * `set null`, never `cascade`, and the difference is the whole receipt.
+     * This table outlives what it points at — that is its own docstring's first
+     * sentence — so destroying the record of a delivery because the person who
+     * vouched for it left the organisation would re-open migration 0011's loss
+     * from a new side. What is lost when they go is the name, not the fact.
+     *
+     * Nullable by construction, so there is no CHECK to write and nothing for
+     * `schema-invariants` to pin: every row that predates the column reads
+     * null, which is what a worker-written receipt means anyway.
+     */
+    assertedBy: text("asserted_by").references(() => user.id, { onDelete: "set null" }),
     attempt: integer("attempt").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

@@ -800,6 +800,50 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.hasPublished("some-other-org", adaptationId)).toBe(false);
   });
 
+  /**
+   * A RECEIPT A PERSON WROTE STOPS A RE-SEND EXACTLY AS A PLATFORM'S DOES.
+   *
+   * When an attempt's answer never comes back, the api lets somebody open the
+   * channel, find the post there, and file a `published` receipt carrying
+   * `asserted_by` (`ContentRepository.assertDelivery`). This guard is what has
+   * to honour it: the whole reason a human verdict is recorded in the ORDINARY
+   * shape is that nothing downstream should need teaching about it.
+   *
+   * The mutation this kills is narrowing the query to receipts no human
+   * asserted. Under it a job redelivered for an adaptation whose post a person
+   * has already found live sails past the cheap guard and posts a second copy —
+   * which is the outcome the entire unknown-delivery design exists to prevent,
+   * reintroduced one table over.
+   */
+  it("hasPublished honours a delivery a person asserted, not only one a platform answered for", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const [row] = await db
+      .select({ channelId: schema.adaptations.channelId })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    const personId = `publish-repo-test-person-${Date.now()}`;
+    await db.insert(schema.user).values({
+      id: personId,
+      name: "A person who looked",
+      email: `${personId}@example.com`,
+    });
+
+    await db.insert(schema.publications).values({
+      orgId,
+      adaptationId,
+      channelId: row?.channelId as string,
+      status: "published",
+      // No id and no link: nobody ever had one. That absence is exactly why a
+      // query could be tempted to treat this receipt as less than a delivery.
+      externalId: null,
+      externalUrl: null,
+      attempt: 1,
+      assertedBy: personId,
+    });
+
+    expect(await repo.hasPublished(orgId, adaptationId)).toBe(true);
+  });
+
   it("markPublishing claims only a publishable row: false (and no attempt_count movement) once the api has moved it", async () => {
     // This is what stops a reject that commits between load() and the claim
     // from being published anyway: both sides take the same row lock.

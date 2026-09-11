@@ -10,6 +10,7 @@ import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
   MAX_REFINE_CALLS_PER_HOUR,
+  nextItemStatus,
   OUTSTANDING_ADAPTATION_STATUSES,
   REFINE_VERBS,
   refineRequestSchema,
@@ -402,5 +403,59 @@ describe("what the wire can say about a delivery", () => {
   it("recognises every one of them, and nothing else", () => {
     for (const outcome of DELIVERY_OUTCOMES) expect(isDeliveryOutcome(outcome)).toBe(true);
     expect(isDeliveryOutcome("in_flight")).toBe(false);
+  });
+});
+
+/**
+ * THE PROMOTION RULE, asked of the fold itself.
+ *
+ * The rule has two callers in two processes — the worker when a delivery lands,
+ * the api when a person settles an unknown one by hand — and before this fold
+ * existed it was one `if/else` inside the worker that nobody else could reach.
+ * A copy in the api would be a second answer free to drift, and the screen that
+ * would show the drift is the same screen: an item stuck at `approved` beside
+ * live posts refuses to be edited and still accepts a reject.
+ *
+ * ONE TEST PER ARM, and one for each arm's own negation, because a fold whose
+ * arms are only tested through their happy case is satisfied by deleting the
+ * one that is never contradicted.
+ */
+describe("what an item's status becomes when its deliveries have moved", () => {
+  it("promotes to published only when every delivery published", () => {
+    expect(nextItemStatus(["published"])).toBe("published");
+    expect(nextItemStatus(["published", "published"])).toBe("published");
+    expect(nextItemStatus(["published", "failed"])).toBeUndefined();
+    expect(nextItemStatus(["published", "queued"])).toBeUndefined();
+  });
+
+  it("fails the item only when every delivery failed", () => {
+    expect(nextItemStatus(["failed"])).toBe("failed");
+    expect(nextItemStatus(["failed", "failed"])).toBe("failed");
+    expect(nextItemStatus(["failed", "queued"])).toBeUndefined();
+  });
+
+  /**
+   * Nothing has been decided while a delivery is still moving, and that is the
+   * whole of what `undefined` means: the caller leaves the item where it is.
+   */
+  it("decides nothing while any delivery is still outstanding", () => {
+    for (const status of ADAPTATION_STATUSES) {
+      if (status === "published" || status === "failed") continue;
+      expect(nextItemStatus([status])).toBeUndefined();
+      expect(nextItemStatus([status, "published"])).toBeUndefined();
+      expect(nextItemStatus([status, "failed"])).toBeUndefined();
+    }
+  });
+
+  /**
+   * THE EMPTY SET, which both `every` arms answer `true` for.
+   *
+   * An item whose channels have all been deleted has no adaptation left to
+   * speak for it. Without the guard the first arm wins and the item is promoted
+   * to `published` — a permanent claim that posts went out, made about an item
+   * that has nowhere to have sent them.
+   */
+  it("decides nothing for an item with no deliveries at all", () => {
+    expect(nextItemStatus([])).toBeUndefined();
   });
 });
