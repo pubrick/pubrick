@@ -1581,7 +1581,7 @@ describe.skipIf(!url)("runs e2e", () => {
         sourceIds.push(await sourceRun(agent, brandId, channelId, shape.url, status));
       }
       // A paste from a paywalled article, a PDF, a Slack message: material a
-      // watcher could never have fetched. SQL NULL, so `count(distinct url)`
+      // watcher could never have fetched. SQL NULL, so `count(distinct story)`
       // skips it without a filter.
       sourceIds.push(await sourceRun(agent, brandId, channelId, null));
 
