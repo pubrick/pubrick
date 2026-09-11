@@ -679,3 +679,137 @@ task reports nobody reads again:
 - **Per-run cost is not shown on the finished draft**, only the org total in
   Settings and the Test result — no endpoint exposes ledger totals per run yet.
   §7 describes the intent; the endpoint is increment 2's.
+
+---
+
+## 12. The gate before increment 3b, and the query that measures it
+
+> **Editorial addition (2026-09-11, branch `feat/paste-a-story`).** Not part of
+> the 2026-08-28 design. Increment 3 shipped in halves: **3a** — a draft from
+> text a person pastes, with the address they pasted it from recorded and never
+> fetched — is what §1's third bullet actually became, and **3b** — the watcher
+> that polls RSS and Telegram — is designed
+> (`2026-09-04-pubrick-watched-sources-design.md` §5, at `cf2077e6`) and **not
+> scheduled**. It becomes a plan when 3a has produced a number. The number is
+> collectable with no new machinery, but only because 3a stores exactly what
+> this query reads, so the query is pinned here, beside the column it reads,
+> rather than left in a planning repository.
+
+**The rule.** 3b earns its machinery when one org's source runs carry **at least
+five distinct URLs a week**, for **four consecutive weeks**, with **at least one
+host appearing in at least three of those four weeks**.
+
+**Those three numbers are chosen, not measured.** They are the point at which a
+weekly copy-and-paste starts to feel like a chore, and nothing was measured
+behind them. What is argued for is the *shape* — recurrence of a host across
+weeks, counted only over runs a watcher could have produced — and that a number
+decided now is worth more than a number argued about after the poller exists.
+
+**Failed and cancelled runs count.** The work a poller would take over is the
+fetching, and the fetching happened before the run did: a person who opened the
+page, selected the article and pasted it did all of 3b's work whether or not the
+model then answered. They are reported in their own column so a reader can tell
+a month of demand from a month of broken deployment.
+
+**URL-less pastes do not count toward the threshold.** A paywalled article, a
+PDF or a Slack message records material a poller could never have fetched.
+`count(distinct url)` skips SQL NULL of its own accord, so they stay out without
+a `filter`; they are reported separately, as context rather than evidence.
+
+```sql
+-- Per org, per week: the distinct stories a watcher could have fetched (the
+-- threshold), the runs they cost and how many of those failed (context), the
+-- URL-less pastes (context, not evidence), and the hosts.
+with source_runs as (
+  select org_id,
+         date_trunc('week', created_at) as week,
+         status,
+         input->>'sourceUrl' as url,
+         nullif(regexp_replace(
+           lower(split_part(split_part(input->>'sourceUrl', '://', 2), '/', 1)),
+           '^www\.', ''), '') as host
+  from pipeline_runs
+  where input->>'kind' = 'source'
+)
+select org_id,
+       week,
+       count(distinct url)                       as watchable_stories,
+       count(*) filter (where url is not null)   as watchable_runs,
+       count(*) filter (where url is not null
+                          and status in ('failed', 'cancelled')) as failed_runs,
+       count(*) filter (where url is null)       as urlless_runs,
+       array_agg(distinct host) filter (where host is not null) as hosts
+from source_runs
+group by 1, 2
+order by 1, 2;
+```
+
+`lower()` runs **inside** the `www.` strip, not outside it. The other way round
+the strip is matched against un-lowered input, so `www.example.com` folds to
+`example.com` while `WWW.Example.com` folds to `www.example.com` — one site, two
+hosts, across the clause that counts hosts across weeks. Nothing normalises a
+URL between the browser and the column: `z.url()` stores what was typed, so both
+spellings really do arrive.
+
+Read the `hosts` arrays across the four weeks by eye for the recurrence clause.
+The query deliberately does not decide it: the set is small enough to read, and a
+`count(distinct host)` would reintroduce the degeneracy that made the first
+draft's two-clause rule a one-clause rule.
+
+### Three things the query cannot see
+
+- **A week with no runs produces no row**, so a gap reads as the end of the data
+  rather than as a break. Whoever runs this checks consecutiveness by eye, or
+  joins against a `generate_series` over the org's own weeks.
+- **`pipeline_runs.brand_id` is `ON DELETE CASCADE`**, so an org that
+  reorganises its brands in week 3 erases the history the window is counted
+  over. The gate is therefore a **floor**: it can be missed, never faked. A
+  reorganisation restarts the window, and the honest response is to restart it.
+- **`pipeline_runs.created_at` is `timestamp` *without* time zone.**
+  `date_trunc('week', …)` on a zoneless value is arithmetic on the stored wall
+  clock, so the reading session's zone does not enter into it; what is lost is
+  *whose* clock that was, since `defaultNow()` renders `now()` in the database
+  server's zone and nothing records which zone that is. Over a four-week window
+  that moves at most a few rows across a boundary.
+
+### What this query counts as a host, and what the queue screen shows
+
+`host` above is a string cut out of the stored URL; `sourceHost`
+(`apps/web/src/lib/runs.ts`), which labels the queue strip and the source strip,
+is the WHATWG URL parser's `hostname`. The two agree on the case fold and on the
+`www.` strip and on nothing else, and **the SQL is the gate's truth** — it is
+what the decision is read from; the parser's answer is a label on a screen.
+
+| stored `sourceUrl` | this query's `host` | `sourceHost` shows | why |
+|---|---|---|---|
+| `https://WWW.Example.com/a` | `example.com` | `example.com` | agree — `lower()` then the strip, both sides |
+| `HTTPS://Example.com/a` | `example.com` | `example.com` | agree — the scheme is cut off before the fold |
+| `https://example.com:8443/a` | `example.com:8443` | `example.com` | the port: the cut is at the first `/`, not at `:` |
+| `https://example.com?q=1` | `example.com?q=1` | `example.com` | a query with no path: there is no `/` to cut at |
+| `https://example.com#frag` | `example.com#frag` | `example.com` | a fragment with no path: likewise |
+| `https://user:pw@example.com/a` | `user:pw@example.com` | `example.com` | userinfo: nothing cuts at `@` |
+| `https://пример.рф/a` | `пример.рф` | `xn--e1afmkfd.xn--p1ai` | the parser punycodes an IDN; `split_part` does not |
+
+**Every divergence splits one site into several hosts; none merges two sites into
+one.** So the recurrence clause can be *missed* because of them — a reader who
+pastes the same blog with a port one week and without it the next scores two
+hosts — and cannot be *faked*. That is the same direction as the cascade above,
+and it is why this is written down rather than fixed: a regex that stripped
+userinfo, port, query and fragment would still not punycode an IDN, and a gate
+whose expression is half a URL parser is worse than one whose blind spots are
+listed.
+
+One blind spot is about the column rather than the URL. `input->>'sourceUrl'`
+reads the **top level** of the jsonb: a writer that nested the address one level
+down — under an `attribution` object, say — would leave this expression NULL for
+every row, and the run would be counted in `urlless_runs` as though the person
+had pasted from a PDF. The query cannot tell those apart, so the DTO does:
+`sourceRunInputSchema.sourceUrl` is `.nullable()` and **not** `.optional()`, so
+the key is mandatory and top-level on every stored source run, and
+`runInputSchema` refuses a nested spelling outright. The pin is
+`apps/api/src/runs/runs.e2e.spec.ts`, which seeds such a row by raw insert,
+shows the query miscounting it, and shows the DTO refusing to produce one.
+
+This section and that spec carry the query **as the same text**; the test reads
+this file, extracts the fence above, runs it, and compares it with its own copy.
+A number the owner reads here is a number a test proved.
