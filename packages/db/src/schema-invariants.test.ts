@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getTableColumns, is } from "drizzle-orm";
 import { getTableConfig, PgDialect, PgTable } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
@@ -439,5 +442,86 @@ describe("refine_proposals", () => {
   it("does not try to re-derive the range from the anchor's length in SQL", () => {
     const checks = config.checks.map((candidate) => dialect.sqlToQuery(candidate.value).sql);
     expect(checks.join(" ")).not.toMatch(/length\s*\(/i);
+  });
+});
+
+/**
+ * THE SET THAT ACTUALLY REACHES POSTGRES, read out of the migration SQL.
+ *
+ * Everything above renders the schema and compares it with itself: the
+ * "declared" values and the "pinned" ones both come from the same TypeScript
+ * constant, one through `text(col, { enum })` and one through `enumCheck(...)`
+ * three lines below it. Neither knows whether a migration was ever generated.
+ * So a fourth `REFINE_VERBS` entry — or a fourth adaptation status, or a sixth
+ * platform — is green in this file, green in `drizzle-kit check` (which CI does
+ * not run at all) and `23514` the first time the product writes it in
+ * production, at a boot that applied every migration successfully.
+ *
+ * `.sql` files rather than the snapshots in `meta/`: the snapshot is generated
+ * from the same schema, and what Postgres executes is the statement.
+ */
+describe("every enum CHECK reaches the database through a migration", () => {
+  const migrationsDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "migrations",
+  );
+  /**
+   * The LAST word on each named constraint, in migration order: a set can be
+   * widened by a later `DROP CONSTRAINT` + `ADD CONSTRAINT`, and the earlier
+   * statement is then history rather than the state of the database.
+   */
+  const inMigrations = new Map<string, string[]>();
+  for (const file of readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()) {
+    const sql = readFileSync(path.join(migrationsDir, file), "utf8");
+    for (const [, name, list] of sql.matchAll(
+      /CONSTRAINT "([^"]+)" CHECK \([^)]*\bin\s*\(([^)]*)\)/gi,
+    )) {
+      inMigrations.set(
+        name as string,
+        [...(list as string).matchAll(/'([^']*)'/g)].map((m) => m[1] as string).sort(),
+      );
+    }
+  }
+
+  it("finds the constraints it exists to compare", () => {
+    expect(inMigrations.size).toBeGreaterThan(10);
+  });
+
+  it("gives every declared enum CHECK a migration naming exactly the same values", () => {
+    const drifted = enumColumns
+      .map((entry) => {
+        const name = `${entry.table}_${entry.column}_check`;
+        return {
+          constraint: name,
+          declared: [...entry.values].sort(),
+          inMigration: inMigrations.get(name) ?? null,
+        };
+      })
+      .filter((entry) => JSON.stringify(entry.declared) !== JSON.stringify(entry.inMigration));
+    expect(
+      drifted,
+      "A CHECK the schema declares that no migration writes with those values. " +
+        "`inMigration: null` means no migration writes this constraint at all; a differing " +
+        "list means the value set was edited without generating one. Run `drizzle-kit generate`:",
+    ).toEqual([]);
+  });
+
+  /**
+   * ...and the other direction: a constraint the database HAS and the schema no
+   * longer declares. Postgres keeps enforcing it, so the row the types now
+   * consider valid is refused at the insert — the same `23514`, arrived at from
+   * the opposite end.
+   */
+  it("declares every enum CHECK the migrations have already written", () => {
+    const declared = new Set(enumColumns.map((entry) => `${entry.table}_${entry.column}_check`));
+    const orphaned = [...inMigrations.keys()].filter((name) => !declared.has(name));
+    expect(
+      orphaned,
+      "A CHECK the migrations wrote that the schema no longer declares — Postgres is still " +
+        "enforcing it. Generate the migration that drops it, or restore the column's enum:",
+    ).toEqual([]);
   });
 });
