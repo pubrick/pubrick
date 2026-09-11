@@ -126,6 +126,25 @@ describe("a run asked for from material a person pasted", () => {
    * wrote nothing USEFUL rather than that they wrote nothing — so it is not a
    * value this column may hold, and the writer's trim has this behind it.
    */
+  /**
+   * `.nullable()` AND NOT `.nullish()` — the key is mandatory, so a stored
+   * source run always carries it.
+   *
+   * 3b's gate reads `input->>'sourceUrl'` as a TOP-LEVEL key and
+   * `jsonb ->> 'k'` answers SQL NULL for an absent key exactly as it does for a
+   * stored `null`, so the difference is invisible to the query that rests on
+   * it. It was invisible here too: mutating this field to `.nullish()` survived
+   * three runs of this package's whole suite and was only killed once `dist`
+   * was rebuilt and `@pubrick/api`'s e2e ran — the guarantee pinned everywhere
+   * except in the package that declares it.
+   */
+  it("refuses a source input with no sourceUrl key at all", () => {
+    const { sourceUrl: _omitted, ...absent } = pasted;
+    const denied = sourceRunInputSchema.safeParse(absent);
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
+  });
+
   it("refuses a stored empty brief, so blank can only be spelled null", () => {
     const denied = sourceRunInputSchema.safeParse({ ...pasted, text: "" });
     expect(denied.success).toBe(false);
