@@ -3,6 +3,7 @@ import {
   isApiErrorCode,
   MAX_CONCURRENT_RUNS,
   MAX_REFINE_CALLS_PER_HOUR,
+  NEXT_CURSOR_HEADER,
 } from "@pubrick/shared";
 import { reportUnauthorized } from "./unauthorized";
 
@@ -288,6 +289,35 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await request(path, init);
   return (await res.json()) as T;
+}
+
+/**
+ * ONE PAGE OF A LIST, AND WHERE THE NEXT ONE STARTS.
+ *
+ * The rows come out of the body, which is a bare array exactly as it was before
+ * paging existed; the cursor comes out of the `X-Next-Cursor` header. The
+ * split is the api's decision (see `NEXT_CURSOR_HEADER` in `@pubrick/shared`)
+ * and this is what the browser needs in order to honour it: `api()` reads the
+ * body and throws the response away, so a caller that wanted the header had
+ * nowhere to get it.
+ *
+ * Here rather than in the queue screen because the shape is the api's, not one
+ * screen's — and because the failure contract has to stay the one every
+ * `handleError` assumes: this goes through the same `request()` as `api()` and
+ * `apiVoid()`, so it rejects with an `ApiError` and nothing else.
+ *
+ * `null` when the header is absent, which is what the api says when the page it
+ * just answered is the last one. An empty header value is read as absent too:
+ * a cursor of zero length is not a position, and treating it as one would be a
+ * `Load more` that never disappears.
+ */
+export type Page<T> = { rows: T[]; nextCursor: string | null };
+
+export async function apiPage<T>(path: string, init?: RequestInit): Promise<Page<T>> {
+  const res = await request(path, init);
+  const rows = (await res.json()) as T[];
+  const cursor = res.headers.get(NEXT_CURSOR_HEADER);
+  return { rows, nextCursor: cursor !== null && cursor.length > 0 ? cursor : null };
 }
 
 /**

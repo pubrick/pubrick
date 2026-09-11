@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   ADAPTATION_STATUSES,
   adaptationUpdateSchema,
+  CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
   contentCreateSchema,
   contentUpdateSchema,
   DELIVERY_OUTCOMES,
+  decodeContentCursor,
+  encodeContentCursor,
   isDeliveryOutcome,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
   nextItemStatus,
   OUTSTANDING_ADAPTATION_STATUSES,
@@ -491,5 +495,78 @@ describe("what an item's status becomes when its deliveries have moved", () => {
    */
   it("decides nothing for an item with no deliveries at all", () => {
     expect(nextItemStatus([])).toBeUndefined();
+  });
+});
+
+/**
+ * THE QUEUE'S CURSOR — the one thing on `GET /api/content` a caller may not
+ * read, and must hand back byte for byte.
+ *
+ * It is opaque because the ordering it encodes is the api's to change: today
+ * `(created_at, id)` newest first, tomorrow whatever a reorderable queue
+ * (`docs/ux-patterns.md` §1.2) needs. A caller that parsed it would pin that
+ * choice from outside. Opacity is only a promise, though, and this file's job
+ * is the half that is enforceable: what goes in comes back out, and what did
+ * NOT come out of `encode` is refused rather than half-read.
+ *
+ * `null` for every refusal, never a throw and never a partial cursor: the
+ * caller is the api's route handler, which turns it into one 400 with a code.
+ */
+describe("the queue page cursor", () => {
+  const AT = "2026-09-11T19:09:52.123456Z";
+  const ID = "33333333-3333-4333-8333-333333333333";
+
+  it("round-trips the sort key it was built from, microseconds included", () => {
+    const decoded = decodeContentCursor(encodeContentCursor({ createdAt: AT, id: ID }));
+    expect(decoded).toEqual({ createdAt: AT, id: ID });
+  });
+
+  /**
+   * MICROSECONDS, AND THIS IS THE ASSERTION THE WHOLE FORMAT EXISTS FOR.
+   *
+   * `created_at` is `timestamptz`, which Postgres keeps to the microsecond;
+   * a JS `Date` holds milliseconds. A cursor carrying the driver's `Date`
+   * would therefore name an instant slightly EARLIER than the row it came
+   * from, and `(created_at, id) < cursor` would not exclude that row — the
+   * last card of one page reappears as the first card of the next, silently,
+   * on exactly the boundary nobody looks at. So the api renders the key in
+   * SQL (`to_char(... 'US')`) and this format carries all six digits.
+   */
+  it("keeps a microsecond that a JS Date would round away", () => {
+    const encoded = encodeContentCursor({ createdAt: AT, id: ID });
+    expect(new Date(AT).toISOString()).toBe("2026-09-11T19:09:52.123Z");
+    expect(decodeContentCursor(encoded)?.createdAt).toBe(AT);
+  });
+
+  it("is base64url: no padding, and nothing needing escaping in a query string", () => {
+    const encoded = encodeContentCursor({ createdAt: AT, id: ID });
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(encodeURIComponent(encoded)).toBe(encoded);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["not base64url at all", "not a cursor!"],
+    ["base64url of nothing that parses", "YWJj"],
+    ["a timestamp with no id", "MjAyNi0wOS0xMVQxOTowOTo1Mi4xMjM0NTZa"],
+    [
+      "a plausible timestamp that is not the canonical form",
+      "MjAyNnwzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzM",
+    ],
+    ["an id that is not a uuid", "MjAyNi0wOS0xMVQxOTowOTo1Mi4xMjM0NTZafG5vdC1hLXV1aWQ"],
+  ])("refuses %s", (_label, raw) => {
+    expect(decodeContentCursor(raw)).toBeNull();
+  });
+
+  /**
+   * The page bounds, pinned as values rather than as "whatever the constant
+   * says": 50 is the owner's decision (design 0009 §6, answered 2026-09-11)
+   * and 200 is the ceiling the api refuses above. Both are read by the api's
+   * validation and by the web's own request, so a silent change to either
+   * would move what the product does without moving a line anybody reviews.
+   */
+  it("bounds a page at 50 by default and 200 at most", () => {
+    expect(CONTENT_PAGE_SIZE).toBe(50);
+    expect(MAX_CONTENT_PAGE_SIZE).toBe(200);
   });
 });

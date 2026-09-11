@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -22,6 +23,7 @@ import {
   contentUpdateSchema,
   type DeliveryAssertion,
   deliveryAssertionSchema,
+  NEXT_CURSOR_HEADER,
   type RefineRequest,
   refineRequestSchema,
 } from "@pubrick/shared";
@@ -36,9 +38,39 @@ import { ContentRepository } from "./content.repository";
 export class ContentController {
   constructor(private readonly content: ContentRepository) {}
 
+  /**
+   * ONE PAGE OF THE QUEUE. `?status=` filters it, `?limit=` sizes it (50 by
+   * default, 200 at most, refused above), `?cursor=` says where it starts.
+   *
+   * THE CURSOR RIDES IN A RESPONSE HEADER AND THE BODY STAYS A BARE ARRAY.
+   * That is the owner's answer to design 0009 §6.2, and the reason is a
+   * ratchet: `tenancy-lists.e2e.spec.ts` reads five list endpoints' bodies as
+   * arrays from one table, so an envelope here would either break it or teach
+   * it that one endpoint is shaped differently — which is how a scan stops
+   * covering the thing it was written for. The browser reaches this api through
+   * Next's own `/api/:path*` rewrite, so the header is same-origin and needs no
+   * CORS `exposedHeaders`.
+   *
+   * `@Res({ passthrough: true })` — Nest still serialises the return value; all
+   * this takes of the response is one `setHeader`. Typed structurally rather
+   * than as express's `Response`, because `@types/express` is not a dependency
+   * of this package and one method is the whole of what is used.
+   *
+   * The header is set ONLY when there is a next page. An `X-Next-Cursor` on the
+   * last page is a `Load more` button that never disappears and one more read
+   * that always answers empty.
+   */
   @Get()
-  list(@OrgId() orgId: string, @Query("status") status?: string) {
-    return this.content.list(orgId, status);
+  async list(
+    @OrgId() orgId: string,
+    @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
+    @Query("status") status?: string,
+    @Query("limit") limit?: string,
+    @Query("cursor") cursor?: string,
+  ) {
+    const page = await this.content.list(orgId, { status, limit, cursor });
+    if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
+    return page.rows;
   }
 
   @Post()

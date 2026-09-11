@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { encodeContentCursor } from "@pubrick/shared";
 import request from "supertest";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -78,6 +79,20 @@ async function brandWithChannel(agent: request.Agent) {
 
 const id = (row: Record<string, unknown>) => row.id as string;
 
+/**
+ * A queue cursor naming the position one millisecond after `createdAt`.
+ *
+ * ROUNDED UP, not down, and that is the load-bearing millisecond. The wire
+ * carries `created_at` at millisecond precision while the column holds
+ * microseconds, so the same instant written back as `.123000Z` names a moment
+ * BEFORE the row it came from and the keyset predicate would exclude it. One
+ * millisecond later is the nearest position that certainly includes it.
+ */
+function justAfter(createdAt: string): string {
+  const at = new Date(Date.parse(createdAt) + 1).toISOString().replace("Z", "000Z");
+  return encodeContentCursor({ createdAt: at, id: "00000000-0000-4000-8000-000000000000" });
+}
+
 const LIST_ENDPOINTS: ListEndpoint[] = [
   {
     controller: "brands",
@@ -106,7 +121,28 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
         .post("/api/content")
         .send({ brandId, body: "Mine.", channelIds: [channelId] })
         .expect(201);
-      return { id: item.body.id as string, paths: ["/api/content", "/api/content?status=draft"] };
+      return {
+        id: item.body.id as string,
+        // THREE BRANCHES, and the third is the one design 0009 added: a keyset
+        // page carries a SECOND copy of the tenancy predicate, in a `where`
+        // built from a different set of clauses, and the bare path never
+        // reaches it. That is exactly how `GET /api/channels?brandId=` came to
+        // have a correct org filter nobody observed.
+        //
+        // The cursor is positioned one millisecond AFTER this row, so the row
+        // is inside the page rather than excluded by it — the positive
+        // assertion above has to stay meaningful — and close enough to the
+        // boundary that a cursor silently ignored and a cursor applied are not
+        // the same request. It carries the OWNER's position when the stranger
+        // replays it, which is the whole point of the second loop below: a
+        // cursor names an instant, instants are not owned, and the only thing
+        // between it and another tenant's rows is `org_id` in the query.
+        paths: [
+          "/api/content",
+          "/api/content?status=draft",
+          `/api/content?cursor=${encodeURIComponent(justAfter(item.body.createdAt as string))}`,
+        ],
+      };
     },
   },
   {

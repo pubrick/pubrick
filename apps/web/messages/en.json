@@ -141,7 +141,8 @@
       "sendAbandoned": "The send to {channel} stopped before it reached the platform and no retry is left. Nothing was sent — publish now to try again."
     },
     "channelsUnavailable": "Channel names could not be loaded, so channels are shown by ID.",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "loadMore": "Load more"
   },
   "ContentNew": {
     "title": "New post",

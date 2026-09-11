@@ -739,3 +739,129 @@ export const contentDetailDtoSchema = contentListItemDtoSchema
   .extend({ body: z.string() })
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;
+
+/**
+ * HOW MANY CARDS ONE READ OF THE QUEUE BRINGS BACK — the owner's answer to
+ * design 0009 §6.1, decided 2026-09-11.
+ *
+ * `GET /api/content` had no bound at all: it returned every draft an
+ * organisation had ever made, `body` included, and the queue re-read the whole
+ * thing every five seconds while anything was publishing (774 KB and 503
+ * statements on the 500-item org 0009 measured). 50 is a screen's worth, and
+ * the control that asks for the next 50 is one `Load more` — never numbered
+ * pages, which would have to be kept in step with that same five-second poll.
+ */
+export const CONTENT_PAGE_SIZE = 50;
+
+/**
+ * ...and the most a caller may ask for, however much it asks for.
+ *
+ * The cap is not politeness. Both page-sized reads in `ContentRepository.list`
+ * send the page's ids as one array parameter, and the response is built in
+ * memory; without a ceiling, `?limit=1000000` is a request to do again exactly
+ * what the bound was added to stop. A `limit` above this is REFUSED rather
+ * than clamped — silently serving 200 to a caller that asked for 5 000 would
+ * make "the list is complete" a claim the api lets it keep believing.
+ */
+export const MAX_CONTENT_PAGE_SIZE = 200;
+
+/**
+ * The response header the next page's cursor rides on.
+ *
+ * A HEADER, so the body of every list endpoint stays a BARE ARRAY. That is a
+ * ratchet, not a preference: `apps/api/src/tenancy-lists.e2e.spec.ts` reads
+ * five endpoints' responses as arrays from one table, and an envelope here
+ * would either break it or teach it that one endpoint is shaped differently —
+ * which is how a tenancy scan stops covering the thing it was written for.
+ * Same-origin, so no CORS `exposedHeaders` is involved: the browser reaches
+ * the api through Next's own `/api/:path*` rewrite.
+ */
+export const NEXT_CURSOR_HEADER = "X-Next-Cursor";
+
+/**
+ * WHERE THE NEXT PAGE STARTS — the queue's sort key, and nothing else.
+ *
+ * `createdAt` is an ISO-8601 instant in UTC **with six fractional digits**,
+ * rendered by Postgres itself, and the precision is the whole point.
+ * `content_items.created_at` is `timestamptz` — microseconds — while a JS
+ * `Date` holds milliseconds, so a cursor built from the driver's `Date` names
+ * an instant a fraction EARLIER than the row it came from. `(created_at, id) <
+ * cursor` would then fail to exclude that row, and the last card of a page
+ * would reappear as the first card of the next one. The api renders this
+ * string in SQL and binds it back as `timestamptz`; it never goes through a
+ * `Date`.
+ */
+export type ContentCursor = {
+  createdAt: string;
+  id: string;
+};
+
+/**
+ * The canonical form, and the only one `decodeContentCursor` accepts: an
+ * ISO-8601 UTC instant with exactly six fractional digits.
+ */
+const CURSOR_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const CURSOR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `|` appears in neither half, so the split is unambiguous. */
+const CURSOR_SEPARATOR = "|";
+
+/**
+ * base64url, through the platform's own `btoa`/`atob` rather than a library or
+ * `Buffer`.
+ *
+ * `Buffer.from(s).toString("base64url")` is the obvious spelling and is wrong
+ * here: this package has no runtime dependency beyond zod BY RULE (CLAUDE.md,
+ * "packages/shared — the rule book") and the browser imports it, where there is
+ * no `Buffer`. A base64url package would be a second runtime dependency for
+ * sixteen lines. `btoa`/`atob` are standard in both runtimes; they are
+ * latin1-only, which costs nothing because the payload is ASCII by
+ * construction — an ISO instant and a UUID.
+ *
+ * Padding is stripped on the way out (`=` is not query-string-safe without
+ * escaping) and not restored on the way in: WHATWG forgiving-base64, which is
+ * what `atob` implements, accepts the unpadded form.
+ */
+function toBase64Url(ascii: string): string {
+  return btoa(ascii).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(value: string): string | null {
+  if (value.length === 0 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    return atob(value.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return null;
+  }
+}
+
+/** The cursor for the page that starts immediately after this row. */
+export function encodeContentCursor(cursor: ContentCursor): string {
+  return toBase64Url(`${cursor.createdAt}${CURSOR_SEPARATOR}${cursor.id}`);
+}
+
+/**
+ * A cursor a caller sent back, or `null` if it is not one this api wrote.
+ *
+ * `null` rather than a throw, and rather than a best-effort read of whichever
+ * half parsed: the caller is a route handler that answers one `invalid_request`
+ * 400. A cursor half-understood is a page silently taken from somewhere else in
+ * the queue, which is worse than a refusal and impossible to notice from the
+ * outside.
+ *
+ * IT CARRIES NO ORGANISATION, and must not: the sort key is all it is, and the
+ * org comes from the session's `ActiveOrgGuard`. So another tenant's cursor is
+ * a perfectly VALID cursor that simply names a position — the page it yields is
+ * this org's rows after that position, never the other org's rows. The `org_id`
+ * predicate in the repository is what makes that true, and
+ * `content-paging.e2e.spec.ts` asks it directly.
+ */
+export function decodeContentCursor(raw: string): ContentCursor | null {
+  const decoded = fromBase64Url(raw);
+  if (decoded === null) return null;
+  const separator = decoded.indexOf(CURSOR_SEPARATOR);
+  if (separator === -1) return null;
+  const createdAt = decoded.slice(0, separator);
+  const id = decoded.slice(separator + 1);
+  if (!CURSOR_INSTANT.test(createdAt) || !CURSOR_ID.test(id)) return null;
+  return { createdAt, id };
+}

@@ -7,15 +7,20 @@ import {
   type AiVersionRow,
   type ApiErrorCode,
   allSentencesAi,
+  CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
   type ContentCreate,
+  type ContentCursor,
   type ContentStatus,
   type ContentUpdate,
   type DeliveryOutcome,
+  decodeContentCursor,
+  encodeContentCursor,
   isMalformedStoredAiCredential,
   isSameText,
   isUnreadableCiphertext,
   MAX_BODY_LENGTH,
+  MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
   nextItemStatus,
   normalizeForComparison,
@@ -894,6 +899,78 @@ function anyOf(column: PgColumn, ids: string[]) {
   return sql`${column} = any(${sql.param(ids)}::uuid[])`;
 }
 
+/** What `GET /api/content` accepts, exactly as the query string carries it. */
+export type ContentListOptions = {
+  status?: string;
+  /** Still a string: it comes off a URL, and refusing a bad one is this file's job. */
+  limit?: string;
+  cursor?: string;
+};
+
+/**
+ * THE SORT KEY, RENDERED BY POSTGRES, AT THE PRECISION POSTGRES KEEPS IT.
+ *
+ * Not `item.createdAt`. The driver hands back a JS `Date`, which holds
+ * milliseconds, while `created_at` is `timestamptz` and holds microseconds — so
+ * a cursor built from the `Date` names an instant slightly EARLIER than the row
+ * it came from, `(created_at, id) < cursor` does not exclude that row, and the
+ * last card of a page comes back as the first card of the next one. The defect
+ * is invisible on any fixture whose timestamps happen to land on a whole
+ * millisecond, which is most of them.
+ *
+ * `to_char(... 'US')` in UTC, so the string is an ISO-8601 instant with six
+ * fractional digits regardless of the session's `TimeZone` — the form
+ * `decodeContentCursor` is the only accepter of, and the form bound straight
+ * back as `timestamptz` below. It is stripped from every row before the wire,
+ * like `body`.
+ */
+const CURSOR_AT = sql<string>`to_char(${schema.contentItems.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+
+/**
+ * The keyset predicate: everything strictly AFTER this position in the queue's
+ * own order.
+ *
+ * A ROW COMPARISON, `(created_at, id) < (a, b)`, not `created_at < a OR
+ * (created_at = a AND id < b)`. The two are equivalent and only one of them is
+ * an index condition: Postgres matches a row-wise comparison against a
+ * multicolumn btree, which is what lets this seek
+ * `content_items_org_id_created_at_id_idx` instead of sorting the organisation
+ * first. The EXPLAIN in `content-list-cost.e2e.spec.ts` is what holds that.
+ *
+ * STRICTLY `<`. `<=` would re-serve the cursor row as the first card of the
+ * next page — and with `created_at` alone as the key it would re-serve every
+ * row sharing that instant, which the generate worker produces by the
+ * transaction-load: `now()` is one value for every row a transaction writes.
+ *
+ * The casts are what a bare parameter needs to be comparable to its column;
+ * `sql.param` keeps both values out of the statement text.
+ */
+function afterCursor(cursor: ContentCursor) {
+  return sql`(${schema.contentItems.createdAt}, ${schema.contentItems.id}) < (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`;
+}
+
+/**
+ * How many cards this request may have, or a 400.
+ *
+ * REFUSED ABOVE THE CEILING RATHER THAN CLAMPED. Serving 200 to a caller that
+ * asked for 5 000 lets it go on believing it has the whole queue, which is the
+ * exact belief the bound exists to take away — and it is the belief every
+ * caller of this endpoint held until this commit. A non-integer, a zero and a
+ * negative are refused for the same reason: `?limit=0` is a request nobody
+ * meant, and answering it with the default would be inventing an intent.
+ */
+function parsePageLimit(raw: string | undefined): number {
+  if (raw === undefined) return CONTENT_PAGE_SIZE;
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CONTENT_PAGE_SIZE) {
+    throw badRequest(
+      "invalid_request",
+      `limit must be an integer between 1 and ${MAX_CONTENT_PAGE_SIZE}; got ${raw}`,
+    );
+  }
+  return limit;
+}
+
 @Injectable()
 export class ContentRepository {
   private readonly logger = new Logger(ContentRepository.name);
@@ -1027,22 +1104,49 @@ export class ContentRepository {
     return collectAiEvidence(rows, (row) => row.contentItemId);
   }
 
-  async list(orgId: string, status?: string) {
+  /**
+   * ONE PAGE OF THE QUEUE, and where the next one starts.
+   *
+   * Answers `{ rows, nextCursor }` — a PAIR FOR THE CONTROLLER, never an
+   * envelope on the wire. The controller puts `nextCursor` in the
+   * `X-Next-Cursor` header and answers with `rows` alone, so the body of this
+   * list, like every other list in this api, stays a bare array; see
+   * `NEXT_CURSOR_HEADER` for the ratchet that makes that a rule rather than a
+   * taste. The row type is inferred from the projection below on purpose: it is
+   * `ITEM_COLUMNS` minus the two fields stripped on the way out, plus the badge
+   * and the channel strip, and a hand-written copy of that would be a second
+   * declaration free to drift from the one that is actually returned.
+   * `contentListItemDtoSchema` (`@pubrick/shared`) is the wire shape, asserted
+   * in the api's own e2e.
+   */
+  async list(orgId: string, options: ContentListOptions = {}) {
+    const { status, cursor: rawCursor } = options;
     if (status !== undefined && !(CONTENT_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException(
         `Unknown status: ${status}. Expected one of: ${CONTENT_STATUSES.join(", ")}`,
       );
     }
-    const where = status
-      ? and(
-          eq(schema.contentItems.orgId, orgId),
-          // Safe: membership just verified above, so the widened `string` really is one
-          // of the literal statuses drizzle's column type expects.
-          eq(schema.contentItems.status, status as ContentStatus),
-        )
-      : eq(schema.contentItems.orgId, orgId);
-    const items = await db
-      .select(ITEM_COLUMNS)
+    const limit = parsePageLimit(options.limit);
+    // A cursor this api did not write is a REFUSAL, never a page taken from
+    // wherever the garbage happened to land. `decodeContentCursor` answers
+    // `null` for every malformed form — see its docstring for why it does not
+    // throw — and this is the one place that turns that into a 400 with a code
+    // a screen can translate. Without it the value reaches drizzle and Postgres
+    // raises `invalid input syntax for type timestamp with time zone`: a 500,
+    // for a request the caller got wrong.
+    const cursor = rawCursor === undefined ? null : decodeContentCursor(rawCursor);
+    if (rawCursor !== undefined && cursor === null) {
+      throw badRequest("invalid_request", `Malformed cursor: ${rawCursor}`);
+    }
+    const where = and(
+      eq(schema.contentItems.orgId, orgId),
+      // Safe: membership just verified above, so the widened `string` really is one
+      // of the literal statuses drizzle's column type expects.
+      status ? eq(schema.contentItems.status, status as ContentStatus) : undefined,
+      cursor ? afterCursor(cursor) : undefined,
+    );
+    const page = await db
+      .select({ ...ITEM_COLUMNS, cursorAt: CURSOR_AT })
       .from(schema.contentItems)
       .where(where)
       // NEWEST FIRST, TIES BROKEN BY `id`. This query had no `ORDER BY` of any
@@ -1051,11 +1155,19 @@ export class ContentRepository {
       // nothing was keeping. The tiebreak is not decoration: the generate
       // worker writes an item inside one transaction, where `now()` is a
       // single value, and two drafts stamped in the same one would otherwise
-      // swap places between two reads of an unchanged queue. It is also what
-      // a `LIMIT` needs before it can mean anything, which is 0009's second
-      // commit; `content_items_org_id_created_at_id_idx` (migration 0020) is
-      // this exact sort.
-      .orderBy(desc(schema.contentItems.createdAt), desc(schema.contentItems.id));
+      // swap places between two reads of an unchanged queue — and under the
+      // `LIMIT` below it decides WHICH items a page contains, not merely the
+      // order they are drawn in. `content_items_org_id_created_at_id_idx`
+      // (migration 0020) is this exact sort, and the keyset page seeks it
+      // (`content-list-cost.e2e.spec.ts` EXPLAINs the real statement).
+      .orderBy(desc(schema.contentItems.createdAt), desc(schema.contentItems.id))
+      // ONE MORE ROW THAN THE PAGE, which is how "is there a next page?" is
+      // answered without a second query and without a `COUNT(*)` over the whole
+      // organisation. The extra row is never rendered and never serialised; all
+      // that is read off it is that it exists.
+      .limit(limit + 1);
+    const hasNext = page.length > limit;
+    const items = hasNext ? page.slice(0, limit) : page;
     const itemIds = items.map((item) => item.id);
     // Two independent reads of the same page, so they go together: neither
     // needs the other's answer, and the pool is the resource being spared.
@@ -1063,7 +1175,7 @@ export class ContentRepository {
       this.itemAiEvidence(orgId, itemIds),
       this.adaptationsForMany(orgId, itemIds),
     ]);
-    return items.map((item) => {
+    const rows = items.map((item) => {
       // The gate's question, on the card. See `get` for why the badge is a
       // boolean the server computes rather than a comparison the browser runs.
       const evidence = aiEvidence.get(item.id) ?? NO_AI_EVIDENCE;
@@ -1077,13 +1189,25 @@ export class ContentRepository {
       // `body`). So the saving is the WIRE and the browser's five-second poll,
       // not the database read — see `ITEM_COLUMNS`. This line IS the list's
       // projection; there is no narrower SELECT behind it.
-      const { body, ...card } = item;
+      //
+      // `cursorAt` leaves by the same door and for a plainer reason: it is the
+      // sort key rendered for the CURSOR, and a caller that read it off a row
+      // would be reading the ordering this api reserves the right to change.
+      const { body, cursorAt: _cursorAt, ...card } = item;
       return {
         ...card,
         bodyIsAiVerbatim: allSentencesAi(body, evidence.rows, evidence.firstFullBody),
         adaptations: adaptations.get(item.id) ?? [],
       };
     });
+    // The LAST ROW OF THE PAGE, not the extra one: the cursor means "start
+    // after this", so the next page begins at the row that was cut off.
+    const last = items[items.length - 1];
+    return {
+      rows,
+      nextCursor:
+        hasNext && last ? encodeContentCursor({ createdAt: last.cursorAt, id: last.id }) : null,
+    };
   }
 
   /**

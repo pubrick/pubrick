@@ -141,7 +141,8 @@
       "sendAbandoned": "O envio para {channel} parou antes de chegar à plataforma e não restam novas tentativas. Nada foi enviado — publique agora para tentar de novo."
     },
     "channelsUnavailable": "Não foi possível carregar os nomes dos canais, por isso eles aparecem pelo ID.",
-    "tryAgain": "Tentar de novo"
+    "tryAgain": "Tentar de novo",
+    "loadMore": "Carregar mais"
   },
   "ContentNew": {
     "title": "Nova publicação",

@@ -45,6 +45,41 @@ queue + drafts makes it "easier to publish confidently and consistently"
 **Mapping:** Queue = one list per brand, grouped by day, drag to reorder. No
 queue-pause/shuffle sub-features at v1.
 
+**Shipped decision — paging the queue (2026-09-11, design 0009).** This
+dossier had no pagination pattern at all, so the queue's bound was decided
+against the constitution rather than against a precedent, and the decision is
+written down here so the next list does not relitigate it.
+
+`GET /api/content` returned every draft an organisation had ever made — 774 KB
+and 503 statements on a 500-item queue, re-read every five seconds while
+anything was publishing. It now answers **50 cards**, and the control for the
+next 50 is **one `Load more`**, never numbered pages:
+
+- **Numbered pages need a stable index, and this list has none.** The queue is
+  polled every five seconds and a generation landing PREPENDS a card, so "page
+  3" names a different set of posts one tick later. `Load more` appends and
+  renumbers nothing. The cursor is a keyset position, not an offset, for the
+  same reason.
+- **The one primary action is already spoken for.** §1's own constitution rule
+  reserves the top-right for it (New post), so the paging control is the shared
+  `secondary` Button at the foot of the list — not a second prominent control
+  competing with it, and not a bespoke one.
+- **The sections are of what is LOADED.** §3.4's fixed sections stay grouped in
+  the browser, from the page in hand, and the headings therefore COUNT NOTHING —
+  each is its status's name alone. A "Draft (12)" would be a claim about the
+  organisation's drafts that a page of fifty cannot make. Moving the grouping
+  server-side so a heading could count again was considered and deliberately not
+  taken (design 0009 §2c).
+- **The poll refreshes page 1 only.** Re-reading every loaded page every five
+  seconds is the unbounded read this replaced, arriving one press at a time. A
+  row that page 1 has taken over from a later page is drawn once, from page 1's
+  newer copy; a row pushed past the boundary by a new post is not drawn until
+  the reader loads more — which is what "of what is loaded" means, honestly.
+
+Infinite scroll was not considered: it takes the decision away from the reader
+and makes the footer unreachable, which is the same objection §10's do-not list
+makes to ambient behaviour generally.
+
 ### 1.3 "Best time" as highlighted slots, never a black box (Later) — `ADOPT-WITH-FEATURE` (analytics)
 
 Later computes suggested times from the user's own engagement and simply
@@ -534,7 +569,7 @@ one internal approval + one optional client approval covers the 90% case.
 | # | Pattern | Source | Verdict | Target |
 |---|---|---|---|---|
 | 1.1 | Slot-based queue | Buffer | adopt-now | Schedule/Channels |
-| 1.2 | Reorderable queue list | Buffer/Typefully | adopt-now | Queue |
+| 1.2 | Reorderable queue list (paged 50 + `Load more` — see the §1.2 shipped decision) | Buffer/Typefully | adopt-now | Queue |
 | 1.3 | Explained best-time highlights | Later | adopt-with-feature | Analytics |
 | 1.4 | Autonomous rescheduling | Motion | **rejected** | — |
 | 2.1 | Master draft + forked channel tabs | Typefully | adopt-now | Compose |

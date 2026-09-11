@@ -1,6 +1,6 @@
 "use client";
 
-import type { PublishFailureReason } from "@pubrick/shared";
+import { CONTENT_PAGE_SIZE, type PublishFailureReason } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -24,7 +24,7 @@ import {
   failureSentence,
   hasAdaptationInFlight,
 } from "@/lib/adaptations";
-import { ApiError, api, type ErrorCode, errorMessage } from "@/lib/api";
+import { ApiError, api, apiPage, type ErrorCode, errorMessage, type Page } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { channelLabel as platformChannelLabel } from "@/lib/platform";
@@ -153,8 +153,37 @@ const openListNeverSettles = () => false;
  * question the item screen asks (`hasAdaptationInFlight`) so the two cannot
  * decide differently about the same row.
  */
-const contentSettled = (items: ContentItem[]) =>
+const queueSettled = (items: readonly ContentItem[]) =>
   !items.some((item) => hasAdaptationInFlight(item.adaptations));
+
+/**
+ * THE LOADED QUEUE, DE-DUPLICATED BY ID, PAGE 1 FIRST.
+ *
+ * The poll refreshes page 1 and leaves the appended pages as they were loaded
+ * (see `fetchContent`), so the two halves of what is on screen were read at
+ * different moments and can disagree about one row. Two ways, both ordinary:
+ *
+ * - **A repeat.** Something was deleted above the boundary, so refreshed page 1
+ *   now reaches one row further down — into what page 2 already holds. Page 1
+ *   is the newer read, so its copy wins and the older one is dropped.
+ * - **A gap.** Something was created, so a row that used to be at the bottom of
+ *   page 1 is pushed past it, into a stretch no loaded page covers. It is not
+ *   drawn until the reader loads more or the screen is reloaded, and NOTHING
+ *   HERE PRETENDS OTHERWISE — the sections say what is loaded, not what exists.
+ *
+ * The alternative — re-reading every loaded page every five seconds — is the
+ * unbounded read this whole design removed, one `Load more` press at a time.
+ */
+function loadedQueue(pages: readonly (readonly ContentItem[])[]): ContentItem[] {
+  const seen = new Set<string>();
+  const items: ContentItem[] = [];
+  for (const item of pages.flat()) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    items.push(item);
+  }
+  return items;
+}
 
 export default function ContentQueuePage() {
   const t = useTranslations("Content");
@@ -197,17 +226,129 @@ export default function ContentQueuePage() {
     [router, locale, t, te],
   );
 
-  // `no-store` for the same reason the runs poll sets it.
+  /**
+   * The pages loaded by `Load more`, page 2 onwards — page 1 is the poll's own
+   * data and is never in here.
+   *
+   * Mirrored into a ref because the settle predicate below has to read them and
+   * `usePoll` requires a STABLE `isTerminal` (it is an effect dependency: a new
+   * identity restarts the poll, which would re-read page 1 on every press). The
+   * ref is written before the state so the predicate sees the page the moment
+   * it lands, not after the next render.
+   */
+  const [laterPages, setLaterPages] = useState<ContentItem[][]>([]);
+  const laterPagesRef = useRef<ContentItem[][]>([]);
+  /** The cursor for the page after the last one loaded, or null at the end. */
+  const [laterCursor, setLaterCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  /**
+   * THE POLL STOPS ONLY WHEN NOTHING ON SCREEN IS STILL MOVING — every loaded
+   * page, not the one that was just re-read.
+   *
+   * This is seam 1 of design 0009 §3. `usePoll` hands its predicate the value
+   * it just fetched, which is page 1; a post publishing on page 3 would leave
+   * that page settled, the poll would stop, and the card a reader is watching
+   * would sit on "Publishing" until they reloaded. So the appended pages are
+   * read off the ref here.
+   *
+   * `useCallback` with NO dependencies on purpose: the identity must not change
+   * when a page is appended (it is a `usePoll` effect dependency), and the ref
+   * is what makes reading fresh pages through a frozen closure correct rather
+   * than stale.
+   */
+  const contentSettled = useCallback(
+    (page: Page<ContentItem>) => queueSettled(loadedQueue([page.rows, ...laterPagesRef.current])),
+    [],
+  );
+
+  /**
+   * PAGE 1, AND ONLY PAGE 1. `no-store` for the same reason the runs poll sets
+   * it: a poll exists to see a change, so it must never be answered from the
+   * browser's cache.
+   *
+   * No cursor, so every tick re-reads the newest `CONTENT_PAGE_SIZE` cards
+   * under the current filter. Refreshing the appended pages too would put the
+   * whole loaded queue back on the wire every five seconds — the unbounded read
+   * this design removed — and would do it while the reader is watching a post
+   * go out, which is exactly when the queue is longest.
+   */
   const fetchContent = useCallback(
     () =>
-      api<ContentItem[]>(`/api/content${status ? `?status=${status}` : ""}`, { cache: "no-store" }),
+      apiPage<ContentItem>(
+        `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}`,
+        { cache: "no-store" },
+      ),
     [status],
   );
   const {
-    data: items,
+    data: firstPage,
     error: contentError,
     refresh: refreshContent,
   } = usePoll(fetchContent, contentSettled, { intervalMs: CONTENT_LIST_POLL_INTERVAL_MS });
+
+  /**
+   * A filter change is a DIFFERENT QUEUE, so the pages loaded under the old one
+   * are not a prefix of this one — they are rows of the wrong status.
+   *
+   * Done here, in the chip's own handler, rather than in an effect on `status`:
+   * the reset is caused by the press, not by the render that follows it, and an
+   * effect would be a second thing to keep in step with a state change that is
+   * already in one place. `usePoll` re-reads page 1 by itself, because
+   * `fetchContent`'s identity moves with `status`.
+   */
+  function changeStatus(next: string) {
+    laterPagesRef.current = [];
+    setLaterPages([]);
+    setLaterCursor(null);
+    setStatus(next);
+  }
+
+  const items = loadedQueue([firstPage?.rows ?? [], ...laterPages]);
+  // While nothing beyond page 1 is loaded the next cursor is page 1's own —
+  // which the poll keeps current. After that it is the last loaded page's, and
+  // page 1's is deliberately ignored: it describes a boundary the reader has
+  // already walked past.
+  const nextCursor = laterPages.length > 0 ? laterCursor : (firstPage?.nextCursor ?? null);
+
+  /**
+   * The next page, appended. Never a refetch of what is already on screen.
+   *
+   * `loadingMore` is the double-press guard, and it is the whole of one: the
+   * press is a discrete event, so React has flushed the state before a second
+   * one can be dispatched, and the button is `disabled` by then. Two presses in
+   * the request's window would otherwise append the same page twice — which
+   * `loadedQueue` would then de-duplicate, hiding the extra read rather than
+   * preventing it.
+   */
+  async function loadMore() {
+    if (nextCursor === null || loadingMore) return;
+    setActionError(null);
+    setLoadingMore(true);
+    try {
+      const page = await apiPage<ContentItem>(
+        `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}&cursor=${encodeURIComponent(nextCursor)}`,
+        { cache: "no-store" },
+      );
+      // A PAGE THAT ARRIVES WITH A DELIVERY STILL MOVING HAS TO RESTART THE
+      // POLL, not merely be counted by it. `usePoll` stops the moment a fetched
+      // value is terminal and asks again only when something fetches; page 1
+      // can be entirely settled while page 3 holds the post the reader pressed
+      // Publish on, and without this that card would sit on "Publishing" until
+      // a reload. Conditional on BOTH halves — the queue was settled, this page
+      // is not — so an ordinary `Load more` over finished posts stays what it
+      // looks like: one request for one page.
+      const wasSettled = queueSettled(items);
+      laterPagesRef.current = [...laterPagesRef.current, page.rows];
+      setLaterPages(laterPagesRef.current);
+      setLaterCursor(page.nextCursor);
+      if (wasSettled && !queueSettled(page.rows)) await refreshContent();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     // A failed read must not look like a list with no names in it. Without
@@ -505,8 +646,8 @@ export default function ContentQueuePage() {
   }
 
   const groups = status
-    ? [[status as ContentStatus, items ?? []] as const]
-    : GROUP_STATUSES.map((s) => [s, (items ?? []).filter((i) => i.status === s)] as const);
+    ? [[status as ContentStatus, items] as const]
+    : GROUP_STATUSES.map((s) => [s, items.filter((i) => i.status === s)] as const);
 
   const filterOptions = [
     { value: "", label: t("filterAll") },
@@ -535,7 +676,10 @@ export default function ContentQueuePage() {
   // "Nothing here yet" is only true when there is no work in flight either —
   // a queue showing "No posts yet. Create your first post" above a running
   // generation would be teaching the wrong next action.
-  const isEmpty = items !== null && items.length === 0 && openRuns.length === 0;
+  // `firstPage !== null` rather than `items.length === 0`: before the first
+  // read lands there is nothing loaded AND nothing known, and those are not the
+  // same screen.
+  const isEmpty = firstPage !== null && items.length === 0 && openRuns.length === 0;
 
   return (
     <AppShell
@@ -569,7 +713,7 @@ export default function ContentQueuePage() {
 
       <div className="mb-5">
         <p className="mb-2 text-sm font-medium text-fg-secondary">{t("filterLabel")}</p>
-        <Segmented options={filterOptions} value={status} onChange={setStatus} />
+        <Segmented options={filterOptions} value={status} onChange={changeStatus} />
       </div>
 
       {isEmpty && (
@@ -589,6 +733,15 @@ export default function ContentQueuePage() {
         </Card>
       )}
 
+      {/*
+        THE SECTIONS ARE OF WHAT IS LOADED, and the headings are honest about
+        that only because they COUNT NOTHING: each is the status\'s own name and
+        no more (design 0009 §3, seam 2 — "say so in the heading, or accept (c)
+        later"). A "Draft (12)" here would be a claim about the organisation\'s
+        drafts that a page of fifty cannot make, and it would be wrong by
+        exactly the rows nobody has loaded yet. Moving the grouping server-side
+        is option (c), deliberately not taken.
+      */}
       {groups.map(([s, groupItems]) =>
         groupItems.length === 0 ? null : (
           <section key={s} className="mb-6">
@@ -598,6 +751,23 @@ export default function ContentQueuePage() {
             </Card>
           </section>
         ),
+      )}
+
+      {/*
+        ONE `Load more`, NEVER NUMBERED PAGES. The constitution reserves the
+        top-right for the one primary action (New post), so this is the shared
+        `secondary` Button and nothing bespoke — and numbers would have to be
+        kept in step with a list re-read every five seconds, where "page 3"
+        stops naming the same cards the moment anything is created.
+        It appears only while the api says there is more, which is what makes
+        its absence mean "that is the whole queue".
+      */}
+      {nextCursor !== null && (
+        <div className="mb-6 flex justify-center">
+          <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
+            {t("loadMore")}
+          </Button>
+        </div>
       )}
     </AppShell>
   );

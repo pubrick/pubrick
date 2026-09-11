@@ -3,6 +3,7 @@ import {
   type ApiErrorBody,
   type ApiErrorCode,
   MAX_CONCURRENT_RUNS,
+  NEXT_CURSOR_HEADER,
   refusalBody,
 } from "@pubrick/shared";
 import { createTranslator } from "next-intl";
@@ -14,6 +15,7 @@ import ru from "../../messages/ru.json";
 import {
   ApiError,
   api,
+  apiPage,
   apiVoid,
   type ErrorTranslator,
   errorMessage,
@@ -503,5 +505,75 @@ describe("a coded refusal, end to end from the HTTP body", () => {
         );
       }
     }
+  });
+});
+
+/**
+ * `apiPage` is `api` plus the one thing `api` throws away: the response.
+ *
+ * The queue's next-page cursor rides in `X-Next-Cursor` so that every list
+ * endpoint's BODY stays a bare array (`NEXT_CURSOR_HEADER` in
+ * `@pubrick/shared` says why that is a ratchet and not a taste) — which means
+ * the browser has to read a header, and `api()` has never been able to. Tested
+ * here rather than through the queue screen for the reason the file's own
+ * header gives: the page mocks `@/lib/api` away, so this is the only place the
+ * real thing is exercised.
+ */
+describe("apiPage", () => {
+  function pagedResponse(rows: unknown[], cursor: string | null): Response {
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: (name: string) => (name === NEXT_CURSOR_HEADER ? cursor : null) },
+      text: async () => JSON.stringify(rows),
+      json: async () => rows,
+    } as unknown as Response;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  it("returns the body's rows and the cursor from the header", async () => {
+    vi.mocked(fetch).mockResolvedValue(pagedResponse([{ id: "1" }], "opaque-cursor"));
+
+    await expect(apiPage("/api/content?limit=50")).resolves.toEqual({
+      rows: [{ id: "1" }],
+      nextCursor: "opaque-cursor",
+    });
+  });
+
+  it("reports no next page when the header is absent", async () => {
+    vi.mocked(fetch).mockResolvedValue(pagedResponse([{ id: "1" }], null));
+
+    await expect(apiPage("/api/content?limit=50")).resolves.toEqual({
+      rows: [{ id: "1" }],
+      nextCursor: null,
+    });
+  });
+
+  /**
+   * An empty header is not a position. Read as one it would be a `Load more`
+   * that never goes away, asking for a page after nowhere — and the distinction
+   * costs one comparison, where the alternative is a control that cannot be
+   * dismissed.
+   */
+  it("reads an empty header as no next page, not as a cursor", async () => {
+    vi.mocked(fetch).mockResolvedValue(pagedResponse([], ""));
+
+    await expect(apiPage("/api/content?limit=50")).resolves.toEqual({ rows: [], nextCursor: null });
+  });
+
+  it("rejects with the same ApiError contract as api() on a 4xx", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(400, refusalBody(400, "invalid_request", "Malformed cursor: nope")),
+    );
+
+    const error = await apiPage("/api/content?cursor=nope").catch((e) => e as ApiError);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(400);
+    expect((error as ApiError).code).toBe("invalid_request");
   });
 });
