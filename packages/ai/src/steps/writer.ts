@@ -48,6 +48,13 @@ export function planMaterial(research: ResearchOutput): string {
  * run including brief-only ones, and a role line naming a source that is not
  * there is a rule the model has to guess at.
  *
+ * The first and second lines are knowingly still phrased over the brief ("a
+ * brief and a plan someone else made"; "no hashtags unless the brief asks for
+ * them"). On a paste-only run the brief is null and those clauses describe
+ * nothing — but they instruct nothing false either: the writer still works
+ * from a plan, and no brief asks for hashtags. Left as they are on purpose,
+ * so the widened lines stay the ones that say what changed.
+ *
  * It is an instruction, never a guarantee. Nothing checks the draft against the
  * material, `steps.test.ts` can pin this prompt and never the output, and the
  * gate that follows answers who TYPED a sentence rather than where the sentence

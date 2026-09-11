@@ -616,7 +616,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
      *
      * `requireHumanInvolvement` itself lives in `apps/api`, and the two Nest
      * apps are siblings (`docs/architecture.md`) — the worker may not import it,
-     * so its THREE clauses are restated here over rows this file read from the
+     * so its clauses are restated here over rows this file read from the
      * real database: nobody has opened it, the body is still the model's, and
      * so is every channel's text (with the adapter's `body ?? item.body`
      * fallback, because a cleared override ships the item's own text). The one
@@ -672,8 +672,9 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
         expect(drafted.error, `the ${path} run failed`).toBeNull();
         expect(drafted.status, `the ${path} run did not succeed`).toBe("succeeded");
 
-        // THE ITEM. `origin` is what the badge reads and what the gate's first
-        // clause turns on; a source run that stored anything else would be
+        // THE ITEM. `origin` is what the badge reads; the gate itself reads
+        // the collected version rows, not this column (`requireHumanInvolvement`
+        // says so). A source run that stored anything else here would be
         // claiming a human wrote text nobody has read.
         expect(drafted.origin, `the ${path} draft's origin`).toBe("ai");
         expect(drafted.body, `the ${path} draft's body`).toBe(EDITED);

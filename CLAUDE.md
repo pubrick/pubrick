@@ -203,7 +203,15 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   imply that a draft is original, or that anything checked it** — and a
   similarity check is not a small addition but a new promise, where a weak one
   that misses is worse than none. That is the argument the fact-check label
-  already rests on, one screen over.
+  already rests on, one screen over. The honest half of the promise ends at the
+  first edit: once a person has changed one sentence, the lens shows what the
+  model wrote and what they wrote, and `Publish.lensLegend`'s "Nothing dimmed
+  means every sentence is yours" is true only in that sense — typed by them,
+  not originated by them; keep every such string about typing, never about
+  origin. Held by `apps/web/src/test/authorship-claims.test.ts`: no message in
+  any locale may use a word that claims originality or verification (the
+  fact-check step's own label, "Claims to verify", is the one allowed hit,
+  because it names what is NOT done).
 - **Never mask against a concatenation of versions.** `aiSentenceMask` consumes
   each AI sentence at most once on purpose — a human's second copy of a sentence
   the AI wrote once stays human — and joining the versions destroys that count,
