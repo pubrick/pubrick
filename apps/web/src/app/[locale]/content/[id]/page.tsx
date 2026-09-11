@@ -678,9 +678,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * "Human-edited" the rest of it — the exact inversion the fragment row
    * exists to prevent.
    *
-   * The draft is re-seeded from that body because Accept is only reachable
-   * while the draft equals the saved one; leaving it behind would leave the
-   * editor showing the text the api has just replaced.
+   * The draft is re-seeded from that body, and that is why Accept is DISABLED
+   * while `draftMoved` (see the button). Re-seeding is the only honest thing to
+   * do with a response that replaced the body — leaving the old text in the
+   * editor would show a draft the api no longer holds — but it overwrites
+   * whatever is in the textarea, so unsaved typing would go with no prompt and
+   * no undo. The gate in front of it is what makes this line safe; it is not a
+   * property of Accept.
    */
   async function acceptProposal(staged: RefineProposal) {
     setRefineBusy("accept");
@@ -1040,11 +1044,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             </p>
           )}
           <div className="flex flex-wrap gap-2">
+            {/*
+              Disabled on UNSAVED TYPING, not only on a call in flight. Accept
+              answers with the merged body and `acceptProposal` re-seeds the
+              textarea from it, so pressing it with edits in the field throws
+              those edits away silently. `draftMoved` implies `proposalStale`,
+              so the sentence above is on screen whenever this is disabled and
+              can be named as the reason — the same arrangement Try again uses.
+              Saving first is the act that clears it, and the toolbar already
+              says so.
+            */}
             <Button
               variant="secondary"
               size="sm"
               onClick={() => acceptProposal(proposal)}
-              disabled={refineBusy !== null}
+              disabled={refineBusy !== null || draftMoved}
+              aria-describedby={draftMoved ? refineStaleId : undefined}
             >
               {t("refineAccept")}
             </Button>

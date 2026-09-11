@@ -1751,19 +1751,39 @@ describe("asking the model to revise a selection (Task 8)", () => {
     expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
   });
 
-  it("marks the card stale when the draft moves under it, and keeps Accept reachable", async () => {
+  /**
+   * ACCEPT IS NOT REACHABLE THROUGH UNSAVED TYPING, and the reason is what
+   * Accept DOES rather than what the api would answer.
+   *
+   * The response is the whole merged item and `acceptProposal` re-seeds the
+   * textarea from its body — the only honest thing to do with a body the api
+   * has just replaced. With edits in the field that re-seed is a silent
+   * overwrite: no prompt, no undo, a paragraph gone. So the press is refused
+   * before it happens, and the sentence already on screen is named as the
+   * reason. Try again is refused here for its own, different reason (it would
+   * ask the model about a stale range); Discard stays available, because
+   * throwing the card away costs the reader nothing they typed.
+   */
+  it("refuses Accept while the editor holds unsaved typing, and says why", async () => {
     installBaseHandlers({ current: refinable({ refineProposal: proposal }) }, []);
 
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     await screen.findByText(proposal.proposal);
     expect(screen.queryByText(en.Publish.refineStale)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
 
     fireEvent.change(bodyField(), { target: { value: `${BODY} A new sentence.` } });
 
     expect(screen.getByText(en.Publish.refineStale)).toBeInTheDocument();
-    // Reachable, because the server's nearest-occurrence rule may well still
-    // find the anchor — discovering the drift after the click is the wrong
-    // moment, and refusing before it is the wrong answer.
+    const accept = screen.getByRole("button", { name: en.Publish.refineAccept });
+    expect(accept).toBeDisabled();
+    expect(accept.getAttribute("aria-describedby")).toBe(
+      screen.getByText(en.Publish.refineStale).id,
+    );
+    expect(screen.getByRole("button", { name: en.Publish.refineDiscard })).toBeEnabled();
+
+    // ...and the typing is what it is about: undo it and Accept comes back.
+    fireEvent.change(bodyField(), { target: { value: BODY } });
     expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeEnabled();
   });
 
