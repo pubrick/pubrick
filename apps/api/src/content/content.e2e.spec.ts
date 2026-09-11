@@ -2013,6 +2013,33 @@ describe.skipIf(!url)("content e2e", () => {
      */
   });
 
+  /**
+   * A NUL byte is not a body Postgres can store — the insert throws `22021`
+   * after every schema has passed — so before this was refused at the DTO the
+   * person who pasted an article out of a PDF got a 500 for a request that was
+   * merely unstorable. The status is the whole assertion: a 400 with
+   * `invalid_request` is a refusal the web already renders in four languages,
+   * and a 500 is a bug report.
+   */
+  it("400s a body carrying a NUL byte instead of 500ing on the insert", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Something", channelIds: [channelId] })
+      .expect(201);
+
+    const refused = await agent
+      .patch(`/api/content/${created.body.id}`)
+      .send({ body: `Edited.\u0000` })
+      .expect(400);
+    expect(refused.body.code).toBe("invalid_request");
+
+    // ...and nothing was written: the draft still holds what it held.
+    const unchanged = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(unchanged.body.body).toBe("Something");
+  });
+
   it('400s an empty PATCH instead of 500ing on drizzle\'s "No values to set"', async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

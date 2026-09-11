@@ -35,6 +35,7 @@ export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
 export * from "./dto/runs.js";
+export * from "./dto/text.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {

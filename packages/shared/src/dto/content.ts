@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
+import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
  * DRAFT LIFECYCLE — the one declaration of it, for every package that stores,
@@ -209,12 +210,25 @@ export const MAX_BODY_LENGTH = 4096;
  */
 const bodyText = z
   .string()
+  .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
   .transform(normalizeNewlines)
   .pipe(z.string().min(1).max(MAX_BODY_LENGTH));
 
+/**
+ * A title is stored in the same kind of column as a body and refuses the same
+ * character, for the same reason (`hasNulByte`). It is NOT piped through
+ * `normalizeNewlines`: a title is a single line, and normalising it would make
+ * `max(300)` measure a different string than it measures today with no defect
+ * behind the change — `runCreateSchema.brief`'s own argument.
+ */
+const titleText = z
+  .string()
+  .max(300)
+  .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE });
+
 export const contentCreateSchema = z.object({
   brandId: z.string().uuid(),
-  title: z.string().max(300).optional(),
+  title: titleText.optional(),
   body: bodyText,
   channelIds: z
     .array(z.string().uuid())
@@ -255,7 +269,7 @@ export type ContentCreate = z.infer<typeof contentCreateSchema>;
  */
 export const contentUpdateSchema = z
   .object({
-    title: z.string().max(300).optional(),
+    title: titleText.optional(),
     body: bodyText.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {

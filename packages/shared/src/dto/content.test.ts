@@ -300,6 +300,67 @@ describe("duplicate channels on create", () => {
 });
 
 /**
+ * THE OTHER CHARACTER A BODY CANNOT CARRY, and unlike a CR it cannot be
+ * normalised away.
+ *
+ * Postgres stores no U+0000 in `text` or `jsonb`: the insert throws `22021`
+ * AFTER every schema in this file has said yes, so the caller's reward for a
+ * pasted NUL was a 500 on a request that was merely unstorable. It is refused
+ * at the DTO for `normalizeNewlines`' own reason — this is the boundary every
+ * writer crosses — and refused rather than stripped, because dropping a
+ * character silently edits what somebody wrote.
+ *
+ * Field-qualified, like every other refinement here: the api answers
+ * `invalid_request`, and the path is what tells a developer which member.
+ */
+describe("a body that cannot be stored at all", () => {
+  const NUL = "\u0000";
+
+  it("refuses a NUL in a created body, naming the field", () => {
+    const denied = contentCreateSchema.safeParse({
+      brandId: BRAND,
+      body: `Ship it.${NUL}`,
+      channelIds: [CHANNEL],
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["body"]]);
+  });
+
+  it("refuses a NUL in a created title", () => {
+    const denied = contentCreateSchema.safeParse({
+      brandId: BRAND,
+      title: `Launch${NUL}`,
+      body: "Ship it.",
+      channelIds: [CHANNEL],
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["title"]]);
+  });
+
+  it("refuses a NUL on the PATCH path, which is where it was found", () => {
+    expect(contentUpdateSchema.safeParse({ body: `Edited.${NUL}` }).success).toBe(false);
+    expect(contentUpdateSchema.safeParse({ title: `Edited${NUL}` }).success).toBe(false);
+  });
+
+  it("refuses a NUL in a channel override, which is stored in the same column shape", () => {
+    expect(adaptationUpdateSchema.safeParse({ body: `A channel take.${NUL}` }).success).toBe(false);
+  });
+
+  /**
+   * The refusal is about U+0000 and nothing else. A schema that refused every
+   * control character would refuse a tab — which a person can type into a
+   * textarea and which Postgres stores without complaint — and the two tests
+   * above would not notice.
+   */
+  it("still admits the control characters a column can hold", () => {
+    const body = "Tabbed.\tAnd newlined.\n";
+    expect(contentCreateSchema.parse({ brandId: BRAND, body, channelIds: [CHANNEL] }).body).toBe(
+      body,
+    );
+  });
+});
+
+/**
  * The set four call sites used to spell out for themselves, in two apps and
  * from two directions: "what must I cancel?" (`BrandsRepository.delete`,
  * `ChannelsRepository.delete`, `ContentRepository.reject`) and "what may I

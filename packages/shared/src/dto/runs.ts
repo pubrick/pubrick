@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
+import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
  * GENERATION RUN LIFECYCLE — the one declaration, for every package that
@@ -181,6 +182,7 @@ export const CLAIMS_TO_VERIFY_LABEL = "claims to verify";
  */
 const pastedMaterial = z
   .string()
+  .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
   .transform(normalizeNewlines)
   .pipe(z.string().min(1).max(MAX_SOURCE_TEXT_LENGTH))
   .optional();
@@ -202,7 +204,11 @@ export const runCreateSchema = z
      * put here, and the brief keeps its own meaning beside one — what to do
      * with the material, in the person's words.
      */
-    brief: z.string().max(MAX_BRIEF_LENGTH).optional(),
+    brief: z
+      .string()
+      .max(MAX_BRIEF_LENGTH)
+      .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
+      .optional(),
     /**
      * The article, pasted. Normalised first and bounded second — the rule
      * `contentCreateSchema.body` follows for the same reason
@@ -228,6 +234,11 @@ export const runCreateSchema = z
     sourceUrl: z
       .url({ protocol: /^https?$/ })
       .max(MAX_SOURCE_URL_LENGTH)
+      // The whole input is one `jsonb` value, so an unstorable character
+      // anywhere in it fails the insert — and the URL parser is no guard: it
+      // admits a NUL and percent-encodes it in `href`, which is not the string
+      // this schema returns.
+      .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
       .optional(),
     channelIds: z
       .array(z.string().uuid())

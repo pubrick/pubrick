@@ -334,6 +334,51 @@ describe("what a run may be asked for", () => {
 });
 
 /**
+ * The same unstorable character, on the path that carries the most text in this
+ * product.
+ *
+ * A run's whole input is written as ONE `jsonb` value, so a NUL anywhere in it
+ * — the brief, the paste, or the link recorded beside the paste — fails the
+ * insert with `22021` after the schema has passed, and the person who pasted an
+ * article out of a PDF gets a 500. `z.url()` is no help for the third of those:
+ * it parses a NUL happily (the WHATWG parser percent-encodes it in `href`,
+ * which is not the string this schema returns).
+ */
+describe("what a run may be asked for, when it cannot be stored", () => {
+  const channelIds = ["11111111-1111-4111-8111-111111111111"];
+  const brandId = "22222222-2222-4222-8222-222222222222";
+  const base = { brandId, channelIds };
+  const NUL = "\u0000";
+
+  it("refuses a NUL in the pasted material, naming the field", () => {
+    const denied = runCreateSchema.safeParse({ ...base, material: `The article.${NUL}` });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["material"]]);
+  });
+
+  it("refuses a NUL in the brief", () => {
+    const denied = runCreateSchema.safeParse({ ...base, brief: `Announce it${NUL}` });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["brief"]]);
+  });
+
+  it("refuses a NUL in the source link, which z.url() admits", () => {
+    const denied = runCreateSchema.safeParse({
+      ...base,
+      material: "The article.",
+      sourceUrl: `https://example.com/a${NUL}b`,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["sourceUrl"]]);
+  });
+
+  it("still admits the control characters the column can hold", () => {
+    const material = "Tabbed.\tAnd newlined.\n";
+    expect(runCreateSchema.parse({ ...base, material }).material).toBe(material);
+  });
+});
+
+/**
  * `pipeline_runs.steps`. The `failed` arm is the point: no writer produces one
  * today and the run receipt renders it, so it is the column's shape rather than
  * the current worker's that this schema states.
