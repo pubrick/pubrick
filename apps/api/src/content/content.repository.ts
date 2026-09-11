@@ -321,18 +321,24 @@ function nearestOccurrence(body: string, selectedText: string, storedStart: numb
  * proposal's anchor a fact about the stored draft rather than a claim a caller
  * made about it.
  *
+ * THE BODY HANDED IN IS THE CANONICAL ONE, and the caller's offsets are read
+ * against it. `DimmedTextarea` renders `normalizeNewlines(value)` and reports
+ * its offsets against that string, and a `<textarea>` strips CR from its value
+ * whatever the API sent — so the editor's coordinates are the canonical body's,
+ * never the stored one's. Slicing a raw CR body with them would hand the model
+ * a selection the reader never made and stage an anchor Accept — which
+ * normalises first — can no longer find.
+ *
  * TWO REFUSALS, both `invalid_request`, and the code is a judgement rather than
  * a shrug. `API_ERROR_CODES` keeps one code for the whole validation boundary
  * because the alternative is a translated sentence per field per rule; these
  * two are that boundary's own kind of fault — a request describing a string the
  * server does not have — and the schema cannot make them because it cannot see
- * the body. The reader's sentence ("check what you entered") is true of both,
- * and neither is reachable from the shipped editor, which reports its selection
- * against the exact string it renders.
+ * the body. The reader's sentence ("check what you entered") is true of both.
  *
  *  - A range past the end of the body. The caller is indexing text this server
- *    does not hold: a draft that moved, or offsets taken against a string that
- *    was never normalised.
+ *    does not hold: a draft that moved under them, or offsets taken against
+ *    some other string entirely.
  *  - A blank selection. Whitespace has nothing to revise, the model's own
  *    schema requires a non-empty replacement for it, and the blankness test is
  *    this product's own class (`normalizeForComparison`, U+200B included) and
@@ -1211,7 +1217,28 @@ export class ContentRepository {
     request: RefineRequest,
   ): Promise<RefineProposal> {
     const item = await this.refinableItem(orgId, id);
-    const selection = selectionOf(item.body, request);
+    /**
+     * THE BODY IN ITS CANONICAL FORM, and the same string for all three of the
+     * things this route does with it: the selection it slices, the text the
+     * model is shown, and the length it bounds the merge by.
+     *
+     * `content_items.body` is canonical only for bodies written through the
+     * DTO. The worker's terminal write stores the model's reply, and the
+     * writer/editor output schemas normalise it there — belt; this is the
+     * braces, for a row that reached the table by some other road (a restored
+     * dump, a migration, a future writer).
+     *
+     * The reason it must be THIS string is the client, not tidiness: the shipped
+     * editor renders `normalizeNewlines(value)` and reports its offsets against
+     * that, and a `<textarea>` drops CR from its value regardless. Offsets from
+     * a CR-free string applied to a CR-bearing one select the wrong words —
+     * silently, since the canonical body is the SHORTER one, so the
+     * past-the-end refusal can never fire. The reader pays for a refine of text
+     * they did not select, and Accept (which normalises) then cannot find the
+     * anchor it was given.
+     */
+    const body = normalizeNewlines(item.body);
+    const selection = selectionOf(body, request);
     await this.requireAiDraft(orgId, id);
     if (await this.overRefineBudget(orgId)) {
       throw conflict(
@@ -1230,8 +1257,8 @@ export class ContentRepository {
       // shown every surrounding word and exactly one copy of the selection.
       input: {
         selection,
-        before: item.body.slice(0, request.start),
-        after: item.body.slice(request.end),
+        before: body.slice(0, request.start),
+        after: body.slice(request.end),
       },
     });
 
@@ -1254,15 +1281,17 @@ export class ContentRepository {
      * ever answer `too_long` to — a card the person reads, presses Accept on,
      * and is refused by, after the call was paid for.
      *
-     * Measured the way Accept measures it: `normalizeNewlines` first (the DTO's
-     * own rule — the limit bounds what gets STORED, and a model's CRLF is a
-     * character the product is about to drop), the splice second. Accept checks
+     * Measured the way Accept measures it, on BOTH sides of the splice:
+     * `normalizeNewlines` first (the DTO's own rule — the limit bounds what
+     * gets STORED, and a model's CRLF is a character the product is about to
+     * drop), the splice second, into the canonical `body` above rather than the
+     * raw row. Accept checks
      * again rather than trusting this one, because the body can grow between
      * propose and accept; this is the first line of defence and that is the
      * second.
      */
     const proposal = normalizeNewlines(outcome.text);
-    const merged = item.body.slice(0, request.start) + proposal + item.body.slice(request.end);
+    const merged = body.slice(0, request.start) + proposal + body.slice(request.end);
     if (merged.length > MAX_BODY_LENGTH) {
       throw conflict(
         "refine_too_long",

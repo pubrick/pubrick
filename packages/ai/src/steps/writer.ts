@@ -1,4 +1,4 @@
-import { MAX_BODY_LENGTH } from "@pubrick/shared";
+import { MAX_BODY_LENGTH, normalizeNewlines } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep, type Material } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
@@ -11,9 +11,22 @@ import type { RunStepContext, Step } from "./types.js";
  * `contentUpdateSchema`, so a longer body would be written to `content_items`
  * by the run and then be un-editable through the API forever — the same defect
  * the adapter's platform limit exists to prevent, one table over.
+ *
+ * NORMALISE FIRST, BOUND SECOND — `contentCreateSchema.bodyText`'s rule, and
+ * for the same reason: this schema is the OTHER boundary a body enters the
+ * product through. Everything written through the API is canonical at the DTO;
+ * a run's body is canonical only here, because the worker's terminal write
+ * inserts what this schema returned, verbatim, into `content_items` AND into
+ * the `ai` `content_versions` row the provenance gate reasons about. A model
+ * that answers with CRLF would otherwise leave a stored body no `<textarea>`
+ * can hold: the lens's overlay lays down more characters than the field, the
+ * counter reports a length no deleting reaches, and a refine's offsets —
+ * measured by the client against the string it renders — select the wrong
+ * words. The bound comes second so a reply that fits once collapsed is not
+ * refused for characters the product is about to drop.
  */
 export const draftSchema = z.object({
-  body: z.string().min(1).max(MAX_BODY_LENGTH),
+  body: z.string().transform(normalizeNewlines).pipe(z.string().min(1).max(MAX_BODY_LENGTH)),
 });
 export type DraftOutput = z.infer<typeof draftSchema>;
 

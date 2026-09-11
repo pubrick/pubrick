@@ -194,6 +194,35 @@ describe("the writer", () => {
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
+  /**
+   * CANONICAL NEWLINES AT THE SOURCE — this schema is the second boundary a
+   * body enters the product through, and the only one for a generated draft.
+   *
+   * The terminal write stores what this returns, verbatim, in
+   * `content_items.body` and in the `ai` `content_versions` row. A stored CR
+   * makes the lens's overlay render more characters than the `<textarea>`
+   * holds, and it makes a refine slice the wrong words: the client measures its
+   * offsets against the string the field renders, which has no CR in it.
+   */
+  it("returns the draft with canonical newlines, whatever the model typed", async () => {
+    const model = jsonModel(JSON.stringify({ body: "Autumn menu.\r\nMonday.\rAll week.\nCome." }));
+
+    const output = await WRITER.run(contextFor(model), { research });
+
+    expect(output.body).toBe("Autumn menu.\nMonday.\nAll week.\nCome.");
+  });
+
+  it("normalises before it bounds, so CRLF that fits once collapsed is not refused", () => {
+    // MAX_BODY_LENGTH is the length of what gets STORED. Refusing a reply for
+    // characters the product is about to drop would fail a run over nothing.
+    const crlf = `${"x\r\n".repeat(10)}${"y".repeat(MAX_BODY_LENGTH - 20)}`;
+    expect(crlf.length).toBeGreaterThan(MAX_BODY_LENGTH);
+
+    const parsed = WRITER.schema.safeParse({ body: crlf });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("carries the whole plan to the model, not just its angle", async () => {
     // The org paid for the researcher's call. Dropping the key points or the
     // "avoid" list on the way to the writer spends that money for nothing and
@@ -239,6 +268,15 @@ describe("the editor", () => {
     expect(
       EDITOR.schema.safeParse({ body: "x".repeat(MAX_BODY_LENGTH + 1), changes: [] }).success,
     ).toBe(false);
+  });
+
+  /** The editor's half of the writer's rule — its body is the one that ships. */
+  it("returns the edited body with canonical newlines too", async () => {
+    const model = jsonModel(JSON.stringify({ body: "Autumn menu.\r\nMonday.", changes: [] }));
+
+    const output = await EDITOR.run(contextFor(model), { research, body: DRAFT_MARKER });
+
+    expect(output.body).toBe("Autumn menu.\nMonday.");
   });
 
   it("enforces that bound on the wire", async () => {
@@ -344,6 +382,23 @@ describe("the adapter", () => {
     const schema = adapterFor({ ...channel, platform: "vk" }).schema;
     expect(schema.safeParse({ body: "x".repeat(MAX_BODY_LENGTH) }).success).toBe(true);
     expect(schema.safeParse({ body: "x".repeat(MAX_BODY_LENGTH + 1) }).success).toBe(false);
+  });
+
+  /**
+   * The adaptation is the third body a run stores, and the only one of the
+   * three the reader edits in a second `DimmedTextarea`. Same rule, same order:
+   * normalise, then bound — the limit is the length of what gets STORED.
+   */
+  it("returns the adaptation with canonical newlines, and counts them collapsed", () => {
+    const schema = adapterFor(channel).schema;
+    const parsed = schema.safeParse({ body: "Autumn menu.\r\nMonday.\rAll week." });
+
+    expect(parsed.success && parsed.data.body).toBe("Autumn menu.\nMonday.\nAll week.");
+    // 300 characters once collapsed: refused for a CR the product drops anyway
+    // would be a run failed over nothing.
+    expect(schema.safeParse({ body: `${"x\r\n".repeat(10)}${"y".repeat(280)}` }).success).toBe(
+      true,
+    );
   });
 
   it("tells the model the exact character limit", async () => {

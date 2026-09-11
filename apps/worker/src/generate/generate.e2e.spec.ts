@@ -334,6 +334,48 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     expect(ledger).toHaveLength(6);
   }, 40_000);
 
+  /**
+   * THE TERMINAL WRITE STORES WHAT THE OUTPUT SCHEMA RETURNED, VERBATIM —
+   * so the canonical form of a generated body is settled in `packages/ai`, at
+   * `draftSchema`/`editSchema`, and this is the row that proves it.
+   *
+   * Nothing downstream normalises `content_items.body`: the API's DTO only
+   * covers bodies a person wrote. A stored CR makes the provenance lens's
+   * overlay lay down more characters than the `<textarea>` holds, and it makes
+   * a refine slice the wrong words — the client measures its offsets against
+   * the string the field renders, which never has a CR in it.
+   *
+   * BOTH rows, because the gate compares them: `content_items.body` is what
+   * ships and the `ai` `content_versions` row is the evidence it is judged
+   * against. One normalised and the other not is a draft that reads as
+   * human-edited the moment it is written.
+   */
+  it("stores a CRLF reply with canonical newlines, in the item and in its ai version", async () => {
+    const seeded = await seed(1);
+    active = scriptedModel({
+      editor: () => ({ body: "Autumn menu.\r\nMonday.\rAll week.", changes: [] }),
+      adapter: () => ({ body: "Autumn menu.\r\nMonday." }),
+    });
+
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+
+    const run = await runRow(seeded.runId);
+    const [item] = await db
+      .select()
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, run?.contentItemId as string));
+    expect(item?.body).toBe("Autumn menu.\nMonday.\nAll week.");
+
+    const versions = await db
+      .select()
+      .from(schema.contentVersions)
+      .where(eq(schema.contentVersions.contentItemId, item?.id as string));
+    const master = versions.find((row) => row.adaptationId === null);
+    expect(master?.body).toBe("Autumn menu.\nMonday.\nAll week.");
+    expect(versions.every((row) => !row.body.includes("\r"))).toBe(true);
+  }, 40_000);
+
   it("drafts a stored source run from the pasted material, with no brief and no URL in any prompt", async () => {
     // The row is written by the test and read back by the REAL parser, which is
     // the whole point: until `parseInput` names the source member, every run

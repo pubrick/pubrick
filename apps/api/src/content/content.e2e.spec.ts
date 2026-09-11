@@ -5241,32 +5241,45 @@ describe.skipIf(!url)("content e2e", () => {
       });
 
       /**
-       * A BODY THE DTO NEVER NORMALISED — the model's own, carrying CRLF.
+       * A BODY THE DTO NEVER NORMALISED — the model's own, carrying CRLF —
+       * SELECTED THE WAY THE SHIPPED EDITOR SELECTS IT.
        *
-       * `editor.ts` and `writer.ts` bound the reply's length and nothing else,
-       * and the worker's terminal write inserts it verbatim, so a stored body
-       * whose newlines are not U+000A is a real row rather than a hypothesis.
-       * `planRefineAccept` requires the canonical form because that is the
-       * string its offsets were measured against: hand it the raw one and every
-       * offset past a CR is one too large in the merged text it reasons about.
+       * The worker's terminal write stores the model's reply, so a stored body
+       * whose newlines are not U+000A is a real row rather than a hypothesis
+       * (the output schemas normalise it at the source now; this is the row
+       * that arrived by another road). The offsets are the ONLY ones a browser
+       * can produce: `DimmedTextarea` renders `normalizeNewlines(value)` and a
+       * `<textarea>` strips CR from its value regardless, so the client counts
+       * characters in the CANONICAL string — `crBody.indexOf(selected)` is a
+       * server coordinate no client has ever sent, which is exactly why the
+       * first version of this test could not see the defect it was written for.
        *
-       * The visible cost is the EVIDENCE ROW, which is what this whole route is
-       * for. Un-normalised, the fragment comes out holding `Passez nous voir.`
-       * as well — a sentence this refine never touched, filed as the work of
-       * this proposal because the guard was reading a different string from the
-       * one it wrote. (On a body where a person's line sits above the model's,
-       * the same shift refuses a paid-for call outright.)
+       * Two things are asserted because two things break. The proposal echoes
+       * back the text the reader actually highlighted — sliced raw, it comes
+       * back as `"\r\nOn vous attend dès sept heure"`, a selection nobody made,
+       * paid for at the provider. And Accept, which normalises before it
+       * re-locates the anchor, then cannot find that string at all: `409
+       * refine_anchor_lost` on a call the org has already been billed for.
        */
-      it("reads the body in canonical form, so a CR draft files the units it really changed", async () => {
+      it("slices the selection the client measured, so a CR draft refines the chosen words", async () => {
         const { agent, itemId } = await refinableDraft();
         const crBody = "Café ouvert.\r\nPassez nous voir.\r\nOn vous attend dès sept heures.";
         await setAiDraft(itemId, crBody);
         const selected = "On vous attend dès sept heures.";
-        const start = crBody.indexOf(selected);
+        // The client's coordinates: measured over the body as the field holds it.
+        const rendered = crBody.replaceAll("\r\n", "\n");
+        const start = rendered.indexOf(selected);
         const staged = await agent
           .post(`/api/content/${itemId}/refine`)
           .send({ verb: "shorten", start, end: start + selected.length })
           .expect(201);
+
+        expect(staged.body.selectedText).toBe(selected);
+        expect(refineCalls.at(-1)?.input).toEqual({
+          selection: selected,
+          before: "Café ouvert.\nPassez nous voir.\n",
+          after: "",
+        });
 
         const accepted = await agent
           .post(`/api/content/${itemId}/refine/${staged.body.id}/accept`)

@@ -1,4 +1,4 @@
-import { MAX_BODY_LENGTH } from "@pubrick/shared";
+import { MAX_BODY_LENGTH, normalizeNewlines } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep, type Material } from "./prompt.js";
 import type { ResearchOutput } from "./researcher.js";
@@ -13,10 +13,13 @@ import { planMaterial } from "./writer.js";
  * satisfy the shape. The strings are unbounded for the same reason the
  * researcher's are: failing a whole run over a verbose change note would cost
  * more than the note is worth. `body` is bounded, because `MAX_BODY_LENGTH` is
- * what the API can later edit.
+ * what the API can later edit, and normalised before it is bounded for the
+ * reason `draftSchema` gives at length: this is the editor's half of the one
+ * boundary a run's text crosses, and the stored body it becomes has to be the
+ * canonical one every other reader of `content_items.body` assumes.
  */
 export const editSchema = z.object({
-  body: z.string().min(1).max(MAX_BODY_LENGTH),
+  body: z.string().transform(normalizeNewlines).pipe(z.string().min(1).max(MAX_BODY_LENGTH)),
   changes: z.array(z.string().min(1)),
 });
 export type EditOutput = z.infer<typeof editSchema>;

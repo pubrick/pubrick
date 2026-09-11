@@ -1,4 +1,5 @@
 import {
+  normalizeNewlines,
   PermanentError,
   PLATFORM_IDS,
   adaptationLimit as platformAdaptationLimit,
@@ -118,11 +119,25 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
   // does that from the issues. It is how the model is told what it missed: it
   // travels into the repair prompt, where "Too big: expected string to have
   // <=300 characters" says less than the number in the model's own terms.
+  //
+  // Normalised before it is bounded, exactly as `draftSchema` and the DTO's
+  // `bodyText` are, and for the same reason: this body is stored in
+  // `adaptations.body` and in an `ai` `content_versions` row, and a stored CR
+  // is a character no `<textarea>` will hold. The `path[0] === "body"` the
+  // repair loop reads is the PIPE's path, so wrapping the bound changes
+  // nothing about how an overflow is detected or worded.
   const schema = z.object({
     body: z
       .string()
-      .min(1)
-      .max(limit, { message: `the body must be at most ${limit} characters to fit this channel` }),
+      .transform(normalizeNewlines)
+      .pipe(
+        z
+          .string()
+          .min(1)
+          .max(limit, {
+            message: `the body must be at most ${limit} characters to fit this channel`,
+          }),
+      ),
   });
 
   const step = defineStep<AdapterInput, AdaptationOutput>({
