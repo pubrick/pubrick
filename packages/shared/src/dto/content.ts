@@ -17,14 +17,26 @@ import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
  *
  * `approved` means every adaptation was queued or scheduled.
  *
- * `partially_published` is where a fan-out ENDS when its channels disagree:
- * every delivery is over, at least one is live and at least one never went.
+ * `partially_published` is where a fan-out STOPS when its channels disagree:
+ * at least one is live, at least one never went, and NOTHING LEFT IN THE
+ * SYSTEM WILL MOVE IT WITHOUT A PERSON. That last clause is the definition —
+ * not "every delivery is over", which was this comment's first wording and is
+ * false of one of the two shapes that reach here:
+ *
+ * - the fold's (`nextItemStatus` below): every delivery ended and they
+ *   disagreed, e.g. `{published, failed}`;
+ * - the canceller's (`ContentRepository.reject`): a person rejected a fan-out
+ *   with a live channel and a send still outstanding, so the outstanding half
+ *   was cancelled back to `pending` and the item written here BY HAND. That
+ *   half is not over — it is waiting for the same person — and the fold
+ *   deliberately does not claim otherwise.
+ *
  * It sits beside `approved` because that is the status it replaces — an item
  * whose halves disagreed used to keep `approve`'s own value for ever, painted
  * in the blue of work in flight, with nothing left in the system that would
- * ever move it. It is a WAITING state, not a final one: terminal means no job
- * outstanding, and a later delivery recomputes the item, so a retry of the
- * failed half promotes it to `published` on its own.
+ * ever move it. It is a WAITING state, not a final one: a later delivery
+ * recomputes the item, so a retry of the failed half promotes it to
+ * `published` on its own.
  */
 export const CONTENT_STATUSES = [
   "draft",
@@ -57,6 +69,22 @@ export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
  * `undefined` means "leave the item where it is": a fan-out with a delivery
  * still outstanding has not decided anything yet, and neither has an item with
  * no adaptations at all.
+ *
+ * "OVER" HERE MEANS `published | failed`, AND DELIBERATELY EXCLUDES `pending`,
+ * which has no job behind it either (`OUTSTANDING_ADAPTATION_STATUSES` below).
+ * The two are not the same question. This fold answers "what did the
+ * DELIVERIES decide", and a `pending` row decided nothing: it is waiting for a
+ * person, `approve` targets it, and one press sends it. So `{published,
+ * pending}` returns `undefined` — the fold has no verdict about a fan-out a
+ * person has still to finish, and inventing one would paint "this is how it
+ * ended" over a post that is one click from going out.
+ *
+ * That leaves exactly one gap, and it has an owner rather than a widening
+ * here: `reject` on a fan-out with a live channel cancels the outstanding half
+ * back to `pending` and writes `partially_published` ITSELF, because the
+ * person who pressed the button is what made the item partly published, not a
+ * delivery. Widening this arm to admit `pending` instead is killed 3/3 by
+ * `packages/db`'s fold/SQL matrix, which is the ratchet saying the same thing.
  *
  * IT LIVES IN THE RULE BOOK BECAUSE THREE CALLERS NEED IT AND THEY ARE NOT ONE
  * PROCESS. The worker's bookkeeping promotes an item when a delivery lands

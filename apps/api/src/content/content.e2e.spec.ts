@@ -6831,9 +6831,14 @@ describe.skipIf(!url)("content e2e", () => {
    *
    * What changes on this tier is TWO things, and they pull in opposite
    * directions on purpose: the text becomes editable WITHOUT a reject, and
-   * reject becomes a refusal. Both are here because either one alone is a
-   * corner — an editable post nobody can correct the channel of, or a refusal
-   * with no way out.
+   * reject stops being able to call the live post off. Both are here because
+   * either one alone is a corner — an editable post nobody can correct the
+   * channel of, or a refusal with no way out.
+   *
+   * Reject splits rather than simply refusing, which the first version of this
+   * gate did not: with a send still outstanding it cancels that send (the only
+   * such control the product has) and the item lands `partially_published`;
+   * with nothing outstanding there is nothing to cancel and it is a 409.
    */
   describe("a post whose channels disagreed", () => {
     /** A second channel on the same brand: a fan-out needs two halves. */
@@ -6901,6 +6906,25 @@ describe.skipIf(!url)("content e2e", () => {
         `DELETE FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
       );
       await pool.end();
+    }
+
+    /**
+     * The pg-boss states of one adaptation's publish jobs.
+     *
+     * NOT `publishJobCount`: `cancel` does not delete the row, it moves the
+     * state out of the fetchable set and leaves the id behind (which is the
+     * whole reason `reject` bumps `attempt_count`). Counting rows therefore
+     * cannot tell a cancelled job from a live one — it answers 1 either way —
+     * so a cancel that never ran would pass unnoticed. The state is the fact.
+     */
+    async function publishJobStates(adaptationId: string): Promise<string[]> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const jobs = await db.execute(
+        `SELECT state FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+      );
+      await pool.end();
+      return (jobs.rows as { state: string }[]).map((row) => row.state);
     }
 
     async function itemStatus(itemId: string): Promise<string> {
@@ -6976,32 +7000,88 @@ describe.skipIf(!url)("content e2e", () => {
     });
 
     /**
-     * THE REACH OF THE REJECT GATE, which is the adaptation and not the item.
+     * THE REACH OF THE REJECT GATE IS THE ADAPTATION, AND WHAT IT DOES THERE
+     * SPLITS ON WHETHER ANYTHING IS STILL GOING OUT.
      *
      * This item's own status is `approved`: only one of its two channels has
      * published, so nothing has promoted it and nothing will until the second
-     * delivery ends. A gate that reads `content_items.status` — the gate this
-     * product shipped until now — sees `approved`, passes, and writes
-     * `rejected` over a post that is live in someone's channel, with the only
-     * writer that could undo it (a delivery) already spent on the half that
-     * succeeded.
+     * delivery ends. A gate that reads `content_items.status` sees `approved`,
+     * passes, and writes `rejected` over a post that is live in someone's
+     * channel, with the only writer that could undo it (a delivery) already
+     * spent on the half that succeeded. That is why the gate asks about the
+     * adaptations.
+     *
+     * But the first version of that gate REFUSED this state, and this is the
+     * state where refusing costs the most: the second channel has a live
+     * pg-boss job, and `reject`'s cancel loop is the only control in this
+     * product that can stop it — while the refusal's own sentence told the
+     * reader that nothing would re-send it and they need do nothing. So the
+     * reject is accepted here and does exactly what it has always done to an
+     * outstanding delivery, and only the ITEM's new status is new.
      */
-    it("refuses a reject while a channel is live, even though the item itself is not published", async () => {
+    it("cancels the channel still on its way out, keeps the live one, and says partly published", async () => {
       const agent = await orgAgent();
       const { itemId, live, other } = await fanOut(agent);
       await seedDelivery(live, "published");
 
-      const refusal = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(409);
-      expect(refusal.body.code).toBe("content_already_published");
-      // Nothing was half-done: the other channel is still on its way out, with
-      // its job intact.
-      expect(await itemStatus(itemId)).toBe("approved");
-      expect(await publishJobCount(other)).toBe(1);
-      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
-      const still = (fetched.body.adaptations as { id: string; status: string }[]).find(
-        (a) => a.id === other,
+      const rejected = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(200);
+      expect(rejected.body.status).toBe("partially_published");
+      expect(await itemStatus(itemId)).toBe("partially_published");
+
+      // The job can no longer be fetched by a worker — the whole point of
+      // accepting — and the row is back to "waiting for a person", which is
+      // what `pending` means.
+      expect(await publishJobStates(other)).toEqual(["cancelled"]);
+      const byId = Object.fromEntries(
+        (rejected.body.adaptations as { id: string; status: string }[]).map((a) => [
+          a.id,
+          a.status,
+        ]),
       );
-      expect(still?.status).toBe("queued");
+      expect(byId[other]).toBe("pending");
+      // NOT touched: rejecting cannot un-send a post that is in someone's
+      // channel, and this row is the reason the item is not `rejected`.
+      expect(byId[live]).toBe("published");
+    });
+
+    /**
+     * A DELAYED SEND IS A SEND. `scheduled` is in
+     * `OUTSTANDING_ADAPTATION_STATUSES` for the same reason `queued` is — a
+     * pg-boss job exists — and it is the shape where "leaving it as it is
+     * stops it" would be most obviously false: the job is sitting on a
+     * `startAfter` days away with nobody watching.
+     */
+    it("cancels a scheduled channel too, while another is already live", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const other = await secondChannel(agent, brandId);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Two channels, one answer", channelIds: [channelId, other] })
+        .expect(201);
+      const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+      const liveId = adaptations.find((a) => a.channelId === channelId)?.id as string;
+      const otherId = adaptations.find((a) => a.channelId === other)?.id as string;
+      await agent
+        .post(`/api/content/${created.body.id}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 86_400_000).toISOString() })
+        .expect(200);
+      await seedDelivery(liveId, "published");
+
+      const rejected = await agent
+        .post(`/api/content/${created.body.id}/reject`)
+        .send({})
+        .expect(200);
+      expect(rejected.body.status).toBe("partially_published");
+      expect(await publishJobStates(otherId)).toEqual(["cancelled"]);
+      const byId = Object.fromEntries(
+        (rejected.body.adaptations as { id: string; status: string }[]).map((a) => [
+          a.id,
+          a.status,
+        ]),
+      );
+      expect(byId[otherId]).toBe("pending");
+      expect(byId[liveId]).toBe("published");
     });
   });
 });

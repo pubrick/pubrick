@@ -77,11 +77,13 @@ const ITEM_COLUMNS = {
  * of that screen.
  *
  * `partially_published` IS in the set for the same reason carried one step
- * further, and it is the reason Reject is CLOSED for it (`requireNotPublished`,
- * "any adaptation published"): rejecting a post that is live in one channel
- * writes `rejected` over it and nothing brings it back, so if the text were
- * pinned here too there would be no way left to correct the channel that
- * refused it — and the commonest permanent failure IS the text. What it costs
+ * further, and it is the reason Reject can no longer be the way out of it
+ * (`requireNotPublished`, the fan-out reach): rejecting a post that is live in
+ * one channel would write `rejected` over it and nothing brings it back, so
+ * reject either refuses (nothing outstanding) or cancels what has not gone and
+ * leaves the item HERE (`reject`) — never `rejected`. If the text were pinned
+ * here too there would then be no way left to correct the channel that refused
+ * it — and the commonest permanent failure IS the text. What it costs
  * is stated rather than hidden: `update` rewrites `content_items.body` and
  * files the NEW text as the human version, so the product's own history does
  * not keep what already went out. That survives only as the receipt and the
@@ -141,14 +143,25 @@ const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
  * HOW FAR "already published" reaches, for the one gate both decisions go
  * through (`requireNotPublished`).
  *
- * Two words rather than a boolean, and the words are the question rather than
- * the answer: a `published: true` flag at a call site says nothing about what
- * it is asking, and the two callers are asking about different rows —
- * `approve` about the item, `reject` about any one of its channels. Spelled
- * out in full at the call site, so the difference is legible where the
- * decision is made rather than in a signature two thousand lines away.
+ * Words rather than a boolean, and the words are the question rather than the
+ * answer: a `published: true` flag at a call site says nothing about what it
+ * is asking, and the two callers are asking about different rows — `approve`
+ * about the item, `reject` about any one of its channels. Spelled out in full
+ * at the call site, so the difference is legible where the decision is made
+ * rather than in a signature two thousand lines away.
+ *
+ * `hasOutstanding` RIDES ON THE FAN-OUT REACH RATHER THAN BEING A FIFTH
+ * PARAMETER, because the gate cannot answer reject's question without it and a
+ * defaulted argument is exactly how it would come to be forgotten. "Any
+ * adaptation is published" is TWO states — a fan-out that has finished
+ * disagreeing, and one with a live post and a send still on its way — and
+ * reject may only refuse the first (see the method). Reject is holding
+ * `lockAdaptations`' rows when it asks, so it is the one place that knows,
+ * and the union makes the answer impossible to omit.
  */
-type Reach = "the item" | "any adaptation";
+type Reach =
+  | { readonly of: "the item" }
+  | { readonly of: "the fan-out"; readonly hasOutstanding: boolean };
 
 /**
  * Adaptation statuses with no delivery in flight, so an override is still safe
@@ -2361,10 +2374,22 @@ export class ContentRepository {
    * not `published`, and rejecting it is exactly as irreversible as rejecting
    * one that is.
    *
-   * What a person does INSTEAD, to stop a partly-delivered post: nothing.
-   * Nothing re-sends by itself, so leaving the item where it is IS the stop —
-   * which is why this refusal costs the reader no recovery and the message
-   * says so.
+   * **AND IT REFUSES ONLY THE FAN-OUT THAT HAS ALREADY STOPPED.** The sentence
+   * this gate hands the reader — "nothing will re-send it on its own, so
+   * leaving it as it is stops it" — is true of `{published, failed}` and FALSE
+   * of `{published, queued}`, where a pg-boss job is on its way to a channel
+   * and reject was the only control in this product that could stop it
+   * (`reject`'s cancel loop). Refusing both states told a person looking at a
+   * live send that they need do nothing, and took away the one thing that
+   * would have done it. So the refusal is scoped to `hasOutstanding === false`,
+   * where the sentence is true as written; with something outstanding the
+   * caller is told `true` and cancels it instead. What a person does INSTEAD,
+   * to stop a fan-out this gate DOES refuse: nothing — nothing re-sends by
+   * itself, so leaving the item where it is IS the stop.
+   *
+   * Returns whether a published adaptation exists, which is the fact `reject`
+   * needs after it: an accepted reject that leaves a live post behind is not a
+   * rejection and must not write `rejected`.
    *
    * An earlier version of this comment justified the unlocked read by claiming
    * a `FOR UPDATE` here "would invert the lock order the whole codebase depends
@@ -2383,7 +2408,7 @@ export class ContentRepository {
     orgId: string,
     id: string,
     reach: Reach,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const rows = await tx
       .select({ status: schema.contentItems.status })
       .from(schema.contentItems)
@@ -2396,7 +2421,7 @@ export class ContentRepository {
         "This content has already been published; it can no longer be approved or rejected",
       );
     }
-    if (reach === "the item") return;
+    if (reach.of === "the item") return false;
     // NO LOCK ON THE ADAPTATIONS, and no new one anywhere: `reject` has
     // already taken `lockAdaptations` over its own outstanding rows, and this
     // read asks about the rows that are `published` — terminal, with no job
@@ -2419,13 +2444,13 @@ export class ContentRepository {
         ),
       )
       .limit(1);
-    if (live.length > 0) {
-      throw conflict(
-        "content_already_published",
-        "This content has already been published to one of its channels; it can no longer be " +
-          "rejected. Nothing will re-send it on its own, so leaving it as it is stops it",
-      );
-    }
+    if (live.length === 0) return false;
+    if (reach.hasOutstanding) return true;
+    throw conflict(
+      "content_already_published",
+      "This content has already been published to one of its channels; it can no longer be " +
+        "rejected. Nothing will re-send it on its own, so leaving it as it is stops it",
+    );
   }
 
   /**
@@ -2852,7 +2877,7 @@ export class ContentRepository {
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
-      await this.requireNotPublished(tx, orgId, id, "the item");
+      await this.requireNotPublished(tx, orgId, id, { of: "the item" });
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
@@ -3181,6 +3206,27 @@ export class ContentRepository {
    * someone's channel; all a 200 bought was a row that said `rejected` about a
    * published post. Saying so out loud is the honest answer, and it is the one
    * the UI can render.
+   *
+   * A FAN-OUT WITH A LIVE CHANNEL SPLITS ON WHETHER ANYTHING IS STILL GOING
+   * OUT, and that is the whole of what this method now decides:
+   *
+   * - something outstanding (`{published, queued | scheduled | publishing}`) —
+   *   the cancel above runs exactly as it always has, the `published` rows are
+   *   not touched, and the item is written `partially_published`. That is a
+   *   rejection of the half that had not gone, which is the most this door can
+   *   honestly do; `rejected` would say the live post was called off.
+   * - nothing outstanding (`{published, failed}`) — 409. There is nothing to
+   *   cancel, so the only thing a 200 could write is the lie above.
+   *
+   * THE `partially_published` WRITE IS THIS METHOD'S OWN, NOT THE FOLD'S, and
+   * the difference is deliberate. After the cancel the fan-out is
+   * `{published, pending}`, for which `nextItemStatus` returns `undefined` on
+   * purpose: it answers "what did the DELIVERIES decide", and a `pending` row
+   * decided nothing — it is waiting for the person who just pressed this
+   * button. Routing this through the fold would mean calling a cancelled
+   * delivery "over", which would then be the fold's answer everywhere,
+   * including for a `pending` row nobody has rejected. So the person's act
+   * names its own result, here, once.
    */
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
@@ -3188,7 +3234,10 @@ export class ContentRepository {
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,
       ]);
-      await this.requireNotPublished(tx, orgId, id, "any adaptation");
+      const live = await this.requireNotPublished(tx, orgId, id, {
+        of: "the fan-out",
+        hasOutstanding: outstanding.length > 0,
+      });
 
       for (const adaptation of outstanding) {
         await this.queue.cancelPublish(tx, adaptation.id, orgId);
@@ -3208,7 +3257,7 @@ export class ContentRepository {
           );
       }
 
-      await this.setItemStatus(tx, orgId, id, "rejected");
+      await this.setItemStatus(tx, orgId, id, live ? "partially_published" : "rejected");
     });
 
     return this.get(orgId, id);
