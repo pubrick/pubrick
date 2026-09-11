@@ -82,8 +82,25 @@ export const contentItems = pgTable(
      * It is also what the keyset page of 0009's second commit will seek with;
      * an index built for a sort the product does not have yet would be
      * speculative, and this one is paid for by the sort that lands with it.
+     *
+     * `.nullsFirst()` ON BOTH DESCENDING COLUMNS, WHICH IS NOT DECORATION.
+     * Both columns are `NOT NULL`, so the placement cannot change a single row
+     * — it decides whether the index is USABLE for the sort at all. A btree
+     * serves an `ORDER BY` only when direction AND nulls placement match, SQL's
+     * `DESC` means `DESC NULLS FIRST`, and drizzle's bare `.desc()` here emits
+     * `DESC NULLS LAST`. Declared that way, this index could not serve
+     * `.orderBy(desc(createdAt), desc(id))` — measured: a `Sort` over a bitmap
+     * scan of `content_items_org_id_idx` even with `enable_sort` off. Written
+     * as it is, the ordinary drizzle `desc()` a query is written with matches,
+     * and the planner seeks (pinned in `content-list-cost.e2e.spec.ts`). Fixing
+     * it from the other end — spelling `desc nulls last` in every query that
+     * reads this index — would make the ergonomic spelling the wrong one.
      */
-    index("content_items_org_id_created_at_id_idx").on(t.orgId, t.createdAt.desc(), t.id.desc()),
+    index("content_items_org_id_created_at_id_idx").on(
+      t.orgId,
+      t.createdAt.desc().nullsFirst(),
+      t.id.desc().nullsFirst(),
+    ),
     /**
      * Both value sets pinned in the database as well as in the types — see
      * `enumCheck`. `status` is the sharper of the two: `PINNED_ITEM_MESSAGE` in

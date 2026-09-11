@@ -157,15 +157,23 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     }
   }
 
-  /** Every statement the api's pool issues while `run` is in flight. */
-  async function countingStatements<T>(run: () => Promise<T>): Promise<[T, string[]]> {
-    const seen: string[] = [];
+  /**
+   * Every statement the api's pool issues while `run` is in flight, with the
+   * values bound to it — the values because the plan of a statement is not a
+   * property of its text alone, and the EXPLAIN below re-issues the real one.
+   */
+  type Statement = { text: string; values: unknown[] };
+  async function countingStatements<T>(run: () => Promise<T>): Promise<[T, Statement[]]> {
+    const seen: Statement[] = [];
     const original = pool.query.bind(pool);
     pool.query = (...args: unknown[]) => {
       const first = args[0];
-      seen.push(
-        typeof first === "string" ? first : String((first as { text?: string })?.text ?? first),
-      );
+      const text =
+        typeof first === "string" ? first : String((first as { text?: string })?.text ?? first);
+      const values = Array.isArray(args[1])
+        ? (args[1] as unknown[])
+        : ((first as { values?: unknown[] })?.values ?? []);
+      seen.push({ text, values });
       return original(...args);
     };
     try {
@@ -173,6 +181,15 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     } finally {
       pool.query = original;
     }
+  }
+
+  /** The rows of `EXPLAIN <statement>`, joined — the plan as the planner prints it. */
+  async function explain(statement: Statement, suffix: string): Promise<string> {
+    const explained = (await pool.query({
+      text: `EXPLAIN ${statement.text}${suffix}`,
+      values: statement.values,
+    })) as { rows: Record<string, string>[] };
+    return explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
   }
 
   it("answers a 200-item queue in a bounded number of statements, without the bodies", async () => {
@@ -188,35 +205,42 @@ describe.skipIf(!url)("the cost of one queue list", () => {
 
     // Was 203 for this seed (3 + one per item) before design 0009's first
     // commit; the whole point is that it no longer mentions `ITEMS` at all.
-    const contentStatements = statements.filter((text) =>
-      /content_items|adaptations|content_versions/.test(text),
+    const contentStatements = statements.filter((statement) =>
+      /content_items|adaptations|content_versions/.test(statement.text),
     );
     expect(contentStatements).toHaveLength(3);
-    expect(contentStatements.filter((text) => /from "adaptations"/i.test(text))).toHaveLength(1);
+    expect(
+      contentStatements.filter((statement) => /from "adaptations"/i.test(statement.text)),
+    ).toHaveLength(1);
 
     /**
      * THE SORT, AS TEXT — the one assertion in this repository's tests that
-     * reads a statement instead of its answer, and it is here because the
-     * index this commit adds is what makes the behavioural test unable to see
-     * the clause.
+     * reads a statement instead of its answer.
      *
-     * `content_items_org_id_created_at_id_idx` leads on `org_id` and continues
-     * `created_at DESC, id DESC`, so an org-scoped read of this table plans as
-     * an Index Only Scan over it and comes back SORTED whether or not anybody
-     * asked (measured with `EXPLAIN` on the seed this file leaves behind:
-     * `Index Only Scan using content_items_org_id_created_at_id_idx`). Delete
-     * the `ORDER BY` and every row-order assertion in `content.e2e.spec.ts`
-     * still passes — on this data, on this planner, today. That is precisely
-     * the property the clause exists to stop relying on: the planner is free to
-     * seq-scan the moment the statistics, the filter or the index change, and
-     * "which items" becomes a correctness question the moment 0009's second
-     * commit puts a `LIMIT` over it.
+     * It is here because a row order is not evidence of an `ORDER BY`: the
+     * plan this statement gets is data-dependent, and on the seed this file
+     * leaves behind it is a `Bitmap Heap Scan` plus a `Sort` (measured), so
+     * the order the rows arrive in is an accident of the plan and would go on
+     * looking deliberate with the clause deleted. The pin is on the statement
+     * the repository actually sends, where no planner can stand in for it.
      *
-     * So the order is pinned where it cannot coincide with the planner's:
-     * in the statement the repository actually sends.
+     * ANCHORED AT THE TAIL, and that is the load-bearing part. Unanchored,
+     * `order by .*created_at desc.*id desc` also matches
+     * `ORDER BY updated_at DESC, created_at DESC, id DESC` — a live defect
+     * shape, since `updated_at` moves on every save and the queue would
+     * reshuffle whenever anybody edited a draft. The `$` says these two keys
+     * are the WHOLE order, not its tail.
+     *
+     * It holds only while drizzle emits the statement on one line: `.` does
+     * not cross a newline, so a formatter change here is a failing test rather
+     * than a silent one. That is the bet, stated.
      */
-    const itemsStatement = contentStatements.find((text) => /from "content_items"/i.test(text));
-    expect(itemsStatement).toMatch(/order by .*"created_at" desc.*"id" desc/i);
+    const itemsStatement = contentStatements.find((statement) =>
+      /from "content_items"/i.test(statement.text),
+    ) as Statement;
+    expect(itemsStatement.text).toMatch(
+      /order by "content_items"\."created_at" desc, "content_items"\."id" desc$/i,
+    );
     // The whole request, session read and membership check included: four,
     // measured, of which one is not this repository's. It was 203 for this
     // seed. The bound rather than an equality because the one statement this
@@ -229,5 +253,62 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     // putting `body` back fails outright.
     expect(Buffer.byteLength(response.text)).toBeLessThan(200_000);
     expect(response.text).not.toContain(BODY.slice(0, 40));
+  });
+
+  /**
+   * THE INDEX CAN SERVE THE SORT — asked of the planner, not of the schema.
+   *
+   * `content_items_org_id_created_at_id_idx` (migration 0020) exists to be the
+   * queue's order. Whether it can be is not a matter of which columns it names:
+   * a btree is usable for an `ORDER BY` only when the NULLS placement agrees as
+   * well as the direction, and `DESC` in a query means `DESC NULLS FIRST` while
+   * drizzle's `.desc()` in a schema emits `DESC NULLS LAST`. Declared the
+   * second way, this index was unusable for this statement — measured on this
+   * machine, with `enable_sort` off so nothing else could win:
+   *
+   *     Sort  (cost=10000001024.93..10000001026.22)
+   *       Sort Key: created_at DESC, id DESC
+   *       ->  Bitmap Heap Scan using content_items_org_id_idx
+   *
+   * The index it is declared as now (`DESC NULLS FIRST`, which is what a bare
+   * `DESC` is) seeks:
+   *
+   *     Limit  (cost=0.41..190.13 rows=50)
+   *       ->  Index Scan using content_items_org_id_created_at_id_idx
+   *
+   * WITH A `LIMIT`, AND UNFORCED, because that is the honest question. The
+   * statement `list` sends today has no bound: reading a whole organisation's
+   * items with `body` among the columns, a sort of the heap is genuinely
+   * cheaper than seeking the index for every row (561 against 774 on this
+   * seed), so a no-`Sort` assertion on the unbounded statement could only be
+   * had by switching the alternatives off — proving the planner was coerced,
+   * not that the index is right. The bound is what 0009's cursor adds next, and
+   * under it the difference is total: with the NULLS mismatch, `LIMIT 50`
+   * still sorts the whole organisation's queue first.
+   *
+   * So: the statement the repository really sent, its real bound values, plus
+   * the page T2 will take. Drop the index, or write the query's order with a
+   * NULLS placement the index does not carry, and a `Sort` reappears here.
+   */
+  it("plans the queue's order as a seek of the index built for it", async () => {
+    const { agent, orgId } = await orgAgent();
+    await seedQueue(agent, orgId);
+
+    const [, statements] = await countingStatements(() => agent.get("/api/content").expect(200));
+    const itemsStatement = statements.find((statement) =>
+      /from "content_items"/i.test(statement.text),
+    ) as Statement;
+    expect(itemsStatement).toBeDefined();
+
+    // The planner's choice is a cost comparison, and a cost is computed from
+    // statistics. Fresh rows the autovacuum daemon has not reached yet would
+    // make this assertion a measurement of timing.
+    await pool.query("ANALYZE content_items");
+    const plan = await explain(itemsStatement, " limit 50");
+
+    expect(plan).toContain("content_items_org_id_created_at_id_idx");
+    // Not `toContain("Index Scan")`: what is being asserted is the ABSENCE of
+    // the sort, which is the whole of what the index buys.
+    expect(plan).not.toMatch(/\bSort\b/);
   });
 });

@@ -866,6 +866,15 @@ describe.skipIf(!url)("runMigrations", () => {
    * are not distinguishable by a query plan — they ARE distinguishable by what
    * the schema says the queue's order is, and the keyset page that reads it
    * next seeks in exactly this direction.
+   *
+   * The NULLS placement is pinned too, and that one IS visible to the planner:
+   * `DESC` in a query means `DESC NULLS FIRST`, so an index declared
+   * `DESC NULLS LAST` — which is what drizzle's bare `.desc()` emits, and what
+   * this migration said when it was first written — cannot serve the queue's
+   * `ORDER BY` at all. Postgres prints the default placement as nothing, so the
+   * assertion is that `NULLS LAST` is ABSENT rather than that `NULLS FIRST` is
+   * present. The plan it buys is asserted where a plan can be read, in
+   * `apps/api/src/content/content-list-cost.e2e.spec.ts`.
    */
   it("adds the queue's order index without touching the rows it indexes", async () => {
     const fresh = await withFreshDatabase(url as string);
@@ -927,6 +936,7 @@ describe.skipIf(!url)("runMigrations", () => {
       expect(definition).toContain("org_id");
       expect(definition).toContain("created_at DESC");
       expect(definition).toContain("id DESC");
+      expect(definition).not.toContain("NULLS LAST");
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();
