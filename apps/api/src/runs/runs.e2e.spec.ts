@@ -757,6 +757,37 @@ describe.skipIf(!url)("runs e2e", () => {
       expect((jobs.rows[0] as { n: number }).n).toBe(1);
     });
 
+    /**
+     * The flagship shape — a paste with no brief and no address — stores two
+     * `null`s, and `runCreateSchema` accepts neither key as `null` (`brief`
+     * and `sourceUrl` are optional, not nullable). The retry must OMIT them,
+     * not forward them: forwarding turns the increment's main flow into a
+     * `400 invalid_request` on Try again. Pinned on the exact shape.
+     */
+    it("re-admits a paste that carried no brief and no address", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({ brandId, material: ARTICLE, channelIds: [channelId] })
+        .expect(201);
+      const first = runDetailDtoSchema.parse(created.body);
+      expect(first.input).toEqual({
+        kind: "source",
+        text: null,
+        material: ARTICLE,
+        sourceUrl: null,
+        channelIds: [channelId],
+      });
+      await setRunStatus(first.id, "failed", "internal");
+
+      const run = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(run.id).not.toBe(first.id);
+      expect(run.input).toEqual(first.input);
+    });
+
     /** The other arm of the union, which has no material and must not grow one. */
     it("re-admits a brief run as a brief run", async () => {
       const agent = await orgAgent();
