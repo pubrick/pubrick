@@ -113,7 +113,14 @@ describe("body newline normalisation", () => {
  */
 describe("the draft and delivery lifecycles keep every status they had", () => {
   it("content status", () => {
-    expect(CONTENT_STATUSES).toEqual(["draft", "approved", "rejected", "published", "failed"]);
+    expect(CONTENT_STATUSES).toEqual([
+      "draft",
+      "approved",
+      "partially_published",
+      "rejected",
+      "published",
+      "failed",
+    ]);
   });
 
   it("adaptation status", () => {
@@ -424,7 +431,9 @@ describe("what an item's status becomes when its deliveries have moved", () => {
   it("promotes to published only when every delivery published", () => {
     expect(nextItemStatus(["published"])).toBe("published");
     expect(nextItemStatus(["published", "published"])).toBe("published");
-    expect(nextItemStatus(["published", "failed"])).toBeUndefined();
+    // Not `undefined` any more, and not `published` either — the third arm
+    // below owns this shape.
+    expect(nextItemStatus(["published", "failed"])).toBe("partially_published");
     expect(nextItemStatus(["published", "queued"])).toBeUndefined();
   });
 
@@ -432,6 +441,31 @@ describe("what an item's status becomes when its deliveries have moved", () => {
     expect(nextItemStatus(["failed"])).toBe("failed");
     expect(nextItemStatus(["failed", "failed"])).toBe("failed");
     expect(nextItemStatus(["failed", "queued"])).toBeUndefined();
+  });
+
+  /**
+   * THE THIRD ARM: every delivery is over and they did not agree.
+   *
+   * The arm exists because its absence had an answer too, and that answer was
+   * a lie — `undefined` left the item at `approved`, the colour of work in
+   * flight, for ever, beside a channel that is live and a channel that never
+   * will be. Terminal, NOT final: a later delivery recomputes the item, so a
+   * retry of the failed half promotes it to `published` through the first arm
+   * with nothing here to undo.
+   */
+  it("says a post is partly out when its deliveries are over and disagree", () => {
+    expect(nextItemStatus(["published", "failed"])).toBe("partially_published");
+    expect(nextItemStatus(["failed", "published"])).toBe("partially_published");
+    expect(nextItemStatus(["published", "failed", "failed"])).toBe("partially_published");
+    expect(nextItemStatus(["published", "published", "failed"])).toBe("partially_published");
+    // Its own negations, one per clause: not terminal, all published, all
+    // failed. A third arm tested only through its happy case is satisfied by
+    // an arm that answers `partially_published` for everything the two above
+    // did not claim first — including a fan-out still in flight.
+    expect(nextItemStatus(["published", "queued"])).toBeUndefined();
+    expect(nextItemStatus(["failed", "publishing"])).toBeUndefined();
+    expect(nextItemStatus(["published", "published"])).toBe("published");
+    expect(nextItemStatus(["failed", "failed"])).toBe("failed");
   });
 
   /**

@@ -103,6 +103,7 @@
     "status": {
       "draft": "Draft",
       "approved": "Approved",
+      "partially_published": "Partly published",
       "rejected": "Rejected",
       "published": "Published",
       "failed": "Failed"

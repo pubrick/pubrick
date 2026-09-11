@@ -892,7 +892,19 @@ describe.skipIf(!url)("content e2e", () => {
     );
   });
 
-  it("a rejected partial fan-out is editable, except the channel that already published", async () => {
+  /**
+   * THE PER-ADAPTATION PIN, on an item that is itself editable.
+   *
+   * This test used to reach that shape through a REJECT of a fan-out with one
+   * live channel, and that route is now a 409: rejecting a post with a live
+   * post in it is a one-way door (`requireNotPublished`, reach "any
+   * adaptation"). The same shape is reached the way the product now reaches it
+   * — the fan-out ENDS in disagreement, and `partially_published` is editable
+   * precisely so that closing reject does not leave the text uncorrectable.
+   * The subject is unchanged: an item being editable says nothing about the
+   * channel that already published.
+   */
+  it("a partly published fan-out is editable, except the channel that already published", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
     const second = await agent
@@ -917,26 +929,32 @@ describe.skipIf(!url)("content e2e", () => {
 
     await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
 
-    // Partial fan-out: one channel delivered, the other still queued. The item
-    // stays `approved` — recomputeItemStatus only promotes on a clean sweep.
+    // The fan-out ends in disagreement: one channel delivered, the other
+    // permanently refused. That is what the worker's recompute writes
+    // `partially_published` for, and what the api answers here.
     const { createDb } = await import("@pubrick/db");
     {
       const { db, pool } = createDb(url as string);
       await db.execute(`UPDATE adaptations SET status = 'published' WHERE id = '${sent?.id}'`);
+      await db.execute(
+        `UPDATE adaptations SET status = 'failed', last_error = 'Telegram 400' WHERE id = '${other?.id}'`,
+      );
+      await db.execute(
+        `UPDATE content_items SET status = 'partially_published' WHERE id = '${created.body.id}'`,
+      );
       await pool.end();
     }
 
-    // Rejecting stops the channel that has not gone out yet and hands the text
-    // back — but it cannot un-send the one that has.
-    await agent.post(`/api/content/${created.body.id}/reject`).send({}).expect(200);
+    // No reject anywhere: the item is editable as it stands, which is the
+    // whole point of `partially_published` being in `EDITABLE_ITEM_STATUSES`.
     await agent.patch(`/api/content/${created.body.id}`).send({ body: "Revised" }).expect(200);
     await agent
       .patch(`/api/content/${created.body.id}/adaptations/${other?.id}`)
-      .send({ body: "Revised for the channel still waiting" })
+      .send({ body: "Revised for the channel that refused it" })
       .expect(200);
 
     // This is why the adaptation's own status is checked and not just the
-    // item's: the item is `rejected` and editable, and this row is neither.
+    // item's: the item is editable, and this row is not.
     const denial = await agent
       .patch(`/api/content/${created.body.id}/adaptations/${sent?.id}`)
       .send({ body: "Rewriting history" })
@@ -6799,6 +6817,191 @@ describe.skipIf(!url)("content e2e", () => {
       const answered = await settling;
       expect(answered.status).toBe(409);
       expect(answered.body.code).toBe("adaptation_pinned_published");
+    });
+  });
+  /**
+   * A POST WHOSE CHANNELS DISAGREED — the status, and the two doors it changes.
+   *
+   * Two channels approved together, one live and one permanently refused, used
+   * to leave `content_items.status` at `approved` for ever: neither `every` in
+   * the recompute was satisfied, so nothing was written, and nothing else in
+   * the product recomputes an item. The reader saw the blue of work in flight
+   * under the queue's "Approved" heading, for a post that was as finished as it
+   * was ever going to get on its own.
+   *
+   * What changes on this tier is TWO things, and they pull in opposite
+   * directions on purpose: the text becomes editable WITHOUT a reject, and
+   * reject becomes a refusal. Both are here because either one alone is a
+   * corner — an editable post nobody can correct the channel of, or a refusal
+   * with no way out.
+   */
+  describe("a post whose channels disagreed", () => {
+    /** A second channel on the same brand: a fan-out needs two halves. */
+    async function secondChannel(agent: request.Agent, brandId: string): Promise<string> {
+      const channel = await agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "telegram",
+          name: "Second",
+          credentials: { botToken: "456:def", chatId: "-1009876543210" },
+        })
+        .expect(201);
+      return channel.body.id as string;
+    }
+
+    /** A two-channel post, approved — the shape the worker then lands on. */
+    async function fanOut(agent: request.Agent) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const other = await secondChannel(agent, brandId);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Two channels, one answer", channelIds: [channelId, other] })
+        .expect(201);
+      const adaptations = created.body.adaptations as { id: string; channelId: string }[];
+      await agent.post(`/api/content/${created.body.id}/approve`).send({}).expect(200);
+      return {
+        itemId: created.body.id as string,
+        live: adaptations.find((a) => a.channelId === channelId)?.id as string,
+        other: adaptations.find((a) => a.channelId === other)?.id as string,
+      };
+    }
+
+    /**
+     * What the worker leaves behind for one delivery: the adaptation's own
+     * status and the attempt's receipt. Seeded directly, as every worker-shaped
+     * fixture in this file is — there is no worker in an api e2e, and the
+     * worker's own half of this rule (a landing delivery reaching the same
+     * verdict, and the retry that promotes the item to `published`) is pinned
+     * in `publish.repository.spec.ts`.
+     */
+    async function seedDelivery(
+      adaptationId: string,
+      status: "published" | "failed" | "unknown",
+    ): Promise<void> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = (
+        await db.execute(`SELECT org_id, channel_id FROM adaptations WHERE id = '${adaptationId}'`)
+      ).rows as { org_id: string; channel_id: string }[];
+      await db.execute(
+        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}'
+          WHERE id = '${adaptationId}'`,
+      );
+      await db.execute(
+        `INSERT INTO publications (org_id, adaptation_id, channel_id, status, external_id, external_url, attempt)
+         VALUES ('${row?.org_id}', '${adaptationId}', '${row?.channel_id}', '${status}',
+                 ${status === "published" ? "'99', 'https://t.me/x/99'" : "NULL, NULL"}, 1)`,
+      );
+      // AND THE JOB IS GONE, because the worker consumed it. Without this the
+      // fixture is a shape the product never produces — a finished delivery
+      // whose publish job is still queued — and a later approve meets
+      // `publishJobId`'s duplicate refusal instead of re-sending.
+      await db.execute(
+        `DELETE FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = '${adaptationId}'`,
+      );
+      await pool.end();
+    }
+
+    async function itemStatus(itemId: string): Promise<string> {
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const { rows } = await db.execute(`SELECT status FROM content_items WHERE id = '${itemId}'`);
+      await pool.end();
+      return (rows[0] as { status: string }).status;
+    }
+
+    /**
+     * THE WHOLE ROUTE, from a fan-out that disagreed to the retry that fixes
+     * it, through the doors a person actually has.
+     *
+     * The promotion here is the API'S OWN — the resolver settling the delivery
+     * nobody could speak for, then asking `nextItemStatus` under the parent
+     * lock exactly as a landing delivery does. That is what makes this an
+     * end-to-end rather than a fixture: no SQL writes `partially_published`
+     * anywhere in this test.
+     *
+     * And every consequence is asserted in the same place, because each one
+     * alone can be satisfied by a different mistake: the item READS
+     * `partially_published` and is LISTED under it, the text is editable with
+     * no reject, reject refuses, and the approve that follows re-sends the
+     * refused channel ONLY — the live one is not in `approve`'s target set and
+     * cannot be sent twice.
+     */
+    it("reads partly published, stays editable, refuses reject, and re-sends only the channel that failed", async () => {
+      const agent = await orgAgent();
+      const { itemId, live, other } = await fanOut(agent);
+      await seedDelivery(live, "published");
+      // The second attempt never came back, so only a person can say what
+      // happened — and they say it did not arrive.
+      await seedDelivery(other, "unknown");
+
+      const settled = await agent
+        .post(`/api/content/${itemId}/adaptations/${other}/delivery`)
+        .send({ delivered: false })
+        .expect(200);
+      expect(settled.body.status).toBe("partially_published");
+      expect(await itemStatus(itemId)).toBe("partially_published");
+
+      const listed = await agent.get("/api/content?status=partially_published").expect(200);
+      expect((listed.body as { id: string }[]).map((row) => row.id)).toContain(itemId);
+
+      // Editable with no reject — which is the only way left to correct the
+      // text, now that reject is closed on a post with a live channel.
+      const patched = await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Short enough now" })
+        .expect(200);
+      expect(patched.body.body).toBe("Short enough now");
+      expect(patched.body.status).toBe("partially_published");
+
+      const refusal = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(409);
+      expect(refusal.body.code).toBe("content_already_published");
+      expect(await itemStatus(itemId)).toBe("partially_published");
+
+      const reApproved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const byId = Object.fromEntries(
+        (reApproved.body.adaptations as { id: string; status: string }[]).map((a) => [
+          a.id,
+          a.status,
+        ]),
+      );
+      expect(byId[other]).toBe("queued");
+      expect(byId[live]).toBe("published");
+      expect(await publishJobCount(other)).toBe(1);
+      expect(await publishJobCount(live)).toBe(0);
+      // Back to work in flight while that retry is out, and the worker promotes
+      // it to `published` when it lands (`publish.repository.spec.ts`).
+      expect(await itemStatus(itemId)).toBe("approved");
+    });
+
+    /**
+     * THE REACH OF THE REJECT GATE, which is the adaptation and not the item.
+     *
+     * This item's own status is `approved`: only one of its two channels has
+     * published, so nothing has promoted it and nothing will until the second
+     * delivery ends. A gate that reads `content_items.status` — the gate this
+     * product shipped until now — sees `approved`, passes, and writes
+     * `rejected` over a post that is live in someone's channel, with the only
+     * writer that could undo it (a delivery) already spent on the half that
+     * succeeded.
+     */
+    it("refuses a reject while a channel is live, even though the item itself is not published", async () => {
+      const agent = await orgAgent();
+      const { itemId, live, other } = await fanOut(agent);
+      await seedDelivery(live, "published");
+
+      const refusal = await agent.post(`/api/content/${itemId}/reject`).send({}).expect(409);
+      expect(refusal.body.code).toBe("content_already_published");
+      // Nothing was half-done: the other channel is still on its way out, with
+      // its job intact.
+      expect(await itemStatus(itemId)).toBe("approved");
+      expect(await publishJobCount(other)).toBe(1);
+      const fetched = await agent.get(`/api/content/${itemId}`).expect(200);
+      const still = (fetched.body.adaptations as { id: string; status: string }[]).find(
+        (a) => a.id === other,
+      );
+      expect(still?.status).toBe("queued");
     });
   });
 });

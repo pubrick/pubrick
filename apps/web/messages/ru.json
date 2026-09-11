@@ -103,6 +103,7 @@
     "status": {
       "draft": "Черновик",
       "approved": "Одобрено",
+      "partially_published": "Опубликовано частично",
       "rejected": "Отклонено",
       "published": "Опубликовано",
       "failed": "Ошибка"

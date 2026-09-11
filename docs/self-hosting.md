@@ -303,6 +303,17 @@ always safe. Pressing **Test connection** on an existing channel does not
 change its stored format while `APP_ENCRYPTION_KEY` is a single key, so
 channels nobody re-saves during the roll are unaffected in either order.
 
+**Deploy web before the migration that adds `partially_published`.** Same
+situation seen from the browser, and it applies to this one upgrade. A post
+whose channels disagreed — one live, one permanently refused — now has a status
+of its own, and that migration BACKFILLS it onto posts that are already in that
+state, so the api starts answering `partially_published` the moment the
+migration commits. A web bundle from before the upgrade has no colour and no
+translated word for it: such a post renders with no status badge at all and a
+raw message key where its label should be. `docker compose up -d --build`
+rebuilds everything together and needs no care here either; only a
+service-at-a-time roll has to put web first.
+
 ## Configuration
 
 Every variable is documented in [.env.example](../.env.example). Variables

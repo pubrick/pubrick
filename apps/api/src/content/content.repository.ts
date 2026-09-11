@@ -76,6 +76,18 @@ const ITEM_COLUMNS = {
  * (Telegram 400: too long, bad entities). Fixing the text is the entire point
  * of that screen.
  *
+ * `partially_published` IS in the set for the same reason carried one step
+ * further, and it is the reason Reject is CLOSED for it (`requireNotPublished`,
+ * "any adaptation published"): rejecting a post that is live in one channel
+ * writes `rejected` over it and nothing brings it back, so if the text were
+ * pinned here too there would be no way left to correct the channel that
+ * refused it — and the commonest permanent failure IS the text. What it costs
+ * is stated rather than hidden: `update` rewrites `content_items.body` and
+ * files the NEW text as the human version, so the product's own history does
+ * not keep what already went out. That survives only as the receipt and the
+ * live post (`publications.external_url`) — which is why the design (§4.3) has
+ * the editor name the channels that already received the previous text.
+ *
  * `as const satisfies` rather than a `readonly ContentStatus[]`
  * annotation: both make a typo a compile error, but this one also keeps the
  * literal member types, which is what lets `PINNED_ITEM_MESSAGE` below be
@@ -84,6 +96,7 @@ const ITEM_COLUMNS = {
 const EDITABLE_ITEM_STATUSES = [
   "draft",
   "rejected",
+  "partially_published",
   "failed",
 ] as const satisfies readonly ContentStatus[];
 
@@ -123,6 +136,19 @@ const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
   approved: "content_pinned_approved",
   published: "content_pinned_published",
 };
+
+/**
+ * HOW FAR "already published" reaches, for the one gate both decisions go
+ * through (`requireNotPublished`).
+ *
+ * Two words rather than a boolean, and the words are the question rather than
+ * the answer: a `published: true` flag at a call site says nothing about what
+ * it is asking, and the two callers are asking about different rows —
+ * `approve` about the item, `reject` about any one of its channels. Spelled
+ * out in full at the call site, so the difference is legible where the
+ * decision is made rather than in a signature two thousand lines away.
+ */
+type Reach = "the item" | "any adaptation";
 
 /**
  * Adaptation statuses with no delivery in flight, so an override is still safe
@@ -2321,6 +2347,25 @@ export class ContentRepository {
    * the worker and reads `published` (409), or gets there first and the
    * worker's promotion lands afterwards on a status it has already decided.
    *
+   * **WHAT "PUBLISHED" MEANS HERE DEPENDS ON THE DOOR, and the two doors are
+   * genuinely different acts.** `approve` asks about the ITEM: a
+   * partly-delivered post has channels left to send and re-approving sends
+   * exactly those (`approve` targets `pending`/`failed`/`scheduled`, so the
+   * live one cannot be sent twice), which is the retry this product already
+   * shipped unlabelled. `reject` asks whether ANY adaptation is `published`,
+   * because rejecting is a one-way door: it writes `rejected`
+   * (`setItemStatus`) over an item with a live post, and the only writer that
+   * could ever bring it back is a delivery — of which this item has none left
+   * outstanding. The item's own status cannot answer that question, which is
+   * the whole of why the reach is a parameter: a `partially_published` item is
+   * not `published`, and rejecting it is exactly as irreversible as rejecting
+   * one that is.
+   *
+   * What a person does INSTEAD, to stop a partly-delivered post: nothing.
+   * Nothing re-sends by itself, so leaving the item where it is IS the stop —
+   * which is why this refusal costs the reader no recovery and the message
+   * says so.
+   *
    * An earlier version of this comment justified the unlocked read by claiming
    * a `FOR UPDATE` here "would invert the lock order the whole codebase depends
    * on". **It would not, and that wrong reason is how the bug comes back.**
@@ -2333,7 +2378,12 @@ export class ContentRepository {
    * below it (`requireHumanInvolvement`) read a body nobody can replace before
    * the status write lands.
    */
-  private async requireNotPublished(tx: Tx, orgId: string, id: string): Promise<void> {
+  private async requireNotPublished(
+    tx: Tx,
+    orgId: string,
+    id: string,
+    reach: Reach,
+  ): Promise<void> {
     const rows = await tx
       .select({ status: schema.contentItems.status })
       .from(schema.contentItems)
@@ -2344,6 +2394,36 @@ export class ContentRepository {
       throw conflict(
         "content_already_published",
         "This content has already been published; it can no longer be approved or rejected",
+      );
+    }
+    if (reach === "the item") return;
+    // NO LOCK ON THE ADAPTATIONS, and no new one anywhere: `reject` has
+    // already taken `lockAdaptations` over its own outstanding rows, and this
+    // read asks about the rows that are `published` — terminal, with no job
+    // behind them and no writer left that could move them inside this
+    // transaction. `docs/lock-order.md` is unchanged by this task: the
+    // acquisitions are `adaptations` then `content_items`, exactly as before.
+    // The item's own status is still asked FIRST, and it is not redundant: an
+    // item whose channels were all deleted after it published has no
+    // `published` adaptation left to find, and it is a published item all the
+    // same. The two clauses answer different questions and neither implies the
+    // other.
+    const live = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, id),
+          eq(schema.adaptations.status, "published"),
+        ),
+      )
+      .limit(1);
+    if (live.length > 0) {
+      throw conflict(
+        "content_already_published",
+        "This content has already been published to one of its channels; it can no longer be " +
+          "rejected. Nothing will re-send it on its own, so leaving it as it is stops it",
       );
     }
   }
@@ -2772,7 +2852,7 @@ export class ContentRepository {
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
-      await this.requireNotPublished(tx, orgId, id);
+      await this.requireNotPublished(tx, orgId, id, "the item");
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
@@ -3108,7 +3188,7 @@ export class ContentRepository {
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,
       ]);
-      await this.requireNotPublished(tx, orgId, id);
+      await this.requireNotPublished(tx, orgId, id, "any adaptation");
 
       for (const adaptation of outstanding) {
         await this.queue.cancelPublish(tx, adaptation.id, orgId);

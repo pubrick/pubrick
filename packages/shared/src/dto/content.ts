@@ -16,8 +16,24 @@ import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
  * comment saying it was a copy and no test comparing it to anything.
  *
  * `approved` means every adaptation was queued or scheduled.
+ *
+ * `partially_published` is where a fan-out ENDS when its channels disagree:
+ * every delivery is over, at least one is live and at least one never went.
+ * It sits beside `approved` because that is the status it replaces — an item
+ * whose halves disagreed used to keep `approve`'s own value for ever, painted
+ * in the blue of work in flight, with nothing left in the system that would
+ * ever move it. It is a WAITING state, not a final one: terminal means no job
+ * outstanding, and a later delivery recomputes the item, so a retry of the
+ * failed half promotes it to `published` on its own.
  */
-export const CONTENT_STATUSES = ["draft", "approved", "rejected", "published", "failed"] as const;
+export const CONTENT_STATUSES = [
+  "draft",
+  "approved",
+  "partially_published",
+  "rejected",
+  "published",
+  "failed",
+] as const;
 export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 
 /** Per-channel delivery lifecycle. One declaration, for the reasons above. */
@@ -35,9 +51,12 @@ export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
  * WHAT A CONTENT ITEM'S STATUS BECOMES once its deliveries have moved — the
  * ONE definition of the promotion rule, for every caller in every tier.
  *
- * A pure fold over an item's adaptation statuses. `undefined` means "leave the
- * item where it is": a fan-out with a delivery still outstanding has not
- * decided anything yet, and neither has an item with no adaptations at all.
+ * A pure fold over an item's adaptation statuses. Three verdicts: `published`
+ * when they all published, `failed` when they all failed, and
+ * `partially_published` when every one of them is over and they disagreed.
+ * `undefined` means "leave the item where it is": a fan-out with a delivery
+ * still outstanding has not decided anything yet, and neither has an item with
+ * no adaptations at all.
  *
  * IT LIVES IN THE RULE BOOK BECAUSE THREE CALLERS NEED IT AND THEY ARE NOT ONE
  * PROCESS. The worker's bookkeeping promotes an item when a delivery lands
@@ -57,16 +76,28 @@ export type AdaptationStatus = (typeof ADAPTATION_STATUSES)[number];
  *
  * THE EMPTY ARRAY IS LOAD-BEARING, not a courtesy. An item whose channels have
  * all been deleted has no adaptation left to speak for it, and `every` over an
- * empty array is `true` for BOTH arms — so the guard is what stops such an item
+ * empty array is `true` for ALL THREE arms — so the guard is what stops such an item
  * being promoted to `published` (the first arm tested) about posts nobody sent.
- * Anything transcribing this fold into SQL owes the same guard, which is why
- * the transcription uses `exists` rather than `bool_and` (`NULL` over an empty
- * set, and `NULL` is not `true`).
+ * Anything transcribing this fold into SQL owes the same guard — written with
+ * `exists` in migration 0018, where it reads as the same clause. SQL would in
+ * fact fail closed without it (`bool_and` over an empty set is `NULL`, and a
+ * `WHERE` that cannot decide updates nothing), which is the opposite of this
+ * `every`: the danger is in THIS language, and the transcription keeps the
+ * clause so the two can be read side by side.
  */
 export function nextItemStatus(statuses: readonly AdaptationStatus[]): ContentStatus | undefined {
   if (statuses.length === 0) return undefined;
   if (statuses.every((status) => status === "published")) return "published";
   if (statuses.every((status) => status === "failed")) return "failed";
+  // EVERY DELIVERY IS OVER AND THEY DISAGREED. Reached only after the two arms
+  // above have claimed the unanimous cases, so "at least one published and at
+  // least one not" is what is left rather than a clause this line has to
+  // restate — and the `every` here is what keeps a fan-out with a `queued` or
+  // `publishing` half out of it, which is the whole difference between "this
+  // is how it ended" and "this is how far it has got".
+  if (statuses.every((status) => status === "published" || status === "failed")) {
+    return "partially_published";
+  }
   return undefined;
 }
 

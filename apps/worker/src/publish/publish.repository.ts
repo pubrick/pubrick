@@ -1041,9 +1041,10 @@ export class PublishRepository {
   }
 
   /**
-   * Promotes the parent item once EVERY adaptation has reached the same
-   * terminal state — `published` when they all published, `failed` when they
-   * all failed — and leaves it alone otherwise.
+   * Promotes the parent item once EVERY adaptation has reached a terminal
+   * state — `published` when they all published, `failed` when they all
+   * failed, `partially_published` when they are all over and they disagreed —
+   * and leaves it alone while any delivery is still outstanding.
    *
    * **The item is taken `FOR UPDATE` before the siblings are read, and that
    * lock is the whole of what makes this function work at all.** Without it the
@@ -1096,6 +1097,11 @@ export class PublishRepository {
    * lands, so an item reads delivered while its other channels are still queued
    * — and is pinned against approve/reject while a delivery is still
    * outstanding.
+   *
+   * The third verdict is terminal, NOT final, and this function is why: a
+   * `partially_published` item whose failed half is re-approved and lands comes
+   * straight back here and is promoted to `published`. Nothing has to notice
+   * that the item was ever partly out.
    */
   private async recomputeItemStatus(tx: Tx, orgId: string, contentItemId: string): Promise<void> {
     const locked = await tx

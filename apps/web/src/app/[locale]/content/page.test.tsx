@@ -194,6 +194,33 @@ describe("grouping by status (Step 2)", () => {
       screen.queryByRole("heading", { name: en.Content.status.failed }),
     ).not.toBeInTheDocument();
   });
+
+  /**
+   * A POST WHOSE CHANNELS DISAGREED HAS A HEADING TO BE UNDER.
+   *
+   * `GROUP_STATUSES` is built from `CONTENT_STATUSES`, so a status the queue
+   * forgot is not a section with no items — it is an item on no section, gone
+   * from the unfiltered queue entirely while the api goes on returning it. The
+   * one place a person looks for their posts would silently stop showing the
+   * ones that half went out, which is the exact population this status exists
+   * for.
+   */
+  it("gives a partly published post a section of its own, so it cannot fall off the queue", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("c1", "Draft post", "draft"),
+      item("c2", "Half-sent post", "partially_published"),
+    ]);
+
+    render(<ContentQueuePage />);
+
+    await screen.findByRole("link", { name: "Half-sent post" });
+    const section = screen
+      .getByRole("heading", { name: en.Content.status.partially_published })
+      .closest("section");
+    expect(section).not.toBeNull();
+    expect(within(section as HTMLElement).getByText("Half-sent post")).toBeInTheDocument();
+  });
 });
 
 describe("filtering (Step 2)", () => {

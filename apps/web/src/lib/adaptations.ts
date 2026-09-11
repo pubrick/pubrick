@@ -63,10 +63,18 @@ export const DELIVERY_BADGE_STATUS: Record<DeliveryOutcome, StatusBadgeStatus> =
  * The same five colors for the draft's own lifecycle. `approved` is the blue
  * of work in flight; `rejected` is the grey of something that will not happen,
  * the same grey `lib/runs.ts` gives a cancelled run.
+ *
+ * `partially_published` takes `review`'s brick, for the reason `unknown` does
+ * above: it is the colour of something waiting on a person. It is deliberately
+ * NOT `approved`'s blue — nothing is in flight, which is exactly the lie this
+ * status was added to end — nor `published`'s green, which would claim a post
+ * that is half missing, nor `failed`'s red, which would claim one that never
+ * went out at all.
  */
 export const CONTENT_BADGE_STATUS: Record<ContentStatus, StatusBadgeStatus> = {
   draft: "draft",
   approved: "scheduled",
+  partially_published: "review",
   rejected: "draft",
   published: "published",
   failed: "failed",

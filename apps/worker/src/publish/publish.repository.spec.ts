@@ -1568,4 +1568,81 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
     expect(await itemStatus(itemId)).toBe("failed");
   });
+  /**
+   * THE THIRD VERDICT: both deliveries are over and they did not agree.
+   *
+   * Until this arm existed the recompute wrote NOTHING here — neither `every`
+   * was satisfied — and the item kept `approve`'s `approved` for ever: the
+   * colour of work in flight, filed under the queue's "Approved" heading,
+   * beside one channel that is live and one that never will be. Nothing else
+   * in the product recomputes an item, so "for ever" is literal.
+   *
+   * The second half is what stops the test being satisfied by an arm that
+   * answers `partially_published` and stays there: the status is TERMINAL, not
+   * final. A retry of the failed half lands through the same function and the
+   * first arm promotes the item to `published`, with nothing here to undo.
+   */
+  it("a fan-out whose channels disagree leaves the item partly published — and a retry finishes it", async () => {
+    const { itemId, adaptationIds } = await seedFanOut(["publishing", "queued"]);
+    const [live, refused] = adaptationIds as [string, string];
+
+    await repo.markPublished(orgId, live, {
+      externalId: "1",
+      externalUrl: "https://t.me/c/1",
+    });
+    expect(await itemStatus(itemId)).toBe("approved");
+
+    expect(
+      await repo.markFailed(orgId, refused, "Telegram: message is too long", {
+        status: "queued",
+        attemptCount: 0,
+      }),
+    ).toBe(true);
+
+    expect(await adaptationStatus(live)).toBe("published");
+    expect(await adaptationStatus(refused)).toBe("failed");
+    expect(await itemStatus(itemId)).toBe("partially_published");
+
+    // The person fixes the text and presses Publish now; this time the channel
+    // takes it.
+    await repo.markPublished(orgId, refused, {
+      externalId: "2",
+      externalUrl: "https://t.me/c/2",
+    });
+    expect(await itemStatus(itemId)).toBe("published");
+  });
+
+  /**
+   * THE FOURTH CALLER, which the recompute's docstring used to leave out and
+   * which reaches the new verdict in batches at 3am.
+   *
+   * `sweepAbandoned` loops the recompute over every row it swept, inside one
+   * transaction — so an item with one live channel and one attempt that never
+   * came back is promoted by the SWEEP, not by a delivery. Nothing about the
+   * verdict is the sweep's own: it asks the same fold through the same
+   * function, which is why this test is here rather than a second rule being
+   * written for maintenance.
+   */
+  it("sweepAbandoned promotes a mixed fan-out to the same verdict a landing delivery would", async () => {
+    const { itemId, adaptationIds } = await seedFanOut(["publishing", "publishing"]);
+    const [live, abandoned] = adaptationIds as [string, string];
+
+    await repo.markPublished(orgId, live, {
+      externalId: "1",
+      externalUrl: "https://t.me/c/1",
+    });
+    expect(await itemStatus(itemId)).toBe("approved");
+
+    // Older than a whole attempt window plus its grace, with no pg-boss job
+    // left that could still finish it.
+    await db.execute(
+      `UPDATE adaptations SET updated_at = now() - interval '1 day' WHERE id = '${abandoned}'`,
+    );
+
+    const swept = await repo.sweepAbandoned();
+
+    expect(swept.map((row) => row.id)).toContain(abandoned);
+    expect(await adaptationStatus(abandoned)).toBe("failed");
+    expect(await itemStatus(itemId)).toBe("partially_published");
+  });
 });

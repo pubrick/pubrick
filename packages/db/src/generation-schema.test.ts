@@ -60,7 +60,14 @@ describe("generation schema", () => {
    * itself.
    */
   it("keeps content and adaptation statuses free of a status nothing can reach", () => {
-    expect(CONTENT_STATUSES).toEqual(["draft", "approved", "rejected", "published", "failed"]);
+    expect(CONTENT_STATUSES).toEqual([
+      "draft",
+      "approved",
+      "partially_published",
+      "rejected",
+      "published",
+      "failed",
+    ]);
     expect(schema.contentItems.status.enumValues).toEqual(CONTENT_STATUSES);
 
     expect(ADAPTATION_STATUSES).toEqual([

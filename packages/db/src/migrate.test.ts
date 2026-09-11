@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ADAPTATION_STATUSES, type AdaptationStatus, nextItemStatus } from "@pubrick/shared";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
@@ -60,6 +61,12 @@ const UNIT_DELTA_MIGRATION = "0015_fragment_unit_delta";
 
 /** The migration that stages a refine proposal on the server, proved below. */
 const REFINE_PROPOSALS_MIGRATION = "0016_refine_proposals";
+
+/**
+ * The migration that gives a half-delivered post a status of its own — and the
+ * only one in this folder that rewrites existing rows on purpose.
+ */
+const PARTIAL_MIGRATION = "0018_partially_published";
 
 /**
  * Every timestamp column in the database that carries a zone, in the order
@@ -421,6 +428,100 @@ async function dropStaleDatabases(admin: pg.Client): Promise<void> {
     // A leftover we could not drop is a leftover; the test it would have been
     // cleaning up for has not started yet and is none the worse for it.
   }
+}
+
+/**
+ * Every multiset of `size` over `values` — combinations WITH repetition, in a
+ * fixed order.
+ *
+ * A fan-out is a bag of delivery statuses, not a sequence: `[published,
+ * failed]` and `[failed, published]` are the same item seen twice, and the
+ * fold has no order to be sensitive to. Enumerating multisets rather than
+ * tuples is what keeps the ratchet below a table somebody can read (37 rows)
+ * instead of 258.
+ */
+function multisets<T>(values: readonly T[], size: number): T[][] {
+  if (size === 0) return [[]];
+  const out: T[][] = [];
+  values.forEach((value, index) => {
+    for (const rest of multisets(values.slice(index), size - 1)) out.push([value, ...rest]);
+  });
+  return out;
+}
+
+/**
+ * THE FAN-OUTS THE RATCHET BELOW RUNS OVER.
+ *
+ * Every multiset over the six adaptation statuses up to TWO deliveries (6 + 21)
+ * — the size at which the fold's every clause can already disagree with the
+ * SQL's — plus every multiset of size three over the three statuses that decide
+ * anything (10), which is where a predicate written with `bool_and`/`bool_or`
+ * or with a clause in the wrong direction first answers differently from one
+ * written with `exists`. And the empty fan-out, which is the trap itself: an
+ * item whose channels have all been deleted, where `every` is vacuously true
+ * for all three arms and `bool_and` is `NULL`.
+ */
+const FAN_OUTS: AdaptationStatus[][] = [
+  ...multisets(ADAPTATION_STATUSES, 0),
+  ...multisets(ADAPTATION_STATUSES, 1),
+  ...multisets(ADAPTATION_STATUSES, 2),
+  ...multisets(["published", "failed", "queued"] as const, 3),
+];
+
+/**
+ * One org, one brand, and one item per fan-out — each adaptation on a channel
+ * of its own.
+ *
+ * DELIBERATELY NOT `seedEveryTable`, and that is the whole reason this helper
+ * exists. That seed feeds `expectNoRowRewritten`, which asserts that no
+ * pre-existing `content_items` value is rewritten between 0009 and head and
+ * calls a backfill "precisely the class this test exists to catch"; it stays
+ * green only because the one item it writes is a `draft` with a `pending`
+ * adaptation, which this migration's predicate cannot match. Putting a
+ * stranded fan-out in there would make the backfill fail the test that guards
+ * every OTHER migration against rewriting rows.
+ *
+ * A channel per position, not one channel for all of them:
+ * `adaptations_one_live_per_item_channel` admits at most one non-`published`
+ * row per (item, channel), so `["queued", "queued"]` on one channel is a
+ * `23505` about the seed rather than anything the migration did.
+ */
+async function seedFanOuts(
+  pool: pg.Pool,
+  org: string,
+  fanOuts: readonly (readonly AdaptationStatus[])[],
+  itemStatus = "approved",
+): Promise<string[]> {
+  await pool.query("INSERT INTO organization (id, name, slug) VALUES ($1, $1, $1)", [org]);
+  const brand = await pool.query(
+    "INSERT INTO brands (org_id, name) VALUES ($1, 'Brand') RETURNING id",
+    [org],
+  );
+  const brandId = brand.rows[0].id as string;
+  const channelIds: string[] = [];
+  for (let position = 0; position < Math.max(0, ...fanOuts.map((f) => f.length)); position++) {
+    const channel = await pool.query(
+      "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ($1, $2, 'telegram', $3, 'blob') RETURNING id",
+      [org, brandId, `Channel ${position}`],
+    );
+    channelIds.push(channel.rows[0].id as string);
+  }
+  const itemIds: string[] = [];
+  for (const fanOut of fanOuts) {
+    const item = await pool.query(
+      "INSERT INTO content_items (org_id, brand_id, body, status, origin) VALUES ($1, $2, 'Ship it.', $3, 'ai') RETURNING id",
+      [org, brandId, itemStatus],
+    );
+    const itemId = item.rows[0].id as string;
+    itemIds.push(itemId);
+    for (const [position, status] of fanOut.entries()) {
+      await pool.query(
+        "INSERT INTO adaptations (org_id, content_item_id, channel_id, status, origin) VALUES ($1, $2, $3, $4, 'ai')",
+        [org, itemId, channelIds[position], status],
+      );
+    }
+  }
+  return itemIds;
 }
 
 describe.skipIf(!url)("runMigrations", () => {
@@ -1561,4 +1662,163 @@ describe.skipIf(!url)("runMigrations", () => {
       }
     }
   }, 180_000);
+  /**
+   * THE BACKFILL, which is the one row rewrite this folder performs on purpose.
+   *
+   * Every item stranded at `approved` by a fan-out that ended in disagreement
+   * is an item nothing can move: the only writer of that promotion is a
+   * delivery, and every delivery this item had is already over. So the status
+   * has to reach the rows that are ALREADY broken, or it would only ever
+   * describe posts sent after the deploy.
+   *
+   * Its own seed, never `seedEveryTable` — see `seedFanOuts`, and §5 of the
+   * design: the shared seed feeds `expectNoRowRewritten`, whose subject is
+   * exactly this class of statement.
+   *
+   * The three negative rows are the predicate's three `exists` clauses, one
+   * each: a delivery still outstanding is not a disagreement but a fan-out
+   * mid-flight, an item with no adaptations at all decides nothing (the empty
+   * guard the fold spells out and `bool_and` would answer `NULL` for), and an
+   * item that is not `approved` was never stranded by this defect.
+   */
+  it("moves a stranded fan-out to the new status, and moves nothing else", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(PARTIAL_MIGRATION);
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let seeded: { stranded: string; midFlight: string; childless: string; draft: string };
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        // If the value were already admitted, "backfilled by this migration"
+        // would be a lie and everything below would prove nothing. It also
+        // pins the ORDER: a backfill written above the CHECK rewrite meets
+        // this same constraint and rolls the migration back.
+        const premature = await refusal(
+          pool,
+          "INSERT INTO organization (id, name, slug) VALUES ('org_premature', 'x', 'x')",
+        );
+        expect(premature).toBeNull();
+        const brand = await pool.query(
+          "INSERT INTO brands (org_id, name) VALUES ('org_premature', 'Brand') RETURNING id",
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO content_items (org_id, brand_id, body, status, origin) VALUES ('org_premature', $1, 'x', 'partially_published', 'ai')",
+            [brand.rows[0].id],
+          ),
+        ).toBe(CHECK_VIOLATION);
+
+        const [stranded, midFlight, childless] = await seedFanOuts(pool, "org_partial", [
+          ["published", "failed"],
+          ["published", "queued"],
+          [],
+        ]);
+        const [draft] = await seedFanOuts(
+          pool,
+          "org_partial_draft",
+          [["published", "failed"]],
+          "draft",
+        );
+        seeded = {
+          stranded: stranded as string,
+          midFlight: midFlight as string,
+          childless: childless as string,
+          draft: draft as string,
+        };
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const statusOf = async (id: string) =>
+          (await after.query("SELECT status FROM content_items WHERE id = $1", [id])).rows[0]
+            ?.status;
+        expect(await statusOf(seeded.stranded)).toBe("partially_published");
+        expect(await statusOf(seeded.midFlight)).toBe("approved");
+        expect(await statusOf(seeded.childless)).toBe("approved");
+        expect(await statusOf(seeded.draft)).toBe("draft");
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  /**
+   * THE ONE-DEFINITION RATCHET: the backfill's predicate and `nextItemStatus`
+   * over the same rows, asserted equal on every one of them.
+   *
+   * The promotion rule has three callers and two of them are TypeScript; the
+   * third is this UPDATE, the fold transcribed into SQL. A transcription is a
+   * copy, and a copy drifts silently — the two answers are only ever compared
+   * where somebody put them side by side, which is here.
+   *
+   * IN THIS FILE because only this tier has a database.
+   * `schema-invariants.test.ts` never queries Postgres — it is a regex over
+   * `migrations/*.sql` and a render of the schema — so it cannot run SQL over
+   * rows at all.
+   *
+   * It catches the `exists`-vs-`bool_and` trap by construction: the empty
+   * fan-out is in the table, and `bool_and` over an empty set is `NULL`.
+   */
+  it("gives the same answer as the fold over every fan-out up to three deliveries", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore(PARTIAL_MIGRATION);
+    try {
+      // 6 + 21 + 10 multisets, plus the empty fan-out. A number, so a helper
+      // that quietly stopped generating one of the three groups would be a
+      // failure here rather than a smaller matrix nobody noticed.
+      expect(FAN_OUTS).toHaveLength(38);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let itemIds: string[];
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        itemIds = await seedFanOuts(pool, "org_matrix", FAN_OUTS);
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const rows = await after.query<{ id: string; status: string }>(
+          "SELECT id, status FROM content_items WHERE org_id = 'org_matrix'",
+        );
+        const backfilled = new Map(rows.rows.map((row) => [row.id, row.status]));
+        // Every row seeded `approved`, so the SQL said `partially_published`
+        // exactly where the row moved. The fold's other two verdicts are the
+        // worker's business and deliberately outside this UPDATE's scope: it
+        // repairs the status nothing could have written, not every status a
+        // past bug could have left behind.
+        const disagreements = FAN_OUTS.map((fanOut, index) => ({
+          fanOut: fanOut.join("+") || "(no deliveries)",
+          sql: backfilled.get(itemIds[index] as string) === "partially_published",
+          fold: nextItemStatus(fanOut) === "partially_published",
+        })).filter((row) => row.sql !== row.fold);
+        expect(
+          disagreements,
+          "the backfill's SQL and `nextItemStatus` disagree about a fan-out:",
+        ).toEqual([]);
+        // And the ratchet is not vacuous from either end.
+        expect(
+          FAN_OUTS.filter((fanOut) => nextItemStatus(fanOut) === "partially_published"),
+        ).not.toHaveLength(0);
+        expect([...backfilled.values()].filter((status) => status === "approved")).not.toHaveLength(
+          0,
+        );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
 });
