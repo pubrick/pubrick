@@ -431,6 +431,20 @@ stale job id) and sets `status = 'cancelled'` where the status is still
 fence before each step and returns without throwing when cancelled. Ledger rows
 already written are kept and still displayed: the money was spent.
 
+**Retry.** `POST /api/runs/:id/retry` takes no body. It re-reads
+`pipeline_runs.input` under the caller's org and re-admits it through the same
+`create` path, so the cross-field refine, the admission cap, the channel
+resolution and the enqueue-in-the-same-transaction rule are one path rather
+than two; its refusals are that path's own (`run_not_found` for another org's
+run included). It exists so that the browser does not have to hold what a run
+was asked for in order to ask for it again: the queue's `?state=open` poll
+therefore carries each run's input with `material` cut out in Postgres
+(`input - 'material'`), while `GET /api/runs/:id` still carries it whole.
+Measured before the split: eight open source runs = 122 265 bytes per list
+response on a five-second poll, over a set nothing bounds — the cap counts
+`queued | running`, and a failed run stays open until a human dismisses it.
+After: 3 457 bytes.
+
 **Failure.** A permanent error records `error`, sets `failed`, and the job
 completes; a transient one is rethrown so pg-boss retries from the last
 checkpoint. The DLQ consumer marks runs whose retries ran out, mirroring
@@ -569,7 +583,9 @@ The queue lists runs as compact strips above the content cards, from
 the content list 400s unknown statuses by design, and a runs repository copying
 that pattern would reject a fake member). Open means `queued`, `running`, and
 **`failed` or `cancelled` that nobody has dismissed** — sorted failures first,
-carrying the human-readable error and Try again / Dismiss. A failed run creates
+carrying the human-readable error and Try again / Dismiss. Try again posts to
+the retry route above and sends nothing: the strip is drawn from the brief, the
+kind and the host, and the pasted article is not on the list at all. A failed run creates
 no content item, so if its strip vanished the failure would be invisible
 everywhere: silent failure is the anti-pattern the dossier names first.
 

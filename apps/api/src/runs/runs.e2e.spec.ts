@@ -466,7 +466,7 @@ describe.skipIf(!url)("runs e2e", () => {
         .expect(201);
 
       // The WIRE contract, not just the row: a browser parses this shape.
-      const run = runDtoSchema.parse(created.body);
+      const run = runDetailDtoSchema.parse(created.body);
       expect(run.input).toEqual({
         kind: "source",
         // `null`, never `""`: a stored empty brief reaches the model as a
@@ -501,6 +501,72 @@ describe.skipIf(!url)("runs e2e", () => {
      * exercising this, because a body that simply OMITS `brief` satisfies it
      * too. The empty string is sent on purpose.
      */
+    /**
+     * THE ARTICLE IS NOT ON THE LIST, and it is on the receipt.
+     *
+     * The queue polls `?state=open` every five seconds over a set nothing
+     * bounds — the cap counts `queued | running`, while a failed run stays open
+     * until a human dismisses it — and it reads three things off each row: the
+     * brief, the kind and the host. Asserted on the RAW body rather than
+     * through `runDtoSchema`, because a zod object strips what it does not
+     * declare: parsing would hide a material the api is still sending.
+     */
+    it("keeps the pasted article off the list, and keeps it on the one run", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: ARTICLE,
+          sourceUrl: "https://example.com/autumn-menu",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      const id = created.body.id as string;
+
+      for (const path of ["/api/runs", "/api/runs?state=open"]) {
+        const listed = (await agent.get(path).expect(200)).body as Array<{
+          input: Record<string, unknown>;
+        }>;
+        expect(listed).toHaveLength(1);
+        expect(listed[0]?.input).toEqual({
+          kind: "source",
+          text: null,
+          sourceUrl: "https://example.com/autumn-menu",
+          channelIds: [channelId],
+        });
+        // The WIRE contract for a list row, which is the shape the browser
+        // parses: narrowed, and still a complete answer to what the strip draws.
+        expect(runDtoSchema.parse(listed[0]).input).toEqual(listed[0]?.input);
+      }
+
+      // The receipt asks for ONE run and gets the whole thing — the material,
+      // and `steps` beside it.
+      const detail = runDetailDtoSchema.parse((await agent.get(`/api/runs/${id}`)).body);
+      expect(detail.input).toEqual({
+        kind: "source",
+        text: null,
+        sourceUrl: "https://example.com/autumn-menu",
+        material: ARTICLE,
+        channelIds: [channelId],
+      });
+    });
+
+    /** A brief run has no `material` key to cut, and must come back whole. */
+    it("leaves a brief run's input alone on the list", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      await startRun(agent, brandId, [channelId]);
+
+      const listed = (await agent.get("/api/runs").expect(200)).body as Array<{ input: unknown }>;
+      expect(listed[0]?.input).toEqual({
+        kind: "brief",
+        text: "Write about our new release",
+        channelIds: [channelId],
+      });
+    });
+
     it("stores no brief for the empty string the compose screen sends", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
@@ -525,7 +591,7 @@ describe.skipIf(!url)("runs e2e", () => {
         .post("/api/runs")
         .send({ brandId, brief: "Shorten it", material: ARTICLE, channelIds: [channelId] })
         .expect(201);
-      expect(runDtoSchema.parse(created.body).input).toMatchObject({
+      expect(runDetailDtoSchema.parse(created.body).input).toMatchObject({
         kind: "source",
         text: "Shorten it",
         material: ARTICLE,

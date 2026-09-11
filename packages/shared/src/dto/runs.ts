@@ -462,6 +462,37 @@ export const runInputSchema = z.discriminatedUnion("kind", [
 export type RunInput = z.infer<typeof runInputSchema>;
 
 /**
+ * THE SAME INPUT WITH THE ARTICLE TAKEN OUT — what a run looks like on the
+ * LIST, `GET /api/runs`.
+ *
+ * The queue strip polls that list every five seconds and reads three things
+ * off it: the brief, the kind and the host (`stripLabel`, `sourceHost`). The
+ * material it never reads — and it used to arrive anyway, all 8 000 characters
+ * of it, for every open run. `MAX_CONCURRENT_RUNS` does not bound that set:
+ * the cap counts `queued | running`, while a failed or cancelled run stays
+ * OPEN until a human dismisses it. Measured on the real route: eight open
+ * source runs = 122 265 bytes per response, ~85 MB/hour per tab, with no
+ * ceiling.
+ *
+ * `.omit()` rather than a second object literal, so the two shapes cannot
+ * drift: every other field — `text`'s `.min(1).nullable()`, `sourceUrl`'s
+ * scheme and bound — is the one declaration above, and a field added to a
+ * stored source run appears here unless somebody says it should not.
+ *
+ * The DETAIL dto keeps the whole input, because the receipt and the draft's
+ * source strip both render the material. The one screen that shows an article
+ * asks for one run.
+ */
+export const sourceRunListInputSchema = sourceRunInputSchema.omit({ material: true });
+export type SourceRunListInput = z.infer<typeof sourceRunListInputSchema>;
+
+export const runListInputSchema = z.discriminatedUnion("kind", [
+  briefRunInputSchema,
+  sourceRunListInputSchema,
+]);
+export type RunListInput = z.infer<typeof runListInputSchema>;
+
+/**
  * ONE ENTRY PER FINISHED STEP of a run — `pipeline_runs.steps`, as ONE schema.
  *
  * Keyed `researcher | writer | editor | factcheck` or `adapter:<channelId>` — a
@@ -516,7 +547,12 @@ export type RunSteps = z.infer<typeof runStepsSchema>;
 export const runDtoSchema = z.object({
   id: z.string().uuid(),
   brandId: z.string().uuid(),
-  input: runInputSchema,
+  /**
+   * What the run was asked for, MINUS the pasted article — see
+   * `runListInputSchema` for the measurement that took it off this shape. The
+   * receipt's schema below puts it back.
+   */
+  input: runListInputSchema,
   status: z.enum(RUN_STATUSES),
   currentStep: z.string().nullable(),
   contentItemId: z.string().uuid().nullable(),
@@ -546,7 +582,17 @@ export type RunDto = z.infer<typeof runDtoSchema>;
 
 /**
  * The receipt's shape: the same run plus its checkpoint map, which the list
- * deliberately does not carry (each checkpoint holds a step's whole output).
+ * deliberately does not carry (each checkpoint holds a step's whole output),
+ * plus the WHOLE input, which the list deliberately does not carry either.
+ *
+ * `input` is restated here rather than inherited because the list's narrowing
+ * is a size decision about a poll, not a statement about what a run is: one
+ * run, asked for by id, is exactly where the pasted article belongs — the
+ * receipt renders it, and so does the source strip above a draft. This is also
+ * what `POST /api/runs` and `POST /api/runs/:id/retry` answer with.
  */
-export const runDetailDtoSchema = runDtoSchema.extend({ steps: runStepsSchema });
+export const runDetailDtoSchema = runDtoSchema.extend({
+  input: runInputSchema,
+  steps: runStepsSchema,
+});
 export type RunDetailDto = z.infer<typeof runDetailDtoSchema>;

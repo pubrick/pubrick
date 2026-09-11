@@ -1,6 +1,5 @@
 "use client";
 
-import type { RunCreate } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -50,40 +49,6 @@ const GROUP_STATUSES: readonly ContentStatus[] = [
   "failed",
   ...CONTENT_STATUSES.filter((s) => s !== "failed"),
 ];
-
-/**
- * The body that asks for the same run again — every field `runCreateSchema`
- * accepts, and no field it refuses.
- *
- * Typed as `RunCreate` rather than assembled inline, so the request the screen
- * sends and the request the api validates are held together by the compiler as
- * well as by a test.
- *
- * `?? undefined` on BOTH nullable fields, and it is the same defect twice: the
- * stored member spells "absent" as `null` (`text`, `sourceUrl`) while the
- * REQUEST spells it as an omitted key, `JSON.stringify` transmits `null`
- * faithfully, and `z.string().optional()` refuses `null` on the type check
- * before any refine runs. Forwarding `run.input.text` unchanged is what made
- * Try again answer a source run with "brief: Invalid input" — a 400 about a
- * brief the person never wrote, on the one screen whose job is to let a failed
- * run be tried again.
- *
- * `material` is deliberately NOT `?? undefined`: it is `z.string().min(1)` on
- * the stored member, so on a source run it is always there, and writing a
- * fallback would describe a case that cannot occur.
- */
-function retryBody(run: Run): RunCreate {
-  if (run.input.kind === "source") {
-    return {
-      brandId: run.brandId,
-      brief: run.input.text ?? undefined,
-      material: run.input.material,
-      sourceUrl: run.input.sourceUrl ?? undefined,
-      channelIds: run.input.channelIds,
-    };
-  }
-  return { brandId: run.brandId, brief: run.input.text, channelIds: run.input.channelIds };
-}
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -237,7 +202,16 @@ export default function ContentQueuePage() {
   }, [runsError, contentError, router, locale]);
 
   /**
-   * Start the run again from the same brief, and clear the one being retried.
+   * Start the run again from what the API already has, and clear the one being
+   * retried.
+   *
+   * NO BODY. The screen used to rebuild a create request out of `run.input`,
+   * which is the only reason the open-runs list ever carried the whole pasted
+   * article — 8 000 characters per open run, re-read every five seconds, over a
+   * set nothing bounds (a failed run stays open until somebody dismisses it).
+   * `POST /api/runs/:id/retry` re-reads the stored input server-side and
+   * re-admits it through the same path a create takes, so the list no longer
+   * has to ship somebody else's article to render a button.
    *
    * The dismissal is not tidiness. A retried run stays open until somebody
    * acknowledges it, and the API sorts failures FIRST — so without this, every
@@ -255,10 +229,7 @@ export default function ContentQueuePage() {
   async function tryAgain(run: Run) {
     setActionError(null);
     try {
-      const created = await api<Run>("/api/runs", {
-        method: "POST",
-        body: JSON.stringify(retryBody(run)),
-      });
+      const created = await api<Run>(`/api/runs/${run.id}/retry`, { method: "POST" });
       const dismissed = await api(`/api/runs/${run.id}/dismiss`, { method: "POST" })
         .then(() => true)
         .catch(() => false);

@@ -1,5 +1,5 @@
 import type { AdaptationStatus, ContentStatus, DeliveryOutcome } from "@pubrick/shared";
-import { runCreateSchema, runDtoSchema, type SourceRunInput } from "@pubrick/shared";
+import { runDtoSchema, type SourceRunListInput } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,7 +124,9 @@ function installHandlers(
 
     if (method === "GET" && path === "/api/channels") return channelList;
     if (method === "GET" && path === "/api/runs?state=open") return runs.current;
-    if (method === "POST" && path === "/api/runs") {
+    // The retry carries NO body: what the run was asked for is read back out of
+    // the row by the api, which is why the list below need not carry it.
+    if (method === "POST" && path.endsWith("/retry")) {
       const created = run({ id: NEW_RUN_ID, status: "queued", currentStep: null, errorCode: null });
       // Creating a run does NOT clear the one it was started from: that run stays
       // open until somebody dismisses it, and sorts ABOVE the new one because
@@ -378,7 +380,14 @@ describe("run strips (Task 10)", () => {
     expect(screen.queryByRole("button", { name: en.Runs.dismiss })).not.toBeInTheDocument();
   });
 
-  it("Try again starts a new run from the same brief and channels", async () => {
+  /**
+   * The retry names the run and sends NOTHING else.
+   *
+   * It used to send a create body rebuilt out of `run.input`, which is the only
+   * reason this list ever carried the whole pasted article. What replaces the
+   * old body-shape tests is this: the screen cannot send what it no longer has.
+   */
+  it("Try again asks the API to run the same run again, with no body at all", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => [], noChannels, {
       current: [run({ status: "failed", errorCode: "internal" })],
@@ -389,19 +398,15 @@ describe("run strips (Task 10)", () => {
     await userEvent.setup().click(tryAgain);
 
     await waitFor(() =>
-      expect(calls.some((c) => c.method === "POST" && c.path === "/api/runs")).toBe(true),
+      expect(calls.some((c) => c.method === "POST" && c.path === `/api/runs/${RUN_ID}/retry`)).toBe(
+        true,
+      ),
     );
-    const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
-    const body = JSON.parse(post?.body ?? "{}");
-    // Pinned twice: the literal the screen sends…
-    expect(body).toEqual({
-      brandId: BRAND_ID,
-      brief: "A post about our new pricing",
-      channelIds: [RUN_CHANNEL_ID],
-    });
-    // …and the schema the API validates it with, round-tripped so a renamed
-    // optional field cannot parse to {} and still pass.
-    expect(runCreateSchema.parse(body)).toEqual(body);
+    const post = calls.find((c) => c.method === "POST" && c.path === `/api/runs/${RUN_ID}/retry`);
+    expect(post?.body).toBeUndefined();
+    // And no create: a screen that still posted `/api/runs` would still need
+    // everything a create body carries.
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/runs")).toBe(false);
     expect(routerMock.push).toHaveBeenCalledWith(`/en/content/runs/${NEW_RUN_ID}`);
   });
 
@@ -421,7 +426,9 @@ describe("run strips (Task 10)", () => {
     // Created FIRST, dismissed second: a dismissal that fails must not be able
     // to cost the user the retry it was meant to tidy up after.
     const posts = calls.filter((c) => c.method === "POST").map((c) => c.path);
-    expect(posts.indexOf("/api/runs")).toBeLessThan(posts.indexOf(`/api/runs/${RUN_ID}/dismiss`));
+    expect(posts.indexOf(`/api/runs/${RUN_ID}/retry`)).toBeLessThan(
+      posts.indexOf(`/api/runs/${RUN_ID}/dismiss`),
+    );
 
     // And the strip the user pressed is gone, with the new run in its place —
     // not sitting above it in red, unchanged, forever.
@@ -624,7 +631,13 @@ describe("run strips (Task 10)", () => {
 describe("a run drafted from pasted material", () => {
   const MATERIAL = "The council voted on Tuesday to fund the bridge.";
 
-  function sourceRun(overrides: Partial<SourceRunInput> = {}, run_: Partial<Run> = {}): Run {
+  /**
+   * A LIST row, which is `SourceRunListInput` and not `SourceRunInput`: the api
+   * cuts `material` out of `input` for the list, so a fixture carrying it would
+   * be a body the api cannot send — and the strip would be tested against an
+   * article it never receives.
+   */
+  function sourceRun(overrides: Partial<SourceRunListInput> = {}, run_: Partial<Run> = {}): Run {
     return run({
       status: "failed",
       errorCode: "internal",
@@ -632,25 +645,11 @@ describe("a run drafted from pasted material", () => {
         kind: "source",
         text: null,
         sourceUrl: null,
-        material: MATERIAL,
         channelIds: [RUN_CHANNEL_ID],
         ...overrides,
       },
       ...run_,
     });
-  }
-
-  /** What the strip posts when Try again is pressed. */
-  async function retryBody(runs: Run[]): Promise<unknown> {
-    const calls: Call[] = [];
-    installHandlers(calls, () => [], noChannels, { current: runs });
-    render(<ContentQueuePage />);
-    await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
-    await waitFor(() =>
-      expect(calls.some((c) => c.method === "POST" && c.path === "/api/runs")).toBe(true),
-    );
-    const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
-    return JSON.parse(post?.body ?? "{}");
   }
 
   describe("the strip's label", () => {
@@ -691,62 +690,35 @@ describe("a run drafted from pasted material", () => {
     });
   });
 
-  describe("Try again re-posts what the run was actually asked for", () => {
+  describe("Try again, on the arm that used to 400", () => {
     /**
-     * The URL-LESS case first, because it is the common one — a paste with no
-     * link — and it is the one a fix written against the URL-bearing case
-     * leaves broken: `sourceUrl` is `.nullable()` on the stored member and
-     * `.optional()` on the request, `JSON.stringify` transmits `null`
-     * faithfully, and `runCreateSchema` refuses it on the type check.
+     * The wire shape itself, parsed: a list row cannot carry the article even
+     * if the api tries to send one. This is the browser-side half of the pair
+     * the api's e2e holds up ("keeps the pasted article off the list").
      */
-    it("omits sourceUrl entirely when the run has none", async () => {
-      const body = await retryBody([sourceRun()]);
-
-      expect(body).toEqual({
-        brandId: BRAND_ID,
-        material: MATERIAL,
-        channelIds: [RUN_CHANNEL_ID],
+    it("cannot hold the pasted article, whatever the api sends", () => {
+      const row = runDtoSchema.parse({
+        ...sourceRun(),
+        input: { ...sourceRun().input, material: MATERIAL },
       });
-      expect(runCreateSchema.parse(body)).toEqual(body);
+
+      expect(row.input).not.toHaveProperty("material");
+      expect(JSON.stringify(row)).not.toContain(MATERIAL);
     });
 
-    it("forwards the URL when the run has one", async () => {
-      const body = await retryBody([sourceRun({ sourceUrl: "https://example.com/story" })]);
+    it("names the run and sends nothing, so there is nothing to rebuild", async () => {
+      const calls: Call[] = [];
+      installHandlers(calls, () => [], noChannels, { current: [sourceRun()] });
 
-      expect(body).toEqual({
-        brandId: BRAND_ID,
-        material: MATERIAL,
-        sourceUrl: "https://example.com/story",
-        channelIds: [RUN_CHANNEL_ID],
-      });
-      expect(runCreateSchema.parse(body)).toEqual(body);
-    });
+      render(<ContentQueuePage />);
+      await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
 
-    it("forwards the brief too when the run carried both", async () => {
-      const body = await retryBody([sourceRun({ text: "Keep it short" })]);
-
-      expect(body).toEqual({
-        brandId: BRAND_ID,
-        brief: "Keep it short",
-        material: MATERIAL,
-        channelIds: [RUN_CHANNEL_ID],
-      });
-      expect(runCreateSchema.parse(body)).toEqual(body);
-    });
-
-    it("sends no material at all for a run started from a brief", async () => {
-      const body = await retryBody([run({ status: "failed", errorCode: "internal" })]);
-
-      // `toEqual` is the assertion that catches an EXTRA key: a retry that
-      // forwarded `material: null` for a brief run would be refused by the
-      // schema, and one that forwarded `material: ""` would be refused by the
-      // stored member the moment the api tried to write it.
-      expect(body).toEqual({
-        brandId: BRAND_ID,
-        brief: BRIEF,
-        channelIds: [RUN_CHANNEL_ID],
-      });
-      expect(runCreateSchema.parse(body)).toEqual(body);
+      await waitFor(() =>
+        expect(calls.some((c) => c.path === `/api/runs/${RUN_ID}/retry`)).toBe(true),
+      );
+      const post = calls.find((c) => c.path === `/api/runs/${RUN_ID}/retry`);
+      expect(post?.method).toBe("POST");
+      expect(post?.body).toBeUndefined();
     });
 
     it("creates the new run before dismissing the one it replaces", async () => {
@@ -760,22 +732,23 @@ describe("a run drafted from pasted material", () => {
       // The order the docstring defends, on the arm that used to 400 here: a
       // dismissal that fails must never be able to cost the person their retry.
       const posts = calls.filter((c) => c.method === "POST").map((c) => c.path);
-      expect(posts.indexOf("/api/runs")).toBeLessThan(posts.indexOf(`/api/runs/${RUN_ID}/dismiss`));
+      expect(posts.indexOf(`/api/runs/${RUN_ID}/retry`)).toBeLessThan(
+        posts.indexOf(`/api/runs/${RUN_ID}/dismiss`),
+      );
     });
 
-    it("leaves the strip exactly where it was when the create fails", async () => {
+    it("leaves the strip exactly where it was when the retry is refused", async () => {
       const calls: Call[] = [];
       installHandlers(calls, () => [], noChannels, { current: [sourceRun()] });
-      // The api refuses the retry — the 400 this whole task exists to stop
-      // being the answer to a source run's Try again.
+      // The api refuses the retry — the brand's channels are gone, say.
       const handlers = mockApi.getMockImplementation();
       if (!handlers) throw new Error("installHandlers did not install one");
       mockApi.mockImplementation(async (...args: unknown[]) => {
         const path = args[0] as string;
         const method = ((args[1] as RequestInit | undefined)?.method ?? "GET") as string;
-        if (method === "POST" && path === "/api/runs") {
+        if (method === "POST" && path.endsWith("/retry")) {
           calls.push({ path, method });
-          throw new ApiError(400, "brief: Invalid input", false);
+          throw new ApiError(400, "This brand has no channels", false);
         }
         return handlers(...(args as Parameters<typeof handlers>));
       });
@@ -783,7 +756,7 @@ describe("a run drafted from pasted material", () => {
       render(<ContentQueuePage />);
       await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
 
-      // Nothing was dismissed: a failed create must leave the run exactly where
+      // Nothing was dismissed: a failed retry must leave the run exactly where
       // the person can press it again.
       await screen.findByRole("alert");
       expect(calls.some((c) => c.path.endsWith("/dismiss"))).toBe(false);

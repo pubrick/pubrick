@@ -8,6 +8,7 @@ import {
   MAX_CONCURRENT_RUNS,
   RUN_LIST_STATES,
   type RunCreate,
+  type RunListInput,
   type RunStatus,
   runCreateSchema,
   runInputSchema,
@@ -31,7 +32,6 @@ import { ZodValidationPipe } from "../validation.pipe";
 const RUN_COLUMNS = {
   id: schema.pipelineRuns.id,
   brandId: schema.pipelineRuns.brandId,
-  input: schema.pipelineRuns.input,
   status: schema.pipelineRuns.status,
   currentStep: schema.pipelineRuns.currentStep,
   contentItemId: schema.pipelineRuns.contentItemId,
@@ -71,15 +71,48 @@ const RUN_COLUMNS = {
 };
 
 /**
- * One run, for the progress receipt at `/content/runs/[id]`, which renders the
- * five steps as a live checklist and therefore needs the checkpoint map.
+ * The list's `input`, WITHOUT the pasted article — `jsonb - 'material'`,
+ * evaluated by Postgres so the 8 000 characters never leave it.
  *
- * The list does NOT carry it: each checkpoint holds that step's whole model
+ * The queue strip polls `?state=open` every five seconds and reads the brief,
+ * the kind and the host off each row; the material it does not read. It
+ * arrived anyway until now, and the set it arrived for is unbounded —
+ * `MAX_CONCURRENT_RUNS` caps `queued | running`, while a failed or cancelled
+ * run stays OPEN until a human dismisses it. Measured through this route:
+ * eight open source runs = 122 265 bytes per response, ~85 MB/hour per tab.
+ *
+ * Cutting the key HERE rather than deleting it in TypeScript is the whole
+ * saving: a row read and then trimmed has already crossed the database
+ * connection. The operator is a no-op on a `brief` input, which has no such
+ * key, so both arms of the union come back intact minus one field — which is
+ * exactly `runListInputSchema`, the shape the wire schema declares.
+ *
+ * The one reason the browser ever needed the article was `Try again`, which
+ * rebuilt a create request out of it; `POST /api/runs/:id/retry` reads it
+ * server-side instead.
+ */
+const RUN_LIST_COLUMNS = {
+  ...RUN_COLUMNS,
+  input: sql<RunListInput>`${schema.pipelineRuns.input} - 'material'::text`,
+};
+
+/**
+ * One run, for the progress receipt at `/content/runs/[id]`, which renders the
+ * five steps as a live checklist and therefore needs the checkpoint map — and
+ * the WHOLE input, article included, which is what the receipt and the source
+ * strip above a draft render.
+ *
+ * The list carries neither: each checkpoint holds that step's whole model
  * output, so a queue strip showing a dozen runs would ship several hundred
  * kilobytes of draft text on every poll to render a row that only reads
- * `status`, `currentStep` and `errorCode`.
+ * `status`, `currentStep` and `errorCode`. The material was the same mistake
+ * one column over — see `RUN_LIST_COLUMNS`.
  */
-const RUN_DETAIL_COLUMNS = { ...RUN_COLUMNS, steps: schema.pipelineRuns.steps };
+const RUN_DETAIL_COLUMNS = {
+  ...RUN_COLUMNS,
+  input: schema.pipelineRuns.input,
+  steps: schema.pipelineRuns.steps,
+};
 
 /**
  * Statuses a run can still be cancelled from — the two in which something is
@@ -212,7 +245,7 @@ export class RunsRepository {
     // of it. There is now exactly one place to delete, and a test on either
     // branch catches it.
     return db
-      .select(RUN_COLUMNS)
+      .select(RUN_LIST_COLUMNS)
       .from(schema.pipelineRuns)
       .where(and(eq(schema.pipelineRuns.orgId, orgId), state === "open" ? open : undefined))
       .orderBy(
