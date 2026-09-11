@@ -214,6 +214,26 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     ).toHaveLength(1);
 
     /**
+     * THE BIND PARAMETERS DO NOT GROW WITH THE PAGE EITHER.
+     *
+     * Three statements for any N is only half a bound: drizzle's `inArray`
+     * emits `in ($2, $3, …)`, one placeholder per id, so the batched reads that
+     * replaced the fan-out still carried a parameter per card. Postgres caps a
+     * statement at 65 535 of them, which turns a long enough queue from slow
+     * into a hard failure — and `list` has no `LIMIT` until 0009's cursor
+     * lands, so nothing bounds the count but the size of the organisation.
+     * Both page-sized reads send the ids as ONE array parameter instead.
+     *
+     * Measured on this 200-item seed: 2 values for the adaptations read
+     * (the org, the ids) and 3 for the versions read (the org, the ids, the
+     * `ai` origin). The bound is a little above both so that one honest extra
+     * predicate is not a test edit, while a parameter per row is a failure.
+     */
+    for (const statement of contentStatements) {
+      expect(statement.values.length, statement.text).toBeLessThanOrEqual(4);
+    }
+
+    /**
      * THE SORT, AS TEXT — the one assertion in this repository's tests that
      * reads a statement instead of its answer.
      *
@@ -253,6 +273,70 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     // putting `body` back fails outright.
     expect(Buffer.byteLength(response.text)).toBeLessThan(200_000);
     expect(response.text).not.toContain(BODY.slice(0, 40));
+  });
+
+  /**
+   * A THOUSAND IDS IN ONE PARAMETER, AND THE RIGHT ROWS COME BACK.
+   *
+   * The bound above says the parameter count does not grow; this says the array
+   * that replaced them is actually serialised, cast and matched correctly at a
+   * size where the placeholder form was heading for Postgres's 65 535-parameter
+   * refusal. A thousand rather than two hundred because the failure mode being
+   * ruled out — an array literal that breaks on quoting, or a cast that matches
+   * nothing — is invisible on a page small enough to eyeball.
+   *
+   * Bodies of two words and one adaptation on one item, because what is under
+   * test is the id set, not the response size: the two page-sized reads receive
+   * a thousand ids each, and the one item that owns a channel must come back
+   * with it while the other 999 come back with an empty strip.
+   */
+  it("matches a thousand ids through one array parameter", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Only",
+        credentials: { botToken: "123:abc", chatId: "-1001111111111" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        title: "Owns the channel",
+        body: "Deux mots.",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const seed = createDb(url as string);
+    try {
+      await seed.db.insert(schema.contentItems).values(
+        Array.from({ length: 999 }, (_unused, index) => ({
+          orgId,
+          brandId: brand.body.id as string,
+          title: `Draft ${index}`,
+          body: "Deux mots.",
+        })),
+      );
+    } finally {
+      await seed.pool.end();
+    }
+
+    const [response, statements] = await countingStatements(() =>
+      agent.get("/api/content").expect(200),
+    );
+    const rows = response.body as { id: string; adaptations: unknown[] }[];
+    expect(rows).toHaveLength(1000);
+    for (const statement of statements) {
+      expect(statement.values.length, statement.text).toBeLessThanOrEqual(4);
+    }
+    const withChannel = rows.filter((row) => row.adaptations.length > 0);
+    expect(withChannel.map((row) => row.id)).toEqual([created.body.id]);
   });
 
   /**

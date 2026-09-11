@@ -30,6 +30,7 @@ import {
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
@@ -874,6 +875,25 @@ function groupAiVersionBodies(adaptationIds: string[], rows: LensVersionRow[]): 
   return { item, adaptations };
 }
 
+/**
+ * `column = ANY($n::uuid[])` — one bind parameter for a whole page of ids.
+ *
+ * drizzle's `inArray` emits `in ($2, $3, …)`, a placeholder per element.
+ * Postgres refuses a statement with more than 65 535 of them, and the two reads
+ * that take a page of item ids have no `LIMIT` over them until design 0009's
+ * cursor lands — the page is however many items an organisation owns. A list
+ * that is merely slow at ten thousand drafts becomes one that cannot be
+ * answered at all, which is a different kind of defect and not one to leave for
+ * a later commit to bound.
+ *
+ * The array goes as a single parameter (`sql.param`, so drizzle sends the JS
+ * array rather than splicing it into the text) and is cast, because a bare
+ * parameter has no type Postgres can compare against a `uuid` column.
+ */
+function anyOf(column: PgColumn, ids: string[]) {
+  return sql`${column} = any(${sql.param(ids)}::uuid[])`;
+}
+
 @Injectable()
 export class ContentRepository {
   private readonly logger = new Logger(ContentRepository.name);
@@ -913,8 +933,9 @@ export class ContentRepository {
    * The channel strips of MANY items at once, keyed by item — one query for a
    * whole list, where `list` used to make one per card.
    *
-   * `= ANY($ids)` (drizzle's `inArray`), exactly what `itemAiEvidence` below
-   * already does, and grouped in JS. The old shape was `items.map(async …)`
+   * `= ANY($ids)` — one bind parameter for the whole page (`anyOf` above says
+   * why it is not drizzle's `inArray`), exactly what `itemAiEvidence` below
+   * also does, and grouped in JS. The old shape was `items.map(async …)`
    * over `adaptationsFor`: 500 statements for a 500-item queue, fired at once
    * through a `Promise.all` at a `pg.Pool` that has TEN clients and is shared
    * with better-auth and every other repository — so one long queue in one tab
@@ -948,7 +969,7 @@ export class ContentRepository {
       .where(
         and(
           eq(schema.adaptations.orgId, orgId),
-          inArray(schema.adaptations.contentItemId, contentItemIds),
+          anyOf(schema.adaptations.contentItemId, contentItemIds),
         ),
       )
       // The same `created_at, id` as the single-item read above, and it has to
@@ -967,7 +988,8 @@ export class ContentRepository {
    * `list` needs the badge's answer for every card, and the badge's answer is
    * the gate's question asked of these rows. One `IN` query rather than a read
    * per item: this is already an N+1 for adaptations, and the cure for that is
-   * not a second one.
+   * not a second one. One bind parameter for the page, like the read above —
+   * see `anyOf`.
    *
    * `adaptation_id IS NULL` because the card's badge is about the MASTER body.
    * A channel override's provenance is a detail of the item screen, and joining
@@ -996,7 +1018,7 @@ export class ContentRepository {
       .where(
         and(
           eq(schema.contentVersions.orgId, orgId),
-          inArray(schema.contentVersions.contentItemId, itemIds),
+          anyOf(schema.contentVersions.contentItemId, itemIds),
           isNull(schema.contentVersions.adaptationId),
           eq(schema.contentVersions.origin, "ai"),
         ),
