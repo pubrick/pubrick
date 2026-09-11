@@ -73,10 +73,13 @@ const PARTIAL_MIGRATION = "0018_partially_published";
  * below.
  *
  * Tagged 0020 rather than 0017, which was the next free number when it was
- * generated: two designs ahead of this one have claimed 0017/0018 and 0019 on
- * branches that have not landed, and a tag collision is a merge conflict in the
- * one file where the resolution is not obvious. The journal already skips 0010,
- * so a gap is not a novelty here.
+ * first generated: two designs ahead of this one had claimed 0017/0018 and 0019
+ * on branches that had not landed then, and a tag collision is a merge conflict
+ * in the one file where the resolution is not obvious. They have landed since,
+ * and this branch was rebased onto them and the migration regenerated against
+ * main's 0019 — so the gap the dodge left (0017 was never this file's number)
+ * is now no gap at all. The journal does still skip 0010, so a gap would not be
+ * a novelty either way.
  */
 const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
 

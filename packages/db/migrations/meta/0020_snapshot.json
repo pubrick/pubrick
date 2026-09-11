@@ -1,6 +1,6 @@
 {
-  "id": "0b4676d7-b161-4bfc-95ab-ddede5c40aea",
-  "prevId": "7677d55f-db90-4d59-aebc-ea869d54a1c5",
+  "id": "91a472f4-698d-424e-88ca-629ce985f01a",
+  "prevId": "a21ec057-c78a-4dcb-860f-48eebbb82279",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -956,6 +956,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1101,6 +1107,10 @@
         "adaptations_origin_check": {
           "name": "adaptations_origin_check",
           "value": "\"adaptations\".\"origin\" in ('ai', 'human')"
+        },
+        "adaptations_failure_reason_check": {
+          "name": "adaptations_failure_reason_check",
+          "value": "\"adaptations\".\"failure_reason\" in ('schedule_missed', 'no_adapter', 'credentials_unreadable', 'credentials_missing', 'credentials_invalid', 'platform_rejected', 'rejected_before_send', 'retries_exhausted', 'send_abandoned', 'outcome_unknown')"
         }
       },
       "isRLSEnabled": false
@@ -1268,7 +1278,7 @@
       "checkConstraints": {
         "content_items_status_check": {
           "name": "content_items_status_check",
-          "value": "\"content_items\".\"status\" in ('draft', 'approved', 'rejected', 'published', 'failed')"
+          "value": "\"content_items\".\"status\" in ('draft', 'approved', 'partially_published', 'rejected', 'published', 'failed')"
         },
         "content_items_origin_check": {
           "name": "content_items_origin_check",
@@ -1339,6 +1349,18 @@
         "error": {
           "name": "error",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asserted_by": {
+          "name": "asserted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asserted_at": {
+          "name": "asserted_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -1469,6 +1491,19 @@
           "tableTo": "channels",
           "columnsFrom": [
             "channel_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "publications_asserted_by_user_id_fk": {
+          "name": "publications_asserted_by_user_id_fk",
+          "tableFrom": "publications",
+          "tableTo": "user",
+          "columnsFrom": [
+            "asserted_by"
           ],
           "columnsTo": [
             "id"
