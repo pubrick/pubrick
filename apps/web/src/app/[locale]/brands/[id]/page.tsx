@@ -364,6 +364,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       >
         {tb("sourcesLink")}
       </Link>
+      <Link
+        href={`/${locale}/brands/${id}/media`}
+        className="mb-5 ml-4 inline-block text-sm text-fg-secondary underline"
+      >
+        {tb("mediaLink")}
+      </Link>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}

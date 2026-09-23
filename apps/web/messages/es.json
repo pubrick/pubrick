@@ -67,7 +67,22 @@
     "voiceUnset": "Sin definir",
     "voiceSave": "Guardar",
     "voiceCancel": "Cancelar",
-    "sourcesLink": "Fuentes vigiladas"
+    "sourcesLink": "Fuentes vigiladas",
+    "mediaLink": "Biblioteca multimedia"
+  },
+  "Media": {
+    "title": "Biblioteca multimedia",
+    "back": "Volver a la marca",
+    "hint": "JPEG, PNG o WebP de hasta 10 MB. Pubrick elimina los metadatos y guarda un JPEG. Las portadas solo se publican en Telegram; el pie admite hasta 1024 caracteres.",
+    "add": "Añadir imagen",
+    "empty": "Añade una imagen para usarla como portada de Telegram.",
+    "selected": "Portada actual",
+    "use": "Usar",
+    "remove": "Eliminar",
+    "detach": "Quitar portada",
+    "more": "Cargar más",
+    "retry": "Reintentar",
+    "failed": "No se pudo cargar la biblioteca multimedia."
   },
   "Sources": {
     "title": "Fuentes de {brand}",
@@ -455,6 +470,12 @@
   },
   "Errors": {
     "content_not_found": "Esta publicación ya no existe: es posible que se haya eliminado.",
+    "content_media_unsupported": "Por ahora, las portadas solo se pueden publicar en canales de Telegram.",
+    "content_media_caption_too_long": "Los pies de foto de Telegram deben tener como máximo 1024 caracteres.",
+    "media_invalid": "Elige una imagen JPEG, PNG o WebP válida de hasta 10 MB.",
+    "media_not_found": "Esta imagen ya no está disponible en esta marca.",
+    "media_in_use": "Quita esta imagen de la publicación antes de eliminarla.",
+    "media_cover_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar la portada.",
     "feed_not_found": "Este feed público no está disponible. Actívalo de nuevo para compartir publicaciones.",
     "feed_item_not_ready": "Añade un título y publica esta entrada antes de compartirla en un feed público.",
     "adaptation_not_found": "El texto propio de este canal ya no existe: es posible que el canal se haya eliminado.",

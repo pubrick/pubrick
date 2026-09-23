@@ -19,6 +19,7 @@ import {
 import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { enumCheck } from "./enum-check.js";
+import { mediaAssets } from "./media.js";
 
 /**
  * Name of the "at most one PUBLISHED RECORD per adaptation" unique index
@@ -42,6 +43,7 @@ export const contentItems = pgTable(
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
     title: text("title"),
+    coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Defaults to `human`, which is what every row written before AI existed is. */

@@ -67,7 +67,22 @@
     "voiceUnset": "Not set",
     "voiceSave": "Save",
     "voiceCancel": "Cancel",
-    "sourcesLink": "Watched sources"
+    "sourcesLink": "Watched sources",
+    "mediaLink": "Media library"
+  },
+  "Media": {
+    "title": "Media library",
+    "back": "Back to brand",
+    "hint": "JPEG, PNG, or WebP up to 10 MB. Pubrick removes metadata and saves a JPEG. Covers publish to Telegram only; photo captions can be up to 1024 characters.",
+    "add": "Add image",
+    "empty": "Add an image to use as a Telegram cover.",
+    "selected": "Current cover",
+    "use": "Use",
+    "remove": "Remove",
+    "detach": "Remove cover",
+    "more": "Load more",
+    "retry": "Try again",
+    "failed": "Could not load the media library."
   },
   "Sources": {
     "title": "Sources for {brand}",
@@ -455,6 +470,12 @@
   },
   "Errors": {
     "content_not_found": "This post no longer exists — it may have been deleted.",
+    "content_media_unsupported": "Covers can currently be published only to Telegram channels.",
+    "content_media_caption_too_long": "Telegram photo captions must be 1024 characters or fewer.",
+    "media_invalid": "Choose a valid JPEG, PNG, or WebP image up to 10 MB.",
+    "media_not_found": "This image is no longer available in this brand.",
+    "media_in_use": "Remove this image from its post before deleting it.",
+    "media_cover_pinned": "This post is already approved or published. Reject it before changing the cover.",
     "feed_not_found": "This public feed is unavailable. Enable it again if you want to share posts.",
     "feed_item_not_ready": "Add a title and publish this post before sharing it in a public feed.",
     "adaptation_not_found": "This channel's own text no longer exists — the channel may have been deleted.",

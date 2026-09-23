@@ -7,6 +7,7 @@ import { ChannelsModule } from "./channels/channels.module";
 import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
+import { MediaModule } from "./media/media.module";
 import { OrgModule } from "./org/org.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
@@ -17,6 +18,7 @@ import { SourcesModule } from "./sources/sources.module";
     AuthModule.forRoot({ auth }),
     QueueModule,
     HealthModule,
+    MediaModule,
     BrandsModule,
     ChannelsModule,
     ContentModule,

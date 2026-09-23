@@ -291,7 +291,9 @@ git pull
 docker compose up -d --build
 ```
 
-Migrations apply on boot; back up the `pgdata` volume before major upgrades.
+Migrations apply on boot; back up the `pgdata` and `media` volumes before major
+upgrades. Keep them together: post cover references live in Postgres and image
+bytes live in `media` (see [Media library](media-library.md)).
 
 ### Variables added since August 2026
 

@@ -81,6 +81,12 @@ export class ApiError extends Error {
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_not_found: "content_not_found",
+  content_media_unsupported: "content_media_unsupported",
+  content_media_caption_too_long: "content_media_caption_too_long",
+  media_invalid: "media_invalid",
+  media_not_found: "media_not_found",
+  media_in_use: "media_in_use",
+  media_cover_pinned: "media_cover_pinned",
   feed_not_found: "feed_not_found",
   feed_item_not_ready: "feed_item_not_ready",
   adaptation_not_found: "adaptation_not_found",
@@ -237,7 +243,10 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   try {
     res = await fetch(path, {
       ...init,
-      headers: { "content-type": "application/json", ...init?.headers },
+      headers:
+        init?.body instanceof FormData
+          ? init.headers
+          : { "content-type": "application/json", ...init?.headers },
     });
   } catch (err) {
     // fetch() itself rejected: network down, DNS, CORS, an aborted request —

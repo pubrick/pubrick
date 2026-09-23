@@ -23,6 +23,10 @@ export type LoadedAdaptation = {
   status: AdaptationStatus;
   body: string | null;
   itemBody: string;
+  itemBrandId: string;
+  channelBrandId: string;
+  coverMediaId: string | null;
+  coverAuthorizedId: string | null;
   /** Parent content item's status: `rejected` means do not deliver. */
   itemStatus: ContentStatus;
   platform: PlatformId;
@@ -519,6 +523,10 @@ export class PublishRepository {
         status: schema.adaptations.status,
         body: schema.adaptations.body,
         itemBody: schema.contentItems.body,
+        itemBrandId: schema.contentItems.brandId,
+        channelBrandId: schema.channels.brandId,
+        coverMediaId: schema.contentItems.coverMediaId,
+        coverAuthorizedId: schema.mediaAssets.id,
         itemStatus: schema.contentItems.status,
         platform: schema.channels.platform,
         attemptCount: schema.adaptations.attemptCount,
@@ -533,6 +541,14 @@ export class PublishRepository {
       })
       .from(schema.adaptations)
       .innerJoin(schema.contentItems, eq(schema.contentItems.id, schema.adaptations.contentItemId))
+      .leftJoin(
+        schema.mediaAssets,
+        and(
+          eq(schema.mediaAssets.id, schema.contentItems.coverMediaId),
+          eq(schema.mediaAssets.orgId, schema.contentItems.orgId),
+          eq(schema.mediaAssets.brandId, schema.contentItems.brandId),
+        ),
+      )
       .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
       .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
       .limit(1);

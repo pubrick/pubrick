@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { encodeContentCursor } from "@pubrick/shared";
+import sharp from "sharp";
 import request from "supertest";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -98,6 +99,30 @@ function justAfter(createdAt: string): string {
 }
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
+  {
+    controller: "media",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Media brand" }).expect(201);
+      const bytes = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#ad5438" },
+      })
+        .png()
+        .toBuffer();
+      const uploaded = await agent
+        .post(`/api/media?brandId=${brand.body.id}`)
+        .attach("file", bytes, { filename: "cover.png", contentType: "image/png" })
+        .expect(201);
+      return {
+        id: uploaded.body.id as string,
+        paths: [
+          `/api/media?brandId=${brand.body.id}`,
+          `/api/media?brandId=${brand.body.id}&offset=0`,
+        ],
+      };
+    },
+  },
   {
     controller: "brands",
     identify: id,

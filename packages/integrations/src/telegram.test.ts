@@ -37,6 +37,53 @@ function okMessage(overrides: Record<string, unknown> = {}) {
 }
 
 describe("telegramPublisher.publish", () => {
+  it("sends a cover and caption together as one Telegram photo", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const result = await telegramPublisher.publish(
+      CREDS,
+      { text: "Photo caption", image: { bytes, mimeType: "image/jpeg" } },
+      { fetchImpl },
+    );
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.telegram.org/bot123:abc/sendPhoto");
+    expect(init.body).toBeInstanceOf(FormData);
+    const body = init.body as FormData;
+    expect(body.get("chat_id")).toBe(CREDS.chatId);
+    expect(body.get("caption")).toBe("Photo caption");
+    const photo = body.get("photo") as File;
+    expect(photo.type).toBe("image/jpeg");
+    expect(new Uint8Array(await photo.arrayBuffer())).toEqual(bytes);
+    expect(result.externalId).toBe("4711");
+  });
+
+  it("refuses an overlong photo caption before sending any bytes", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    await expect(
+      telegramPublisher.publish(
+        CREDS,
+        { text: "x".repeat(1025), image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
+        { fetchImpl },
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps an interrupted photo delivery as an unknown outcome", async () => {
+    const fetchImpl = fetchRejectingWith("ECONNRESET", "reply lost");
+    await expect(
+      telegramPublisher.publish(
+        CREDS,
+        {
+          text: "Caption",
+          image: { bytes: new Uint8Array([0xff, 0xd8]), mimeType: "image/jpeg" },
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("posts plain text without parse_mode and returns a public link", async () => {
     const fetchImpl = fetchReturning(okMessage());
     const result = await telegramPublisher.publish(
