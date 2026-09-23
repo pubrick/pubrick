@@ -34,6 +34,26 @@ records an actionable failed delivery. Provider responses keep the same
 permanent/transient/unknown-outcome classification as text publishing, so an
 uncertain `sendPhoto` is never retried into a possible duplicate.
 
-Image generation, per-image regeneration, and VK/MAX image delivery remain
-future work. The media library never implies those channels will receive a
-cover.
+## Generate and revise images
+
+With a Google BYOK key saved in organization settings, the library offers an
+explicit **Generate image** action. Describe the image and click once; Pubrick
+calls Google's stable `gemini-3.1-flash-image` model for a 1K image. **Try
+variation** on an individual image sends that brand's JPEG alongside a new
+instruction. Each result is a new, normalized asset; the source remains intact.
+The result is not attached to any post. Review it and choose **Use** on an
+editable Telegram post before approval. No background generation is triggered
+by typing, opening the library, or approving a post.
+
+Every dispatched image request records a BYOK row in `usage_ledger`, including
+failed and uncertain outcomes. Where Gemini returns modality token counts,
+Pubrick estimates the standard tier cost using the published input, image
+output, text output and thinking rates. Missing details remain `unknown` rather
+than claiming a zero cost. The organization limit is 12 image calls per hour;
+one click makes one provider request with no retry. Provider error bodies and
+keys never reach the browser. The image model and rates should be reviewed as
+Google changes its [model](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image)
+and [pricing](https://ai.google.dev/gemini-api/docs/pricing) documentation.
+
+VK/MAX image delivery remains future work. The media library never implies
+those channels will receive a cover.

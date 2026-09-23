@@ -87,6 +87,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   media_not_found: "media_not_found",
   media_in_use: "media_in_use",
   media_cover_pinned: "media_cover_pinned",
+  media_generation_limit: "media_generation_limit",
+  media_generation_failed: "media_generation_failed",
   feed_not_found: "feed_not_found",
   feed_item_not_ready: "feed_item_not_ready",
   adaptation_not_found: "adaptation_not_found",

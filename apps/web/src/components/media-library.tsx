@@ -2,10 +2,11 @@
 
 import type { MediaAssetDto } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Textarea } from "@/components/ui/textarea";
 import { api, apiVoid, errorMessage } from "@/lib/api";
 
 export function MediaLibrary({
@@ -32,6 +33,11 @@ export function MediaLibrary({
   const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hasGoogleKey, setHasGoogleKey] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [generatedId, setGeneratedId] = useState<string | null>(null);
+  const promptRef = useRef<HTMLDivElement>(null);
   const load = useCallback(async () => {
     try {
       const first = await api<MediaAssetDto[]>(`/api/media?brandId=${brandId}`);
@@ -47,6 +53,35 @@ export function MediaLibrary({
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    void api<{ provider: string }[]>("/api/ai-credentials")
+      .then((keys) => setHasGoogleKey(keys.some((key) => key.provider === "google")))
+      .catch(() => setHasGoogleKey(false));
+  }, []);
+
+  async function generate() {
+    if (prompt.trim().length < 8 || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const asset = await api<MediaAssetDto>("/api/media/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId,
+          prompt: prompt.trim(),
+          ...(sourceId ? { sourceMediaId: sourceId } : {}),
+        }),
+      });
+      setGeneratedId(asset.id);
+      setPrompt("");
+      setSourceId(null);
+      await load();
+    } catch (cause) {
+      setError(errorMessage(cause, t("generateFailed"), te));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function loadMore() {
     setBusy(true);
@@ -139,6 +174,43 @@ export function MediaLibrary({
           {error}
         </p>
       )}
+      {hasGoogleKey && (
+        <div
+          ref={promptRef}
+          className="mb-4 space-y-2 rounded-control border border-border bg-bg-sunken p-3"
+        >
+          <p className="text-sm font-medium">{t("generateTitle")}</p>
+          <p className="text-xs text-fg-secondary">{t("generateHint")}</p>
+          {sourceId && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+              <span>
+                {t("variationOf", {
+                  name: assets.find((asset) => asset.id === sourceId)?.name ?? t("image"),
+                })}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setSourceId(null)}>
+                {t("cancelVariation")}
+              </Button>
+            </div>
+          )}
+          <Textarea
+            label={t("prompt")}
+            value={prompt}
+            maxLength={2000}
+            disabled={busy}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder={sourceId ? t("variationPlaceholder") : t("promptPlaceholder")}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy || prompt.trim().length < 8}
+            onClick={() => void generate()}
+          >
+            {busy ? t("generating") : sourceId ? t("generateVariation") : t("generate")}
+          </Button>
+        </div>
+      )}
       {loadFailed ? (
         <Button size="sm" variant="secondary" onClick={() => void load()}>
           {t("retry")}
@@ -172,6 +244,11 @@ export function MediaLibrary({
                 <p className="truncate text-xs text-fg-secondary" title={asset.name}>
                   {asset.name}
                 </p>
+                {generatedId === asset.id && (
+                  <p className="text-xs text-accent" role="status">
+                    {t("reviewImage")}
+                  </p>
+                )}
                 {itemId &&
                   (selectedId === asset.id ? (
                     <span className="text-xs font-medium text-accent">{t("selected")}</span>
@@ -185,6 +262,20 @@ export function MediaLibrary({
                       {t("use")}
                     </Button>
                   ))}
+                {hasGoogleKey && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setSourceId(asset.id);
+                      setGeneratedId(null);
+                      promptRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }}
+                  >
+                    {t("tryVariation")}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="danger"

@@ -15,20 +15,29 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { type MediaCoverUpdate, mediaCoverUpdateSchema } from "@pubrick/shared";
+import {
+  type MediaCoverUpdate,
+  type MediaGenerate,
+  mediaCoverUpdateSchema,
+  mediaGenerateSchema,
+} from "@pubrick/shared";
 import type { Response } from "express";
 import { z } from "zod";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { MEDIA_MAX_UPLOAD_BYTES, MediaRepository } from "./media.repository";
+import { MediaImageService } from "./media-image.service";
 
 const offsetSchema = z.coerce.number().int().min(0).max(100_000).default(0);
 
 @Controller("media")
 @UseGuards(ActiveOrgGuard)
 export class MediaController {
-  constructor(private readonly media: MediaRepository) {}
+  constructor(
+    private readonly media: MediaRepository,
+    private readonly images: MediaImageService,
+  ) {}
 
   @Get()
   list(
@@ -49,6 +58,14 @@ export class MediaController {
     @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string },
   ) {
     return this.media.upload(orgId, brandId, file);
+  }
+
+  @Post("generate")
+  generate(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(mediaGenerateSchema)) body: MediaGenerate,
+  ) {
+    return this.images.generate(orgId, body);
   }
 
   @Get(":id/file")

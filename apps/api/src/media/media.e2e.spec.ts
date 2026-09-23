@@ -3,16 +3,33 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { createDb, schema } from "@pubrick/db";
 import { mediaAssetDtoSchema } from "@pubrick/shared";
+import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GeminiImageCaller } from "./gemini-image.caller";
 
 const url = process.env.TEST_DATABASE_URL;
 
 describe.skipIf(!url)("media library e2e", () => {
   let app: INestApplication;
   let mediaDir: string;
+  let direct: ReturnType<typeof createDb>;
+  let generatedPng: Buffer;
+  const modelCall = vi.fn<GeminiImageCaller["call"]>(async (_key, _prompt, _source) => ({
+    bytes: generatedPng,
+    mimeType: "image/png",
+    usage: {
+      promptTokenCount: 100,
+      candidatesTokenCount: 1120,
+      thoughtsTokenCount: 10,
+      candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 1120 }],
+    },
+    outcome: "completed" as const,
+    responseMs: 100,
+  }));
 
   beforeAll(async () => {
     mediaDir = await mkdtemp(path.join(tmpdir(), "pubrick-media-test-"));
@@ -20,18 +37,30 @@ describe.skipIf(!url)("media library e2e", () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    generatedPng = await sharp({
+      create: { width: 4, height: 3, channels: 3, background: "#ffcc00" },
+    })
+      .png()
+      .toBuffer();
     const { AppModule } = await import("../app.module");
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(GeminiImageCaller)
+      .useValue({ call: modelCall })
+      .compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
     await app.listen(0);
+    direct = createDb(url as string);
   });
 
   afterAll(async () => {
     await app.close();
+    await direct.pool.end();
     await rm(mediaDir, { recursive: true, force: true });
   });
+
+  beforeEach(() => modelCall.mockClear());
 
   async function agent() {
     const user = request.agent(app.getHttpServer());
@@ -209,5 +238,148 @@ describe.skipIf(!url)("media library e2e", () => {
       .expect(409);
     await owner.patch(`/api/media/posts/${item.body.id}/cover`).send({ mediaId: null }).expect(200);
     await owner.delete(`/api/media/${image.body.id}`).expect(204);
+  });
+
+  it("bills an explicit Gemini generation and keeps the new image detached for review", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Image brand" }).expect(201);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const created = await owner
+      .post("/api/media/generate")
+      .send({ brandId: brand.body.id, prompt: "A golden ceramic vase on a table" })
+      .expect(201);
+    expect(created.body).toMatchObject({
+      brandId: brand.body.id,
+      mimeType: "image/jpeg",
+      width: 4,
+      height: 3,
+    });
+    expect(mediaAssetDtoSchema.safeParse(created.body).success).toBe(true);
+    expect(modelCall).toHaveBeenCalledWith(
+      "test-google-key",
+      "A golden ceramic vase on a table",
+      undefined,
+    );
+    const saved = await readFile(path.join(mediaDir, `${created.body.id}.jpg`));
+    expect((await sharp(saved).metadata()).format).toBe("jpeg");
+    const assetRows = await direct.db
+      .select()
+      .from(schema.mediaAssets)
+      .where(eq(schema.mediaAssets.id, created.body.id));
+    const rows = await direct.db
+      .select()
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.step, "image_generate"));
+    const ledger = rows.find((row) => row.orgId === assetRows[0]?.orgId);
+    expect(ledger).toMatchObject({
+      provider: "google",
+      modelId: "gemini-3.1-flash-image",
+      costSource: "price_table",
+      outcome: "completed",
+    });
+    expect(Number(ledger?.costUsd)).toBeGreaterThan(0);
+  });
+
+  it("regenerates only from a same-brand image and preserves the source", async () => {
+    const owner = await agent();
+    const stranger = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Image brand" }).expect(201);
+    const other = await owner.post("/api/brands").send({ name: "Other brand" }).expect(201);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const source = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "source.png", contentType: "image/png" })
+      .expect(201);
+    const blocked = {
+      brandId: other.body.id,
+      prompt: "Change the background to blue",
+      sourceMediaId: source.body.id,
+    };
+    await owner.post("/api/media/generate").send(blocked).expect(404);
+    await stranger
+      .post("/api/media/generate")
+      .send({ ...blocked, brandId: brand.body.id })
+      .expect(404);
+    expect(modelCall).not.toHaveBeenCalled();
+    const variant = await owner
+      .post("/api/media/generate")
+      .send({ ...blocked, brandId: brand.body.id })
+      .expect(201);
+    expect(variant.body.id).not.toBe(source.body.id);
+    expect(modelCall.mock.calls[0]?.[2]).toEqual(
+      await readFile(path.join(mediaDir, `${source.body.id}.jpg`)),
+    );
+    await owner.get(`/api/media/${source.body.id}/file`).expect(200);
+    await owner.get(`/api/media/${variant.body.id}/file`).expect(200);
+  });
+
+  it("refuses calls without a Google key and records an uncertain billed call without an asset", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Image brand" }).expect(201);
+    const body = { brandId: brand.body.id, prompt: "A blue ceramic vase on a table" };
+    await owner.post("/api/media/generate").send(body).expect(404);
+    expect(modelCall).not.toHaveBeenCalled();
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    modelCall.mockImplementationOnce(async () => ({ outcome: "unknown", responseMs: 120000 }));
+    await owner.post("/api/media/generate").send(body).expect(409);
+    const assets = await owner.get(`/api/media?brandId=${brand.body.id}`).expect(200);
+    expect(assets.body).toEqual([]);
+    const brandRows = await direct.db
+      .select()
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    expect(brandRows).toHaveLength(1);
+    const rows = await direct.db
+      .select()
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, brandRows[0]?.orgId ?? ""));
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        step: "image_generate",
+        outcome: "unknown",
+        costSource: "unknown",
+        status: "errored",
+      }),
+    );
+  });
+
+  it("stops an organization at its hourly image call budget before contacting Gemini", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Budget brand" }).expect(201);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const brandRows = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    expect(brandRows).toHaveLength(1);
+    await direct.db.insert(schema.usageLedger).values(
+      Array.from({ length: 12 }, () => ({
+        orgId: brandRows[0]?.orgId ?? "",
+        step: "image_generate",
+        provider: "google" as const,
+        modelId: "gemini-3.1-flash-image",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      })),
+    );
+    const response = await owner
+      .post("/api/media/generate")
+      .send({ brandId: brand.body.id, prompt: "An editorial photo of a blue vase" })
+      .expect(409);
+    expect(response.body.code).toBe("media_generation_limit");
+    expect(modelCall).not.toHaveBeenCalled();
   });
 });
