@@ -15,7 +15,7 @@ documents when they disagree.
 | Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, selected social post/news digest/expert article/how-to formats, and opt-in homepage UTM tagging | Video/newsletter repurposing and deeper SEO workflow |
 | Images and media | Brand-scoped upload library, manual Gemini image generation and per-image variation, cover selection and Telegram photo delivery | Other channel media and richer image provenance |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
-| Calendar | Scheduled publishing, brand calendar, slots and planned draft generation | Memorable dates and richer planning |
+| Calendar | Scheduled publishing, brand calendar, slots, planned draft generation and brand-scoped annual memorable-date suggestions | Richer planning and topic-bank links |
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
 | Analytics | Usage and cost ledger; brand results and on-demand VK post metrics | Automatic collection, other-channel metrics and performance feedback |
 | Comment analysis | On-demand public Telegram reply sample and metered Google BYOK aggregate summary, sentiment and themes | Private or inaccessible discussions and feedback-informed ranking |

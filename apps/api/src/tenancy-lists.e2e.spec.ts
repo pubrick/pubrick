@@ -27,6 +27,8 @@ type ListEndpoint = {
   controller: string;
   /** Pulls the identifying value out of one row of the response. */
   identify: (row: Record<string, unknown>) => string;
+  /** Unwrap a collection response that also carries metadata. */
+  rows?: (body: unknown) => Record<string, unknown>[];
   seed: (agent: request.Agent) => Promise<Seeded>;
   /** A foreign brand id is rejected before listing, rather than returning an empty list. */
   foreignBrandNotFound?: boolean;
@@ -103,6 +105,30 @@ function justAfter(createdAt: string): string {
 }
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
+  {
+    controller: "calendar/memorable-dates",
+    identify: id,
+    rows: (body) => (body as { dates: Record<string, unknown>[] }).dates,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Date brand" }).expect(201);
+      const date = await agent
+        .post("/api/calendar/memorable-dates")
+        .send({
+          brandId: brand.body.id,
+          monthDay: "02-29",
+          title: "Leap day",
+          leadDays: 14,
+          suggestedContentTypes: ["social_post"],
+          isActive: true,
+        })
+        .expect(201);
+      return {
+        id: date.body.id as string,
+        paths: [`/api/calendar/memorable-dates?brandId=${brand.body.id}`],
+      };
+    },
+  },
   {
     controller: "calendar/slots",
     identify: id,
@@ -324,7 +350,8 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // so an endpoint that answered `[]` to everything — a broken query, a
       // filter on the wrong column — cannot pass for correct scoping.
       for (const path of mine.paths) {
-        const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
+        const body = (await stranger.get(path).expect(200)).body as unknown;
+        const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
         expect(listed.map(endpoint.identify)).toEqual([mine.id]);
       }
 
@@ -337,7 +364,8 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
         if (endpoint.foreignBrandNotFound) {
           await stranger.get(path).expect(404);
         } else {
-          const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
+          const body = (await stranger.get(path).expect(200)).body as unknown;
+          const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
           expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
         }
       }
