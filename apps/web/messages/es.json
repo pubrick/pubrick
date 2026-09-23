@@ -304,6 +304,13 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "briefLabel": "Brief",
     "briefPlaceholder": "¿De qué debería tratar esta publicación?",
+    "contentTypeLabel": "Generar como",
+    "contentType": {
+      "social_post": "Publicación social",
+      "news_digest": "Resumen de noticias",
+      "expert_article": "Artículo especializado",
+      "educational": "Guía práctica"
+    },
     "sourceTitle": "Fuente",
     "materialLabel": "Texto pegado",
     "materialPlaceholder": "Pega aquí el artículo o la publicación…",
@@ -531,6 +538,13 @@
     "title": "Generación",
     "backToQueue": "Volver a la cola",
     "briefLabel": "Brief",
+    "contentTypeLabel": "Formato",
+    "contentType": {
+      "social_post": "Publicación social",
+      "news_digest": "Resumen de noticias",
+      "expert_article": "Artículo especializado",
+      "educational": "Guía práctica"
+    },
     "materialLabel": "Texto pegado",
     "sourceLabel": "Fuente",
     "noBrief": "Sin brief: redactado a partir del texto pegado.",

@@ -57,11 +57,11 @@ const stop = { unified: "stop" as const, raw: undefined };
  * every call as a researcher.
  */
 const ROLE_MARKERS: ReadonlyArray<[StepRole, string]> = [
-  ["researcher", "You plan a social post before anyone writes it."],
-  ["writer", "You write the master draft of a social post"],
-  ["editor", "You edit a draft post into the brand's voice."],
-  ["factcheck", "You read a draft post and list the factual claims"],
-  ["adapter", "You rewrite an approved post for one channel:"],
+  ["researcher", "You plan a content draft before anyone writes it."],
+  ["writer", "You write the master draft, working from a brief"],
+  ["editor", "You edit a draft into the brand's voice."],
+  ["factcheck", "You read a draft and list the factual claims"],
+  ["adapter", "You rewrite an approved draft for one channel:"],
 ];
 
 function roleOf(system: string): StepRole {
@@ -73,7 +73,7 @@ function roleOf(system: string): StepRole {
 
 /** The channel an adapter call is for, read back out of its own instructions. */
 export function channelOf(system: string): string {
-  return /You rewrite an approved post for one channel: (.+?), on /.exec(system)?.[1] ?? "";
+  return /You rewrite an approved draft for one channel: (.+?), on /.exec(system)?.[1] ?? "";
 }
 
 type PromptMessage = { role: string; content: unknown };

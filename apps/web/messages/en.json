@@ -304,6 +304,13 @@
     "genericError": "Something went wrong. Please try again.",
     "briefLabel": "Brief",
     "briefPlaceholder": "What should this post be about?",
+    "contentTypeLabel": "Generate as",
+    "contentType": {
+      "social_post": "Social post",
+      "news_digest": "News digest",
+      "expert_article": "Expert article",
+      "educational": "How-to guide"
+    },
     "sourceTitle": "Source",
     "materialLabel": "Pasted text",
     "materialPlaceholder": "Paste the article or post here…",
@@ -531,6 +538,13 @@
     "title": "Generation",
     "backToQueue": "Back to queue",
     "briefLabel": "Brief",
+    "contentTypeLabel": "Format",
+    "contentType": {
+      "social_post": "Social post",
+      "news_digest": "News digest",
+      "expert_article": "Expert article",
+      "educational": "How-to guide"
+    },
     "materialLabel": "Pasted text",
     "sourceLabel": "Source",
     "noBrief": "No brief — drafted from the pasted text.",

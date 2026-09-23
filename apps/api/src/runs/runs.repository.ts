@@ -387,13 +387,19 @@ export class RunsRepository {
               ? // The refine guarantees at least one of the two is non-blank, so
                 // with no material the brief is non-null. This is the one place
                 // that guarantee is invisible to the compiler.
-                { kind: "brief", text: brief as string, channelIds: data.channelIds }
+                {
+                  kind: "brief",
+                  text: brief as string,
+                  channelIds: data.channelIds,
+                  ...(data.contentType && { contentType: data.contentType }),
+                }
               : {
                   kind: "source",
                   text: brief,
                   sourceUrl: data.sourceUrl ?? null,
                   material,
                   channelIds: data.channelIds,
+                  ...(data.contentType && { contentType: data.contentType }),
                 },
         })
         .returning({ id: schema.pipelineRuns.id });
@@ -452,6 +458,7 @@ export class RunsRepository {
       orgId,
       parseRunCreate.transform({
         brandId: row.brandId,
+        contentType: stored.contentType,
         brief: stored.text ?? undefined,
         ...(stored.kind === "source"
           ? { material: stored.material, sourceUrl: stored.sourceUrl ?? undefined }

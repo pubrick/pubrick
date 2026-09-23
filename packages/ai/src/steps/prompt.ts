@@ -3,6 +3,7 @@ import { PermanentError, PROMPT_ROLES } from "@pubrick/shared";
 import type { ZodType } from "zod";
 import { withRunFailure } from "../classify.js";
 import { generateStructured } from "../generate.js";
+import { contentTypePolicy } from "./content-type-policy.js";
 import type { Step, StepAttribution, StepContext } from "./types.js";
 
 /**
@@ -125,12 +126,15 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
       const key = spec.name.startsWith("adapter:") ? "adapter" : spec.name;
       const role = PROMPT_ROLES.find((candidate) => candidate === key);
       const guidance = role ? ctx.promptGuidance?.[role] : undefined;
+      const format = role ? contentTypePolicy(ctx.contentType ?? "social_post", role) : [];
       return callStep(ctx, {
         schema: spec.schema,
         attribution,
-        role: guidance
-          ? [...spec.role, "", "Additional guidance set by this organization:", guidance]
-          : spec.role,
+        role: [
+          ...spec.role,
+          ...format,
+          ...(guidance ? ["", "Additional guidance set by this organization:", guidance] : []),
+        ],
         material: spec.material(ctx, input),
       });
     },

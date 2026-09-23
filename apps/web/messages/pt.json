@@ -304,6 +304,13 @@
     "genericError": "Algo deu errado. Tente novamente.",
     "briefLabel": "Briefing",
     "briefPlaceholder": "Sobre o que deve ser esta publicação?",
+    "contentTypeLabel": "Gerar como",
+    "contentType": {
+      "social_post": "Publicação social",
+      "news_digest": "Resumo de notícias",
+      "expert_article": "Artigo especializado",
+      "educational": "Guia prático"
+    },
     "sourceTitle": "Fonte",
     "materialLabel": "Texto colado",
     "materialPlaceholder": "Cole aqui o artigo ou a publicação…",
@@ -531,6 +538,13 @@
     "title": "Geração",
     "backToQueue": "Voltar para a fila",
     "briefLabel": "Briefing",
+    "contentTypeLabel": "Formato",
+    "contentType": {
+      "social_post": "Publicação social",
+      "news_digest": "Resumo de notícias",
+      "expert_article": "Artigo especializado",
+      "educational": "Guia prático"
+    },
     "materialLabel": "Texto colado",
     "sourceLabel": "Fonte",
     "noBrief": "Sem briefing: redigido a partir do texto colado.",

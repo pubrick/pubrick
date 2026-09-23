@@ -1907,6 +1907,39 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         seeded.channelNames[0],
       );
     }, 25_000);
+
+    it("uses the stored editorial format without adding a paid step", async () => {
+      const seeded = await seed({ channels: 1 });
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          input: {
+            kind: "brief",
+            text: BRIEF,
+            channelIds: seeded.channelIds,
+            contentType: "educational",
+          },
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      const script = scriptedModel();
+
+      await serviceFor(script).handle({
+        id: "job-how-to",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      expect(script.calls.map((call) => call.role)).toEqual([
+        "researcher",
+        "writer",
+        "editor",
+        "factcheck",
+        "adapter",
+      ]);
+      expect(script.calls.find((call) => call.role === "writer")?.system).toContain("how-to");
+      expect(script.calls.find((call) => call.role === "researcher")?.system).toContain("how-to");
+      expect(script.calls.find((call) => call.role === "adapter")?.system).toContain("how-to");
+      expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+    }, 25_000);
   });
 
   /**

@@ -304,6 +304,13 @@
     "genericError": "Что-то пошло не так. Попробуйте ещё раз.",
     "briefLabel": "Бриф",
     "briefPlaceholder": "О чём должен быть этот пост?",
+    "contentTypeLabel": "Формат генерации",
+    "contentType": {
+      "social_post": "Пост",
+      "news_digest": "Дайджест новостей",
+      "expert_article": "Экспертная статья",
+      "educational": "Практическое руководство"
+    },
     "sourceTitle": "Источник",
     "materialLabel": "Вставленный текст",
     "materialPlaceholder": "Вставьте сюда текст статьи или поста…",
@@ -531,6 +538,13 @@
     "title": "Генерация",
     "backToQueue": "Назад в очередь",
     "briefLabel": "Бриф",
+    "contentTypeLabel": "Формат",
+    "contentType": {
+      "social_post": "Пост",
+      "news_digest": "Дайджест новостей",
+      "expert_article": "Экспертная статья",
+      "educational": "Практическое руководство"
+    },
     "materialLabel": "Вставленный текст",
     "sourceLabel": "Источник",
     "noBrief": "Без брифа — черновик по вставленному тексту.",

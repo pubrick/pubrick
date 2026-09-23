@@ -2,6 +2,8 @@
 
 import {
   type AiCredentialPublic,
+  CONTENT_TYPES,
+  type ContentType,
   MAX_BODY_LENGTH,
   MAX_BRIEF_LENGTH,
   MAX_SOURCE_TEXT_LENGTH,
@@ -48,6 +50,7 @@ export default function NewContentPage() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [brief, setBrief] = useState("");
+  const [contentType, setContentType] = useState<ContentType>("social_post");
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
@@ -307,6 +310,7 @@ export default function NewContentPage() {
         body: JSON.stringify({
           brandId,
           channelIds: [...channelIds],
+          ...(contentType !== "social_post" && { contentType }),
           ...(hasBrief && { brief }),
           ...(hasMaterial && { material }),
           ...(hasSourceUrl && { sourceUrl }),
@@ -404,6 +408,21 @@ export default function NewContentPage() {
               showCount
               rows={3}
             />
+            {canGenerate && (
+              <Select
+                id="contentType"
+                label={t("contentTypeLabel")}
+                value={contentType}
+                onChange={(event) => setContentType(event.target.value as ContentType)}
+                className="min-h-11"
+              >
+                {CONTENT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {t(`contentType.${type}`)}
+                  </option>
+                ))}
+              </Select>
+            )}
             {credentials !== null &&
               (canGenerate ? (
                 <div>

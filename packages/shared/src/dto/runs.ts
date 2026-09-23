@@ -153,6 +153,15 @@ export const MAX_SOURCE_URL_LENGTH = 2048;
  */
 export const MAX_CONCURRENT_RUNS = 3;
 
+/** Editorial format for an existing generation run; no extra pipeline or model call. */
+export const CONTENT_TYPES = [
+  "social_post",
+  "news_digest",
+  "expert_article",
+  "educational",
+] as const;
+export type ContentType = (typeof CONTENT_TYPES)[number];
+
 /**
  * What the fact-checking step's output is called, everywhere a human can read it.
  *
@@ -199,6 +208,7 @@ const pastedMaterial = z
 export const runCreateSchema = z
   .object({
     brandId: z.string().uuid(),
+    contentType: z.enum(CONTENT_TYPES).optional(),
     /**
      * No longer `.min(1)`: a run asked for from pasted material has nothing to
      * put here, and the brief keeps its own meaning beside one — what to do
@@ -394,6 +404,8 @@ export function isRunFailure(value: unknown): value is RunFailure {
  */
 export const briefRunInputSchema = z.object({
   kind: z.literal("brief"),
+  /** Optional for runs created before content types were introduced. */
+  contentType: z.enum(CONTENT_TYPES).optional(),
   text: z.string().min(1),
   channelIds: z.array(z.string().uuid()).min(1),
 });
@@ -412,6 +424,7 @@ export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
  */
 export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
+  contentType: z.enum(CONTENT_TYPES).optional(),
   /**
    * What the person typed, if anything — instructions about the material, not a
    * second thing to work from.

@@ -710,6 +710,50 @@ describe.skipIf(!url)("runs e2e", () => {
    * spelling of it.
    */
   describe("retrying a run the API already has", () => {
+    it("preserves the chosen format in the receipt and on retry", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Explain the setup",
+          channelIds: [channelId],
+          contentType: "educational",
+        })
+        .expect(201);
+      const first = runDetailDtoSchema.parse(created.body);
+      expect(first.input.contentType).toBe("educational");
+      await setRunStatus(first.id, "failed", "internal");
+
+      const retried = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(retried.input).toEqual(first.input);
+    });
+
+    it("preserves an article format beside pasted source material", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: ARTICLE,
+          sourceUrl: "https://example.com/article",
+          channelIds: [channelId],
+          contentType: "expert_article",
+        })
+        .expect(201);
+      const first = runDetailDtoSchema.parse(created.body);
+      expect(first.input).toMatchObject({ kind: "source", contentType: "expert_article" });
+      await setRunStatus(first.id, "failed", "internal");
+
+      const retried = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(retried.input).toEqual(first.input);
+    });
     const ARTICLE = "The autumn menu, as somebody else wrote it.";
 
     async function pastedRun(agent: request.Agent, brandId: string, channelIds: string[]) {

@@ -40,7 +40,8 @@ call is recorded, including the retries and the ones that failed after the
 provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
 brand; an article's title and summary can start a draft. You can also
 [fetch a public article into an editable preview](docs/source-extraction.md) and
-generate posts for selected channels. See [watched sources](docs/watched-sources.md)
+generate [social posts, news digests, expert articles, or how-to guides](docs/content-types.md)
+for selected channels. See [watched sources](docs/watched-sources.md)
 for the exact limits. The per-brand
 knowledge base uses text search and optional Gemini vector indexing. Other
 platforms remain unavailable until their publishers are implemented.
