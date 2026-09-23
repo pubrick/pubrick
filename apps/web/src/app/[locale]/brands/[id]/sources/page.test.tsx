@@ -105,4 +105,40 @@ describe("watched sources page", () => {
     });
     expect(runCreateSchema.parse(payload)).toEqual(payload);
   });
+
+  it("saves an article as a topic and records an editor signal", async () => {
+    const item = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "New market hall",
+      summary: "The council approved the project.",
+      url: "https://example.com/articles/hall",
+      editorSignal: null,
+      publishedAt: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const calls = install([item]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await waitFor(() => expect(document.body.textContent).toContain(item.title));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Sources.saveTopic }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) => call.method === "POST" && call.url.includes(`/api/topics/from-news/${ITEM_ID}`),
+        ),
+      ).toBe(true),
+    );
+    await user.click(screen.getByRole("button", { name: en.Sources.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Sources.relevant }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        url: expect.stringContaining(`/api/topics/news/${ITEM_ID}/feedback?brandId=${BRAND_ID}`),
+        method: "PATCH",
+        body: { signal: "relevant" },
+      }),
+    );
+  });
 });

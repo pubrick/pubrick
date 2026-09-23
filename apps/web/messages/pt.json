@@ -67,7 +67,12 @@
     "voiceUnset": "Não definido",
     "voiceSave": "Salvar",
     "voiceCancel": "Cancelar",
-    "sourcesLink": "Fontes monitoradas"
+    "sourcesLink": "Fontes monitoradas",
+    "topicsLink": "Banco de tópicos",
+    "calendarLink": "Abrir calendário de conteúdo",
+    "knowledgeTitle": "Conhecimento da marca",
+    "knowledgeHint": "Guarde detalhes de produtos, exemplos e notas para futuros rascunhos.",
+    "knowledgeOpen": "Abrir conhecimento"
   },
   "Sources": {
     "title": "Fontes de {brand}",
@@ -103,10 +108,14 @@
     "selectChannels": "Escolha os canais para este rascunho.",
     "noChannels": "Adicione um canal à marca antes de gerar.",
     "generate": "Gerar",
-    "calendarLink": "Abrir calendário de conteúdo",
-    "knowledgeTitle": "Conhecimento da marca",
-    "knowledgeHint": "Guarde detalhes de produtos, exemplos e notas para futuros rascunhos.",
-    "knowledgeOpen": "Abrir conhecimento"
+    "topicsLink": "Banco de tópicos",
+    "saveTopic": "Salvar tópico",
+    "topicSaved": "Tópico salvo. Revise-o no banco de tópicos.",
+    "relevant": "Relevante",
+    "irrelevant": "Irrelevante",
+    "more": "Mais",
+    "clearRelevant": "Limpar relevante",
+    "clearIrrelevant": "Limpar irrelevante"
   },
   "Knowledge": {
     "title": "Conhecimento da marca",
@@ -601,7 +610,10 @@
     "manual_publication_not_ready": "Aprove esta publicação do VC.ru antes de registar o URL público.",
     "calendar_slot_not_found": "Este espaço planejado não existe mais.",
     "calendar_slot_started": "A geração deste espaço já começou. Abra a execução para ver o progresso.",
-    "calendar_time_in_past": "Escolha um horário futuro para gerar o rascunho."
+    "calendar_time_in_past": "Escolha um horário futuro para gerar o rascunho.",
+    "topic_not_found": "Este tópico não está mais disponível. Atualize o banco de tópicos.",
+    "news_item_not_found": "Este artigo não está mais disponível. Atualize a lista de fontes.",
+    "topic_not_approved": "Aprove este tópico antes de gerar."
   },
   "Calendar": {
     "title": "Calendário de conteúdo",
@@ -634,5 +646,38 @@
     "save": "Salvar",
     "removeTitle": "Remover geração planejada?",
     "removeBody": "Isso remove o espaço antes do início da geração."
+  },
+  "Topics": {
+    "title": "Tópicos de {brand}",
+    "back": "Voltar aos artigos",
+    "add": "Adicionar tópico",
+    "name": "Título do tópico",
+    "description": "O que o rascunho deve abordar?",
+    "hint": "Revise e aprove um tópico antes de gerar. Um artigo salvo fornece apenas o título e o resumo do feed.",
+    "empty": "Ainda não há tópicos. Salve um artigo ou adicione uma ideia.",
+    "addFirst": "Adicione o primeiro tópico",
+    "noDescription": "Sem descrição",
+    "status_idea": "Ideia",
+    "status_approved": "Aprovado",
+    "status_archived": "Arquivado",
+    "edit": "Editar",
+    "approve": "Aprovar",
+    "generate": "Gerar",
+    "archive": "Arquivar",
+    "remove": "Remover",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "editTitle": "Editar tópico",
+    "removeTitle": "Remover este tópico?",
+    "removeBody": "A ideia será removida. Gerações e rascunhos existentes permanecem.",
+    "runTitle": "Gerar a partir do tópico",
+    "runHint": "Escolha os canais. A geração usa o título e a descrição aprovados; abra o link da fonte antes de confiar em detalhes fora do resumo.",
+    "noChannels": "Adicione um canal a esta marca antes de gerar.",
+    "genericError": "Algo deu errado. Tente novamente.",
+    "invalid": "Confira o título e a descrição do tópico.",
+    "more": "Mais",
+    "listError": "Não foi possível carregar os tópicos.",
+    "retry": "Tentar novamente",
+    "openSource": "Abrir fonte"
   }
 }

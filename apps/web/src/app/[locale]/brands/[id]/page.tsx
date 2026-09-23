@@ -365,6 +365,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <Link href={`/${locale}/brands/${id}/calendar`} className="text-accent underline">
           {tb("calendarLink")}
         </Link>
+        <Link href={`/${locale}/brands/${id}/topics`} className="text-accent underline">
+          {tb("topicsLink")}
+        </Link>
       </div>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">

@@ -190,6 +190,13 @@
       "when": 1790163967368,
       "tag": "0027_outstanding_tyger_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790164271039,
+      "tag": "0028_naive_gateway",
+      "breakpoints": true
     }
   ]
 }

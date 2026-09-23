@@ -11,7 +11,7 @@ documents when they disagree.
 | Brands | Present | Brand onboarding wizard |
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
 | News monitoring | Brand-scoped RSS, Atom, RDF and JSON Feed sources, polling, article list and draft start | Telegram sources, relevance ranking and topic review |
-| Topics bank | Not ported | Reviewed topic queue from monitored sources |
+| Topics bank | Brand-scoped human-reviewed ideas, import from watched articles, approval, edit/archive and generation via existing runs | AI topic suggestions, planning, and relevance ranking |
 | Multi-agent generation | Five-step engine and run receipts present | Content-type pipelines, repurposing, date context and link policy |
 | Image generation | Not ported | Media storage, generation and per-image regeneration |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
@@ -28,10 +28,10 @@ documents when they disagree.
 | Additional reference utilities | Partial | Uploads, link sanitization and cross-channel media propagation |
 
 The nearest dependency chain follows the generation design's shipping order:
-add Telegram sources, relevance review and the topics bank on top of the RSS
-source inventory. A topic should become another input to the existing
-generation engine, not a second generation path. The public RSS output is
-available for syndication, but it does not assert that Dzen imported a post.
+add Telegram sources and relevance ranking on top of the RSS source inventory
+and human-reviewed topics. A topic uses the existing generation engine rather
+than a second generation path. The public RSS output is available for
+syndication, but it does not assert that Dzen imported a post.
 
 Every ported slice should be usable on its own, tenant-scoped, metered when it
 calls a model, translated in all four locales, tested locally, and described in

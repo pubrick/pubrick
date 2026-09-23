@@ -176,6 +176,19 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "topics",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Ideas" }).expect(201);
+      const topic = await agent
+        .post("/api/topics")
+        .send({ brandId: brand.body.id, title: "A better market report" })
+        .expect(201);
+      return { id: topic.body.id as string, paths: [`/api/topics?brandId=${brand.body.id}`] };
+    },
+  },
+  {
     controller: "content",
     identify: id,
     seed: async (agent) => {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NEWS_FEEDBACK_SIGNALS } from "./topics.js";
 
 export const NEWS_SOURCE_ERROR_CODES = [
   "fetch_failed",
@@ -56,5 +57,6 @@ export const newsItemDtoSchema = z.object({
   url: z.string(),
   publishedAt: z.string().nullable(),
   createdAt: z.string(),
+  editorSignal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),
 });
 export type NewsItemDto = z.infer<typeof newsItemDtoSchema>;
