@@ -30,6 +30,7 @@ export type Material = { label: string; text: string };
  * the same trust tier as the brand's voice: org configuration, not content.)
  */
 export function instructionsFor(ctx: StepContext, role: readonly string[]): string {
+  const currentDate = (ctx.now?.() ?? new Date()).toISOString().slice(0, 10);
   const brand = [`Name: ${ctx.brand.name}`];
   // An unset voice omits its line. Interpolating a null would tell the model the
   // brand's voice is the word "null", which it would dutifully take as guidance.
@@ -48,6 +49,8 @@ export function instructionsFor(ctx: StepContext, role: readonly string[]): stri
 
   return [
     ...role,
+    "",
+    `Current date (UTC): ${currentDate}. Use it for date and year references; do not treat it as evidence that a claim in the supplied material is current.`,
     "",
     "About the brand you are writing for:",
     ...brand.map((line) => `- ${line}`),
