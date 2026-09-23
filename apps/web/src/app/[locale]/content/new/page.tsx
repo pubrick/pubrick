@@ -4,6 +4,7 @@ import {
   type AiCredentialPublic,
   CONTENT_TYPES,
   type ContentType,
+  contentTypeRequiresMaterial,
   MAX_BODY_LENGTH,
   MAX_BRIEF_LENGTH,
   MAX_SOURCE_TEXT_LENGTH,
@@ -265,8 +266,8 @@ export default function NewContentPage() {
       setSourceOpen(true);
       return;
     }
-    if (contentType === "repost" && !hasMaterial) {
-      setError(t("repostNeedsMaterial"));
+    if (contentTypeRequiresMaterial(contentType) && !hasMaterial) {
+      setError(t(contentType === "case_study" ? "caseStudyNeedsMaterial" : "repostNeedsMaterial"));
       setSourceOpen(true);
       return;
     }
@@ -421,7 +422,7 @@ export default function NewContentPage() {
                 onChange={(event) => {
                   const selected = event.target.value as ContentType;
                   setContentType(selected);
-                  if (selected === "repost") setSourceOpen(true);
+                  if (contentTypeRequiresMaterial(selected)) setSourceOpen(true);
                 }}
                 className="min-h-11"
               >
