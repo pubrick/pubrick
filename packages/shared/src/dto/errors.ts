@@ -78,6 +78,7 @@ export const API_ERROR_CODES = [
   "metrics_refresh_cooldown",
   "metrics_unavailable",
   "content_media_unsupported",
+  "content_media_too_large_for_bluesky",
   "content_media_caption_too_long",
   "media_invalid",
   "media_not_found",

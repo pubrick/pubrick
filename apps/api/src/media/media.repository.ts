@@ -191,7 +191,7 @@ export class MediaRepository {
       }
       if (mediaId) {
         const assets = await tx
-          .select({ id: schema.mediaAssets.id })
+          .select({ id: schema.mediaAssets.id, byteSize: schema.mediaAssets.byteSize })
           .from(schema.mediaAssets)
           .where(
             and(
@@ -201,7 +201,8 @@ export class MediaRepository {
             ),
           )
           .limit(1);
-        if (!assets.length) throw notFound("media_not_found", "Image not found in this brand");
+        const asset = assets[0];
+        if (!asset) throw notFound("media_not_found", "Image not found in this brand");
         const targets = await tx
           .select({ platform: schema.channels.platform, body: schema.adaptations.body })
           .from(schema.adaptations)
@@ -209,10 +210,18 @@ export class MediaRepository {
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, itemId)),
           );
-        if (targets.some((target) => !["telegram", "vk", "max"].includes(target.platform))) {
+        if (
+          targets.some((target) => !["telegram", "vk", "max", "bluesky"].includes(target.platform))
+        ) {
           throw conflict(
             "content_media_unsupported",
-            "Covers currently publish only to Telegram, VK, and MAX; remove other channels from this post",
+            "Covers currently publish only to Telegram, VK, MAX, and Bluesky; remove other channels from this post",
+          );
+        }
+        if (targets.some((target) => target.platform === "bluesky") && asset.byteSize > 2_000_000) {
+          throw conflict(
+            "content_media_too_large_for_bluesky",
+            "Bluesky covers must be 2 MB or smaller; choose a smaller image",
           );
         }
         if (

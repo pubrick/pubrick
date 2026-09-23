@@ -329,6 +329,50 @@ describe.skipIf(!url)("media library e2e", () => {
     ]);
   });
 
+  it("accepts a Bluesky cover for an approved post", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Bluesky cover brand" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "bluesky",
+        name: "Bluesky",
+        credentials: { handle: "example.bsky.social", appPassword: "test-app-password" },
+      })
+      .expect(201);
+    const post = await owner
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "A reviewed Bluesky post",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const image = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "cover.png", contentType: "image/png" })
+      .expect(201);
+    await direct.db
+      .update(schema.mediaAssets)
+      .set({ byteSize: 2_000_001 })
+      .where(eq(schema.mediaAssets.id, image.body.id));
+    await owner
+      .patch(`/api/media/posts/${post.body.id}/cover`)
+      .send({ mediaId: image.body.id })
+      .expect(409);
+    await direct.db
+      .update(schema.mediaAssets)
+      .set({ byteSize: image.body.byteSize })
+      .where(eq(schema.mediaAssets.id, image.body.id));
+    await owner
+      .patch(`/api/media/posts/${post.body.id}/cover`)
+      .send({ mediaId: image.body.id })
+      .expect(200);
+    const approved = await owner.post(`/api/content/${post.body.id}/approve`).send({}).expect(200);
+    expect(approved.body.adaptations).toMatchObject([{ status: "queued" }]);
+  });
+
   it("bills an explicit Gemini generation and keeps the new image detached for review", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Image brand" }).expect(201);

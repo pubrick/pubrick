@@ -3667,12 +3667,14 @@ export class ContentRepository {
       const coveredItem = cover[0];
       if (coveredItem?.id) {
         if (
-          platforms.some((channel) => !["telegram", "vk", "max"].includes(channel.platform)) ||
+          platforms.some(
+            (channel) => !["telegram", "vk", "max", "bluesky"].includes(channel.platform),
+          ) ||
           manualReady.length
         ) {
           throw conflict(
             "content_media_unsupported",
-            "Covers currently publish only to Telegram, VK, and MAX channels",
+            "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
           );
         }
         const overrideBodies = await tx

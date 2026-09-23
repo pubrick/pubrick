@@ -272,7 +272,8 @@ never be limited at all.
 3. Press **Test connection**. Pubrick checks the user, the token's `wall`
    permission, and community administration without publishing a test post.
 
-VK publishing currently sends text posts. The result links to the new community
+VK publishing sends text posts and one reviewed JPEG cover. A cover also needs
+the token's `photos` permission. The result links to the new community
 wall post. A failed or uncertain send is classified by the same delivery rules
 as Telegram; an uncertain outcome requires a human to inspect the wall before
 another attempt.
@@ -285,10 +286,25 @@ another attempt.
    bot token and chat ID. Press **Test connection** to check the bot, destination,
    and posting permission without sending a message.
 
-MAX publishing currently sends text posts. Pubrick uses the current
+MAX publishing sends text posts and one reviewed JPEG cover. Pubrick uses the current
 [`platform-api2.max.ru` API](https://dev.max.ru/docs-api/methods/POST/messages)
 and puts the token in the `Authorization` header, as MAX requires. If MAX returns
 a public post URL, Pubrick keeps it with the publication.
+
+## Connect a Bluesky account
+
+1. Create an app password in your Bluesky account settings. Use the account's
+   handle and this app password, not the account password. The current
+   connector supports accounts hosted on `bsky.social`.
+2. In Pubrick, open a brand → add a channel → platform **Bluesky**. Enter the
+   handle and app password, then press **Test connection**. This authenticates
+   without publishing a post.
+
+Bluesky delivery supports text within its 300-grapheme limit and one JPEG cover.
+The worker records the post URI and public URL when Bluesky returns them. An
+uncertain create-record response is not retried automatically; inspect the
+account before trying again. See Bluesky's
+[post and image guide](https://docs.bsky.app/docs/tutorials/creating-a-post).
 
 ## Upgrade
 

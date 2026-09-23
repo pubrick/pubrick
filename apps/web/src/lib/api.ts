@@ -92,6 +92,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   metrics_refresh_cooldown: "metrics_refresh_cooldown",
   metrics_unavailable: "metrics_unavailable",
   content_media_unsupported: "content_media_unsupported",
+  content_media_too_large_for_bluesky: "content_media_too_large_for_bluesky",
   content_media_caption_too_long: "content_media_caption_too_long",
   media_invalid: "media_invalid",
   media_not_found: "media_not_found",

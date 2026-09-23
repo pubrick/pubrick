@@ -1,5 +1,6 @@
 import { PLATFORM_IDS, PUBLISHABLE_PLATFORM_IDS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
+import { blueskyPublisher } from "./bluesky.js";
 import { maxPublisher } from "./max.js";
 import { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
 import { telegramPublisher } from "./telegram.js";
@@ -10,6 +11,7 @@ describe("getPublisher", () => {
     expect(getPublisher("telegram")).toBe(telegramPublisher);
     expect(getPublisher("vk")).toBe(vkPublisher);
     expect(getPublisher("max")).toBe(maxPublisher);
+    expect(getPublisher("bluesky")).toBe(blueskyPublisher);
   });
 
   it("returns undefined for a platform with no adapter yet", () => {

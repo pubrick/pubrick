@@ -3,6 +3,7 @@ import path from "node:path";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  BLUESKY_REQUEST_TIMEOUT_MS,
   getPublisher,
   MAX_REQUEST_TIMEOUT_MS,
   PermanentPublishError,
@@ -101,7 +102,12 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  * "outcome unknown, go look at the channel".
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
-  Math.max(TELEGRAM_REQUEST_TIMEOUT_MS, VK_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS) +
+  Math.max(
+    TELEGRAM_REQUEST_TIMEOUT_MS,
+    VK_REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_TIMEOUT_MS,
+    BLUESKY_REQUEST_TIMEOUT_MS,
+  ) +
   PUBLISH_RECORD_BUDGET_MS +
   10_000;
 
@@ -481,7 +487,9 @@ export class PublishService {
           ? env.VK_API_BASE_URL
           : adaptation.platform === "max"
             ? env.MAX_API_BASE_URL
-            : this.baseUrl;
+            : adaptation.platform === "telegram"
+              ? this.baseUrl
+              : undefined;
       let image: { bytes: Uint8Array; mimeType: "image/jpeg" } | undefined;
       if (adaptation.coverMediaId) {
         if (adaptation.itemBrandId !== adaptation.channelBrandId) {
@@ -496,7 +504,7 @@ export class PublishService {
             "rejected_before_send",
           );
         }
-        if (!["telegram", "vk", "max"].includes(adaptation.platform)) {
+        if (!["telegram", "vk", "max", "bluesky"].includes(adaptation.platform)) {
           throw new ClassifiedPermanentError(
             "This channel cannot publish a cover image",
             "rejected_before_send",

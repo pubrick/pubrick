@@ -25,7 +25,7 @@ the brand deletion still succeeds and the server logs any removal failure.
 
 ## Publishing boundary
 
-Telegram, VK, and MAX accept a single JPEG cover. Telegram uses one `sendPhoto`
+Telegram, VK, MAX, and Bluesky accept a single JPEG cover. Telegram uses one `sendPhoto`
 request with the reviewed text as its caption (maximum 1024 characters).
 VK uses the official `photos.getWallUploadServer` → multipart upload →
 `photos.saveWallPhoto` → `wall.post` path and attaches the saved community photo
@@ -55,6 +55,11 @@ be retried because no message was sent. An uncertain final message outcome is
 terminal; MAX's explicit `attachment.not.ready` refusal is safe to retry.
 See the [MAX upload method](https://dev.max.ru/docs-api/methods/POST/uploads)
 and [image message flow](https://dev.max.ru/docs-api/use-cases/sending-messages/media).
+Bluesky uploads the JPEG as a blob before creating one `app.bsky.feed.post`
+record with an image embed. Its 2 MB image limit is checked before the provider
+call. The image upload can be retried; an uncertain record creation remains
+terminal to avoid a duplicate. See Bluesky's
+[image post guide](https://docs.bsky.app/docs/tutorials/creating-a-post#images-embeds).
 
 ## Generate and revise images
 
@@ -64,7 +69,7 @@ calls Google's stable `gemini-3.1-flash-image` model for a 1K image. **Try
 variation** on an individual image sends that brand's JPEG alongside a new
 instruction. Each result is a new, normalized asset; the source remains intact.
 The result is not attached to any post. Review it and choose **Use** on an
-editable Telegram, VK, or MAX post before approval. No background generation is triggered
+editable Telegram, VK, MAX, or Bluesky post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
 Every dispatched image request records a BYOK row in `usage_ledger`, including

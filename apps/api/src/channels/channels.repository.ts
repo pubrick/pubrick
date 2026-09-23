@@ -456,7 +456,9 @@ export class ChannelsRepository {
           ? env.VK_API_BASE_URL
           : channel.platform === "max"
             ? env.MAX_API_BASE_URL
-            : env.TELEGRAM_API_BASE_URL;
+            : channel.platform === "telegram"
+              ? env.TELEGRAM_API_BASE_URL
+              : undefined;
       return await publisher.verify(parsed.data, { baseUrl });
     } catch {
       return { ok: false, reason: "Connection test failed unexpectedly" };

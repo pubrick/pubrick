@@ -773,6 +773,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </div>
           {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
           {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
+          {platform === "bluesky" && (
+            <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
+          )}
           {platform === "vc_ru" && <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>}
         </form>
       </Card>
@@ -816,6 +819,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           )}
           {editing?.platform === "max" && (
             <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>
+          )}
+          {editing?.platform === "bluesky" && (
+            <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
           )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (
