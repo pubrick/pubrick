@@ -4,6 +4,7 @@ import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateRepository } from "./generate/generate.repository";
 import { GenerateService } from "./generate/generate.service";
+import { NotificationsService } from "./notifications/notifications.service";
 import { PublishRepository } from "./publish/publish.repository";
 import { PublishService } from "./publish/publish.service";
 import { QueueService } from "./queue.service";
@@ -22,6 +23,7 @@ import { SuggestionsService } from "./suggestions/suggestions.service";
     PublishService,
     GenerateRepository,
     GenerateService,
+    NotificationsService,
     RssRepository,
     RssService,
     CalendarService,

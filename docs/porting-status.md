@@ -23,7 +23,7 @@ documents when they disagree.
 | Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |
 | Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
-| Notifications | Not ported | Actionable admin notifications |
+| Notifications | Org-scoped Telegram bot and chat, encrypted at rest, opt-in draft alerts, delivery failure/unknown alerts, Test action, durable at-most-once outbox | Morning digest, richer event preferences and delivery history UI |
 | Public API | Internal authenticated API present | Public keys, documented endpoints, webhooks and MCP |
 | Additional reference utilities | Uploads present | Link sanitization and cross-channel media propagation |
 

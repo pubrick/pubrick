@@ -30,6 +30,7 @@ import type { PgBoss } from "pg-boss";
 import { CalendarService } from "./calendar/calendar.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
+import { NotificationsService } from "./notifications/notifications.service";
 import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
@@ -123,6 +124,7 @@ export class QueueService {
     @Optional() private readonly relevance?: RelevanceService,
     @Optional() private readonly comments?: CommentsService,
     @Optional() private readonly suggestions?: SuggestionsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -140,6 +142,14 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    if (this.notifications && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("notification-scan");
+      await boss.schedule("notification-scan", "* * * * *");
+      await boss.work("notification-scan", { batchSize: 1 }, async () =>
+        this.notifications?.scan(),
+      );
+    }
 
     if (this.rss && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });

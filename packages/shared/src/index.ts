@@ -47,6 +47,7 @@ export * from "./dto/content.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";
 export * from "./dto/media.js";
+export * from "./dto/notifications.js";
 export {
   PROMPT_ROLES,
   type PromptRevisionCreate,

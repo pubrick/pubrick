@@ -8,6 +8,7 @@ export * from "./feeds.js";
 export * from "./generation.js";
 export * from "./knowledge.js";
 export * from "./media.js";
+export * from "./notifications.js";
 export * from "./prompts.js";
 export * from "./readapt.js";
 export * from "./refine.js";

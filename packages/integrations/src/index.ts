@@ -1,6 +1,7 @@
 export { MAX_REQUEST_TIMEOUT_MS, maxPublisher } from "./max.js";
 export { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
 export { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
+export { sendTelegramNotification } from "./telegram-notification.js";
 export {
   PermanentPublishError,
   PlatformRejectionError,

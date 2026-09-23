@@ -45,6 +45,7 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # Leave on unless something in front of Pubrick already rate-limits /api/auth.
       AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
       MEDIA_STORAGE_DIR: /data/media
@@ -70,6 +71,7 @@ services:
   worker:
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     environment:
+      WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
       # Same value as the api's; the Telegram connect command encrypts this worker's session.
       # No fallback on purpose, same reasoning as the api's: see that service above.
@@ -82,6 +84,7 @@ services:
       # failure at boot. Worker-only — the web needs no bound to paint an
       # overdue row (see .env.example).
       PUBLISH_MAX_LATENESS_HOURS: "${PUBLISH_MAX_LATENESS_HOURS:-6}"
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
       MEDIA_STORAGE_DIR: /data/media

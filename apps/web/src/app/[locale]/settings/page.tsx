@@ -601,6 +601,17 @@ export default function SettingsPage() {
         </Card>
 
         <Card>
+          <h2 className="mb-2 text-base font-semibold text-fg">{t("notificationsTitle")}</h2>
+          <p className="mb-3 text-sm text-fg-secondary">{t("notificationsHint")}</p>
+          <Link
+            href={`/${locale}/settings/notifications`}
+            className="text-sm font-medium text-accent underline"
+          >
+            {t("notificationsOpen")}
+          </Link>
+        </Card>
+
+        <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>
           <p className="mb-3 text-sm text-fg-secondary">{session?.user?.email}</p>
           <Button variant="secondary" onClick={() => void signOut()}>

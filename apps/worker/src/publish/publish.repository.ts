@@ -15,6 +15,7 @@ import {
 import { and, eq, inArray, isNull, type SQLWrapper, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { enqueueNotification } from "../notifications/notifications.outbox";
 
 export type LoadedAdaptation = {
   id: string;
@@ -1016,6 +1017,14 @@ export class PublishRepository {
       );
 
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+      await enqueueNotification(
+        tx,
+        orgId,
+        outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+        adaptationId,
+        updated.contentItemId,
+        updated.attemptCount,
+      );
       return true;
     });
   }
@@ -1206,6 +1215,14 @@ export class PublishRepository {
           attempt: row.attemptCount,
         });
         await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+        await enqueueNotification(
+          tx,
+          row.orgId,
+          row.outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+          row.id,
+          row.contentItemId,
+          row.attemptCount,
+        );
       }
 
       return swept.map((row) => ({ id: row.id, orgId: row.orgId, outcome: row.outcome }));
@@ -1385,6 +1402,14 @@ export class PublishRepository {
           attempt: row.attemptCount,
         });
         await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+        await enqueueNotification(
+          tx,
+          row.orgId,
+          row.outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+          row.id,
+          row.contentItemId,
+          row.attemptCount,
+        );
       }
 
       return swept.map((row) => ({
