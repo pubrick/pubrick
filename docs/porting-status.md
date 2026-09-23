@@ -12,7 +12,7 @@ documents when they disagree.
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
 | News monitoring | Brand-scoped RSS, Atom, RDF and JSON Feed sources, polling, article list and draft start | Telegram sources, relevance ranking and topic review |
 | Topics bank | Brand-scoped human-reviewed ideas, import from watched articles, approval, edit/archive and generation via existing runs | AI topic suggestions, planning, and relevance ranking |
-| Multi-agent generation | Five-step engine, run receipts and current UTC date in every model step | Content-type pipelines, repurposing and link policy |
+| Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, and a public article URL preview that feeds the existing multi-channel run | Content-type pipelines, video/newsletter repurposing and link policy |
 | Image generation | Not ported | Media storage, generation and per-image regeneration |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
 | Calendar | Scheduled publishing, brand calendar, slots and planned draft generation | Memorable dates and richer planning |

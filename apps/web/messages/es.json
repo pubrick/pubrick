@@ -276,7 +276,7 @@
     "materialPlaceholder": "Pega aquí el artículo o la publicación…",
     "sourceUrlLabel": "URL de la fuente",
     "sourceUrlPlaceholder": "https://example.com/articulo (opcional)",
-    "sourceHelp": "El texto se usa tal como lo pegas. El enlace solo queda registrado: nada lo descarga.",
+    "sourceHelp": "Pega el texto o carga un artículo público y confirma la vista previa. La generación usa el texto guardado y no vuelve a abrir el enlace.",
     "generate": "Generar",
     "noBrandSelected": "Selecciona una marca primero.",
     "briefOrMaterialRequired": "Escribe un brief, pega material, o ambas cosas.",
@@ -289,7 +289,15 @@
     "discardTitle": "¿Descartar tu borrador?",
     "discardBody": "Generar crea una publicación nueva a partir de tu brief. El texto que escribiste aquí no se guarda.",
     "discardConfirm": "Descartar y generar",
-    "discardCancel": "Cancelar"
+    "discardCancel": "Cancelar",
+    "fetchSource": "Cargar artículo",
+    "fetchingSource": "Cargando…",
+    "sourcePreviewTitle": "Vista previa extraída",
+    "sourcePreviewTruncated": "La vista previa se redujo a {limit} caracteres. Revísala antes de generar.",
+    "useSourceText": "Usar este texto",
+    "replaceSourceText": "Reemplazar texto pegado",
+    "sourcePreviewNeedsUse": "Usa o descarta la vista previa extraída antes de generar.",
+    "dismissSourcePreview": "Descartar vista previa"
   },
   "Feed": {
     "title": "Feed RSS público",
@@ -613,7 +621,10 @@
     "calendar_time_in_past": "Elige una fecha futura para generar el borrador.",
     "topic_not_found": "Este tema ya no está disponible. Vuelve a cargar el banco de temas.",
     "news_item_not_found": "Este artículo ya no está disponible. Vuelve a cargar la lista de fuentes.",
-    "topic_not_approved": "Aprueba este tema antes de generar."
+    "topic_not_approved": "Aprueba este tema antes de generar.",
+    "source_fetch_failed": "No se pudo cargar esa página pública. Comprueba el enlace o pega su texto.",
+    "source_response_too_large": "La página es demasiado grande para importarla. Pega el texto relevante.",
+    "source_unreadable": "No se pudo extraer el texto del artículo. Pega el texto relevante."
   },
   "Calendar": {
     "title": "Calendario de contenido",

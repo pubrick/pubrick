@@ -463,7 +463,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
   const open = (user: ReturnType<typeof userEvent.setup>) =>
     user.click(screen.getByText(en.ContentNew.sourceTitle));
 
-  it("hides the paste behind the shared Advanced, and says what happens to the link", async () => {
+  it("hides source material behind the shared Advanced and explains the preview flow", async () => {
     const calls: Call[] = [];
     installHandlers(calls, undefined, googleKey);
 
@@ -479,8 +479,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
 
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toBeVisible();
     expect(screen.getByLabelText(en.ContentNew.sourceUrlLabel)).toBeVisible();
-    // The two promises the product makes about this field, in the open: the
-    // text is used as pasted, and the link is recorded rather than fetched.
+    // The preview is explicit; generation uses the accepted text in the run.
     const help = screen.getByText(en.ContentNew.sourceHelp);
     expect(help).toBeVisible();
     // And they reach a reader who cannot see the paragraph, through the fields
@@ -503,6 +502,141 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
       "maxlength",
       String(MAX_SOURCE_URL_LENGTH),
     );
+  });
+
+  it("shows fetched article text for confirmation before it can enter a run", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (path === "/api/source-extraction" && method === "POST") {
+          return {
+            title: "A guide",
+            material: "A guide\n\nUseful article text.",
+            truncated: false,
+          };
+        }
+        if (path === "/api/runs" && method === "POST") return { id: "imported-run" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+    await user.type(
+      screen.getByLabelText(en.ContentNew.sourceUrlLabel),
+      "https://example.com/guide",
+    );
+    await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
+
+    expect(await screen.findByText(en.ContentNew.sourcePreviewTitle)).toBeInTheDocument();
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
+    expect(parsedBody(calls.find((c) => c.path === "/api/source-extraction"))).toEqual({
+      url: "https://example.com/guide",
+    });
+    await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
+      "A guide\n\nUseful article text.",
+    );
+    expect(calls.some((c) => c.path === "/api/runs")).toBe(false);
+
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/imported-run"),
+    );
+    const runBody = parsedBody(calls.find((c) => c.path === "/api/runs"));
+    expect(runCreateSchema.parse(runBody)).toMatchObject({
+      brandId: B1,
+      channelIds: [CH1],
+      material: "A guide\n\nUseful article text.",
+      sourceUrl: "https://example.com/guide",
+    });
+  });
+
+  it("drops an in-flight preview when the source URL changes", async () => {
+    const calls: Call[] = [];
+    let finish: ((value: unknown) => void) | undefined;
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (path === "/api/source-extraction" && method === "POST") {
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        }
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+    fireEvent.change(screen.getByLabelText(en.ContentNew.sourceUrlLabel), {
+      target: { value: "https://example.com/first" },
+    });
+    await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
+    fireEvent.change(screen.getByLabelText(en.ContentNew.sourceUrlLabel), {
+      target: { value: "https://example.com/second" },
+    });
+    finish?.({ title: "Old", material: "Old article text", truncated: false });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.ContentNew.fetchSource })).toBeEnabled(),
+    );
+    expect(screen.queryByText(en.ContentNew.sourcePreviewTitle)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
+  });
+
+  it("requires a decision on a new preview before generating from previously pasted text", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (path === "/api/source-extraction" && method === "POST") {
+          return { title: "New", material: "New article text.", truncated: false };
+        }
+        if (path === "/api/runs" && method === "POST") return { id: "manual-run" };
+        return undefined;
+      },
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await open(user);
+    fireEvent.change(screen.getByLabelText(en.ContentNew.materialLabel), {
+      target: { value: "Existing article text." },
+    });
+    fireEvent.change(screen.getByLabelText(en.ContentNew.sourceUrlLabel), {
+      target: { value: "https://example.com/guide" },
+    });
+    await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
+    await screen.findByText(en.ContentNew.sourcePreviewTitle);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByText(en.ContentNew.sourcePreviewNeedsUse)).toBeInTheDocument();
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.dismissSourcePreview }));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/manual-run"),
+    );
+    expect(parsedBody(calls.find((call) => call.path === "/api/runs"))).toMatchObject({
+      material: "Existing article text.",
+      sourceUrl: "https://example.com/guide",
+    });
   });
 
   it("counts the paste against MAX_SOURCE_TEXT_LENGTH as it is typed", async () => {

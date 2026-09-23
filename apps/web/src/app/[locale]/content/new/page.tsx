@@ -7,11 +7,13 @@ import {
   MAX_SOURCE_TEXT_LENGTH,
   MAX_SOURCE_URL_LENGTH,
   runCreateSchema,
+  type SourceExtractionResponse,
+  sourceExtractionRequestSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
@@ -48,6 +50,10 @@ export default function NewContentPage() {
   const [brief, setBrief] = useState("");
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [fetchingSource, setFetchingSource] = useState(false);
+  const sourceRequestId = useRef(0);
   // `null` until the first answer: neither Generate nor the "add a key" hint
   // should flash while we still do not know which of the two is true.
   const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
@@ -146,6 +152,35 @@ export default function NewContentPage() {
     });
   }
 
+  async function fetchSource() {
+    setSourceError(null);
+    const parsed = sourceExtractionRequestSchema.safeParse({ url: sourceUrl });
+    if (!parsed.success) {
+      setSourceError(t("sourceUrlNotHttp"));
+      return;
+    }
+    const requestId = ++sourceRequestId.current;
+    setSourcePreview(null);
+    setFetchingSource(true);
+    try {
+      const preview = await api<SourceExtractionResponse>("/api/source-extraction", {
+        method: "POST",
+        body: JSON.stringify(parsed.data),
+      });
+      if (requestId === sourceRequestId.current) setSourcePreview(preview);
+    } catch (err) {
+      if (err instanceof ApiError && err.noActiveOrg) {
+        router.replace(`/${locale}/onboarding`);
+        return;
+      }
+      if (requestId === sourceRequestId.current) {
+        setSourceError(errorMessage(err, t("genericError"), te));
+      }
+    } finally {
+      setFetchingSource(false);
+    }
+  }
+
   // Shared by the form's own submit (Enter in a field) and the AppShell
   // header's primary-action button, which lives outside the <form> element
   // (constitution: submit is the top-right primary action, not an in-flow
@@ -220,6 +255,11 @@ export default function NewContentPage() {
     }
     if (channelIds.size === 0) {
       setError(t("noChannelsSelected"));
+      return;
+    }
+    if (sourcePreview) {
+      setError(t("sourcePreviewNeedsUse"));
+      setSourceOpen(true);
       return;
     }
     // The refine's own rule, in the refine's own words: a run needs something
@@ -395,17 +435,6 @@ export default function NewContentPage() {
             onOpenChange={setSourceOpen}
           >
             <div className="flex flex-col gap-4">
-              <Textarea
-                id="material"
-                label={t("materialLabel")}
-                value={material}
-                onChange={(e) => setMaterial(e.target.value)}
-                placeholder={t("materialPlaceholder")}
-                maxLength={MAX_SOURCE_TEXT_LENGTH}
-                showCount
-                aria-describedby={SOURCE_HELP_ID}
-                rows={6}
-              />
               {/*
                 `inputMode` and NOT `type="url"`, which is what this plan asked
                 for and is the one instruction in it that does not survive
@@ -427,15 +456,78 @@ export default function NewContentPage() {
                 inputMode="url"
                 label={t("sourceUrlLabel")}
                 value={sourceUrl}
-                onChange={(e) => setSourceUrl(e.target.value)}
+                onChange={(e) => {
+                  sourceRequestId.current += 1;
+                  setSourceUrl(e.target.value);
+                  setSourcePreview(null);
+                  setSourceError(null);
+                }}
                 placeholder={t("sourceUrlPlaceholder")}
                 maxLength={MAX_SOURCE_URL_LENGTH}
                 aria-describedby={SOURCE_HELP_ID}
               />
-              {/* Both promises in one line, where the fields are: nothing
-                  rewrites the paste, and nothing opens the link — and wired to
-                  both fields, because a promise only sighted readers can reach
-                  is not the promise this product makes. */}
+              <div>
+                <Button
+                  variant="secondary"
+                  className="min-h-11"
+                  onClick={() => void fetchSource()}
+                  disabled={fetchingSource}
+                >
+                  {t(fetchingSource ? "fetchingSource" : "fetchSource")}
+                </Button>
+              </div>
+              {sourceError && (
+                <p role="alert" className="text-sm text-danger">
+                  {sourceError}
+                </p>
+              )}
+              {sourcePreview && (
+                <div
+                  className="rounded-control border border-border bg-bg-sunken p-4"
+                  aria-live="polite"
+                >
+                  <p className="text-sm font-semibold text-fg">{t("sourcePreviewTitle")}</p>
+                  {sourcePreview.title && (
+                    <p className="mt-1 text-sm text-fg-secondary">{sourcePreview.title}</p>
+                  )}
+                  <div className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-sm text-fg-secondary">
+                    {sourcePreview.material}
+                  </div>
+                  {sourcePreview.truncated && (
+                    <p className="mt-2 text-sm text-fg-tertiary">
+                      {t("sourcePreviewTruncated", { limit: MAX_SOURCE_TEXT_LENGTH })}
+                    </p>
+                  )}
+                  <Button
+                    variant="secondary"
+                    className="mt-3 min-h-11"
+                    onClick={() => {
+                      setMaterial(sourcePreview.material);
+                      setSourcePreview(null);
+                    }}
+                  >
+                    {t(hasMaterial ? "replaceSourceText" : "useSourceText")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="mt-3 ml-2 min-h-11"
+                    onClick={() => setSourcePreview(null)}
+                  >
+                    {t("dismissSourcePreview")}
+                  </Button>
+                </div>
+              )}
+              <Textarea
+                id="material"
+                label={t("materialLabel")}
+                value={material}
+                onChange={(e) => setMaterial(e.target.value)}
+                placeholder={t("materialPlaceholder")}
+                maxLength={MAX_SOURCE_TEXT_LENGTH}
+                showCount
+                aria-describedby={SOURCE_HELP_ID}
+                rows={6}
+              />
               <p id={SOURCE_HELP_ID} className="text-sm text-fg-tertiary">
                 {t("sourceHelp")}
               </p>

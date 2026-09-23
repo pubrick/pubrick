@@ -276,7 +276,7 @@
     "materialPlaceholder": "Paste the article or post here…",
     "sourceUrlLabel": "Source URL",
     "sourceUrlPlaceholder": "https://example.com/article (optional)",
-    "sourceHelp": "The text is used exactly as you paste it. The link is only recorded — nothing ever fetches it.",
+    "sourceHelp": "Paste text, or fetch a public article and confirm its preview. Generation uses the saved text and does not revisit the link.",
     "generate": "Generate",
     "noBrandSelected": "Select a brand first.",
     "briefOrMaterialRequired": "Write a brief, paste some material, or both.",
@@ -289,7 +289,15 @@
     "discardTitle": "Discard your draft?",
     "discardBody": "Generating starts a new post from your brief. The text you typed here is not saved.",
     "discardConfirm": "Discard and generate",
-    "discardCancel": "Cancel"
+    "discardCancel": "Cancel",
+    "fetchSource": "Fetch article",
+    "fetchingSource": "Fetching…",
+    "sourcePreviewTitle": "Extracted preview",
+    "sourcePreviewTruncated": "The preview was shortened to {limit} characters. Review it before generating.",
+    "useSourceText": "Use this text",
+    "replaceSourceText": "Replace pasted text",
+    "sourcePreviewNeedsUse": "Use or dismiss the extracted preview before generating.",
+    "dismissSourcePreview": "Dismiss preview"
   },
   "Feed": {
     "title": "Public RSS feed",
@@ -613,7 +621,10 @@
     "calendar_time_in_past": "Choose a future time for draft generation.",
     "topic_not_found": "This topic is no longer available. Reload the topic bank.",
     "news_item_not_found": "This article is no longer available. Reload the source list.",
-    "topic_not_approved": "Approve this topic before generating."
+    "topic_not_approved": "Approve this topic before generating.",
+    "source_fetch_failed": "Could not fetch that public page. Check the link or paste its text.",
+    "source_response_too_large": "That page is too large to import. Paste the relevant text instead.",
+    "source_unreadable": "No article text could be extracted. Paste the relevant text instead."
   },
   "Calendar": {
     "title": "Content calendar",

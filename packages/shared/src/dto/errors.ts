@@ -324,6 +324,9 @@ export const API_ERROR_CODES = [
 
   // ── runs ──────────────────────────────────────────────────────────────────
   "run_not_found",
+  "source_fetch_failed",
+  "source_response_too_large",
+  "source_unreadable",
   "topic_not_found",
   "news_item_not_found",
   "topic_not_approved",
