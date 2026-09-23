@@ -642,7 +642,7 @@ describe("a run drafted from pasted material", () => {
     });
   }
 
-  it.each(["product_update", "repost"] as const)(
+  it.each(["product_update", "repost", "comparison", "case_study"] as const)(
     "shows the selected %s format on the run receipt",
     async (contentType) => {
       installHandlers({ current: sourceRun({ contentType }) });

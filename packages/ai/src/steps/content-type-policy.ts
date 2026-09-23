@@ -72,6 +72,37 @@ const POLICIES = {
       "Keep a structured article on channels with room for one; on shorter channels, write a self-contained summary of its thesis and main takeaway. Do not promise a full article at a link you were not given.",
     ],
   },
+  comparison: {
+    researcher: [
+      "Plan a fair comparison of the options or approaches named in the brief or supplied material. Identify shared criteria, evidence available for each option, and gaps that prevent a conclusion.",
+      "If no verified measurements are supplied, compare decision criteria and trade-offs without ranking products or claiming superior performance.",
+    ],
+    writer: [
+      "Write a balanced comparison with clear criteria and practical trade-offs. Attribute concrete product facts to the supplied material and state when evidence is missing.",
+      "Do not invent rankings, benchmarks, prices, percentages, performance gains, test results, or a winner. Avoid implying hands-on testing you did not perform.",
+    ],
+    editor: [
+      "Remove unsupported rankings, superiority and performance claims. Keep caveats where options lack comparable evidence and separate supplied facts from editorial advice.",
+    ],
+    adapter: [
+      "Preserve the comparison criteria and evidence limits within this channel's space. Do not turn a qualified trade-off into a claim that one option is best.",
+    ],
+  },
+  case_study: {
+    researcher: [
+      "Plan a case study only from the supplied source text: the documented situation, actions, and observed outcome. Mark missing customer identity, dates, or measurements as unknown.",
+    ],
+    writer: [
+      "Write a grounded case study from the supplied material, with a clear situation, action, observed outcome, and limits of what the record establishes. Aim for roughly 1500–4000 characters only when the source supports that length. Keep the person's identity anonymous unless the source names them.",
+      "Do not invent customers, testimonials, endorsements, results, dates, metrics, before-and-after figures, or causal effects. If an outcome was not supplied, say what was done without claiming success.",
+    ],
+    editor: [
+      "Check every customer, outcome, metric, quotation, and endorsement against the source text. Remove unsupported claims and keep uncertainty visible.",
+    ],
+    adapter: [
+      "Preserve the case study's documented situation, action, and supported outcome within this channel's limit. Never add a result or endorsement to make a shorter story stronger.",
+    ],
+  },
   educational: {
     researcher: [
       "Plan a practical how-to: name the learner's goal, the prerequisites stated in the material, ordered steps, and the expected result. Omit steps whose details are unsupported.",

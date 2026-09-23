@@ -160,9 +160,16 @@ export const CONTENT_TYPES = [
   "repost",
   "product_update",
   "expert_article",
+  "comparison",
+  "case_study",
   "educational",
 ] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
+
+/** Formats that would invite invented facts if admitted without source text. */
+export function contentTypeRequiresMaterial(contentType: ContentType | undefined): boolean {
+  return contentType === "repost" || contentType === "case_study";
+}
 
 /**
  * What the fact-checking step's output is called, everywhere a human can read it.
@@ -300,11 +307,10 @@ export const runCreateSchema = z
     message: "provide a brief, material, or both",
     path: ["brief"],
   })
-  // A source retelling cannot be inferred from the brief or URL. The model
-  // receives the stored text, not a fetched page, so admission requires that
-  // text even when a brief and a source URL were supplied.
-  .refine((v) => v.contentType !== "repost" || (v.material ?? "").trim() !== "", {
-    message: "source retelling requires material",
+  // A retelling or case study cannot be inferred from a brief or URL. The
+  // model receives stored text, not a fetched page or a customer's real story.
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType) || (v.material ?? "").trim() !== "", {
+    message: "this format requires source material",
     path: ["material"],
   });
 export type RunCreate = z.infer<typeof runCreateSchema>;
@@ -419,8 +425,8 @@ export const briefRunInputSchema = z
     text: z.string().min(1),
     channelIds: z.array(z.string().uuid()).min(1),
   })
-  .refine((v) => v.contentType !== "repost", {
-    message: "source retelling requires material",
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
+    message: "this format requires source material",
     path: ["contentType"],
   });
 export type BriefRunInput = z.infer<typeof briefRunInputSchema>;

@@ -396,7 +396,10 @@ describe("Generate (Task 10)", () => {
     expect(runCreateSchema.parse(parsedBody(post))).toEqual(parsedBody(post));
   });
 
-  it("sends the selected editorial format through the API's run schema", async () => {
+  it.each([
+    ["product_update", "Announce our supported update"],
+    ["comparison", "Compare the two ways to order supplies"],
+  ] as const)("sends the %s format through the API's run schema", async (contentType, brief) => {
     const calls: Call[] = [];
     installHandlers(
       calls,
@@ -411,14 +414,8 @@ describe("Generate (Task 10)", () => {
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
     await pickBrandAndChannel(user);
-    await user.type(
-      screen.getByLabelText(en.ContentNew.briefLabel),
-      "Announce our supported update",
-    );
-    await user.selectOptions(
-      screen.getByLabelText(en.ContentNew.contentTypeLabel),
-      "product_update",
-    );
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), brief);
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), contentType);
     await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
 
     await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/typed-run"));
@@ -426,14 +423,17 @@ describe("Generate (Task 10)", () => {
     const sent = parsedBody(post);
     expect(sent).toEqual({
       brandId: B1,
-      brief: "Announce our supported update",
+      brief,
       channelIds: [CH1],
-      contentType: "product_update",
+      contentType,
     });
     expect(runCreateSchema.parse(sent)).toEqual(sent);
   });
 
-  it("opens Source and requires its text for a source retelling", async () => {
+  it.each([
+    ["repost", en.ContentNew.repostNeedsMaterial],
+    ["case_study", en.ContentNew.caseStudyNeedsMaterial],
+  ] as const)("opens Source and requires text for %s", async (contentType, refusal) => {
     const calls: Call[] = [];
     installHandlers(
       calls,
@@ -452,11 +452,11 @@ describe("Generate (Task 10)", () => {
       screen.getByLabelText(en.ContentNew.briefLabel),
       "Explain this for our readers",
     );
-    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), "repost");
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), contentType);
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(en.ContentNew.repostNeedsMaterial);
+    expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
     expect(calls.some((call) => call.method === "POST" && call.path === "/api/runs")).toBe(false);
 
     await user.type(
@@ -474,7 +474,7 @@ describe("Generate (Task 10)", () => {
       brandId: B1,
       brief: "Explain this for our readers",
       channelIds: [CH1],
-      contentType: "repost",
+      contentType,
       material: "The supplier says the autumn menu is available on Monday.",
     });
     expect(runCreateSchema.parse(sent)).toEqual(sent);

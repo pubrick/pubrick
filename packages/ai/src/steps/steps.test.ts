@@ -131,6 +131,8 @@ describe("editorial content types", () => {
     ["repost", "source-based retelling"],
     ["product_update", "product update"],
     ["expert_article", "expert article"],
+    ["comparison", "comparison"],
+    ["case_study", "case study"],
     ["educational", "how-to"],
   ] as const)("adds the %s policy to the existing writer call", async (contentType, phrase) => {
     const model = jsonModel(JSON.stringify({ body: "A supported draft." }));

@@ -2072,6 +2072,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     it.each([
       ["educational", "how-to", "how-to"],
       ["product_update", "product update", "release change"],
+      ["comparison", "comparison", "comparison criteria"],
     ] as const)(
       "uses stored %s format without adding a paid step",
       async (contentType, phrase, adapterPhrase) => {
@@ -2111,43 +2112,48 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       25_000,
     );
 
-    it("retells stored source text through the same five metered steps", async () => {
-      const seeded = await seed({ channels: 1 });
-      const material = "SOURCE_MARKER The supplier announced new autumn ordering terms.";
-      await db
-        .update(schema.pipelineRuns)
-        .set({
-          input: {
-            kind: "source",
-            text: "Explain the effect for cafe owners",
-            material,
-            sourceUrl: null,
-            channelIds: seeded.channelIds,
-            contentType: "repost",
-          },
-        })
-        .where(eq(schema.pipelineRuns.id, seeded.runId));
-      const script = scriptedModel();
+    it.each([
+      ["repost", "source-based retelling"],
+      ["case_study", "case study"],
+    ] as const)(
+      "uses stored source text for %s through the same five metered steps",
+      async (contentType, phrase) => {
+        const seeded = await seed({ channels: 1 });
+        const material = "SOURCE_MARKER The supplier announced new autumn ordering terms.";
+        await db
+          .update(schema.pipelineRuns)
+          .set({
+            input: {
+              kind: "source",
+              text: "Explain the effect for cafe owners",
+              material,
+              sourceUrl: null,
+              channelIds: seeded.channelIds,
+              contentType,
+            },
+          })
+          .where(eq(schema.pipelineRuns.id, seeded.runId));
+        const script = scriptedModel();
 
-      await serviceFor(script).handle({
-        id: "job-repost",
-        data: { runId: seeded.runId, orgId: seeded.orgId },
-      });
+        await serviceFor(script).handle({
+          id: `job-${contentType}`,
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
 
-      expect(script.calls.map((call) => call.role)).toEqual([
-        "researcher",
-        "writer",
-        "editor",
-        "factcheck",
-        "adapter",
-      ]);
-      expect(script.calls.find((call) => call.role === "writer")?.system).toContain(
-        "source-based retelling",
-      );
-      expect(script.calls.find((call) => call.role === "researcher")?.user).toContain(material);
-      expect(script.calls.find((call) => call.role === "writer")?.user).toContain(material);
-      expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
-    }, 25_000);
+        expect(script.calls.map((call) => call.role)).toEqual([
+          "researcher",
+          "writer",
+          "editor",
+          "factcheck",
+          "adapter",
+        ]);
+        expect(script.calls.find((call) => call.role === "writer")?.system).toContain(phrase);
+        expect(script.calls.find((call) => call.role === "researcher")?.user).toContain(material);
+        expect(script.calls.find((call) => call.role === "writer")?.user).toContain(material);
+        expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+      },
+      25_000,
+    );
   });
 
   /**
