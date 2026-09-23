@@ -977,6 +977,59 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
   }
 
+  function previewLimit(channelId: string): number {
+    const ch = channels.find((c) => c.id === channelId);
+    return ch?.platform === "telegram" && item?.coverMediaId ? 1024 : overrideLimit(channelId);
+  }
+
+  function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
+    const channel = channels.find((c) => c.id === adaptation.channelId);
+    const override = overrideDrafts[adaptation.id] ?? adaptation.body ?? "";
+    const usesMaster = override.trim() === "";
+    const previewText = usesMaster ? bodyDraft : override;
+    const unsaved =
+      override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
+    const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const limit = previewLimit(adaptation.channelId);
+
+    return (
+      <section
+        aria-label={t("reviewPreviewFor", { channel: channelLabel(adaptation.channelId) })}
+        className="mt-4 rounded-control border border-border-soft bg-bg-sunken p-4"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-fg">{t("reviewPreview")}</h3>
+          <span className="text-xs text-fg-secondary">
+            {unsaved ? t("reviewPreviewUnsaved") : t("reviewPreviewSaved")}
+          </span>
+        </div>
+        <p className="mb-3 text-xs text-fg-secondary">
+          {adaptation.deliveryOutcome === "published"
+            ? t("reviewPreviewPublishedNote")
+            : t("reviewPreviewLocalNote")}
+        </p>
+        {telegramCover && (
+          // Authenticated, tenant-scoped file endpoint shared with MediaLibrary.
+          // biome-ignore lint/performance/noImgElement: this endpoint requires the signed-in session
+          <img
+            src={`/api/media/${currentItem.coverMediaId}/file`}
+            alt={t("reviewPreviewCoverAlt")}
+            className="mb-3 max-h-64 w-full rounded-control object-contain"
+          />
+        )}
+        {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
+        <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        {previewText.length > limit && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {telegramCover
+              ? t("reviewPreviewCaptionTooLong", { limit })
+              : t("reviewPreviewTooLong", { limit })}
+          </p>
+        )}
+      </section>
+    );
+  }
+
   /**
    * What the user just did wins over what the poll is complaining about: a
    * rejected approval must not be replaced two seconds later by a generic
@@ -1494,11 +1547,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                * than the platform limit has to stay editable, or it is
                * unfixable forever.
                */
-              displayLimit={overrideLimit(a.channelId)}
+              displayLimit={previewLimit(a.channelId)}
               maxLength={MAX_BODY_LENGTH}
               showCount
               rows={4}
             />
+            {reviewPreview(a, item)}
             <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
                 {t("saveOverride")}

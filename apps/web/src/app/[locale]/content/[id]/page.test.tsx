@@ -23,6 +23,7 @@ import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
+import ru from "../../../../../messages/ru.json";
 import ContentItemPage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -58,6 +59,7 @@ type Adaptation = {
 type ContentItem = {
   id: string;
   brandId: string;
+  coverMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -112,6 +114,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
   const merged = {
     id: "c1",
     brandId: "b1",
+    coverMediaId: null as string | null,
     title: "Launch post",
     body: "Hello world",
     status: "draft" as ContentStatus,
@@ -881,6 +884,112 @@ describe("restoring saved text", () => {
 });
 
 describe("per-channel override (Step 6)", () => {
+  it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation({ body: "Saved text" })] }) };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).getByText("Saved text")).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewSaved)).toBeVisible();
+
+    const draft = "First line\n<script>alert('xss')</script>\nLast line";
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Override for Telegram · Main channel" }),
+      {
+        target: { value: draft },
+      },
+    );
+
+    const text = within(preview).getByText(
+      (_, element) => element?.tagName === "P" && element.textContent === draft,
+    );
+    expect(text).toHaveClass("whitespace-pre-wrap");
+    expect(text.textContent).toBe(draft);
+    expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
+    expect(preview.querySelector("script")).toBeNull();
+    expect(within(preview).getByText(en.Publish.reviewPreviewLocalNote)).toBeVisible();
+  });
+
+  it("previews the unsaved master draft when a channel override is empty", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).getByText("Hello world")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.bodyLabel }), {
+      target: { value: "Changed master draft" },
+    });
+    expect(within(preview).getByText("Changed master draft")).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
+  });
+
+  it("shows the Telegram cover and warns only beyond the 1024-character caption limit", async () => {
+    const served = {
+      current: makeItem({
+        coverMediaId: "cover-1",
+        adaptations: [makeAdaptation({ body: "a".repeat(1024) })],
+      }),
+    };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(
+      within(preview).getByRole("img", { name: en.Publish.reviewPreviewCoverAlt }),
+    ).toHaveAttribute("src", "/api/media/cover-1/file");
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(counterFor(field)).toHaveTextContent("1024 / 1024");
+    expect(within(preview).queryByRole("alert")).toBeNull();
+
+    fireEvent.change(field, { target: { value: "a".repeat(1025) } });
+    expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
+    expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+  });
+
+  it("keeps Telegram's 4096-character text limit without a cover and marks published copy as local", async () => {
+    const served = {
+      current: makeItem({
+        adaptations: [makeAdaptation({ body: "a".repeat(1025), status: "published" })],
+      }),
+    };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).queryByRole("img")).toBeNull();
+    expect(within(preview).queryByRole("alert")).toBeNull();
+    expect(within(preview).getByText(en.Publish.reviewPreviewPublishedNote)).toBeVisible();
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+  });
+
+  it("shows translated preview text without a Telegram cover for a VK channel", async () => {
+    const served = {
+      current: makeItem({ coverMediaId: "cover-1", adaptations: [makeAdaptation()] }),
+    };
+    installBaseHandlers(served, [], undefined, [{ ...channel, platform: "vk" }]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, {
+      locale: "ru",
+    });
+    const preview = await screen.findByRole("region", {
+      name: ru.Publish.reviewPreviewFor.replace("{channel}", "VK · Main channel"),
+    });
+    expect(within(preview).queryByRole("img")).toBeNull();
+    expect(within(preview).getByText(ru.Publish.reviewPreview)).toBeVisible();
+    expect(within(preview).getByText(ru.Publish.reviewPreviewLocalNote)).toBeVisible();
+  });
+
   it("PATCHes the adaptation, not the item", async () => {
     const adaptation = makeAdaptation({ id: "a1", channelId: "ch1", body: null });
     const served = { current: makeItem({ adaptations: [adaptation] }) };
