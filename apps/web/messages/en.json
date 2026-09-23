@@ -90,7 +90,8 @@
     "editCredsPartial": "Fill in every credential field, or leave them all empty. New credentials replace the stored ones as a set, so a half-filled form would leave this channel unable to post.",
     "editSave": "Save",
     "editCancel": "Cancel",
-    "platformUnsupported": "Not yet supported"
+    "platformUnsupported": "Not yet supported",
+    "vkTokenHint": "Use a VK user access token with wall permission and the positive numeric community ID. The user must manage that community."
   },
   "Content": {
     "title": "Queue",

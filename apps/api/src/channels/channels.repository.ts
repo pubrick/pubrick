@@ -412,7 +412,8 @@ export class ChannelsRepository {
     // adapter bug or an unanticipated response shape must not escape as a
     // raw exception and become an HTTP 500 here.
     try {
-      return await publisher.verify(parsed.data, { baseUrl: env.TELEGRAM_API_BASE_URL });
+      const baseUrl = channel.platform === "vk" ? env.VK_API_BASE_URL : env.TELEGRAM_API_BASE_URL;
+      return await publisher.verify(parsed.data, { baseUrl });
     } catch {
       return { ok: false, reason: "Connection test failed unexpectedly" };
     }

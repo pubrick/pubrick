@@ -254,6 +254,23 @@ never be limited at all.
    channel, since the same failure will otherwise surface later as a `failed`
    adaptation once the worker attempts the real publish.
 
+## Connect a VK community
+
+1. Create a **user access token** with the `wall` permission for a VK account
+   that administers the community. Keep the token private. VK's published
+   [API schema for `wall.post`](https://github.com/VKCOM/vk-api-schema/blob/master/wall/methods.json)
+   declares user authorization for this method.
+2. Find the community's **positive numeric ID** (without the minus sign used
+   in wall URLs). In Pubrick, open a brand → add a channel → platform **VK**,
+   then enter the token and this ID.
+3. Press **Test connection**. Pubrick checks the user, the token's `wall`
+   permission, and community administration without publishing a test post.
+
+VK publishing currently sends text posts. The result links to the new community
+wall post. A failed or uncertain send is classified by the same delivery rules
+as Telegram; an uncertain outcome requires a human to inspect the wall before
+another attempt.
+
 ## Upgrade
 
 ```bash
