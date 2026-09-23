@@ -386,6 +386,7 @@
     "contentType": {
       "social_post": "Пост",
       "news_digest": "Дайджест новостей",
+      "product_update": "Обновление продукта",
       "expert_article": "Экспертная статья",
       "educational": "Практическое руководство"
     },
@@ -633,6 +634,7 @@
     "contentType": {
       "social_post": "Пост",
       "news_digest": "Дайджест новостей",
+      "product_update": "Обновление продукта",
       "expert_article": "Экспертная статья",
       "educational": "Практическое руководство"
     },
@@ -804,6 +806,7 @@
     "formats": "Рекомендуемые форматы",
     "type_social_post": "Пост",
     "type_news_digest": "Обзор новостей",
+    "type_product_update": "Обновление продукта",
     "type_expert_article": "Экспертная статья",
     "type_educational": "Инструкция",
     "inactive": "Неактивна",

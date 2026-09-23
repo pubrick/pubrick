@@ -157,6 +157,7 @@ export const MAX_CONCURRENT_RUNS = 3;
 export const CONTENT_TYPES = [
   "social_post",
   "news_digest",
+  "product_update",
   "expert_article",
   "educational",
 ] as const;

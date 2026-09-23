@@ -411,8 +411,14 @@ describe("Generate (Task 10)", () => {
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
     await pickBrandAndChannel(user);
-    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Explain our new process");
-    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), "educational");
+    await user.type(
+      screen.getByLabelText(en.ContentNew.briefLabel),
+      "Announce our supported update",
+    );
+    await user.selectOptions(
+      screen.getByLabelText(en.ContentNew.contentTypeLabel),
+      "product_update",
+    );
     await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
 
     await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/typed-run"));
@@ -420,9 +426,9 @@ describe("Generate (Task 10)", () => {
     const sent = parsedBody(post);
     expect(sent).toEqual({
       brandId: B1,
-      brief: "Explain our new process",
+      brief: "Announce our supported update",
       channelIds: [CH1],
-      contentType: "educational",
+      contentType: "product_update",
     });
     expect(runCreateSchema.parse(sent)).toEqual(sent);
   });

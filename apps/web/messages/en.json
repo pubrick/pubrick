@@ -386,6 +386,7 @@
     "contentType": {
       "social_post": "Social post",
       "news_digest": "News digest",
+      "product_update": "Product update",
       "expert_article": "Expert article",
       "educational": "How-to guide"
     },
@@ -633,6 +634,7 @@
     "contentType": {
       "social_post": "Social post",
       "news_digest": "News digest",
+      "product_update": "Product update",
       "expert_article": "Expert article",
       "educational": "How-to guide"
     },
@@ -804,6 +806,7 @@
     "formats": "Suggested formats",
     "type_social_post": "Social post",
     "type_news_digest": "News digest",
+    "type_product_update": "Product update",
     "type_expert_article": "Expert article",
     "type_educational": "How-to",
     "inactive": "Inactive",

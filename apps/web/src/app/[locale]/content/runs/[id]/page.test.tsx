@@ -643,12 +643,12 @@ describe("a run drafted from pasted material", () => {
   }
 
   it("shows the selected editorial format on the run receipt", async () => {
-    installHandlers({ current: sourceRun({ contentType: "expert_article" }) });
+    installHandlers({ current: sourceRun({ contentType: "product_update" }) });
 
     await renderRun();
 
     expect(await screen.findByText(en.Runs.contentTypeLabel)).toBeInTheDocument();
-    expect(screen.getByText(en.Runs.contentType.expert_article)).toBeInTheDocument();
+    expect(screen.getByText(en.Runs.contentType.product_update)).toBeInTheDocument();
   });
 
   it("shows the material it was drafted from, under its own label", async () => {

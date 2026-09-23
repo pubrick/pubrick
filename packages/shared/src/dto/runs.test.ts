@@ -214,7 +214,13 @@ describe("what a run may be asked for", () => {
   const base = { brandId, channelIds };
 
   it("accepts each supported format and refuses unknown content types", () => {
-    for (const contentType of ["social_post", "news_digest", "expert_article", "educational"]) {
+    for (const contentType of [
+      "social_post",
+      "news_digest",
+      "product_update",
+      "expert_article",
+      "educational",
+    ]) {
       const body = { ...base, brief: "Supported facts", contentType };
       expect(runCreateSchema.parse(body)).toEqual(body);
     }

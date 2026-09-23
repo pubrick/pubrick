@@ -26,6 +26,21 @@ const POLICIES = {
       "Preserve the news, its source context, and the practical takeaway within this channel's limit.",
     ],
   },
+  product_update: {
+    researcher: [
+      "Plan a factual product update from the supplied brief or material: identify the specific release change, who benefits, and when or where it is available. Mark missing details as unknown instead of filling them in.",
+    ],
+    writer: [
+      "Write a concise product update of roughly 300–1000 characters when the supplied facts support it. Lead with the actual change, explain its practical benefit, and state availability only if supplied.",
+      "Do not invent features, version numbers, launch dates, pricing, eligibility, or outcomes. Do not present a planned change as already released.",
+    ],
+    editor: [
+      "Check each feature, benefit, and availability claim against the supplied material. Remove unsupported release and promotional claims; preserve any stated uncertainty.",
+    ],
+    adapter: [
+      "Keep the concrete release change, supported benefit, and any known availability within this channel's limit. Do not add new features or release dates.",
+    ],
+  },
   expert_article: {
     researcher: [
       "Plan a substantive expert article: a specific thesis, three to five useful sections, and an actionable conclusion. Mark unsupported claims for omission rather than inventing sources.",
