@@ -45,7 +45,7 @@ export type PlatformId = (typeof PLATFORM_IDS)[number];
  * the adapters that actually exist. This constant is what lets the picker say
  * the same thing before the request is made.
  */
-export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max", "bluesky"] as const;
+export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max", "bluesky", "mastodon"] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
 /** Channels that prepare a post for a person to publish outside Pubrick. */

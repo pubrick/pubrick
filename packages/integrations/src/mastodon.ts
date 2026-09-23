@@ -114,6 +114,9 @@ async function request(
         });
   } catch (error) {
     if (isPermanentGuardedFetchError(error)) {
+      if (phase === "publish") {
+        throw new UnknownOutcomePublishError("Mastodon post outcome is unknown");
+      }
       throw new PermanentPublishError("Mastodon instance is not a safe public destination");
     }
     if (phase === "prepare" || connectFailed(error)) {
@@ -134,10 +137,6 @@ async function request(
       }
       throw new TransientPublishError(message, response.status);
     }
-    if (response.status === 429) throw new TransientPublishError(message, response.status);
-    if (response.status >= 400 && response.status < 500) {
-      throw new PermanentPublishError(message, response.status);
-    }
     throw new UnknownOutcomePublishError(message, response.status);
   }
 
@@ -155,12 +154,10 @@ async function request(
     }
     throw new TransientPublishError(message, response.status);
   }
-  if (response.status === 429) throw new TransientPublishError(message, response.status);
+  if (parsed.success && response.status === 429)
+    throw new TransientPublishError(message, response.status);
   if (parsed.success && response.status >= 400 && response.status < 500) {
     throw new PlatformRejectionError(message, response.status);
-  }
-  if (response.status >= 400 && response.status < 500) {
-    throw new PermanentPublishError(message, response.status);
   }
   throw new UnknownOutcomePublishError(message, response.status);
 }

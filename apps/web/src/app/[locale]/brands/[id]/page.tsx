@@ -776,6 +776,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           {platform === "bluesky" && (
             <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
           )}
+          {platform === "mastodon" && (
+            <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
+          )}
           {platform === "vc_ru" && <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>}
         </form>
       </Card>
@@ -822,6 +825,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           )}
           {editing?.platform === "bluesky" && (
             <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
+          )}
+          {editing?.platform === "mastodon" && (
+            <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
           )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (

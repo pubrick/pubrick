@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { schema } from "@pubrick/db";
 import {
+  BLUESKY_REQUEST_TIMEOUT_MS,
+  MASTODON_REQUEST_TIMEOUT_MS,
   PermanentPublishError,
   PlatformRejectionError,
   TELEGRAM_REQUEST_TIMEOUT_MS,
@@ -521,6 +523,12 @@ describe("PublishService.handle", () => {
   it("waits out a whole publish attempt before a graceful stop gives up on it", () => {
     expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
       TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      BLUESKY_REQUEST_TIMEOUT_MS * 4 + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      MASTODON_REQUEST_TIMEOUT_MS * 2 + PUBLISH_RECORD_BUDGET_MS,
     );
   });
 

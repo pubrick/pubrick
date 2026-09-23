@@ -161,6 +161,19 @@ describe("Mastodon publishing", () => {
     }
   });
 
+  it("treats non-Mastodon 4xx responses after a status send as unknown", async () => {
+    for (const status of [403, 429]) {
+      const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+        String(url).endsWith("/api/v2/instance")
+          ? answer(instance)
+          : new Response("gateway response", { status }),
+      ) as unknown as typeof fetch;
+      await expect(
+        mastodonPublisher.publish(credentials, { text: "Hello" }, options(fetchImpl)),
+      ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+    }
+  });
+
   it("does not leak an access token echoed by the server", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) =>
       String(url).endsWith("/api/v2/instance")

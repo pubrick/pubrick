@@ -55,5 +55,7 @@ export function adaptationLimit(platform: string): number {
 /** Credential field ids are camelCase wire keys; humanize for the form label. */
 export function credentialFieldLabel(field: string): string {
   const spaced = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
-  return (spaced.charAt(0).toUpperCase() + spaced.slice(1)).replace(/\bid\b/gi, "ID");
+  return (spaced.charAt(0).toUpperCase() + spaced.slice(1))
+    .replace(/\bid\b/gi, "ID")
+    .replace(/\burl\b/gi, "URL");
 }

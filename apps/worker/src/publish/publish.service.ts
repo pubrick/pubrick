@@ -5,6 +5,7 @@ import { schema } from "@pubrick/db";
 import {
   BLUESKY_REQUEST_TIMEOUT_MS,
   getPublisher,
+  MASTODON_REQUEST_TIMEOUT_MS,
   MAX_REQUEST_TIMEOUT_MS,
   PermanentPublishError,
   PlatformRejectionError,
@@ -88,8 +89,9 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  * Derived, not picked, because the failure it prevents is a duplicate post: a
  * job failed by `failWip()` is a job pg-boss redelivers, and a handler
  * interrupted mid-request may already have posted. The window has to cover the
- * longest one attempt can legitimately still be running — a platform request at
- * its own timeout, plus the worst case of recording the result afterwards —
+ * longest one attempt can legitimately still be running — all sequential
+ * platform requests at their own timeouts, plus the worst case of recording
+ * the result afterwards —
  * with margin for the writes themselves. pg-boss's default is 30s, which is
  * exactly the adapter's request timeout and so the worst possible value: a
  * request that started a moment before SIGTERM is guaranteed to be cut off at
@@ -106,7 +108,10 @@ export const PUBLISH_STOP_TIMEOUT_MS =
     TELEGRAM_REQUEST_TIMEOUT_MS,
     VK_REQUEST_TIMEOUT_MS,
     MAX_REQUEST_TIMEOUT_MS,
-    BLUESKY_REQUEST_TIMEOUT_MS,
+    // Bluesky: session, mention resolution, optional cover upload, createRecord.
+    BLUESKY_REQUEST_TIMEOUT_MS * 4,
+    // Mastodon: instance configuration, then create status.
+    MASTODON_REQUEST_TIMEOUT_MS * 2,
   ) +
   PUBLISH_RECORD_BUDGET_MS +
   10_000;
