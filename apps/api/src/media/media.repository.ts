@@ -209,10 +209,10 @@ export class MediaRepository {
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, itemId)),
           );
-        if (targets.some((target) => target.platform !== "telegram" && target.platform !== "vk")) {
+        if (targets.some((target) => !["telegram", "vk", "max"].includes(target.platform))) {
           throw conflict(
             "content_media_unsupported",
-            "Covers currently publish only to Telegram and VK; remove other channels from this post",
+            "Covers currently publish only to Telegram, VK, and MAX; remove other channels from this post",
           );
         }
         if (

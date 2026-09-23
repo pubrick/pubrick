@@ -157,10 +157,39 @@ describe("PublishService.handle", () => {
     }
   });
 
+  it("loads a stored cover and passes its bytes to the MAX publisher", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-max-cover-"));
+    const previous = process.env.MEDIA_STORAGE_DIR;
+    process.env.MEDIA_STORAGE_DIR = directory;
+    const coverMediaId = "00000000-0000-4000-8000-000000000003";
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    try {
+      await writeFile(path.join(directory, `${coverMediaId}.jpg`), bytes);
+      const { repo } = fixture({ coverMediaId, platform: "max" });
+      const publish = vi.fn().mockResolvedValue({ externalId: "77", externalUrl: null });
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(publish).toHaveBeenCalledWith(
+        { botToken: "1:a", chatId: "-100" },
+        { text: "Hello", image: { bytes, mimeType: "image/jpeg" } },
+        { baseUrl: env.MAX_API_BASE_URL },
+      );
+      expect(repo.markPublished).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
+      else process.env.MEDIA_STORAGE_DIR = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("fails explicitly when a channel cannot publish the stored cover", async () => {
     const { repo } = fixture({
       coverMediaId: "00000000-0000-4000-8000-000000000001",
-      platform: "max",
+      platform: "unsupported",
     });
     const publish = vi.fn();
     const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");

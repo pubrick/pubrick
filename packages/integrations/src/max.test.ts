@@ -12,6 +12,124 @@ const options = (fetchImpl: typeof fetch) => ({ fetchImpl, baseUrl: "https://max
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe("MAX publishing", () => {
+  const cover = { bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xd9), mimeType: "image/jpeg" as const };
+  const capability = "https://iu.oneme.ru/uploadImage?apiToken=secret-capability";
+
+  it("uploads one JPEG and sends one image attachment with the reviewed text", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("/uploads?")) return answer({ url: capability });
+      if (String(url) === capability) {
+        expect(init?.headers).toBeUndefined();
+        expect(init?.redirect).toBe("error");
+        const form = init?.body;
+        expect(form).toBeInstanceOf(FormData);
+        if (!(form instanceof FormData)) throw new Error("Expected multipart image upload");
+        const file = form.get("data") as File;
+        expect(file.name).toBe("cover.jpg");
+        expect(file.type).toBe("image/jpeg");
+        expect(new Uint8Array(await file.arrayBuffer())).toEqual(cover.bytes);
+        return answer({ photos: { "photo-1": { token: "image-token" } } });
+      }
+      expect(init?.headers).toMatchObject({ Authorization: credentials.accessToken });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        text: "Reviewed MAX post",
+        attachments: [{ type: "image", payload: { token: "image-token" } }],
+      });
+      return answer({ message: { body: { mid: "image-post" } } });
+    }) as unknown as typeof fetch;
+    await expect(
+      maxPublisher.publish(
+        credentials,
+        { text: "Reviewed MAX post", image: cover },
+        options(fetchImpl),
+      ),
+    ).resolves.toEqual({ externalId: "image-post", externalUrl: null });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(fetchImpl).mock.calls[0]?.[0]).toBe("https://max.test/uploads?type=image");
+  });
+
+  it("refuses an untrusted upload URL before sending bytes or credentials", async () => {
+    for (const url of [
+      "http://iu.oneme.ru/uploadImage",
+      "https://iu.oneme.ru.evil.test/uploadImage",
+      "https://127.0.0.1/uploadImage",
+      "https://user@iu.oneme.ru/uploadImage",
+      "https://iu.oneme.ru:8443/uploadImage",
+    ]) {
+      const fetchImpl = vi.fn(async () => answer({ url })) as unknown as typeof fetch;
+      await expect(
+        maxPublisher.publish(credentials, { text: "Hello", image: cover }, options(fetchImpl)),
+      ).rejects.toBeInstanceOf(PermanentPublishError);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("retries preparation errors without posting and hides the capability URL", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes("/uploads?")) return answer({ url: capability });
+      throw new Error(`Upload failed at ${capability}`);
+    }) as unknown as typeof fetch;
+    const error = await maxPublisher
+      .publish(credentials, { text: "Hello", image: cover }, options(fetchImpl))
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TransientPublishError);
+    expect((error as Error).message).not.toContain("secret-capability");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const unavailable = vi.fn(
+      async () => new Response("gateway", { status: 502 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      maxPublisher.publish(credentials, { text: "Hello", image: cover }, options(unavailable)),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+    expect(unavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops after a definite upload refusal without sending a message", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).includes("/uploads?")
+        ? answer({ url: capability })
+        : answer({ code: "file.invalid", message: "Rejected" }, 400),
+    ) as unknown as typeof fetch;
+    await expect(
+      maxPublisher.publish(credentials, { text: "Hello", image: cover }, options(fetchImpl)),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only explicit image-not-ready refusal; an uncertain message result is terminal", async () => {
+    const beforeMessage = (url: string | URL | Request) => {
+      if (String(url).includes("/uploads?")) return answer({ url: capability });
+      if (String(url) === capability)
+        return answer({ photos: { "1": { token: "secret-image-token" } } });
+      return null;
+    };
+    const notReady = vi.fn(
+      async (url: string | URL | Request) =>
+        beforeMessage(url) ?? answer({ code: "attachment.not.ready", message: "Processing" }, 400),
+    ) as unknown as typeof fetch;
+    await expect(
+      maxPublisher.publish(credentials, { text: "Hello", image: cover }, options(notReady)),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+    expect(notReady).toHaveBeenCalledTimes(3);
+    const uncertain = vi.fn(
+      async (url: string | URL | Request) =>
+        beforeMessage(url) ?? new Response("gateway", { status: 502 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      maxPublisher.publish(credentials, { text: "Hello", image: cover }, options(uncertain)),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+    expect(uncertain).toHaveBeenCalledTimes(3);
+    const echoed = vi.fn(
+      async (url: string | URL | Request) =>
+        beforeMessage(url) ?? answer({ code: "denied", message: "secret-image-token" }, 403),
+    ) as unknown as typeof fetch;
+    const error = await maxPublisher
+      .publish(credentials, { text: "Hello", image: cover }, options(echoed))
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PlatformRejectionError);
+    expect((error as Error).message).not.toContain("secret-image-token");
+  });
+
   it("sends plain text with header auth and preserves the public post URL", async () => {
     const fetchImpl = vi.fn(async () =>
       answer({ message: { body: { mid: "post_7" }, url: "https://max.ru/c/7" } }),

@@ -496,7 +496,7 @@ export class PublishService {
             "rejected_before_send",
           );
         }
-        if (adaptation.platform !== "telegram" && adaptation.platform !== "vk") {
+        if (!["telegram", "vk", "max"].includes(adaptation.platform)) {
           throw new ClassifiedPermanentError(
             "This channel cannot publish a cover image",
             "rejected_before_send",
