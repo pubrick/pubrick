@@ -1,7 +1,58 @@
 import { knowledgeImportSchema } from "@pubrick/shared";
 import { parse } from "csv-parse/browser/esm/sync";
+import { stringify } from "csv-stringify/browser/esm/sync";
 
-export type KnowledgeCsvErrorCode = "invalid_header" | "invalid_row" | "too_many";
+type PortableKnowledgeEntry = {
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  isActive: boolean;
+};
+
+const EXPORT_HEADERS = ["title", "content", "category", "tags_json", "is_active"] as const;
+const MAX_IMPORT_BYTES = 1_000_000;
+const MAX_IMPORT_ROWS = 500;
+
+/** Each file stays within the importer's row and UTF-8 byte limits. */
+export function serializeKnowledgeCsv(entries: PortableKnowledgeEntry[]): string[] {
+  if (entries.length === 0) return [];
+  const header = stringify([EXPORT_HEADERS]);
+  const encoder = new TextEncoder();
+  const headerBytes = encoder.encode(header).byteLength;
+  const files: string[] = [];
+  let body = "";
+  let bytes = headerBytes;
+  let rows = 0;
+  for (const entry of entries) {
+    const record = stringify([
+      [
+        entry.title,
+        entry.content,
+        entry.category,
+        JSON.stringify(entry.tags),
+        String(entry.isActive),
+      ],
+    ]);
+    const recordBytes = encoder.encode(record).byteLength;
+    if (headerBytes + recordBytes > MAX_IMPORT_BYTES) {
+      throw new KnowledgeCsvError("too_large");
+    }
+    if (rows === MAX_IMPORT_ROWS || bytes + recordBytes > MAX_IMPORT_BYTES) {
+      files.push(header + body);
+      body = "";
+      bytes = headerBytes;
+      rows = 0;
+    }
+    body += record;
+    bytes += recordBytes;
+    rows++;
+  }
+  if (rows > 0) files.push(header + body);
+  return files;
+}
+
+export type KnowledgeCsvErrorCode = "invalid_header" | "invalid_row" | "too_many" | "too_large";
 
 export class KnowledgeCsvError extends Error {
   constructor(

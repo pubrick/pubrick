@@ -48,6 +48,16 @@ the provider call. A provider failure leaves the note available to text search.
 
 ## Importing an existing knowledge base
 
+Use **Export CSV** to download the current brand notes, including paused notes
+and literal tags. Pubrick reads the latest brand list before export. A small
+export is one CSV file; larger exports arrive as one ZIP containing CSV parts
+that each fit the 500-row and 1 MB import limits. Unzip it and import each part
+into the desired brand. The export excludes embeddings, credentials, internal
+IDs, and timestamps. A reimport creates new notes, so do not import the same
+part twice. Treat CSV as data when opening it in spreadsheet software: import
+text cells as text, since arbitrary note content can start with spreadsheet
+formula characters.
+
 Select **Import CSV** on the brand knowledge page. The file must be UTF-8 CSV
 with `title`, `content`, and `category` headers. Optional `is_active` preserves
 the note's paused state: its cells must be exactly `true` or `false` in

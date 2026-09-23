@@ -6,6 +6,7 @@ import {
   knowledgeImportSchema,
   knowledgeUpdateSchema,
 } from "@pubrick/shared";
+import { zipSync } from "fflate";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -21,7 +22,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
-import { KnowledgeCsvError, parseKnowledgeCsv } from "@/lib/knowledge-csv";
+import { KnowledgeCsvError, parseKnowledgeCsv, serializeKnowledgeCsv } from "@/lib/knowledge-csv";
 
 type Entry = {
   id: string;
@@ -58,6 +59,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
     entries: ReturnType<typeof parseKnowledgeCsv>;
   } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const describeError = useCallback(
     (err: unknown) => {
@@ -269,6 +271,50 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
     }
   }
 
+  async function exportCsv() {
+    if (!entries?.length) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const latest = await api<Entry[]>(`/api/knowledge?brandId=${brandId}`);
+      const files = serializeKnowledgeCsv(latest);
+      if (files.length === 0) {
+        setNotice(t("empty"));
+        return;
+      }
+      const basename = `pubrick-knowledge-${brandId}`;
+      const filename = files.length === 1 ? `${basename}.csv` : `${basename}.zip`;
+      const payload =
+        files.length === 1
+          ? (files[0] ?? "")
+          : zipSync(
+              Object.fromEntries(
+                files.map((content, index) => [
+                  `${basename}-${index + 1}-of-${files.length}.csv`,
+                  new TextEncoder().encode(content),
+                ]),
+              ),
+            );
+      const url = URL.createObjectURL(
+        new Blob([payload], {
+          type: files.length === 1 ? "text/csv;charset=utf-8" : "application/zip",
+        }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setNotice(t("csvExported", { count: files.length }));
+    } catch {
+      setError(t("csvExportFailed"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const closeImport = useCallback(() => setImportPreview(null), []);
   async function importCsv() {
     if (!importPreview) return;
@@ -311,9 +357,18 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
             event.target.value = "";
           }}
         />
-        <Button variant="secondary" className="mt-4" onClick={() => csvInput.current?.click()}>
-          {t("csvImport")}
-        </Button>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Button variant="secondary" onClick={() => csvInput.current?.click()}>
+            {t("csvImport")}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => void exportCsv()}
+            disabled={!entries?.length || exporting}
+          >
+            {exporting ? t("csvExporting") : t("csvExport")}
+          </Button>
+        </div>
         {entries?.some((entry) => entry.isActive && !entry.hasEmbedding) && (
           <div className="mt-4 rounded-xl border border-border bg-surface-raised p-4">
             <p className="text-sm text-fg-secondary">

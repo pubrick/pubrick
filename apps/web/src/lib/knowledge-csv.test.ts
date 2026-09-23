@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KnowledgeCsvError, parseKnowledgeCsv } from "./knowledge-csv";
+import { KnowledgeCsvError, parseKnowledgeCsv, serializeKnowledgeCsv } from "./knowledge-csv";
 
 describe("knowledge CSV import", () => {
   it("reads quoted commas, doubled quotes, CRLF and tags", () => {
@@ -53,5 +53,38 @@ describe("knowledge CSV import", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "invalid_row", row: 2 });
     }
+  });
+});
+
+describe("knowledge CSV export", () => {
+  it("round-trips literal tags, paused state, quotes and multiline UTF-8 content", () => {
+    const entries = [
+      {
+        title: 'Crème, "special"',
+        content: 'First line\nSecond "quoted" line',
+        category: "brand_guidelines",
+        tags: ["coffee, roasted", "bulk|B2B"],
+        isActive: false,
+      },
+    ];
+    const files = serializeKnowledgeCsv(entries);
+    expect(files).toHaveLength(1);
+    expect(parseKnowledgeCsv(files[0] ?? "")).toEqual(entries);
+  });
+
+  it("splits exports into files accepted by the CSV importer", () => {
+    const entries = Array.from({ length: 501 }, (_, i) => ({
+      title: `Note ${i}`,
+      content: "é".repeat(4_000),
+      category: "product_info",
+      tags: [] as string[],
+      isActive: true,
+    }));
+    const files = serializeKnowledgeCsv(entries);
+    expect(files.length).toBeGreaterThan(1);
+    expect(files.every((file) => new TextEncoder().encode(file).byteLength <= 1_000_000)).toBe(
+      true,
+    );
+    expect(files.flatMap(parseKnowledgeCsv)).toEqual(entries);
   });
 });
