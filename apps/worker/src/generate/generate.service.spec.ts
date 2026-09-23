@@ -677,6 +677,36 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       );
     }, 25_000);
 
+    it("excludes vectors from a different embedding model", async () => {
+      const own = await seed({ channels: 1, apiKey: VICTIM_KEY, brandName: "Model scope" });
+      const [entry] = await db
+        .insert(schema.knowledgeEntries)
+        .values({
+          orgId: own.orgId,
+          brandId: own.brandId,
+          title: "Model-specific fact",
+          content: "A fact for vector search",
+          category: "product_info",
+          embedding: Array(768).fill(0.1),
+          embeddingModel: "other-model",
+          embeddingDimensions: 768,
+        })
+        .returning({ id: schema.knowledgeEntries.id });
+      const repository = new Repository();
+      expect(await repository.hasIndexedKnowledge(own.orgId, own.brandId)).toBe(false);
+      expect(
+        await repository.similarKnowledge(own.orgId, own.brandId, Array(768).fill(0.1)),
+      ).toEqual([]);
+      await db
+        .update(schema.knowledgeEntries)
+        .set({ embeddingModel: "gemini-embedding-001" })
+        .where(eq(schema.knowledgeEntries.id, entry?.id as string));
+      expect(await repository.hasIndexedKnowledge(own.orgId, own.brandId)).toBe(true);
+      expect(
+        await repository.similarKnowledge(own.orgId, own.brandId, Array(768).fill(0.1)),
+      ).toHaveLength(1);
+    });
+
     const checkpoint = {
       status: "succeeded" as const,
       output: { body: "x" },

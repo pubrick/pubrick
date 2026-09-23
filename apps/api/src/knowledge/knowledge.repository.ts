@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { KNOWLEDGE_EMBEDDING_DIMENSIONS, KNOWLEDGE_EMBEDDING_MODEL } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   decryptJson,
@@ -116,7 +117,11 @@ export class KnowledgeRepository {
   ) {
     const rows = await db
       .update(schema.knowledgeEntries)
-      .set({ embedding })
+      .set({
+        embedding,
+        embeddingModel: KNOWLEDGE_EMBEDDING_MODEL,
+        embeddingDimensions: KNOWLEDGE_EMBEDDING_DIMENSIONS,
+      })
       .where(
         and(
           eq(schema.knowledgeEntries.orgId, orgId),
@@ -194,7 +199,12 @@ export class KnowledgeRepository {
     const textChanged = data.title !== undefined || data.content !== undefined;
     const [entry] = await db
       .update(schema.knowledgeEntries)
-      .set({ ...data, ...(textChanged ? { embedding: null } : {}) })
+      .set({
+        ...data,
+        ...(textChanged
+          ? { embedding: null, embeddingModel: null, embeddingDimensions: null }
+          : {}),
+      })
       .where(
         and(
           eq(schema.knowledgeEntries.orgId, orgId),
@@ -253,7 +263,11 @@ export class KnowledgeRepository {
   ) {
     const [entry] = await db
       .update(schema.knowledgeEntries)
-      .set({ embedding })
+      .set({
+        embedding,
+        embeddingModel: KNOWLEDGE_EMBEDDING_MODEL,
+        embeddingDimensions: KNOWLEDGE_EMBEDDING_DIMENSIONS,
+      })
       .where(
         and(
           eq(schema.knowledgeEntries.orgId, orgId),

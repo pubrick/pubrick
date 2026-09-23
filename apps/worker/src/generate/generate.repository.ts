@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
+  KNOWLEDGE_EMBEDDING_DIMENSIONS,
+  KNOWLEDGE_EMBEDDING_MODEL,
   type StepAttribution,
   type UsageRecord,
   withRunFailure,
@@ -699,6 +701,8 @@ export class GenerateRepository {
           eq(schema.knowledgeEntries.brandId, brandId),
           eq(schema.knowledgeEntries.isActive, true),
           isNotNull(schema.knowledgeEntries.embedding),
+          eq(schema.knowledgeEntries.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.knowledgeEntries.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
         ),
       )
       .limit(1);
@@ -737,6 +741,8 @@ export class GenerateRepository {
           eq(schema.knowledgeEntries.brandId, brandId),
           eq(schema.knowledgeEntries.isActive, true),
           isNotNull(schema.knowledgeEntries.embedding),
+          eq(schema.knowledgeEntries.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.knowledgeEntries.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
         ),
       )
       .orderBy(asc(cosineDistance(schema.knowledgeEntries.embedding, embedding)))

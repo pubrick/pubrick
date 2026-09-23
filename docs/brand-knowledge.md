@@ -56,11 +56,12 @@ Malformed vectors remain unindexed and can be retried. A provider failure
 leaves notes searchable by text. No indexing request is made by CSV import.
 If Google does not confirm a result, the ledger records an unknown outcome;
 the page warns that the call might still have been billed before a retry.
-The schema fixes all stored vectors at 768 dimensions, and every current
-document and query embedding path pins `gemini-embedding-001`. Notes do not yet
-store embedding model provenance. Supporting a second embedding model requires
-model/dimension metadata, retrieval filters, and a deliberate reindex plan;
-changing the model constant alone would mix incomparable vectors.
+The schema fixes all stored vectors at 768 dimensions. Each indexed note stores
+its embedding model and dimensions; the migration labels existing vectors with
+the only model previously used, `gemini-embedding-001`. Vector retrieval accepts
+only that model and dimension pair. Supporting a second embedding model still
+requires a deliberate reindex plan and a compatible vector schema; changing the
+model constant alone would not make old vectors comparable.
 The importer accepts a CSV selected by the user; it does not connect to the
 previous Ozon Tools database or migrate its stored notes automatically.
 
