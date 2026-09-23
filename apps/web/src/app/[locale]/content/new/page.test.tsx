@@ -433,6 +433,53 @@ describe("Generate (Task 10)", () => {
     expect(runCreateSchema.parse(sent)).toEqual(sent);
   });
 
+  it("opens Source and requires its text for a source retelling", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "retelling-run" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(
+      screen.getByLabelText(en.ContentNew.briefLabel),
+      "Explain this for our readers",
+    );
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), "repost");
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.ContentNew.repostNeedsMaterial);
+    expect(calls.some((call) => call.method === "POST" && call.path === "/api/runs")).toBe(false);
+
+    await user.type(
+      screen.getByLabelText(en.ContentNew.materialLabel),
+      "The supplier says the autumn menu is available on Monday.",
+    );
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/retelling-run"),
+    );
+    const sent = parsedBody(
+      calls.find((call) => call.method === "POST" && call.path === "/api/runs"),
+    );
+    expect(sent).toEqual({
+      brandId: B1,
+      brief: "Explain this for our readers",
+      channelIds: [CH1],
+      contentType: "repost",
+      material: "The supplier says the autumn menu is available on Monday.",
+    });
+    expect(runCreateSchema.parse(sent)).toEqual(sent);
+  });
+
   it("confirms before throwing a typed draft away", async () => {
     const calls: Call[] = [];
     installHandlers(

@@ -757,6 +757,53 @@ describe.skipIf(!url)("runs e2e", () => {
       );
       expect(retried.input).toEqual(first.input);
     });
+    it.each([null, "https://example.com/announcement"])(
+      "preserves a source retelling and its optional URL %s on retry",
+      async (sourceUrl) => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const material = "The supplier announced a new process for autumn orders.";
+        const created = await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Explain the effect for cafe owners",
+            material,
+            ...(sourceUrl && { sourceUrl }),
+            channelIds: [channelId],
+            contentType: "repost",
+          })
+          .expect(201);
+        const first = runDetailDtoSchema.parse(created.body);
+        expect(first.input).toMatchObject({
+          kind: "source",
+          contentType: "repost",
+          material,
+          sourceUrl,
+        });
+        await setRunStatus(first.id, "failed", "internal");
+
+        const retried = runDetailDtoSchema.parse(
+          (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+        );
+        expect(retried.input).toEqual(first.input);
+      },
+    );
+
+    it("refuses a source retelling with only a brief and URL", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Retell this story",
+          sourceUrl: "https://example.com/announcement",
+          channelIds: [channelId],
+          contentType: "repost",
+        })
+        .expect(400);
+    });
     const ARTICLE = "The autumn menu, as somebody else wrote it.";
 
     async function pastedRun(agent: request.Agent, brandId: string, channelIds: string[]) {

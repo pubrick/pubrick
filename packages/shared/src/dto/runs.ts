@@ -157,6 +157,7 @@ export const MAX_CONCURRENT_RUNS = 3;
 export const CONTENT_TYPES = [
   "social_post",
   "news_digest",
+  "repost",
   "product_update",
   "expert_article",
   "educational",
@@ -298,6 +299,13 @@ export const runCreateSchema = z
   .refine((v) => (v.brief ?? "").trim() !== "" || (v.material ?? "").trim() !== "", {
     message: "provide a brief, material, or both",
     path: ["brief"],
+  })
+  // A source retelling cannot be inferred from the brief or URL. The model
+  // receives the stored text, not a fetched page, so admission requires that
+  // text even when a brief and a source URL were supplied.
+  .refine((v) => v.contentType !== "repost" || (v.material ?? "").trim() !== "", {
+    message: "source retelling requires material",
+    path: ["material"],
   });
 export type RunCreate = z.infer<typeof runCreateSchema>;
 
@@ -403,21 +411,26 @@ export function isRunFailure(value: unknown): value is RunFailure {
  * `kind` is discriminated from the start so a second kind can be added
  * without a migration.
  */
-export const briefRunInputSchema = z.object({
-  kind: z.literal("brief"),
-  /** Optional for runs created before content types were introduced. */
-  contentType: z.enum(CONTENT_TYPES).optional(),
-  text: z.string().min(1),
-  channelIds: z.array(z.string().uuid()).min(1),
-});
+export const briefRunInputSchema = z
+  .object({
+    kind: z.literal("brief"),
+    /** Optional for runs created before content types were introduced. */
+    contentType: z.enum(CONTENT_TYPES).optional(),
+    text: z.string().min(1),
+    channelIds: z.array(z.string().uuid()).min(1),
+  })
+  .refine((v) => v.contentType !== "repost", {
+    message: "source retelling requires material",
+    path: ["contentType"],
+  });
 export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
 
 /**
  * A run asked for from material a person pasted — the second thing this column
  * may hold.
  *
- * The bounds mirror the brief member EXACTLY: `.min(1)` on the text a person
- * wrote, no `.max()` anywhere. The length limit belongs to
+ * The bounds mirror the brief member: nonblank text, no `.max()` anywhere.
+ * The length limit belongs to
  * `runCreateSchema.material`, the boundary a request crosses, precisely as
  * `MAX_BRIEF_LENGTH` sits on `runCreateSchema.brief` beside an unbounded
  * `briefRunInputSchema.text`. A stored input is a receipt of what was asked
@@ -465,7 +478,9 @@ export const sourceRunInputSchema = z.object({
    * what the run screen says happened, and a receipt resolved through a foreign
    * key renders as a blank the day the row behind it goes.
    */
-  material: z.string().min(1),
+  material: z.string().refine((text) => text.trim() !== "", {
+    message: "source material must not be blank",
+  }),
   channelIds: z.array(z.string().uuid()).min(1),
 });
 export type SourceRunInput = z.infer<typeof sourceRunInputSchema>;

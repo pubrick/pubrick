@@ -387,6 +387,7 @@
     "contentType": {
       "social_post": "Publicación social",
       "news_digest": "Resumen de noticias",
+      "repost": "Reelaboración de una fuente",
       "product_update": "Actualización de producto",
       "expert_article": "Artículo especializado",
       "educational": "Guía práctica"
@@ -400,6 +401,7 @@
     "generate": "Generar",
     "noBrandSelected": "Selecciona una marca primero.",
     "briefOrMaterialRequired": "Escribe un brief, pega material, o ambas cosas.",
+    "repostNeedsMaterial": "Añade el texto de origen en Fuente antes de generar la reelaboración.",
     "sourceUrlNeedsMaterial": "Un enlace necesita el texto del que viene: pega el artículo o borra el enlace.",
     "sourceUrlNotHttp": "El enlace de la fuente debe ser una dirección http:// o https:// completa.",
     "sourceBlocksCreate": "La sección Fuente contiene algo que una publicación no puede llevar: usa Generar o vacíala.",
@@ -635,6 +637,7 @@
     "contentType": {
       "social_post": "Publicación social",
       "news_digest": "Resumen de noticias",
+      "repost": "Reelaboración de una fuente",
       "product_update": "Actualización de producto",
       "expert_article": "Artículo especializado",
       "educational": "Guía práctica"
@@ -808,6 +811,7 @@
     "formats": "Formatos sugeridos",
     "type_social_post": "Publicación social",
     "type_news_digest": "Resumen de noticias",
+    "type_repost": "Reelaboración de una fuente",
     "type_product_update": "Actualización de producto",
     "type_expert_article": "Artículo experto",
     "type_educational": "Guía",
