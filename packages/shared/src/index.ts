@@ -41,6 +41,7 @@ export {
 } from "./deploy-origin.js";
 export * from "./dto/ai-credentials.js";
 export * from "./dto/brands.js";
+export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
@@ -63,6 +64,7 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";

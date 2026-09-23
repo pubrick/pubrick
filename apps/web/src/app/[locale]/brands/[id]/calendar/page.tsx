@@ -1,0 +1,485 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import { ApiError, api, errorMessage } from "@/lib/api";
+
+type Channel = { id: string; name: string; platform: string };
+type Slot = {
+  id: string;
+  scheduledAt: string;
+  brief: string;
+  channelIds: string[];
+  notes: string | null;
+  runId: string | null;
+  errorCode: string | null;
+  retryAfter: string | null;
+};
+const FORM_ID = "calendar-add-slot";
+const EDIT_FORM_ID = "calendar-edit-slot";
+const WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+const pad = (n: number) => String(n).padStart(2, "0");
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function localInput(date: Date): string {
+  return `${dayKey(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function monthStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+export default function CalendarPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: brandId } = use(params);
+  const t = useTranslations("Calendar");
+  const te = useTranslations("Errors");
+  const locale = useLocale();
+  const router = useRouter();
+  const [month, setMonth] = useState(() => monthStart(new Date()));
+  const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
+  const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [dateInput, setDateInput] = useState(() => localInput(new Date(Date.now() + 86_400_000)));
+  const [brief, setBrief] = useState("");
+  const [notes, setNotes] = useState("");
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [editing, setEditing] = useState<Slot | null>(null);
+  const [removing, setRemoving] = useState<Slot | null>(null);
+  const loadSequence = useRef(0);
+
+  const describe = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && err.noActiveOrg) {
+        router.replace(`/${locale}/onboarding`);
+        return null;
+      }
+      return errorMessage(err, t("genericError"), te);
+    },
+    [locale, router, t, te],
+  );
+
+  const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
+    const from = month.toISOString();
+    const to = new Date(month.getFullYear(), month.getMonth() + 1, 1).toISOString();
+    setError(null);
+    try {
+      const [slotRows, channelRows] = await Promise.all([
+        api<Slot[]>(
+          `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+        ),
+        api<Channel[]>(`/api/channels?brandId=${brandId}`),
+      ]);
+      if (sequence !== loadSequence.current) return;
+      setSlots(slotRows);
+      setChannels(channelRows);
+    } catch (err) {
+      if (sequence !== loadSequence.current) return;
+      setSlots(null);
+      setError(describe(err));
+    }
+  }, [brandId, month, describe]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const byDay = useMemo(() => {
+    const result = new Map<string, Slot[]>();
+    for (const slot of slots ?? []) {
+      const key = dayKey(new Date(slot.scheduledAt));
+      result.set(key, [...(result.get(key) ?? []), slot]);
+    }
+    return result;
+  }, [slots]);
+  const days = useMemo(() => {
+    const offset = (month.getDay() + 6) % 7;
+    return Array.from(
+      { length: 42 },
+      (_, index) => new Date(month.getFullYear(), month.getMonth(), index - offset + 1),
+    );
+  }, [month]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setFormError(null);
+    if (selectedChannels.length === 0) {
+      setFormError(t("chooseChannel"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/api/calendar/slots", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId,
+          scheduledAt: new Date(dateInput).toISOString(),
+          brief,
+          channelIds: selectedChannels,
+          notes: notes.trim() || null,
+        }),
+      });
+      setBrief("");
+      setNotes("");
+      const nextDate = new Date(dateInput);
+      setMonth(monthStart(nextDate));
+      setSelectedDay(dayKey(nextDate));
+      if (
+        nextDate.getMonth() === month.getMonth() &&
+        nextDate.getFullYear() === month.getFullYear()
+      )
+        await load();
+    } catch (err) {
+      setFormError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function beginEdit(slot: Slot) {
+    setEditing(slot);
+    setDateInput(localInput(new Date(slot.scheduledAt)));
+    setBrief(slot.brief);
+    setNotes(slot.notes ?? "");
+    setSelectedChannels(slot.channelIds);
+    setFormError(null);
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing || busy) return;
+    if (selectedChannels.length === 0) {
+      setFormError(t("chooseChannel"));
+      return;
+    }
+    setBusy(true);
+    setFormError(null);
+    try {
+      await api(`/api/calendar/slots/${editing.id}?brandId=${brandId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          scheduledAt: new Date(dateInput).toISOString(),
+          brief,
+          channelIds: selectedChannels,
+          notes: notes.trim() || null,
+        }),
+      });
+      setEditing(null);
+      await load();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "calendar_slot_started") {
+        setEditing(null);
+        await load();
+        setError(describe(err));
+      } else setFormError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function remove() {
+    if (!removing || busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/calendar/slots/${removing.id}?brandId=${brandId}`, { method: "DELETE" });
+      setRemoving(null);
+      await load();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "calendar_slot_started") {
+        setRemoving(null);
+        await load();
+      }
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const selected = byDay.get(selectedDay) ?? [];
+  function changeMonth(offset: number) {
+    const next = new Date(month.getFullYear(), month.getMonth() + offset, 1);
+    setMonth(next);
+    setSelectedDay(dayKey(next));
+  }
+  const monthLabel = new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(
+    month,
+  );
+  const dateLabel = new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(
+    new Date(`${selectedDay}T12:00`),
+  );
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const fields = (isEdit: boolean) => (
+    <div className="flex flex-col gap-3">
+      <Input
+        type="datetime-local"
+        label={t("dateTime")}
+        value={dateInput}
+        min={localInput(new Date())}
+        onChange={(e) => setDateInput(e.target.value)}
+        required
+      />
+      <Textarea
+        id={isEdit ? "calendar-edit-brief" : "calendar-brief"}
+        label={t("brief")}
+        value={brief}
+        onChange={(e) => setBrief(e.target.value)}
+        maxLength={2000}
+        showCount
+        required
+      />
+      <fieldset className="rounded-card border border-border p-3">
+        <legend className="px-1 text-sm font-medium text-fg">{t("channels")}</legend>
+        <div className="flex flex-wrap gap-3">
+          {(channels ?? []).map((channel) => (
+            <label key={channel.id} className="flex min-h-11 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={selectedChannels.includes(channel.id)}
+                onChange={(e) =>
+                  setSelectedChannels((current) =>
+                    e.target.checked
+                      ? [...current, channel.id]
+                      : current.filter((id) => id !== channel.id),
+                  )
+                }
+              />
+              {channel.name}
+            </label>
+          ))}
+        </div>
+        {channels?.length === 0 && <p className="text-sm text-fg-secondary">{t("noChannels")}</p>}
+      </fieldset>
+      <Textarea
+        label={t("notes")}
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        maxLength={2000}
+        showCount
+      />
+      <p className="text-sm text-fg-secondary">{t("reviewHint")}</p>
+      {formError && (
+        <p role="alert" className="text-sm text-danger">
+          {formError}
+        </p>
+      )}
+      {!isEdit && <p className="text-xs text-fg-tertiary">{t("timezone", { zone: timezone })}</p>}
+    </div>
+  );
+
+  return (
+    <AppShell
+      title={t("title")}
+      primaryAction={
+        <Button type="submit" form={FORM_ID} disabled={busy || channels?.length === 0}>
+          {t("add")}
+        </Button>
+      }
+    >
+      <Link
+        href={`/${locale}/brands/${brandId}`}
+        className="mb-4 inline-block text-sm text-fg-secondary underline"
+      >
+        {t("backToBrand")}
+      </Link>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <Button
+          variant="secondary"
+          className="min-h-11 min-w-11"
+          onClick={() => changeMonth(-1)}
+          aria-label={t("previousMonth")}
+        >
+          ←
+        </Button>
+        <h2 className="text-lg font-semibold text-fg">{monthLabel}</h2>
+        <Button
+          variant="secondary"
+          className="min-h-11 min-w-11"
+          onClick={() => changeMonth(1)}
+          aria-label={t("nextMonth")}
+        >
+          →
+        </Button>
+      </div>
+      <div className="mb-4 sm:hidden">
+        <Input
+          type="date"
+          label={t("chooseDay")}
+          value={selectedDay}
+          onChange={(e) => {
+            const next = new Date(`${e.target.value}T12:00`);
+            if (Number.isNaN(next.getTime())) return;
+            setSelectedDay(e.target.value);
+            setMonth(monthStart(next));
+          }}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {slots === null && !error ? (
+        <Skeleton lines={7} />
+      ) : (
+        <Card className="mb-6 hidden sm:block">
+          <fieldset className="grid grid-cols-7 gap-1">
+            <legend className="sr-only">{monthLabel}</legend>
+            {Array.from({ length: 7 }, (_, i) => (
+              <span key={WEEKDAY_KEYS[i]} className="pb-2 text-center text-xs text-fg-secondary">
+                {new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
+                  new Date(2024, 0, i + 1),
+                )}
+              </span>
+            ))}
+            {days.map((day) => {
+              const key = dayKey(day);
+              const count = byDay.get(key)?.length ?? 0;
+              const outside = day.getMonth() !== month.getMonth();
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSelectedDay(key)}
+                  aria-label={t("dayLabel", {
+                    day: new Intl.DateTimeFormat(locale, { dateStyle: "full" }).format(day),
+                    count,
+                  })}
+                  aria-pressed={selectedDay === key}
+                  className={`min-h-14 rounded-card border p-1 text-left text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${selectedDay === key ? "border-accent" : "border-border"} ${outside ? "text-fg-tertiary" : "text-fg"}`}
+                >
+                  <span className="block">{day.getDate()}</span>
+                  {count > 0 && <span className="text-xs text-fg-secondary">{count}</span>}
+                </button>
+              );
+            })}
+          </fieldset>
+        </Card>
+      )}
+      <section className="mb-6" aria-label={dateLabel}>
+        <h2 className="mb-3 text-lg font-semibold text-fg">{dateLabel}</h2>
+        {selected.length === 0 ? (
+          <EmptyState
+            title={t("emptyDay")}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => document.getElementById("calendar-brief")?.focus()}
+              >
+                {t("add")}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="space-y-3">
+            {selected.map((slot) => (
+              <Card key={slot.id}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-fg">{slot.brief}</p>
+                    <p className="mt-1 text-sm text-fg-secondary">
+                      {new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(
+                        new Date(slot.scheduledAt),
+                      )}
+                      {" · "}
+                      {slot.channelIds
+                        .map(
+                          (id) =>
+                            channels?.find((channel) => channel.id === id)?.name ??
+                            t("missingChannel"),
+                        )
+                        .join(", ")}
+                    </p>
+                    {slot.notes && <p className="mt-2 text-sm text-fg-secondary">{slot.notes}</p>}
+                    {slot.retryAfter && !slot.runId && (
+                      <p className="mt-2 text-sm text-fg-secondary">{t("waitingCapacity")}</p>
+                    )}
+                    {slot.errorCode && (
+                      <p role="alert" className="mt-2 text-sm text-danger">
+                        {slot.errorCode === "channels_missing"
+                          ? t("channelsMissing")
+                          : t("invalidInput")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    {slot.runId ? (
+                      <Link
+                        href={`/${locale}/content/runs/${slot.runId}`}
+                        className="text-sm text-accent underline"
+                      >
+                        {t("viewRun")}
+                      </Link>
+                    ) : (
+                      <>
+                        <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
+                          {t("edit")}
+                        </Button>
+                        <Button size="sm" variant="danger" onClick={() => setRemoving(slot)}>
+                          {t("remove")}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+      <Card>
+        <h2 className="mb-3 text-lg font-semibold text-fg">{t("addTitle")}</h2>
+        <form id={FORM_ID} onSubmit={add}>
+          {fields(false)}
+        </form>
+      </Card>
+      <Modal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title={t("editTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setEditing(null)}>
+              {t("cancel")}
+            </Button>
+            <Button type="submit" form={EDIT_FORM_ID} disabled={busy}>
+              {t("save")}
+            </Button>
+          </>
+        }
+      >
+        <form id={EDIT_FORM_ID} onSubmit={save}>
+          {fields(true)}
+        </form>
+      </Modal>
+      <Modal
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        title={t("removeTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRemoving(null)}>
+              {t("cancel")}
+            </Button>
+            <Button variant="danger" onClick={remove} disabled={busy}>
+              {t("remove")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
+      </Modal>
+    </AppShell>
+  );
+}

@@ -3,6 +3,7 @@ import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { auth } from "./auth";
 import { BrandsModule } from "./brands/brands.module";
+import { CalendarModule } from "./calendar/calendar.module";
 import { ChannelsModule } from "./channels/channels.module";
 import { ContentModule } from "./content/content.module";
 import { HealthModule } from "./health/health.module";
@@ -16,6 +17,7 @@ import { RunsModule } from "./runs/runs.module";
     QueueModule,
     HealthModule,
     BrandsModule,
+    CalendarModule,
     ChannelsModule,
     ContentModule,
     OrgModule,

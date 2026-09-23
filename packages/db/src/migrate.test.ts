@@ -90,11 +90,10 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * somebody wrote down, and a list computed from the same types the migration
  * was generated from could only ever agree with itself.
  *
- * Twelve of them are the publishing path, converted by 0014. The last two were
- * born zoned: `refine_proposals` (0016) is a table the editor writes, and
- * `publications.asserted_at` (0017) is the moment a person settled a delivery
- * nobody else could — and neither has any reason to inherit the "naive means
- * UTC" convention the conversion existed to end. They are deliberately NOT in
+ * Twelve of them are the publishing path, converted by 0014. `refine_proposals`
+ * (0016), `publications.asserted_at` (0017), and all four calendar timestamps
+ * (0021) were born zoned. They have no reason to inherit the "naive means UTC"
+ * convention the conversion existed to end. They are deliberately NOT in
  * `UNZONED_TABLES`, which is the list of tables somebody decided to LEAVE.
  */
 const ZONED_COLUMNS = [
@@ -103,6 +102,10 @@ const ZONED_COLUMNS = [
   "adaptations.updated_at",
   "brands.created_at",
   "brands.updated_at",
+  "calendar_slots.created_at",
+  "calendar_slots.retry_after",
+  "calendar_slots.scheduled_at",
+  "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
   "content_items.created_at",
@@ -202,6 +205,11 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
+  // 0021's nullable calendar error enum is on a table that did not exist when
+  // seedEveryTable wrote its pre-0009 rows, so the UPDATE loop cannot test it.
+  // schema-invariants.test.ts verifies the schema declaration; this count
+  // verifies that the generated migration installed the database guard.
+  "calendar_slots_error_code_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

@@ -20,6 +20,9 @@
 /** Queue the api enqueues to and the worker consumes. */
 export const PUBLISH_QUEUE = "publish";
 
+/** The two-argument advisory-lock namespace shared by API and calendar admissions. */
+export const RUN_ADMISSION_LOCK_NAMESPACE = 0x7a11;
+
 /** Dead-letter queue for publish jobs whose retries were exhausted. */
 export const PUBLISH_DLQ = "publish-dlq";
 

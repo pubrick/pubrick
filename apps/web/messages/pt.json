@@ -66,7 +66,8 @@
     "languageHint": "O código do idioma em que os rascunhos são escritos — por exemplo en, es, ru ou pt-BR.",
     "voiceUnset": "Não definido",
     "voiceSave": "Salvar",
-    "voiceCancel": "Cancelar"
+    "voiceCancel": "Cancelar",
+    "calendarLink": "Abrir calendário de conteúdo"
   },
   "Channels": {
     "title": "Canais",
@@ -396,6 +397,41 @@
     "invalid_request": "Parte do que você digitou não é válida. Verifique o formulário e tente de novo.",
     "signed_out": "Você saiu da conta. Entre novamente para continuar.",
     "no_active_organization": "Nenhuma organização ativa — crie ou selecione uma primeiro.",
-    "forbidden": "Você não tem acesso a isto."
+    "forbidden": "Você não tem acesso a isto.",
+    "calendar_slot_not_found": "Este espaço planejado não existe mais.",
+    "calendar_slot_started": "A geração deste espaço já começou. Abra a execução para ver o progresso.",
+    "calendar_time_in_past": "Escolha um horário futuro para gerar o rascunho."
+  },
+  "Calendar": {
+    "title": "Calendário de conteúdo",
+    "genericError": "Não foi possível atualizar o calendário. Tente novamente.",
+    "chooseChannel": "Escolha pelo menos um canal.",
+    "dateTime": "Data e hora",
+    "chooseDay": "Escolher um dia",
+    "brief": "Tema ou instruções",
+    "channels": "Canais",
+    "noChannels": "Adicione um canal à marca antes de planejar.",
+    "notes": "Notas para a equipe",
+    "reviewHint": "No horário planejado, o Pubrick cria um rascunho para revisão. Nada é publicado automaticamente.",
+    "timezone": "Os horários usam seu fuso local: {zone}.",
+    "add": "Adicionar",
+    "backToBrand": "Voltar à marca",
+    "previousMonth": "Mês anterior",
+    "nextMonth": "Próximo mês",
+    "dayLabel": "{day}, {count} espaços planejados",
+    "emptyDay": "Não há espaços planejados neste dia. Use Adicionar para criar um.",
+    "missingChannel": "Canal removido",
+    "channelsMissing": "Um canal foi removido. Edite este espaço e escolha outro.",
+    "invalidInput": "Este espaço é inválido. Edite e salve antes de gerar.",
+    "waitingCapacity": "Aguardando capacidade de geração. O Pubrick tentará novamente automaticamente.",
+    "viewRun": "Ver geração",
+    "edit": "Editar",
+    "remove": "Remover",
+    "addTitle": "Planejar geração",
+    "editTitle": "Editar geração planejada",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "removeTitle": "Remover geração planejada?",
+    "removeBody": "Isso remove o espaço antes do início da geração."
   }
 }

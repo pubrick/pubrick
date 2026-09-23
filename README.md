@@ -28,8 +28,9 @@ instructed with — and channels with credentials encrypted at rest, plus conten
 drafts, a review queue with approval/rejection/overrides, and publishing to
 Telegram, the one platform there is a publisher for — through a restyled,
 installable (PWA) web app. AI generation works too, with **your own** Gemini or
-OpenRouter key (there is no hosted key): type a brief and five roles —
-researcher, writer, editor, a fact-checker that lists claims to verify rather
+OpenRouter key (there is no hosted key): start from a brief or schedule a draft
+in the [brand calendar](docs/calendar.md). Five roles — researcher, writer,
+editor, a fact-checker that lists claims to verify rather
 than checking them, and one adapter per channel — produce a draft with
 per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model

@@ -66,7 +66,8 @@
     "languageHint": "El código del idioma en el que se escriben los borradores: por ejemplo en, es, ru o pt-BR.",
     "voiceUnset": "Sin definir",
     "voiceSave": "Guardar",
-    "voiceCancel": "Cancelar"
+    "voiceCancel": "Cancelar",
+    "calendarLink": "Abrir calendario de contenido"
   },
   "Channels": {
     "title": "Canales",
@@ -396,6 +397,41 @@
     "invalid_request": "Algo de lo que has introducido no es válido. Revisa el formulario e inténtalo de nuevo.",
     "signed_out": "Has cerrado la sesión. Vuelve a iniciar sesión para continuar.",
     "no_active_organization": "No hay ninguna organización activa: crea o selecciona una primero.",
-    "forbidden": "No tienes acceso a esto."
+    "forbidden": "No tienes acceso a esto.",
+    "calendar_slot_not_found": "Este espacio planificado ya no existe.",
+    "calendar_slot_started": "La generación de este espacio ya comenzó. Abre su ejecución para ver el progreso.",
+    "calendar_time_in_past": "Elige una fecha futura para generar el borrador."
+  },
+  "Calendar": {
+    "title": "Calendario de contenido",
+    "genericError": "No se pudo actualizar el calendario. Inténtalo de nuevo.",
+    "chooseChannel": "Elige al menos un canal.",
+    "dateTime": "Fecha y hora",
+    "chooseDay": "Elegir un día",
+    "brief": "Tema o instrucciones",
+    "channels": "Canales",
+    "noChannels": "Añade un canal a esta marca antes de planificar.",
+    "notes": "Notas para el equipo",
+    "reviewHint": "A la hora prevista, Pubrick crea un borrador para revisar. No se publica automáticamente.",
+    "timezone": "La hora usa tu zona local: {zone}.",
+    "add": "Añadir",
+    "backToBrand": "Volver a la marca",
+    "previousMonth": "Mes anterior",
+    "nextMonth": "Mes siguiente",
+    "dayLabel": "{day}, {count} espacios planificados",
+    "emptyDay": "No hay espacios planificados este día. Usa Añadir para crear uno.",
+    "missingChannel": "Canal eliminado",
+    "channelsMissing": "Se eliminó un canal. Edita este espacio y elige otro.",
+    "invalidInput": "Este espacio no es válido. Edítalo y guárdalo antes de generar.",
+    "waitingCapacity": "Esperando capacidad para generar. Pubrick lo intentará de nuevo automáticamente.",
+    "viewRun": "Ver generación",
+    "edit": "Editar",
+    "remove": "Eliminar",
+    "addTitle": "Planificar generación",
+    "editTitle": "Editar generación planificada",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "removeTitle": "¿Eliminar generación planificada?",
+    "removeBody": "Esto elimina el espacio antes de que empiece la generación."
   }
 }

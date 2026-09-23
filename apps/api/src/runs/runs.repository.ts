@@ -6,6 +6,7 @@ import {
   isLiveRunStatus,
   LIVE_RUN_STATUSES,
   MAX_CONCURRENT_RUNS,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   RUN_LIST_STATES,
   type RunCreate,
   type RunListInput,
@@ -183,7 +184,6 @@ function isCancellable(status: RunStatus): status is CancellableStatus {
  * the one-argument space `runMigrations` uses — so the two can never collide
  * however their keys hash.
  */
-const ADMISSION_LOCK_NAMESPACE = 0x7a11;
 
 /**
  * The two schemas `retry` validates with, through the SAME pipe the HTTP
@@ -319,7 +319,7 @@ export class RunsRepository {
    */
   private async admit(tx: Tx, orgId: string): Promise<void> {
     await tx.execute(
-      sql`select pg_advisory_xact_lock(${ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+      sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
     );
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })

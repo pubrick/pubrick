@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   GENERATE_DLQ,
   GENERATE_QUEUE,
@@ -11,6 +11,7 @@ import {
   type PublishJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
+import { CalendarService } from "./calendar/calendar.service";
 import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
 
@@ -97,6 +98,7 @@ export class QueueService {
   constructor(
     private readonly publish: PublishService,
     private readonly generate: GenerateService,
+    @Optional() private readonly calendar?: CalendarService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -193,5 +195,14 @@ export class QueueService {
     await boss.work(sweepQueue, { batchSize: 1 }, async () => {
       await this.generate.sweepAbandoned();
     });
+
+    // Private test queues must not consume production calendar ticks.
+    if (this.calendar && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("calendar-scan");
+      await boss.schedule("calendar-scan", "* * * * *");
+      await boss.work("calendar-scan", { batchSize: 1 }, async () => {
+        await this.calendar?.scan(boss);
+      });
+    }
   }
 }
