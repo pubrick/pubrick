@@ -21,6 +21,10 @@ import {
   TELEGRAM_COMMENTS_OPTIONS,
   TELEGRAM_COMMENTS_QUEUE,
   type TelegramCommentsJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { CalendarService } from "./calendar/calendar.service";
@@ -29,6 +33,7 @@ import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
+import { SuggestionsService } from "./suggestions/suggestions.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
@@ -117,6 +122,7 @@ export class QueueService {
     @Optional() private readonly calendar?: CalendarService,
     @Optional() private readonly relevance?: RelevanceService,
     @Optional() private readonly comments?: CommentsService,
+    @Optional() private readonly suggestions?: SuggestionsService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -179,6 +185,26 @@ export class QueueService {
         { batchSize: 1, groupConcurrency: 1 },
         async ([job]) => {
           if (job) await this.comments?.handle(job.data);
+        },
+      );
+    }
+
+    if (this.suggestions && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
+      await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.handle(job.data);
+        },
+      );
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_DLQ,
+        { batchSize: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.exhausted(job.data);
         },
       );
     }

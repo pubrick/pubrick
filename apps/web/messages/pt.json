@@ -679,7 +679,8 @@
     "media_in_use": "Remova a imagem da publicação antes de excluí-la.",
     "media_cover_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar a capa.",
     "media_generation_limit": "O limite de geração de imagens por hora foi atingido. Tente mais tarde.",
-    "media_generation_failed": "O Gemini não retornou uma imagem utilizável. Tente outra descrição."
+    "media_generation_failed": "O Gemini não retornou uma imagem utilizável. Tente outra descrição.",
+    "topic_suggestions_cooldown": "Pode pedir mais ideias daqui a 30 minutos."
   },
   "Calendar": {
     "title": "Calendário de conteúdo",
@@ -744,7 +745,14 @@
     "more": "Mais",
     "listError": "Não foi possível carregar os tópicos.",
     "retry": "Tentar novamente",
-    "openSource": "Abrir fonte"
+    "openSource": "Abrir fonte",
+    "suggest": "Sugerir temas com IA",
+    "suggestionWorking": "A procurar ideias com base na marca, nos temas e nos artigos avaliados…",
+    "suggestionComplete": "Foram adicionadas {count} ideias novas. Reveja e aprove antes de gerar.",
+    "suggestionError_no_api_key": "Adicione uma chave de IA nas Definições e tente novamente.",
+    "suggestionError_unreadable_key": "Não foi possível ler a chave de IA. Substitua-a nas Definições.",
+    "suggestionError_model_failed": "Não foi possível sugerir temas. Tente mais tarde.",
+    "aiSuggestion": "Sugestão de IA"
   },
   "Media": {
     "title": "Biblioteca de mídia",

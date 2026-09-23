@@ -131,6 +131,8 @@ const ZONED_COLUMNS = [
   "publications.created_at",
   "refine_proposals.created_at",
   "telegram_source_accounts.connected_at",
+  "topic_suggestion_requests.created_at",
+  "topic_suggestion_requests.updated_at",
   "topics.created_at",
   "topics.updated_at",
 ];
@@ -250,6 +252,11 @@ const NON_ENUM_CHECKS = [
   // seed. The topic API e2e writes real rows and proves both reject off-list
   // values with SQLSTATE 23514.
   "topics_status_check",
+  // 0033's late enum pins are exercised by the topic API and suggestion worker
+  // e2e suites; this pre-0009 seed has no topic or request rows to update.
+  "topics_origin_check",
+  "topic_suggestion_requests_status_check",
+  "topic_suggestion_requests_error_code_check",
   "news_items_editor_signal_check",
   "news_items_relevance_status_check",
   "news_items_relevance_urgency_check",

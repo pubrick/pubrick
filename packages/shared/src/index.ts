@@ -94,6 +94,10 @@ export {
   TELEGRAM_COMMENTS_OPTIONS,
   TELEGRAM_COMMENTS_QUEUE,
   type TelegramCommentsJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
   telegramCommentsJobOptions,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";

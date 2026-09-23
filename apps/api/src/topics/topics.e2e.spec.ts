@@ -181,4 +181,34 @@ describe.skipIf(!url)("topic bank e2e", () => {
     ).toEqual([]);
     await owner.agent.get(`/api/runs/${run.body.id}`).expect(200);
   });
+
+  it("queues one brand-scoped suggestion request and reuses it during the cooldown", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Ideas" }).expect(201);
+    await other.agent.get(`/api/topics/suggestions?brandId=${brand.body.id}`).expect(404);
+    await other.agent.post(`/api/topics/suggestions?brandId=${brand.body.id}`).expect(404);
+    expect(
+      (await owner.agent.get(`/api/topics/suggestions?brandId=${brand.body.id}`).expect(200)).body,
+    ).toEqual({ request: null });
+    const first = await owner.agent
+      .post(`/api/topics/suggestions?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(first.body).toMatchObject({
+      brandId: brand.body.id,
+      status: "queued",
+      suggestionCount: 0,
+    });
+    const again = await owner.agent
+      .post(`/api/topics/suggestions?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(again.body.id).toBe(first.body.id);
+    expect(
+      (await owner.agent.get(`/api/topics/suggestions?brandId=${brand.body.id}`).expect(200)).body
+        .request.id,
+    ).toBe(first.body.id);
+    expect(
+      (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body,
+    ).toEqual([]);
+  });
 });

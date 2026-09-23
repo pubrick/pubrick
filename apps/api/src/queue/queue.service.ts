@@ -23,6 +23,10 @@ import {
   TELEGRAM_COMMENTS_OPTIONS,
   TELEGRAM_COMMENTS_QUEUE,
   type TelegramCommentsJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
   telegramCommentsJobOptions,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
@@ -99,6 +103,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(RELEVANCE_DLQ);
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
+    await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
@@ -149,6 +156,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
+  }
+
+  async enqueueTopicSuggestions(tx: Tx, payload: TopicSuggestionsJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(TOPIC_SUGGESTIONS_QUEUE, payload, {
+      id: payload.requestId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Topic suggestions are already queued");
   }
 
   /**

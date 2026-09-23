@@ -679,7 +679,8 @@
     "media_in_use": "Remove this image from its post before deleting it.",
     "media_cover_pinned": "This post is already approved or published. Reject it before changing the cover.",
     "media_generation_limit": "The hourly image generation limit is reached. Try again later.",
-    "media_generation_failed": "Gemini did not return a usable image. Try another prompt."
+    "media_generation_failed": "Gemini did not return a usable image. Try another prompt.",
+    "topic_suggestions_cooldown": "You can request more ideas in 30 minutes."
   },
   "Calendar": {
     "title": "Content calendar",
@@ -744,7 +745,14 @@
     "more": "More",
     "listError": "Topics could not be loaded.",
     "retry": "Try again",
-    "openSource": "Open source"
+    "openSource": "Open source",
+    "suggest": "Suggest topics with AI",
+    "suggestionWorking": "Finding ideas from your brand, topics, and scored articles…",
+    "suggestionComplete": "New ideas added: {count}. Review and approve before generating.",
+    "suggestionError_no_api_key": "Add an AI key in Settings, then try again.",
+    "suggestionError_unreadable_key": "Your AI key could not be read. Replace it in Settings, then try again.",
+    "suggestionError_model_failed": "Ideas could not be suggested. Try again later.",
+    "aiSuggestion": "AI suggestion"
   },
   "Media": {
     "title": "Media library",

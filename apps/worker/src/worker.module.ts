@@ -12,6 +12,8 @@ import { RelevanceService } from "./relevance/relevance.service";
 import { RssRepository } from "./rss/rss.repository";
 import { RssService } from "./rss/rss.service";
 import { TelegramReader } from "./rss/telegram.reader";
+import { SuggestionsRepository } from "./suggestions/suggestions.repository";
+import { SuggestionsService } from "./suggestions/suggestions.service";
 
 @Module({
   providers: [
@@ -28,6 +30,8 @@ import { TelegramReader } from "./rss/telegram.reader";
     RelevanceService,
     CommentsRepository,
     CommentsService,
+    SuggestionsRepository,
+    SuggestionsService,
   ],
 })
 export class WorkerModule {}

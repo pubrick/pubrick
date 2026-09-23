@@ -13,6 +13,9 @@ import {
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { publishSweepQueueOf, QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
@@ -44,6 +47,45 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers bounded topic suggestions and their exhausted-job handler", async () => {
+    const boss = bossStub();
+    const suggestions = { handle: vi.fn(), exhausted: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      suggestions as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_QUEUE, {
+      ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_QUEUE, {
+      ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+    });
+    expect(boss.work).toHaveBeenCalledWith(
+      TOPIC_SUGGESTIONS_QUEUE,
+      { batchSize: 1, groupConcurrency: 1 },
+      expect.any(Function),
+    );
+    const handle = boss.work.mock.calls.find(
+      (call) => call[0] === TOPIC_SUGGESTIONS_QUEUE,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const exhausted = boss.work.mock.calls.find(
+      (call) => call[0] === TOPIC_SUGGESTIONS_DLQ,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const payload = { orgId: "org", brandId: "brand", requestId: "request" };
+    await handle([{ data: payload }]);
+    await exhausted([{ data: payload }]);
+    expect(suggestions.handle).toHaveBeenCalledWith(payload);
+    expect(suggestions.exhausted).toHaveBeenCalledWith(payload);
+  });
+
   it("registers bounded relevance work, hourly scanning, and exhausted-job handling", async () => {
     const boss = bossStub();
     const relevance = { handle: vi.fn(), scan: vi.fn(), exhausted: vi.fn() };
