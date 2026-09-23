@@ -213,6 +213,16 @@ describe("what a run may be asked for", () => {
   const brandId = "22222222-2222-4222-8222-222222222222";
   const base = { brandId, channelIds };
 
+  it("accepts each supported format and refuses unknown content types", () => {
+    for (const contentType of ["social_post", "news_digest", "expert_article", "educational"]) {
+      const body = { ...base, brief: "Supported facts", contentType };
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    }
+    expect(
+      runCreateSchema.safeParse({ ...base, brief: "Facts", contentType: "case_study" }).success,
+    ).toBe(false);
+  });
+
   it("accepts a brief alone, exactly as it did before material existed", () => {
     const body = { ...base, brief: "Announce the autumn menu" };
     expect(runCreateSchema.parse(body)).toEqual(body);

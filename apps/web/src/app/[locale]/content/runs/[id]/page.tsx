@@ -261,6 +261,11 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           */}
           <Card className="mb-6">
             <div className="flex flex-col gap-4">
+              <RunField label={t("contentTypeLabel")}>
+                <p className="text-sm text-fg">
+                  {t(`contentType.${run.input.contentType ?? "social_post"}`)}
+                </p>
+              </RunField>
               {run.input.kind === "source" && run.input.text === null ? (
                 /*
                   Not an empty "Brief" block. A label with nothing under it reads

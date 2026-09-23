@@ -124,6 +124,42 @@ const channel = {
   platform: "bluesky" as const,
 };
 
+describe("editorial content types", () => {
+  it.each([
+    ["news_digest", "news digest"],
+    ["expert_article", "expert article"],
+    ["educational", "how-to"],
+  ] as const)("adds the %s policy to the existing writer call", async (contentType, phrase) => {
+    const model = jsonModel(JSON.stringify({ body: "A supported draft." }));
+    const onUsage = vi.fn();
+    const ctx = {
+      ...contextFor(model, onUsage),
+      contentType,
+      material: "SOURCE_MARKER supplied facts only",
+    };
+
+    await WRITER.run(ctx, { research });
+
+    const { system, user } = halvesOf(model);
+    expect(system.toLowerCase()).toContain(phrase);
+    expect(system).not.toContain("social post without a title");
+    expect(system).not.toContain("SOURCE_MARKER");
+    expect(user).toContain("SOURCE_MARKER");
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(onUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the default social post's no-title instruction", async () => {
+    const model = jsonModel(JSON.stringify({ body: "A social post." }));
+    await WRITER.run(contextFor(model), { research });
+    const { system } = halvesOf(model);
+    expect(system).toContain("social post without a title");
+    expect(system).not.toContain("news digest");
+    expect(system).not.toContain("expert article");
+    expect(system).not.toContain("how-to");
+  });
+});
+
 describe("the researcher", () => {
   it("returns an angle, key points and things to avoid", async () => {
     const model = jsonModel(

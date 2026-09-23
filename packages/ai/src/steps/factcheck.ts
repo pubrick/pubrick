@@ -51,7 +51,7 @@ export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = defineStep({
   name: "factcheck",
   schema: factcheckSchema,
   role: [
-    `You read a draft post and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
+    `You read a draft and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
     "You have no sources and no way to look anything up, so you check nothing and decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
     "Produce, for each claim:",
     "- text: the claim in one sentence, as the draft states it.",

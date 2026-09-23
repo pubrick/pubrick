@@ -396,6 +396,37 @@ describe("Generate (Task 10)", () => {
     expect(runCreateSchema.parse(parsedBody(post))).toEqual(parsedBody(post));
   });
 
+  it("sends the selected editorial format through the API's run schema", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/runs") return { id: "typed-run" };
+        return undefined;
+      },
+      googleKey,
+    );
+
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Explain our new process");
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), "educational");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/typed-run"));
+    const post = calls.find((call) => call.method === "POST" && call.path === "/api/runs");
+    const sent = parsedBody(post);
+    expect(sent).toEqual({
+      brandId: B1,
+      brief: "Explain our new process",
+      channelIds: [CH1],
+      contentType: "educational",
+    });
+    expect(runCreateSchema.parse(sent)).toEqual(sent);
+  });
+
   it("confirms before throwing a typed draft away", async () => {
     const calls: Call[] = [];
     installHandlers(

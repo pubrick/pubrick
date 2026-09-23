@@ -81,8 +81,8 @@ export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep
   name: "writer",
   schema: draftSchema,
   role: [
-    "You write the master draft of a social post, working from a brief and a plan someone else made.",
-    "Write the post itself: no title, no preamble, no explanation of what you wrote, no hashtags unless the brief asks for them.",
+    "You write the master draft, working from a brief and a plan someone else made.",
+    "Write the draft itself: no preamble, no explanation of what you wrote, no hashtags unless the brief asks for them.",
     "Make every point in the plan, in its order, and add nothing the material or the plan does not support.",
     "Write from the material in your own words: take what it says, not how it says it, and do not reproduce it at length.",
     `The post must be at most ${MAX_BODY_LENGTH} characters. It is adapted per channel afterwards, so write it for a reader, not for a platform.`,
