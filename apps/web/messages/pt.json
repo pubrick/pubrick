@@ -585,7 +585,7 @@
     "stepsTitle": "Etapas",
     "knowledgeNotesTitle": "Notas da marca selecionadas para esta geração",
     "knowledgeNotesEmpty": "Nenhuma nota da marca correspondente foi selecionada.",
-    "knowledgeNotesHint": "As notas selecionadas fornecem contexto; não verificam afirmações factuais.",
+    "knowledgeNotesHint": "Estas notas foram selecionadas como contexto. Reveja as afirmações factuais antes de publicar.",
     "step": {
       "researcher": "Pesquisa",
       "writer": "Rascunho",

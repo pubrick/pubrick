@@ -585,7 +585,7 @@
     "stepsTitle": "Steps",
     "knowledgeNotesTitle": "Brand notes selected for this run",
     "knowledgeNotesEmpty": "No matching brand notes were selected.",
-    "knowledgeNotesHint": "Selected notes provide context; they do not verify factual claims.",
+    "knowledgeNotesHint": "These notes were selected as context. Review factual claims before publishing.",
     "step": {
       "researcher": "Research",
       "writer": "Draft",

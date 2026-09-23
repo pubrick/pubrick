@@ -585,7 +585,7 @@
     "stepsTitle": "Pasos",
     "knowledgeNotesTitle": "Notas de marca seleccionadas para esta generación",
     "knowledgeNotesEmpty": "No se seleccionaron notas de marca coincidentes.",
-    "knowledgeNotesHint": "Las notas seleccionadas aportan contexto; no verifican las afirmaciones fácticas.",
+    "knowledgeNotesHint": "Estas notas se seleccionaron como contexto. Revisa las afirmaciones fácticas antes de publicar.",
     "step": {
       "researcher": "Investigación",
       "writer": "Redacción",
