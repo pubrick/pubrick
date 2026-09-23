@@ -1,4 +1,5 @@
 import type { PublishablePlatformId } from "@pubrick/shared";
+import { maxPublisher } from "./max.js";
 import { telegramPublisher } from "./telegram.js";
 import type { Publisher } from "./types.js";
 import { vkPublisher } from "./vk.js";
@@ -25,6 +26,7 @@ import { vkPublisher } from "./vk.js";
 const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   telegram: telegramPublisher as unknown as Publisher<never>,
   vk: vkPublisher as unknown as Publisher<never>,
+  max: maxPublisher as unknown as Publisher<never>,
 };
 
 /**

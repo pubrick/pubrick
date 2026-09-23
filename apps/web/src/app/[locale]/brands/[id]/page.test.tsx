@@ -308,6 +308,13 @@ it("explains the user token and community ID when VK is selected", async () => {
   expect(screen.getByText(/VK user access token with wall permission/)).toBeInTheDocument();
 });
 
+it("explains MAX bot permissions when MAX is selected", async () => {
+  installHandlers([]);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "max");
+  expect(screen.getByText(/MAX bot token and the numeric chat or channel ID/)).toBeInTheDocument();
+});
+
 /**
  * The add form's credential fields are cleared when the platform changes —
  * otherwise a value typed under one platform resurfaces in a same-named field

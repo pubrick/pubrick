@@ -41,6 +41,18 @@ describe.skipIf(!url)("channels verify e2e", () => {
         );
         return;
       }
+      if (req.url === "/me" || req.url?.startsWith("/chats/")) {
+        const maxBodies: Record<string, unknown> = {
+          "/me": { user_id: 7, username: "writer_bot" },
+          "/chats/-12345": { chat_id: -12345, type: "channel", status: "active", title: "Bakery" },
+          "/chats/-12345/members/me": { is_owner: false, is_admin: true, permissions: ["write"] },
+        };
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify(maxBodies[req.url ?? ""] ?? { code: "not_found", message: "Unknown" }),
+        );
+        return;
+      }
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
@@ -71,6 +83,7 @@ describe.skipIf(!url)("channels verify e2e", () => {
     const port = (telegram.address() as { port: number }).port;
     process.env.TELEGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
     process.env.VK_API_BASE_URL = `http://127.0.0.1:${port}/method`;
+    process.env.MAX_API_BASE_URL = `http://127.0.0.1:${port}`;
 
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
@@ -150,6 +163,24 @@ describe.skipIf(!url)("channels verify e2e", () => {
     expect(result.body).toEqual({ ok: true, account: "id7", target: "Bakery" });
     expect(JSON.stringify(result.body)).not.toContain("vk-api-secret");
     expect(telegramCalls).toContain("/method/groups.getById");
+  });
+
+  it("verifies a MAX channel through the API without exposing its token", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "max",
+        name: "MAX",
+        credentials: { accessToken: "max-api-secret", chatId: "-12345" },
+      })
+      .expect(201);
+    const result = await agent.post(`/api/channels/${channel.body.id}/test`).send({}).expect(200);
+    expect(result.body).toEqual({ ok: true, account: "@writer_bot", target: "Bakery" });
+    expect(JSON.stringify(result.body)).not.toContain("max-api-secret");
+    expect(telegramCalls).toContain("/chats/-12345/members/me");
   });
 
   it("answers 200 with ok:false, not a 500, when the adapter gets a malformed platform response", async () => {

@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   getPublisher,
+  MAX_REQUEST_TIMEOUT_MS,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
@@ -97,7 +98,9 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  * "outcome unknown, go look at the channel".
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
-  Math.max(TELEGRAM_REQUEST_TIMEOUT_MS, VK_REQUEST_TIMEOUT_MS) + PUBLISH_RECORD_BUDGET_MS + 10_000;
+  Math.max(TELEGRAM_REQUEST_TIMEOUT_MS, VK_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS) +
+  PUBLISH_RECORD_BUDGET_MS +
+  10_000;
 
 /**
  * Seconds as hours, to one decimal, for a sentence a person reads — ROUNDED IN
@@ -467,7 +470,12 @@ export class PublishService {
           "credentials_invalid",
         );
       }
-      const baseUrl = adaptation.platform === "vk" ? env.VK_API_BASE_URL : this.baseUrl;
+      const baseUrl =
+        adaptation.platform === "vk"
+          ? env.VK_API_BASE_URL
+          : adaptation.platform === "max"
+            ? env.MAX_API_BASE_URL
+            : this.baseUrl;
       result = await publisher.publish(parsed.data, { text }, { baseUrl });
     } catch (error) {
       const message = (error as Error).message;

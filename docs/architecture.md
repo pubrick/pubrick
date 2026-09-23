@@ -61,7 +61,7 @@ steps live in `steps/`; the metering (`usage.ts`), the call budget
 
 **`packages/integrations`** — publishers, one per platform, behind a registry
 typed over the platforms `shared` declares as publishable. Today: Telegram and
-VK community walls. A
+VK community walls, and MAX chats or channels. A
 publisher's errors are one of three kinds — permanent, transient, or unknown
 outcome — and that distinction is the whole delivery story (below).
 

@@ -70,7 +70,7 @@ const LANGUAGE_HINT_ID = "brand-language-hint";
  *
  * Every platform this product names is still shown, and those with no
  * adapter are shown as what they are — `disabled`, under a heading that says
- * so — rather than hidden. Hiding them would answer "does Pubrick support VK?"
+ * so — rather than hidden. Hiding them would answer "does Pubrick support this?"
  * with silence; the honest answer is "not yet", and this is a product whose
  * pitch is not overstating what it did. The browser will not let a disabled
  * option be selected, so nobody can reach the credential fields for one, and
@@ -558,6 +558,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             ))}
           </div>
           {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
+          {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
         </form>
       </Card>
 
@@ -591,6 +592,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
           {editing?.platform === "vk" && (
             <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>
+          )}
+          {editing?.platform === "max" && (
+            <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>
           )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (
