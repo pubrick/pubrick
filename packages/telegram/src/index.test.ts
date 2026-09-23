@@ -168,6 +168,20 @@ describe("private Telegram channel adapter", () => {
     expect(fake.getHistory).not.toHaveBeenCalled();
   });
 
+  it("ends a stalled invite lookup at the 20-second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      fake.getChat.mockReturnValue(new Promise(() => undefined));
+      const lookup = resolveJoinedPrivateChannel({ ...input, invite });
+      const failure = expect(lookup).rejects.toThrow("unavailable");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await failure;
+      expect(fake.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("polls exactly 50 recent posts by saved peer and emits member-only links", async () => {
     fake.getChat.mockResolvedValue(chat);
     fake.getHistory.mockResolvedValue([

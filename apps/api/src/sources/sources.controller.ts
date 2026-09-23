@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -17,10 +18,13 @@ import {
   newsItemListQuerySchema,
   newsSourceCreateSchema,
   newsSourceUpdateSchema,
+  type PrivateTelegramSourceCreate,
+  privateTelegramSourceCreateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
+import { PrivateSourceOwnerGuard } from "./private-source-owner.guard";
 import { SourcesRepository } from "./sources.repository";
 
 @Controller("sources")
@@ -44,6 +48,17 @@ export class SourcesController {
     @Body(new ZodValidationPipe(newsSourceCreateSchema)) body: NewsSourceCreate,
   ) {
     return this.sources.create(orgId, body);
+  }
+
+  @Post("telegram-private")
+  @UseGuards(PrivateSourceOwnerGuard)
+  createPrivateTelegram(
+    @OrgId() orgId: string,
+    @Req() request: { privateSourceActorId: string },
+    @Body(new ZodValidationPipe(privateTelegramSourceCreateSchema))
+    body: PrivateTelegramSourceCreate,
+  ) {
+    return this.sources.createPrivateTelegram(orgId, request.privateSourceActorId, body);
   }
 
   @Patch(":id")

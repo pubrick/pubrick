@@ -144,6 +144,7 @@ const ZONED_COLUMNS = [
   "publications.created_at",
   "refine_proposals.created_at",
   "telegram_source_accounts.connected_at",
+  "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
   "topic_suggestion_requests.updated_at",
   "topics.created_at",

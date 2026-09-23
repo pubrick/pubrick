@@ -46,6 +46,8 @@ services:
       # Leave on unless something in front of Pubrick already rate-limits /api/auth.
       AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
       TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
       MEDIA_STORAGE_DIR: /data/media

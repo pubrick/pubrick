@@ -93,6 +93,14 @@ export const newsSourceCreateSchema = z.preprocess(
 );
 export type NewsSourceCreate = z.infer<typeof newsSourceCreateSchema>;
 
+/** Invite links are single-use setup input. They must never enter source URLs or logs. */
+export const privateTelegramSourceCreateSchema = z.object({
+  brandId: z.string().uuid(),
+  name: newsSourceNameSchema,
+  invite: z.string().regex(/^https:\/\/t\.me\/(?:\+|joinchat\/)[A-Za-z0-9_-]{8,128}$/),
+});
+export type PrivateTelegramSourceCreate = z.infer<typeof privateTelegramSourceCreateSchema>;
+
 export const newsSourceUpdateSchema = z.object({
   name: newsSourceNameSchema.optional(),
   url: z.union([telegramUrl, feedUrl]).optional(),

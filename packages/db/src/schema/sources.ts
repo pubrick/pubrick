@@ -57,6 +57,8 @@ export const telegramSourceAccounts = pgTable("telegram_source_accounts", {
     .references(() => organization.id, { onDelete: "cascade" }),
   sessionEncrypted: text("session_encrypted").notNull(),
   connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Atomic organization-wide attempt gate; consumed before each MTProto lookup. */
+  lastPrivateResolveAt: timestamp("last_private_resolve_at", { withTimezone: true }),
 });
 
 export const newsItems = pgTable(

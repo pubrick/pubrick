@@ -9,16 +9,21 @@ import type { AiCredential } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   commentAnalysisResultSchema,
+  decryptJson,
+  encryptJson,
   type NewsItemListQuery,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsSourceCreateSchema,
+  type PrivateTelegramSourceCreate,
   toLedgerCostUsd,
 } from "@pubrick/shared";
+import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
-import { notFound } from "../api-error";
+import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
+import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
 import { CommentAnalysisCaller } from "./comment-analysis.caller";
 
@@ -104,6 +109,117 @@ export class SourcesRepository {
         .returning(SOURCE_COLUMNS);
       const source = rows[0];
       if (!source) throw new ConflictException("This source is already watched for the brand");
+      await this.queue.enqueueRssPoll(tx, { orgId, sourceId: source.id });
+      return source;
+    });
+  }
+
+  async createPrivateTelegram(orgId: string, actorId: string, data: PrivateTelegramSourceCreate) {
+    await this.requireBrand(orgId, data.brandId);
+    if (!env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH)
+      throw conflict(
+        "private_source_not_configured",
+        "Telegram application credentials are not configured",
+      );
+
+    // This UPDATE is the per-organization, cross-process attempt gate. A failed
+    // lookup consumes the minute as well, so bad invites cannot be brute-forced.
+    const [claimed] = await db
+      .update(schema.telegramSourceAccounts)
+      .set({ lastPrivateResolveAt: new Date() })
+      .where(
+        and(
+          eq(schema.telegramSourceAccounts.orgId, orgId),
+          sql`(${schema.telegramSourceAccounts.lastPrivateResolveAt} IS NULL OR ${schema.telegramSourceAccounts.lastPrivateResolveAt} <= now() - interval '1 minute')`,
+        ),
+      )
+      .returning({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted });
+    if (!claimed) {
+      const [account] = await db
+        .select({ orgId: schema.telegramSourceAccounts.orgId })
+        .from(schema.telegramSourceAccounts)
+        .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+        .limit(1);
+      if (!account)
+        throw conflict(
+          "private_source_not_connected",
+          "Connect this workspace's Telegram account first",
+        );
+      throw conflict("private_source_cooldown", "Wait one minute before checking another invite");
+    }
+
+    let session: string;
+    try {
+      const stored: unknown = decryptJson(claimed.sessionEncrypted, env.APP_ENCRYPTION_KEY);
+      if (
+        !stored ||
+        typeof stored !== "object" ||
+        !("session" in stored) ||
+        typeof stored.session !== "string" ||
+        !stored.session
+      )
+        throw new Error();
+      session = stored.session;
+    } catch {
+      throw conflict("private_source_not_connected", "Reconnect this workspace's Telegram account");
+    }
+
+    let peer: Awaited<ReturnType<typeof resolveJoinedPrivateChannel>>["peer"];
+    try {
+      ({ peer } = await resolveJoinedPrivateChannel({
+        apiId: env.TELEGRAM_API_ID,
+        apiHash: env.TELEGRAM_API_HASH,
+        session,
+        invite: data.invite,
+      }));
+    } catch {
+      // Never send upstream Telegram errors (which may quote the invite) to clients or logs.
+      throw conflict(
+        "private_source_access_denied",
+        "The account cannot read this joined broadcast channel",
+      );
+    }
+
+    return db.transaction(async (tx) => {
+      const [actor] = await tx
+        .select({ role: schema.member.role })
+        .from(schema.member)
+        .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorId)))
+        .for("update")
+        .limit(1);
+      if (actor?.role !== "owner" && actor?.role !== "admin")
+        throw forbidden("private_source_owner_required", "Organization owner or admin required");
+      const [account] = await tx
+        .select({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted })
+        .from(schema.telegramSourceAccounts)
+        .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+        .for("update")
+        .limit(1);
+      if (!account || account.sessionEncrypted !== claimed.sessionEncrypted)
+        throw conflict(
+          "private_source_session_changed",
+          "Telegram account changed; check the invite again",
+        );
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+        .limit(1);
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [source] = await tx
+        .insert(schema.newsSources)
+        .values({
+          orgId,
+          brandId: data.brandId,
+          name: data.name,
+          kind: "telegram_private",
+          url: `https://t.me/c/${peer.channelId}`,
+          privatePeerEncrypted: encryptJson(peer, env.APP_ENCRYPTION_KEY),
+        })
+        .onConflictDoNothing()
+        .returning(SOURCE_COLUMNS);
+      if (!source)
+        throw conflict("private_source_duplicate", "This channel is already watched for the brand");
       await this.queue.enqueueRssPoll(tx, { orgId, sourceId: source.id });
       return source;
     });

@@ -10,7 +10,7 @@ documents when they disagree.
 |---|---|---|
 | Brands | Guided manual setup with name, source-targeting description, voice, audience and content language; profile editing and next-step links | Optional website/social import with reviewed AI suggestions |
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and channel-specific publishing options |
-| News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed, public Telegram channels and joined private Telegram broadcast channels; polling, story list, advisory AI relevance scoring and draft start | In-app private-channel onboarding, feedback-informed ranking and discussion groups |
+| News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed, public Telegram channels and joined private Telegram broadcast channels with in-app setup; polling, story list, advisory AI relevance scoring and draft start | Feedback-informed ranking and discussion groups |
 | Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive, direct generation and approved-topic calendar links | Richer editorial feedback and bulk planning |
 | Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, selected social post/news digest/expert article/how-to formats, and opt-in homepage UTM tagging | Video/newsletter repurposing and deeper SEO workflow |
 | Images and media | Brand-scoped upload library, manual Gemini image generation and per-image variation, cover selection and Telegram/VK/MAX photo delivery | Richer image provenance and additional media formats |

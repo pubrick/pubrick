@@ -1,4 +1,9 @@
-import { newsItemListQuerySchema, newsSourceCreateSchema, runCreateSchema } from "@pubrick/shared";
+import {
+  newsItemListQuerySchema,
+  newsSourceCreateSchema,
+  privateTelegramSourceCreateSchema,
+  runCreateSchema,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -130,6 +135,29 @@ describe("watched sources page", () => {
     expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/api/sources"))).toBe(
       false,
     );
+  });
+
+  it("sends a private invite only in the protected request body and clears the field", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.kind), "telegram_private");
+    await user.type(screen.getByLabelText(en.Sources.name), "Joined channel");
+    const input = screen.getByLabelText(en.Sources.privateInvite);
+    expect(input).toHaveAttribute("type", "password");
+    await user.type(input, "https://t.me/+SecretInvite123");
+    await user.click(screen.getByRole("button", { name: en.Sources.add }));
+    const sent = calls.find(
+      (call) => call.method === "POST" && call.url.endsWith("/api/sources/telegram-private"),
+    );
+    expect(sent?.body).toEqual({
+      brandId: BRAND_ID,
+      name: "Joined channel",
+      invite: "https://t.me/+SecretInvite123",
+    });
+    expect(privateTelegramSourceCreateSchema.parse(sent?.body)).toEqual(sent?.body);
+    expect(sent?.url).not.toContain("SecretInvite123");
+    await waitFor(() => expect(input).toHaveValue(""));
   });
 
   it("labels a private channel with its safe link and does not offer public comment collection", async () => {
