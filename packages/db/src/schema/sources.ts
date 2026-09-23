@@ -1,3 +1,4 @@
+import { NEWS_FEEDBACK_SIGNALS } from "@pubrick/shared";
 import {
   boolean,
   index,
@@ -10,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
+import { enumCheck } from "./enum-check.js";
 
 export const newsSources = pgTable(
   "news_sources",
@@ -53,11 +55,13 @@ export const newsItems = pgTable(
     summary: text("summary").notNull().default(""),
     url: text("url").notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
+    editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("news_items_org_brand_url_idx").on(t.orgId, t.brandId, t.url),
     index("news_items_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     index("news_items_source_idx").on(t.sourceId),
+    enumCheck("news_items_editor_signal_check", t.editorSignal, NEWS_FEEDBACK_SIGNALS),
   ],
 );

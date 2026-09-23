@@ -11,11 +11,12 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
+import { Menu } from "@/components/ui/menu";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -143,6 +144,33 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  async function saveTopic(item: NewsItemDto) {
+    setError(null);
+    try {
+      await api(`/api/topics/from-news/${item.id}?brandId=${id}`, { method: "POST" });
+      setNotice(t("topicSaved"));
+    } catch (err) {
+      setError(describeError(err));
+    }
+  }
+
+  async function setSignal(item: NewsItemDto, signal: "relevant" | "irrelevant" | null) {
+    setError(null);
+    try {
+      await api(`/api/topics/news/${item.id}/feedback?brandId=${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ signal }),
+      });
+      setItems(
+        (current) =>
+          current?.map((row) => (row.id === item.id ? { ...row, editorSignal: signal } : row)) ??
+          null,
+      );
+    } catch (err) {
+      setError(describeError(err));
+    }
+  }
+
   function openRun(item: NewsItemDto) {
     setSelectedItem(item);
     setSelectedChannels(new Set());
@@ -197,6 +225,12 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         className="mb-5 inline-block text-sm text-fg-secondary underline"
       >
         {t("back")}
+      </Link>
+      <Link
+        href={`/${locale}/brands/${id}/topics`}
+        className="mb-5 ml-4 inline-block text-sm text-fg-secondary underline"
+      >
+        {t("topicsLink")}
       </Link>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
@@ -315,6 +349,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   {item.publishedAt
                     ? new Date(item.publishedAt).toLocaleDateString(locale)
                     : new Date(item.createdAt).toLocaleDateString(locale)}
+                  {item.editorSignal ? ` · ${t(item.editorSignal)}` : ""}
                 </span>
               }
               trailing={
@@ -330,6 +365,30 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   <Button variant="secondary" size="sm" onClick={() => openRun(item)}>
                     {t("createDraft")}
                   </Button>
+                  <Menu
+                    trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
+                    items={[
+                      { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
+                      {
+                        label: t(item.editorSignal === "relevant" ? "clearRelevant" : "relevant"),
+                        onSelect: () =>
+                          void setSignal(
+                            item,
+                            item.editorSignal === "relevant" ? null : "relevant",
+                          ),
+                      },
+                      {
+                        label: t(
+                          item.editorSignal === "irrelevant" ? "clearIrrelevant" : "irrelevant",
+                        ),
+                        onSelect: () =>
+                          void setSignal(
+                            item,
+                            item.editorSignal === "irrelevant" ? null : "irrelevant",
+                          ),
+                      },
+                    ]}
+                  />
                 </>
               }
             />

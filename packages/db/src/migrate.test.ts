@@ -119,6 +119,8 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "topics.created_at",
+  "topics.updated_at",
 ];
 
 /**
@@ -212,6 +214,11 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
+  // 0025's late enum pins: neither topics nor news items exists in the pre-0009
+  // seed. The topic API e2e writes real rows and proves both reject off-list
+  // values with SQLSTATE 23514.
+  "topics_status_check",
+  "news_items_editor_signal_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

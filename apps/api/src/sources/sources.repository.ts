@@ -28,6 +28,7 @@ const ITEM_COLUMNS = {
   url: schema.newsItems.url,
   publishedAt: schema.newsItems.publishedAt,
   createdAt: schema.newsItems.createdAt,
+  editorSignal: schema.newsItems.editorSignal,
 };
 
 @Injectable()

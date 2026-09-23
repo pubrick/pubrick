@@ -22,6 +22,12 @@ is absent from the feed summary.
 Pause prevents future checks. Remove deletes the source and its collected
 articles, while any drafts already created from those articles remain.
 
+An editor can also mark an article **Relevant** or **Irrelevant**, or choose
+**Save topic**. These are human signals recorded for the brand; they do not
+change the feed order or run an AI relevance model. Saving is idempotent for
+one article. The topic keeps a snapshot of its title, summary, and URL, so
+deleting a source does not erase an idea already saved.
+
 ## Boundaries
 
 - Sources, articles, and actions are scoped to both organization and brand.
@@ -37,9 +43,8 @@ articles, while any drafts already created from those articles remain.
   bodies are never returned to the browser. Refreshing a paused source is
   refused until it is resumed.
 
-The reference Content Factory also scored relevance, stored feedback, and
-turned news into a topics bank. Those are separate upcoming slices; this feed
-is chronological and makes no relevance claim.
+The reference Content Factory also scored relevance with embeddings. This feed
+is chronological; its human feedback is not yet a ranking algorithm.
 
 ## Dependencies
 

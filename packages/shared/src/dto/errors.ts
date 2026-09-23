@@ -324,6 +324,9 @@ export const API_ERROR_CODES = [
 
   // ── runs ──────────────────────────────────────────────────────────────────
   "run_not_found",
+  "topic_not_found",
+  "news_item_not_found",
+  "topic_not_approved",
   "brand_not_found",
   /** Generating for a brand that has nothing to publish to. */
   "brand_has_no_channels",

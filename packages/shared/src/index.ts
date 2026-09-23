@@ -47,6 +47,7 @@ export * from "./dto/errors.js";
 export * from "./dto/runs.js";
 export * from "./dto/sources.js";
 export * from "./dto/text.js";
+export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {

@@ -67,7 +67,8 @@
     "voiceUnset": "Not set",
     "voiceSave": "Save",
     "voiceCancel": "Cancel",
-    "sourcesLink": "Watched sources"
+    "sourcesLink": "Watched sources",
+    "topicsLink": "Topic bank"
   },
   "Sources": {
     "title": "Sources for {brand}",
@@ -102,7 +103,15 @@
     "invalidArticle": "This article cannot be used as a source. Open it and paste its text in the compose screen.",
     "selectChannels": "Choose the channels for this draft.",
     "noChannels": "Add a channel to this brand before generating.",
-    "generate": "Generate"
+    "generate": "Generate",
+    "topicsLink": "Topic bank",
+    "saveTopic": "Save topic",
+    "topicSaved": "Topic saved. Review it in the topic bank.",
+    "relevant": "Relevant",
+    "irrelevant": "Irrelevant",
+    "more": "More",
+    "clearRelevant": "Clear relevant",
+    "clearIrrelevant": "Clear irrelevant"
   },
   "Channels": {
     "title": "Channels",
@@ -511,6 +520,42 @@
     "adaptation_pinned_manual_ready": "This post is ready for manual publishing. Reject it before editing.",
     "manual_schedule_unsupported": "VC.ru posts cannot be scheduled from Pubrick. Approve them for manual publishing instead.",
     "manual_publication_pending": "This post is ready for you to publish manually on VC.ru.",
-    "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL."
+    "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL.",
+    "topic_not_found": "This topic is no longer available. Reload the topic bank.",
+    "news_item_not_found": "This article is no longer available. Reload the source list.",
+    "topic_not_approved": "Approve this topic before generating."
+  },
+  "Topics": {
+    "title": "Topics for {brand}",
+    "back": "Back to articles",
+    "add": "Add topic",
+    "name": "Topic title",
+    "description": "What should the draft cover?",
+    "hint": "Review and approve a topic before generating. A saved article supplies only its feed title and summary.",
+    "empty": "No topics yet. Save an article or add an idea.",
+    "addFirst": "Add your first topic",
+    "noDescription": "No description",
+    "status_idea": "Idea",
+    "status_approved": "Approved",
+    "status_archived": "Archived",
+    "edit": "Edit",
+    "approve": "Approve",
+    "generate": "Generate",
+    "archive": "Archive",
+    "remove": "Remove",
+    "cancel": "Cancel",
+    "save": "Save",
+    "editTitle": "Edit topic",
+    "removeTitle": "Remove this topic?",
+    "removeBody": "This removes the idea. Existing generation runs and drafts remain.",
+    "runTitle": "Generate from topic",
+    "runHint": "Choose channels. Generation uses the approved title and description; open the source link before relying on details outside its summary.",
+    "noChannels": "Add a channel to this brand before generating.",
+    "genericError": "Something went wrong. Please try again.",
+    "invalid": "Check the topic title and description.",
+    "more": "More",
+    "listError": "Topics could not be loaded.",
+    "retry": "Try again",
+    "openSource": "Open source"
   }
 }

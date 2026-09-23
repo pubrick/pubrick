@@ -8,3 +8,4 @@ export * from "./generation.js";
 export * from "./readapt.js";
 export * from "./refine.js";
 export * from "./sources.js";
+export * from "./topics.js";

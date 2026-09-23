@@ -67,7 +67,8 @@
     "voiceUnset": "Sin definir",
     "voiceSave": "Guardar",
     "voiceCancel": "Cancelar",
-    "sourcesLink": "Fuentes vigiladas"
+    "sourcesLink": "Fuentes vigiladas",
+    "topicsLink": "Banco de temas"
   },
   "Sources": {
     "title": "Fuentes de {brand}",
@@ -102,7 +103,15 @@
     "invalidArticle": "Este artículo no se puede usar como fuente. Ábrelo y pega su texto en el editor.",
     "selectChannels": "Elige los canales para este borrador.",
     "noChannels": "Añade un canal a esta marca antes de generar.",
-    "generate": "Generar"
+    "generate": "Generar",
+    "topicsLink": "Banco de temas",
+    "saveTopic": "Guardar tema",
+    "topicSaved": "Tema guardado. Revísalo en el banco de temas.",
+    "relevant": "Relevante",
+    "irrelevant": "Irrelevante",
+    "more": "Más",
+    "clearRelevant": "Quitar relevante",
+    "clearIrrelevant": "Quitar irrelevante"
   },
   "Channels": {
     "title": "Canales",
@@ -511,6 +520,42 @@
     "adaptation_pinned_manual_ready": "Esta publicación está lista para publicación manual. Recházala antes de editarla.",
     "manual_schedule_unsupported": "Pubrick no puede programar publicaciones en VC.ru. Apruébalas para publicación manual.",
     "manual_publication_pending": "Esta publicación está lista para que la publiques manualmente en VC.ru.",
-    "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública."
+    "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública.",
+    "topic_not_found": "Este tema ya no está disponible. Vuelve a cargar el banco de temas.",
+    "news_item_not_found": "Este artículo ya no está disponible. Vuelve a cargar la lista de fuentes.",
+    "topic_not_approved": "Aprueba este tema antes de generar."
+  },
+  "Topics": {
+    "title": "Temas de {brand}",
+    "back": "Volver a los artículos",
+    "add": "Añadir tema",
+    "name": "Título del tema",
+    "description": "¿Qué debe tratar el borrador?",
+    "hint": "Revisa y aprueba un tema antes de generar. Un artículo guardado aporta solo el título y el resumen del feed.",
+    "empty": "Todavía no hay temas. Guarda un artículo o añade una idea.",
+    "addFirst": "Añade el primer tema",
+    "noDescription": "Sin descripción",
+    "status_idea": "Idea",
+    "status_approved": "Aprobado",
+    "status_archived": "Archivado",
+    "edit": "Editar",
+    "approve": "Aprobar",
+    "generate": "Generar",
+    "archive": "Archivar",
+    "remove": "Eliminar",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "editTitle": "Editar tema",
+    "removeTitle": "¿Eliminar este tema?",
+    "removeBody": "Se elimina la idea. Las generaciones y los borradores existentes permanecen.",
+    "runTitle": "Generar a partir del tema",
+    "runHint": "Elige canales. La generación usa el título y la descripción aprobados; abre el enlace de la fuente antes de confiar en detalles fuera del resumen.",
+    "noChannels": "Añade un canal a esta marca antes de generar.",
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "invalid": "Revisa el título y la descripción del tema.",
+    "more": "Más",
+    "listError": "No se pudieron cargar los temas.",
+    "retry": "Intentar de nuevo",
+    "openSource": "Abrir fuente"
   }
 }

@@ -11,6 +11,7 @@ import { OrgModule } from "./org/org.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
 import { SourcesModule } from "./sources/sources.module";
+import { TopicsModule } from "./topics/topics.module";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { SourcesModule } from "./sources/sources.module";
     AiCredentialsModule,
     RunsModule,
     SourcesModule,
+    TopicsModule,
   ],
 })
 export class AppModule {}

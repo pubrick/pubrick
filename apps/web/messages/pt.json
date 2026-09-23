@@ -67,7 +67,8 @@
     "voiceUnset": "Não definido",
     "voiceSave": "Salvar",
     "voiceCancel": "Cancelar",
-    "sourcesLink": "Fontes monitoradas"
+    "sourcesLink": "Fontes monitoradas",
+    "topicsLink": "Banco de tópicos"
   },
   "Sources": {
     "title": "Fontes de {brand}",
@@ -102,7 +103,15 @@
     "invalidArticle": "Este artigo não pode ser usado como fonte. Abra-o e cole o texto no editor.",
     "selectChannels": "Escolha os canais para este rascunho.",
     "noChannels": "Adicione um canal à marca antes de gerar.",
-    "generate": "Gerar"
+    "generate": "Gerar",
+    "topicsLink": "Banco de tópicos",
+    "saveTopic": "Salvar tópico",
+    "topicSaved": "Tópico salvo. Revise-o no banco de tópicos.",
+    "relevant": "Relevante",
+    "irrelevant": "Irrelevante",
+    "more": "Mais",
+    "clearRelevant": "Limpar relevante",
+    "clearIrrelevant": "Limpar irrelevante"
   },
   "Channels": {
     "title": "Canais",
@@ -511,6 +520,42 @@
     "adaptation_pinned_manual_ready": "Esta publicação está pronta para publicação manual. Rejeite-a antes de editar.",
     "manual_schedule_unsupported": "O Pubrick não pode agendar publicações no VC.ru. Aprove-as para publicação manual.",
     "manual_publication_pending": "Esta publicação está pronta para ser publicada manualmente no VC.ru.",
-    "manual_publication_not_ready": "Aprove esta publicação do VC.ru antes de registar o URL público."
+    "manual_publication_not_ready": "Aprove esta publicação do VC.ru antes de registar o URL público.",
+    "topic_not_found": "Este tópico não está mais disponível. Atualize o banco de tópicos.",
+    "news_item_not_found": "Este artigo não está mais disponível. Atualize a lista de fontes.",
+    "topic_not_approved": "Aprove este tópico antes de gerar."
+  },
+  "Topics": {
+    "title": "Tópicos de {brand}",
+    "back": "Voltar aos artigos",
+    "add": "Adicionar tópico",
+    "name": "Título do tópico",
+    "description": "O que o rascunho deve abordar?",
+    "hint": "Revise e aprove um tópico antes de gerar. Um artigo salvo fornece apenas o título e o resumo do feed.",
+    "empty": "Ainda não há tópicos. Salve um artigo ou adicione uma ideia.",
+    "addFirst": "Adicione o primeiro tópico",
+    "noDescription": "Sem descrição",
+    "status_idea": "Ideia",
+    "status_approved": "Aprovado",
+    "status_archived": "Arquivado",
+    "edit": "Editar",
+    "approve": "Aprovar",
+    "generate": "Gerar",
+    "archive": "Arquivar",
+    "remove": "Remover",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "editTitle": "Editar tópico",
+    "removeTitle": "Remover este tópico?",
+    "removeBody": "A ideia será removida. Gerações e rascunhos existentes permanecem.",
+    "runTitle": "Gerar a partir do tópico",
+    "runHint": "Escolha os canais. A geração usa o título e a descrição aprovados; abra o link da fonte antes de confiar em detalhes fora do resumo.",
+    "noChannels": "Adicione um canal a esta marca antes de gerar.",
+    "genericError": "Algo deu errado. Tente novamente.",
+    "invalid": "Confira o título e a descrição do tópico.",
+    "more": "Mais",
+    "listError": "Não foi possível carregar os tópicos.",
+    "retry": "Tentar novamente",
+    "openSource": "Abrir fonte"
   }
 }
