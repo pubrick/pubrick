@@ -128,6 +128,7 @@ const channel = {
 describe("editorial content types", () => {
   it.each([
     ["news_digest", "news digest"],
+    ["product_update", "product update"],
     ["expert_article", "expert article"],
     ["educational", "how-to"],
   ] as const)("adds the %s policy to the existing writer call", async (contentType, phrase) => {

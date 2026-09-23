@@ -382,6 +382,7 @@
     "contentType": {
       "social_post": "Publicación social",
       "news_digest": "Resumen de noticias",
+      "product_update": "Actualización de producto",
       "expert_article": "Artículo especializado",
       "educational": "Guía práctica"
     },
@@ -629,6 +630,7 @@
     "contentType": {
       "social_post": "Publicación social",
       "news_digest": "Resumen de noticias",
+      "product_update": "Actualización de producto",
       "expert_article": "Artículo especializado",
       "educational": "Guía práctica"
     },
@@ -800,6 +802,7 @@
     "formats": "Formatos sugeridos",
     "type_social_post": "Publicación social",
     "type_news_digest": "Resumen de noticias",
+    "type_product_update": "Actualización de producto",
     "type_expert_article": "Artículo experto",
     "type_educational": "Guía",
     "inactive": "Inactiva",

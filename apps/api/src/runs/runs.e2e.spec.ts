@@ -710,27 +710,30 @@ describe.skipIf(!url)("runs e2e", () => {
    * spelling of it.
    */
   describe("retrying a run the API already has", () => {
-    it("preserves the chosen format in the receipt and on retry", async () => {
-      const agent = await orgAgent();
-      const { brandId, channelId } = await brandWithChannel(agent);
-      const created = await agent
-        .post("/api/runs")
-        .send({
-          brandId,
-          brief: "Explain the setup",
-          channelIds: [channelId],
-          contentType: "educational",
-        })
-        .expect(201);
-      const first = runDetailDtoSchema.parse(created.body);
-      expect(first.input.contentType).toBe("educational");
-      await setRunStatus(first.id, "failed", "internal");
+    it.each(["educational", "product_update"] as const)(
+      "preserves the %s format in the receipt and on retry",
+      async (contentType) => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const created = await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Announce the supported product change",
+            channelIds: [channelId],
+            contentType,
+          })
+          .expect(201);
+        const first = runDetailDtoSchema.parse(created.body);
+        expect(first.input.contentType).toBe(contentType);
+        await setRunStatus(first.id, "failed", "internal");
 
-      const retried = runDetailDtoSchema.parse(
-        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
-      );
-      expect(retried.input).toEqual(first.input);
-    });
+        const retried = runDetailDtoSchema.parse(
+          (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+        );
+        expect(retried.input).toEqual(first.input);
+      },
+    );
 
     it("preserves an article format beside pasted source material", async () => {
       const agent = await orgAgent();
