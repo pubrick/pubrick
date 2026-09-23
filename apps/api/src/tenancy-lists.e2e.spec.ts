@@ -103,6 +103,23 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "knowledge",
+    identify: id,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+      const entry = await agent
+        .post("/api/knowledge")
+        .send({
+          brandId: brand.body.id,
+          title: "Origin",
+          content: "Arabica beans",
+          category: "product_info",
+        })
+        .expect(201);
+      return { id: entry.body.id as string, paths: [`/api/knowledge?brandId=${brand.body.id}`] };
+    },
+  },
+  {
     controller: "channels",
     identify: id,
     seed: async (agent) => {

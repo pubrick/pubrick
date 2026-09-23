@@ -112,6 +112,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   unreadable_credentials: "unreadable_credentials",
   run_not_found: "run_not_found",
   brand_not_found: "brand_not_found",
+  knowledge_not_found: "knowledge_not_found",
   brand_has_no_channels: "brand_has_no_channels",
   run_limit_reached: "run_limit_reached",
   run_not_cancellable_succeeded: "run_not_cancellable_succeeded",

@@ -20,7 +20,18 @@ import {
   type RunStepCheckpoint,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, isNotNull, type SQL, type SQLWrapper, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  cosineDistance,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -628,6 +639,103 @@ export class GenerateRepository {
       throw error;
     }
     return { provider: row.provider, apiKey, defaultModel: row.defaultModel };
+  }
+
+  async hasKnowledge(orgId: string, brandId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: schema.knowledgeEntries.id })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasIndexedKnowledge(orgId: string, brandId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: schema.knowledgeEntries.id })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNotNull(schema.knowledgeEntries.embedding),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async googleKnowledgeKey(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!row) return undefined;
+    try {
+      return parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).apiKey;
+    } catch (error) {
+      if (isUnreadableCiphertext(error) || isMalformedStoredAiCredential(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async similarKnowledge(orgId: string, brandId: string, embedding: number[]) {
+    return db
+      .select({
+        id: schema.knowledgeEntries.id,
+        title: schema.knowledgeEntries.title,
+        category: schema.knowledgeEntries.category,
+        content: schema.knowledgeEntries.content,
+      })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNotNull(schema.knowledgeEntries.embedding),
+        ),
+      )
+      .orderBy(asc(cosineDistance(schema.knowledgeEntries.embedding, embedding)))
+      .limit(5);
+  }
+
+  /** Lexical fallback is useful before indexing and when Google is unavailable. */
+  async lexicalKnowledge(orgId: string, brandId: string, topic: string) {
+    const document = sql`to_tsvector('simple', ${schema.knowledgeEntries.title} || ' ' || ${schema.knowledgeEntries.content})`;
+    // A brief contains instructions as well as nouns. `plainto_tsquery` joins
+    // every token with AND and misses a note sharing the actual subject but
+    // not words such as "announce". PostgreSQL's own parser still escapes the
+    // input; OR permits a partial match and the rank sorts the strongest one.
+    const query = sql`websearch_to_tsquery('simple', regexp_replace(${topic}, '[[:space:]]+', ' OR ', 'g'))`;
+    return db
+      .select({
+        id: schema.knowledgeEntries.id,
+        title: schema.knowledgeEntries.title,
+        category: schema.knowledgeEntries.category,
+        content: schema.knowledgeEntries.content,
+      })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          sql`${document} @@ ${query}`,
+        ),
+      )
+      .orderBy(desc(sql`ts_rank_cd(${document}, ${query})`))
+      .limit(5);
   }
 
   /**

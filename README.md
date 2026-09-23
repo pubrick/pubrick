@@ -35,8 +35,9 @@ per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
 provider had counted tokens. Not yet: publishers for the other seven platforms
-(the channel form names them and refuses to connect one), a per-brand knowledge
-base, refining text inside the editor, and drafting from watched sources.
+(the channel form names them and refuses to connect one), refining text inside
+the editor, and drafting from watched sources. A per-brand knowledge base is
+available with text search and optional Gemini vector indexing.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
@@ -46,8 +47,8 @@ Features land phase by phase — see
   unless you explicitly enable autopilot. Anti-slop is the point.
 - **Brand voice** — voice, audience and content language are set per brand and
   go into every generation's instructions, so drafts sound like you rather than
-  like a model. (A per-brand knowledge base with retrieval is planned, not
-  built.)
+  like a model. Brand knowledge notes can be selected as material for a draft;
+  see [brand knowledge](docs/brand-knowledge.md).
 - **Bring your own keys** — Gemini and OpenRouter (hundreds of models);
   self-hosted generation at your own API cost.
 - **Own it** — AGPL-3.0, docker compose, Postgres as the only stateful service.

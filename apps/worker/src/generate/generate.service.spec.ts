@@ -611,6 +611,64 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       return { victim, intruder };
     }
 
+    it("adds only active notes of the run's brand to material, without a provider embedding call", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const [otherBrand] = await db
+        .insert(schema.brands)
+        .values({ orgId: victim.orgId, name: "Other brand" })
+        .returning({ id: schema.brands.id });
+      await db.insert(schema.knowledgeEntries).values([
+        {
+          orgId: victim.orgId,
+          brandId: victim.brandId,
+          title: "Autumn menu",
+          content: "OWN_KNOWLEDGE_MARKER espresso uses Arabica.",
+          category: "product_info",
+        },
+        {
+          orgId: victim.orgId,
+          brandId: victim.brandId,
+          title: "Autumn menu",
+          content: "PAUSED_KNOWLEDGE_MARKER",
+          category: "product_info",
+          isActive: false,
+        },
+        {
+          orgId: victim.orgId,
+          brandId: otherBrand?.id as string,
+          title: "Autumn menu",
+          content: "OTHER_BRAND_MARKER",
+          category: "product_info",
+        },
+        {
+          orgId: intruder.orgId,
+          brandId: intruder.brandId,
+          title: "Autumn menu",
+          content: "OTHER_ORG_MARKER",
+          category: "product_info",
+        },
+      ]);
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "knowledge-job",
+        data: { runId: victim.runId, orgId: victim.orgId },
+      });
+
+      for (const role of ["researcher", "writer"] as const) {
+        const call = script.calls.find((candidate) => candidate.role === role);
+        expect(call?.user).toContain("OWN_KNOWLEDGE_MARKER");
+        expect(call?.system).not.toContain("OWN_KNOWLEDGE_MARKER");
+        expect(call?.user).not.toContain("PAUSED_KNOWLEDGE_MARKER");
+        expect(call?.user).not.toContain("OTHER_BRAND_MARKER");
+        expect(call?.user).not.toContain("OTHER_ORG_MARKER");
+      }
+      const run = await runRow(victim.runId);
+      expect(run?.steps.knowledge?.status).toBe("succeeded");
+      expect((await ledgerOf(victim.orgId)).filter((row) => row.step === "knowledge")).toHaveLength(
+        0,
+      );
+    }, 25_000);
+
     const checkpoint = {
       status: "succeeded" as const,
       output: { body: "x" },

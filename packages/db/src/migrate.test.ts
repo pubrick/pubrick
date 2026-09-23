@@ -109,6 +109,8 @@ const ZONED_COLUMNS = [
   "content_items.first_opened_at",
   "content_items.updated_at",
   "content_versions.created_at",
+  "knowledge_entries.created_at",
+  "knowledge_entries.updated_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
@@ -202,6 +204,10 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
+  // 0021's category pin arrives after the pre-0009 seed, so it has no row for
+  // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
+  // the category constraint against a bogus update at head.
+  "knowledge_entries_category_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

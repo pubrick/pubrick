@@ -1,0 +1,55 @@
+import { z } from "zod";
+import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
+
+export const KNOWLEDGE_CATEGORIES = [
+  "product_info",
+  "brand_guidelines",
+  "case_study",
+  "tone_example",
+  "competitor",
+  "customer",
+] as const;
+
+export const knowledgeCreateSchema = z.object({
+  brandId: z.uuid(),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
+  content: z
+    .string()
+    .trim()
+    .min(1)
+    .max(20_000)
+    .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
+  category: z.enum(KNOWLEDGE_CATEGORIES),
+  tags: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(50)
+        .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
+    )
+    .max(20)
+    .default([]),
+});
+export type KnowledgeCreate = z.infer<typeof knowledgeCreateSchema>;
+
+export const knowledgeUpdateSchema = knowledgeCreateSchema
+  .omit({ brandId: true })
+  .partial()
+  .extend({ isActive: z.boolean().optional() });
+export type KnowledgeUpdate = z.infer<typeof knowledgeUpdateSchema>;
+
+export const knowledgeImportSchema = z.object({
+  brandId: z.uuid(),
+  entries: z
+    .array(knowledgeCreateSchema.omit({ brandId: true }))
+    .min(1)
+    .max(500),
+});
+export type KnowledgeImport = z.infer<typeof knowledgeImportSchema>;

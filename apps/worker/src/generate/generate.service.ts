@@ -3,8 +3,11 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   type AiCredential,
   adapterFor,
+  callOutcomeOf,
   EDITOR,
+  embedKnowledgeText,
   FACTCHECK,
+  KNOWLEDGE_EMBEDDING_MODEL,
   RESEARCHER,
   type RunStepContext,
   redactSecrets,
@@ -148,6 +151,12 @@ type RunState = {
   usage: Map<string, UsageRecord[]>;
   signal: AbortSignal | undefined;
 };
+
+const knowledgeContextSchema = z.object({
+  entries: z
+    .array(z.object({ title: z.string(), category: z.string(), content: z.string() }))
+    .max(5),
+});
 
 @Injectable()
 export class GenerateService {
@@ -396,6 +405,97 @@ export class GenerateService {
           this.recordUnrecordedCall(run.orgId, run.id, error, record),
       },
     };
+
+    // Skip the step entirely for brands with no notes: existing runs keep the
+    // same checkpoints and make no additional model call.
+    if (state.checkpoints.knowledge || (await this.repo.hasKnowledge(run.orgId, run.brandId))) {
+      const topic = (input.text ?? (input.kind === "source" ? input.material : "")).slice(0, 2000);
+      const knowledge = await this.runStep(
+        state,
+        {
+          name: "knowledge",
+          schema: knowledgeContextSchema,
+          run: async (ctx) => {
+            let entries: Awaited<ReturnType<GenerateRepository["lexicalKnowledge"]>>;
+            const indexed = await this.repo.hasIndexedKnowledge(run.orgId, run.brandId);
+            const key = indexed ? await this.repo.googleKnowledgeKey(run.orgId) : undefined;
+            if (key && topic.trim()) {
+              const started = Date.now();
+              let result: Awaited<ReturnType<typeof embedKnowledgeText>> | undefined;
+              try {
+                result = await embedKnowledgeText(key, topic, "RETRIEVAL_QUERY");
+              } catch (error) {
+                await ctx.onUsage(
+                  {
+                    provider: "google",
+                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                    attempt: 1,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cachedInputTokens: 0,
+                    reasoningTokens: 0,
+                    costUsd: null,
+                    costSource: "unknown",
+                    responseMs: Date.now() - started,
+                    status: "errored",
+                    outcome: callOutcomeOf(error),
+                  },
+                  { step: "knowledge" },
+                );
+                this.logger.warn(
+                  `Knowledge embedding unavailable for run ${run.id}; using text search`,
+                );
+              }
+              if (result) {
+                await ctx.onUsage(
+                  {
+                    provider: "google",
+                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                    attempt: 1,
+                    inputTokens: result.tokens,
+                    outputTokens: 0,
+                    cachedInputTokens: 0,
+                    reasoningTokens: 0,
+                    costUsd: null,
+                    costSource: "unknown",
+                    responseMs: Date.now() - started,
+                    status: "ok",
+                    outcome: "completed",
+                  },
+                  { step: "knowledge" },
+                );
+                const similar = await this.repo.similarKnowledge(
+                  run.orgId,
+                  run.brandId,
+                  result.embedding,
+                );
+                // Include unindexed imported notes that match the brief even
+                // when this brand already has some indexed notes.
+                const lexical = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+                const seen = new Set(similar.map((entry) => entry.id));
+                entries = [...similar, ...lexical.filter((entry) => !seen.has(entry.id))].slice(
+                  0,
+                  5,
+                );
+              } else {
+                entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+              }
+            } else {
+              entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+            }
+            return {
+              entries: entries.map((entry) => ({
+                ...entry,
+                content: entry.content.slice(0, 3000),
+              })),
+            };
+          },
+        },
+        undefined,
+      );
+      if (knowledge === STOPPED) return STOPPED;
+      state.ctx.knowledge = knowledge.entries;
+    }
 
     const research = await this.runStep(state, RESEARCHER, undefined);
     if (research === STOPPED) return STOPPED;
