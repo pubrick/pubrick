@@ -21,7 +21,7 @@ documents when they disagree.
 | Comment analysis | Not ported | Collection, analysis and feedback signals |
 | Knowledge base / RAG | Not ported | Brand documents, retrieval and citation in generation |
 | Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |
-| Prompt management | Prompts live in code | Versioned registry and experiments |
+| Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
 | Notifications | Not ported | Actionable admin notifications |
 | Public API | Internal authenticated API present | Public keys, documented endpoints, webhooks and MCP |

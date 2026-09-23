@@ -14,13 +14,24 @@ import {
   LIVE_RUN_STATUSES,
   PermanentError,
   type PlatformId,
+  type PromptRole,
   parseStoredAiCredential,
   preferredCredential,
   type RunFailure,
   type RunStepCheckpoint,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, isNotNull, type SQL, type SQLWrapper, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -134,6 +145,7 @@ export type ClaimedRun = {
 export type RunContext = {
   brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
   channels: Array<{ id: string; name: string; platform: PlatformId }>;
+  promptGuidance?: Partial<Record<PromptRole, string>>;
 };
 
 /** What one finished run writes: the master body plus one body per channel. */
@@ -560,7 +572,19 @@ export class GenerateRepository {
       )
       .orderBy(asc(schema.channels.id));
 
-    return { brand, channels };
+    const guidance = await db
+      .selectDistinctOn([schema.promptRevisions.role], {
+        role: schema.promptRevisions.role,
+        text: schema.promptRevisions.guidance,
+      })
+      .from(schema.promptRevisions)
+      .where(eq(schema.promptRevisions.orgId, orgId))
+      .orderBy(asc(schema.promptRevisions.role), desc(schema.promptRevisions.version));
+    return {
+      brand,
+      channels,
+      promptGuidance: Object.fromEntries(guidance.map((row) => [row.role, row.text])),
+    };
   }
 
   /**

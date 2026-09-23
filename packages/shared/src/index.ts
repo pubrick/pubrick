@@ -44,6 +44,15 @@ export * from "./dto/brands.js";
 export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
+export {
+  PROMPT_ROLES,
+  type PromptRevisionCreate,
+  type PromptRevisionDto,
+  type PromptRole,
+  promptRevisionCreateSchema,
+  promptRevisionDtoSchema,
+  promptRoleSchema,
+} from "./dto/prompts.js";
 export * from "./dto/runs.js";
 export * from "./dto/sources.js";
 export * from "./dto/text.js";

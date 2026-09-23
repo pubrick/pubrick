@@ -8,6 +8,7 @@ import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
 import { OrgModule } from "./org/org.module";
+import { PromptsModule } from "./prompts/prompts.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
 import { SourcesModule } from "./sources/sources.module";
@@ -22,6 +23,7 @@ import { SourcesModule } from "./sources/sources.module";
     ContentModule,
     FeedsModule,
     OrgModule,
+    PromptsModule,
     AiCredentialsModule,
     RunsModule,
     SourcesModule,

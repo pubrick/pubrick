@@ -329,6 +329,29 @@
     "manualPublicationAsserted": "Recorded by {name} on {date} — self reported; Pubrick did not ask VC.ru.",
     "manualPublicationAssertedRemoved": "Recorded by a removed member on {date} — self reported; Pubrick did not ask VC.ru."
   },
+  "Prompts": {
+    "title": "Generation guidance",
+    "back": "Back to settings",
+    "intro": "Each AI role has built-in rules. Add organization guidance here; new generations use the latest saved version. Clear the field and save to return to the built-in rules.",
+    "role": "AI role",
+    "guidance": "Additional guidance",
+    "guidanceHint": "This is an instruction to the model. Keep source material and secrets out of it (6,000 characters maximum).",
+    "save": "Save",
+    "saved": "Guidance saved as a new version.",
+    "history": "Version history",
+    "noHistory": "No custom guidance yet. Save a version to begin.",
+    "version": "Version {version}",
+    "restore": "Restore",
+    "tooLong": "Guidance must be at most 6,000 characters.",
+    "genericError": "Guidance could not be loaded or saved. Try again.",
+    "roles": {
+      "researcher": "Researcher",
+      "writer": "Writer",
+      "editor": "Editor",
+      "factcheck": "Claims review",
+      "adapter": "Channel adapter"
+    }
+  },
   "SettingsPage": {
     "title": "Settings",
     "appearanceTitle": "Appearance",
@@ -339,6 +362,9 @@
     "workspaceTitle": "Workspace",
     "workspaceNoOrg": "No organization",
     "aiTitle": "AI provider",
+    "promptsTitle": "Generation guidance",
+    "promptsHint": "Add guidance for each AI role. Built-in safety and output rules stay in place.",
+    "promptsOpen": "Edit guidance",
     "aiSpend": "Spent so far: {amount}",
     "aiEmpty": "No API key yet — add one below so Pubrick can generate content.",
     "aiProviderLabel": "Provider",

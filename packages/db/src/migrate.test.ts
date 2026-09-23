@@ -116,6 +116,7 @@ const ZONED_COLUMNS = [
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
+  "prompt_revisions.created_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
@@ -212,6 +213,12 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
+  // 0021's table does not exist when the pre-0009 seed is written, so the
+  // generic UPDATE loop cannot exercise its role pin. The schema invariant
+  // test checks the enum expression; the repository e2e checks version writes.
+  "prompt_revisions_role_check",
+  "prompt_revisions_version_positive_check",
+  "prompt_revisions_guidance_limit_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

@@ -5,6 +5,7 @@ export * from "./content.js";
 export * from "./content-items.js";
 export * from "./feeds.js";
 export * from "./generation.js";
+export * from "./prompts.js";
 export * from "./readapt.js";
 export * from "./refine.js";
 export * from "./sources.js";
