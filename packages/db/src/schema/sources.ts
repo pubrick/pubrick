@@ -6,6 +6,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -148,4 +149,25 @@ export const newsComments = pgTable(
     uniqueIndex("news_comments_item_message_idx").on(t.itemId, t.telegramMessageId),
     index("news_comments_org_brand_item_idx").on(t.orgId, t.brandId, t.itemId),
   ],
+);
+
+/** Aggregate analysis of one saved comment sample, without per-author inference. */
+export const newsCommentAnalyses = pgTable(
+  "news_comment_analyses",
+  {
+    itemId: uuid("item_id")
+      .primaryKey()
+      .references(() => newsItems.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    sampleCheckedAt: timestamp("sample_checked_at", { withTimezone: true }).notNull(),
+    result: jsonb("result").notNull(),
+    sampleSize: integer("sample_size").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("news_comment_analyses_org_brand_idx").on(t.orgId, t.brandId)],
 );

@@ -239,6 +239,13 @@
       "when": 1790168797286,
       "tag": "0034_silly_madame_masque",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790168923746,
+      "tag": "0035_huge_ken_ellis",
+      "breakpoints": true
     }
   ]
 }

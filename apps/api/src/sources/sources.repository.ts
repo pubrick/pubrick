@@ -2,19 +2,25 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
+import type { AiCredential } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  commentAnalysisResultSchema,
   type NewsItemListQuery,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsSourceCreateSchema,
+  toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { CommentAnalysisCaller } from "./comment-analysis.caller";
 
 const SOURCE_COLUMNS = {
   id: schema.newsSources.id,
@@ -53,7 +59,13 @@ const ITEM_COLUMNS = {
 
 @Injectable()
 export class SourcesRepository {
-  constructor(private readonly queue: QueueService) {}
+  private readonly logger = new Logger(SourcesRepository.name);
+
+  constructor(
+    private readonly queue: QueueService,
+    private readonly aiCredentials: AiCredentialsRepository,
+    private readonly commentAnalysisCaller: CommentAnalysisCaller,
+  ) {}
 
   private async requireBrand(orgId: string, brandId: string) {
     const rows = await db
@@ -231,6 +243,7 @@ export class SourcesRepository {
     const rows = await db
       .select({
         id: schema.newsItems.id,
+        title: schema.newsItems.title,
         commentsCheckedAt: schema.newsItems.commentsCheckedAt,
         commentsStatus: schema.newsItems.commentsStatus,
         sourceKind: schema.newsSources.kind,
@@ -296,5 +309,153 @@ export class SourcesRepository {
           );
       return { queued };
     });
+  }
+
+  private async analysisSample(orgId: string, brandId: string, itemId: string) {
+    return db
+      .select({ body: schema.newsComments.body })
+      .from(schema.newsComments)
+      .where(
+        and(
+          eq(schema.newsComments.orgId, orgId),
+          eq(schema.newsComments.brandId, brandId),
+          eq(schema.newsComments.itemId, itemId),
+        ),
+      )
+      .orderBy(desc(schema.newsComments.publishedAt))
+      .limit(30);
+  }
+
+  async commentAnalysis(orgId: string, brandId: string, itemId: string) {
+    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    if (item.commentsStatus === "private" || item.commentsStatus === "unavailable")
+      return { status: "unavailable" as const };
+    if (!item.commentsCheckedAt) return { status: "not_collected" as const };
+    const sample = await this.analysisSample(orgId, brandId, itemId);
+    if (sample.length === 0) return { status: "no_comments" as const };
+    const rows = await db
+      .select({
+        result: schema.newsCommentAnalyses.result,
+        sampleSize: schema.newsCommentAnalyses.sampleSize,
+        sampleCheckedAt: schema.newsCommentAnalyses.sampleCheckedAt,
+        createdAt: schema.newsCommentAnalyses.createdAt,
+      })
+      .from(schema.newsCommentAnalyses)
+      .where(
+        and(
+          eq(schema.newsCommentAnalyses.orgId, orgId),
+          eq(schema.newsCommentAnalyses.brandId, brandId),
+          eq(schema.newsCommentAnalyses.itemId, itemId),
+        ),
+      )
+      .limit(1);
+    const analysis = rows[0];
+    if (analysis?.sampleCheckedAt.getTime() === item.commentsCheckedAt.getTime()) {
+      const result = commentAnalysisResultSchema.safeParse(analysis.result);
+      if (result.success)
+        return {
+          status: "ready" as const,
+          result: result.data,
+          sampleSize: analysis.sampleSize,
+          analyzedAt: analysis.createdAt.toISOString(),
+        };
+    }
+    const keys = await db
+      .select({ orgId: schema.aiCredentials.orgId })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!keys.length) return { status: "no_key" as const };
+    return { status: analysis ? ("stale" as const) : ("not_analyzed" as const) };
+  }
+
+  async analyzeComments(orgId: string, brandId: string, itemId: string) {
+    const current = await this.commentAnalysis(orgId, brandId, itemId);
+    if (
+      current.status === "unavailable" ||
+      current.status === "not_collected" ||
+      current.status === "no_comments" ||
+      current.status === "no_key" ||
+      current.status === "ready"
+    )
+      return current;
+    const recent = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, "comment_analysis"),
+          gt(schema.usageLedger.createdAt, new Date(Date.now() - 60 * 60_000)),
+        ),
+      )
+      .limit(10);
+    if (recent.length >= 10) return { status: "limit_reached" as const };
+    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const sample = await this.analysisSample(orgId, brandId, itemId);
+    if (!item.commentsCheckedAt || sample.length === 0) return { status: "no_comments" as const };
+
+    // Only Google's key from this organization is used. No platform fallback.
+    let credential: AiCredential;
+    try {
+      credential = await this.aiCredentials.getDecrypted(orgId, "google");
+    } catch (error) {
+      // The key may have been removed between the status read and this call.
+      if (error instanceof NotFoundException) return { status: "no_key" as const };
+      throw error;
+    }
+    const outcome = await this.commentAnalysisCaller.run({
+      credential,
+      title: item.title,
+      comments: sample.map((row) => row.body),
+    });
+    if (outcome.usage.length) {
+      try {
+        await db.insert(schema.usageLedger).values(
+          outcome.usage.map((record) => ({
+            orgId,
+            step: "comment_analysis",
+            attempt: record.attempt,
+            provider: record.provider,
+            modelId: record.modelId,
+            inputTokens: record.inputTokens,
+            outputTokens: record.outputTokens,
+            cachedInputTokens: record.cachedInputTokens,
+            reasoningTokens: record.reasoningTokens,
+            costUsd: toLedgerCostUsd(record.costUsd),
+            costSource: record.costSource,
+            status: record.status,
+            outcome: record.outcome,
+            responseMs: record.responseMs,
+            keyOwnership: "byok" as const,
+          })),
+        );
+      } catch {
+        this.logger.error(`Usage recording failed for comment analysis in org ${orgId}`);
+      }
+    }
+    if (!outcome.ok) return { status: outcome.failure };
+    await db
+      .insert(schema.newsCommentAnalyses)
+      .values({
+        itemId,
+        orgId,
+        brandId,
+        sampleCheckedAt: item.commentsCheckedAt,
+        sampleSize: sample.length,
+        result: outcome.result,
+      })
+      .onConflictDoUpdate({
+        target: schema.newsCommentAnalyses.itemId,
+        set: {
+          sampleCheckedAt: item.commentsCheckedAt,
+          sampleSize: sample.length,
+          result: outcome.result,
+          createdAt: new Date(),
+        },
+      });
+    return this.commentAnalysis(orgId, brandId, itemId);
   }
 }

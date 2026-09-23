@@ -117,6 +117,8 @@ const ZONED_COLUMNS = [
   "knowledge_entries.created_at",
   "knowledge_entries.updated_at",
   "media_assets.created_at",
+  "news_comment_analyses.created_at",
+  "news_comment_analyses.sample_checked_at",
   "news_comments.created_at",
   "news_comments.published_at",
   "news_items.comments_checked_at",

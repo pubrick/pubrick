@@ -131,3 +131,43 @@ export const newsCommentDtoSchema = z.object({
   publishedAt: z.string(),
 });
 export type NewsCommentDto = z.infer<typeof newsCommentDtoSchema>;
+
+/** Only aggregate observations are retained; no author or per-comment score. */
+const storableText = (value: string) => !value.includes("\u0000");
+export const commentAnalysisResultSchema = z.object({
+  summary: z.string().min(1).max(400).refine(storableText),
+  sentiment: z.object({
+    positive: z.number().min(0).max(1),
+    neutral: z.number().min(0).max(1),
+    negative: z.number().min(0).max(1),
+  }),
+  themes: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(80).refine(storableText),
+        mentions: z.number().int().min(1).max(30),
+      }),
+    )
+    .max(5),
+  feedback: z.array(z.string().min(1).max(200).refine(storableText)).max(3),
+});
+export type CommentAnalysisResult = z.infer<typeof commentAnalysisResultSchema>;
+
+export const commentAnalysisDtoSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("unavailable") }),
+  z.object({ status: z.literal("not_collected") }),
+  z.object({ status: z.literal("no_comments") }),
+  z.object({ status: z.literal("no_key") }),
+  z.object({ status: z.literal("limit_reached") }),
+  z.object({ status: z.literal("timed_out") }),
+  z.object({ status: z.literal("failed") }),
+  z.object({ status: z.literal("not_analyzed") }),
+  z.object({ status: z.literal("stale") }),
+  z.object({
+    status: z.literal("ready"),
+    result: commentAnalysisResultSchema,
+    sampleSize: z.number().int().min(1),
+    analyzedAt: z.string(),
+  }),
+]);
+export type CommentAnalysisDto = z.infer<typeof commentAnalysisDtoSchema>;
