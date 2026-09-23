@@ -271,6 +271,19 @@ wall post. A failed or uncertain send is classified by the same delivery rules
 as Telegram; an uncertain outcome requires a human to inspect the wall before
 another attempt.
 
+## Connect a MAX chat or channel
+
+1. Create a MAX bot and copy its token from the bot's settings. Find the numeric
+   chat or channel ID and make the bot an admin with the **write** permission.
+2. In Pubrick, open a brand → add a channel → platform **MAX**, then enter the
+   bot token and chat ID. Press **Test connection** to check the bot, destination,
+   and posting permission without sending a message.
+
+MAX publishing currently sends text posts. Pubrick uses the current
+[`platform-api2.max.ru` API](https://dev.max.ru/docs-api/methods/POST/messages)
+and puts the token in the `Authorization` header, as MAX requires. If MAX returns
+a public post URL, Pubrick keeps it with the publication.
+
 ## Upgrade
 
 ```bash

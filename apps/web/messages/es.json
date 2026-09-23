@@ -91,7 +91,8 @@
     "editSave": "Guardar",
     "editCancel": "Cancelar",
     "platformUnsupported": "Todavía no compatible",
-    "vkTokenHint": "Usa un token de acceso de usuario de VK con permiso wall y el ID numérico positivo de la comunidad. El usuario debe administrarla."
+    "vkTokenHint": "Usa un token de acceso de usuario de VK con permiso wall y el ID numérico positivo de la comunidad. El usuario debe administrarla.",
+    "maxTokenHint": "Usa el token del bot de MAX y el ID numérico del chat o canal. Haz al bot administrador con permiso para publicar."
   },
   "Content": {
     "title": "Cola",

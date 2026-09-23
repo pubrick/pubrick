@@ -45,7 +45,7 @@ export type PlatformId = (typeof PLATFORM_IDS)[number];
  * the adapters that actually exist. This constant is what lets the picker say
  * the same thing before the request is made.
  */
-export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk"] as const;
+export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max"] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
 /** Can Pubrick deliver a post to this platform today? */
@@ -55,7 +55,7 @@ export function isPublishablePlatform(id: string): id is PublishablePlatformId {
 
 /**
  * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
- * form asks for the right keys instead of a generic "token" for seven of eight
+ * form asks for the right keys instead of a generic "token" for unsupported
  * platforms. Keep in sync with the publishers added in later plans.
  */
 export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
@@ -63,7 +63,7 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   vk: ["accessToken", "groupId"],
   dzen: ["token"],
   vc_ru: ["token"],
-  max: ["token"],
+  max: ["accessToken", "chatId"],
   bluesky: ["handle", "appPassword"],
   mastodon: ["instanceUrl", "accessToken"],
   x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],

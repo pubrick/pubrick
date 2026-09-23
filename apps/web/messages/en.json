@@ -91,7 +91,8 @@
     "editSave": "Save",
     "editCancel": "Cancel",
     "platformUnsupported": "Not yet supported",
-    "vkTokenHint": "Use a VK user access token with wall permission and the positive numeric community ID. The user must manage that community."
+    "vkTokenHint": "Use a VK user access token with wall permission and the positive numeric community ID. The user must manage that community.",
+    "maxTokenHint": "Use a MAX bot token and the numeric chat or channel ID. Make the bot an admin with permission to post."
   },
   "Content": {
     "title": "Queue",

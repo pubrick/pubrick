@@ -91,7 +91,8 @@
     "editSave": "Salvar",
     "editCancel": "Cancelar",
     "platformUnsupported": "Ainda não suportado",
-    "vkTokenHint": "Use um token de acesso de usuário do VK com permissão wall e o ID numérico positivo da comunidade. O usuário deve administrá-la."
+    "vkTokenHint": "Use um token de acesso de usuário do VK com permissão wall e o ID numérico positivo da comunidade. O usuário deve administrá-la.",
+    "maxTokenHint": "Use o token do bot do MAX e o ID numérico do chat ou canal. Torne o bot administrador com permissão para publicar."
   },
   "Content": {
     "title": "Fila",
