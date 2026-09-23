@@ -237,4 +237,14 @@ describe("Bluesky publishing", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).not.toContain(credentials.appPassword);
   });
+
+  it("does not retry a malformed 401 session refusal", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response("unauthorized", { status: 401 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      blueskyPublisher.publish(credentials, { text: "Hello" }, options(fetchImpl)),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

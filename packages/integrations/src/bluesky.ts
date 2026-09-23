@@ -100,13 +100,25 @@ async function xrpc(
       redirect: "error",
       signal: AbortSignal.timeout(BLUESKY_REQUEST_TIMEOUT_MS),
     });
-    raw = await response.json();
   } catch (error) {
     const message = safeMessage(String(error), secrets);
     if (phase === "prepare" || connectFailed(error)) {
       throw new TransientPublishError(`Bluesky request did not complete: ${message}`);
     }
     throw new UnknownOutcomePublishError(`Bluesky post outcome is unknown: ${message}`);
+  }
+
+  try {
+    raw = await response.json();
+  } catch {
+    const message = `Bluesky returned an unreadable response (HTTP ${response.status})`;
+    if (phase === "prepare") {
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new PermanentPublishError(message, response.status);
+      }
+      throw new TransientPublishError(message, response.status);
+    }
+    throw new UnknownOutcomePublishError(message, response.status);
   }
 
   if (response.ok) return raw;
