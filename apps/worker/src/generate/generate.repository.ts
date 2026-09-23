@@ -135,6 +135,9 @@ const PGBOSS_SCHEMA = "pgboss";
 
 /** The checkpoint map exactly as `pipeline_runs.steps` types it. */
 export type RunSteps = (typeof schema.pipelineRuns.$inferSelect)["steps"];
+export type GuidanceSnapshot = NonNullable<
+  (typeof schema.pipelineRuns.$inferSelect)["guidanceSnapshot"]
+>;
 
 /** The run, as the handler needs it after a successful claim. */
 export type ClaimedRun = {
@@ -143,6 +146,7 @@ export type ClaimedRun = {
   brandId: string;
   input: unknown;
   steps: RunSteps;
+  guidanceSnapshot: GuidanceSnapshot;
   createdAt: Date;
 };
 
@@ -266,6 +270,31 @@ export class GenerateRepository {
       .set({
         activeJobId: fence,
         status: "running",
+        // The UPDATE locks this run row. A re-claim sees the stored value,
+        // including {}, even when guidance changes between deliveries.
+        guidanceSnapshot: sql`coalesce(
+          ${schema.pipelineRuns.guidanceSnapshot},
+          (
+            select coalesce(
+              jsonb_object_agg(latest.role, jsonb_build_object(
+                'revisionId', latest.id,
+                'version', latest.version,
+                'text', latest.guidance
+              )),
+              '{}'::jsonb
+            )
+            from (
+              select distinct on (${schema.promptRevisions.role})
+                ${schema.promptRevisions.id} as id,
+                ${schema.promptRevisions.role} as role,
+                ${schema.promptRevisions.version} as version,
+                ${schema.promptRevisions.guidance} as guidance
+              from ${schema.promptRevisions}
+              where ${schema.promptRevisions.orgId} = ${orgId}
+              order by ${schema.promptRevisions.role}, ${schema.promptRevisions.version} desc
+            ) as latest
+          )
+        )`,
         leaseExpiresAt: leaseExpiry(),
         updatedAt: nowSql(),
       })
@@ -287,6 +316,7 @@ export class GenerateRepository {
         brandId: schema.pipelineRuns.brandId,
         input: schema.pipelineRuns.input,
         steps: schema.pipelineRuns.steps,
+        guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
         createdAt: schema.pipelineRuns.createdAt,
       });
     const row = rows[0];
@@ -297,6 +327,7 @@ export class GenerateRepository {
       brandId: row.brandId,
       input: row.input,
       steps: row.steps ?? {},
+      guidanceSnapshot: row.guidanceSnapshot ?? {},
       createdAt: row.createdAt,
     };
   }
@@ -554,6 +585,7 @@ export class GenerateRepository {
     orgId: string,
     brandId: string,
     channelIds: readonly string[],
+    guidanceSnapshot: GuidanceSnapshot,
   ): Promise<RunContext | undefined> {
     const brands = await db
       .select({
@@ -588,14 +620,6 @@ export class GenerateRepository {
       )
       .orderBy(asc(schema.channels.id));
 
-    const guidance = await db
-      .selectDistinctOn([schema.promptRevisions.role], {
-        role: schema.promptRevisions.role,
-        text: schema.promptRevisions.guidance,
-      })
-      .from(schema.promptRevisions)
-      .where(eq(schema.promptRevisions.orgId, orgId))
-      .orderBy(asc(schema.promptRevisions.role), desc(schema.promptRevisions.version));
     return {
       brand: {
         name: brand.name,
@@ -605,7 +629,9 @@ export class GenerateRepository {
       },
       linkPolicy: brand.linkPolicy,
       channels,
-      promptGuidance: Object.fromEntries(guidance.map((row) => [row.role, row.text])),
+      promptGuidance: Object.fromEntries(
+        Object.entries(guidanceSnapshot).map(([role, revision]) => [role, revision.text]),
+      ),
     };
   }
 

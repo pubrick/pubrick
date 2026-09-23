@@ -5,6 +5,7 @@ import {
   CONTENT_ORIGINS,
   KEY_OWNERSHIPS,
   LEDGER_STATUSES,
+  type PromptRole,
   RUN_STATUSES,
   type RunInput,
   type RunSteps,
@@ -84,6 +85,16 @@ export const pipelineRuns = pgTable(
     currentStep: text("current_step"),
     /** Typed from `runStepsSchema` (`@pubrick/shared`) — see `input` above. */
     steps: jsonb("steps").$type<RunSteps>().notNull().default({}),
+    /**
+     * The active organization guidance as it stood at the first successful
+     * worker claim. NULL means never claimed (including runs from before this
+     * column existed); an empty object means claimed with no role guidance.
+     * A delivery resumed after a checkpoint must not silently change prompts.
+     */
+    guidanceSnapshot:
+      jsonb("guidance_snapshot").$type<
+        Partial<Record<PromptRole, { revisionId: string; version: number; text: string }>>
+      >(),
     /**
      * Set on success. `set null` rather than cascade: a run is a record of what
      * was spent and when, and it must outlive the draft it produced.

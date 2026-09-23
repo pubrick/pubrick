@@ -755,12 +755,16 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // The brand carries the voice and audience that become the run's
       // instructions; reading it across orgs puts one org's positioning into
       // another org's post.
-      expect(await repo.context(intruder.orgId, victim.brandId, victim.channelIds)).toBeUndefined();
+      expect(
+        await repo.context(intruder.orgId, victim.brandId, victim.channelIds, {}),
+      ).toBeUndefined();
 
-      const own = await repo.context(victim.orgId, victim.brandId, [
-        ...victim.channelIds,
-        ...intruder.channelIds,
-      ]);
+      const own = await repo.context(
+        victim.orgId,
+        victim.brandId,
+        [...victim.channelIds, ...intruder.channelIds],
+        {},
+      );
       expect(own?.brand.name).toBe("Victim Coffee");
       // The channel list is scoped by brand as well as org — the brand predicate
       // alone would already exclude these — so this pins the pair, not either
@@ -768,20 +772,139 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(own?.channels.map((channel) => channel.id)).toEqual(victim.channelIds);
     }, 25_000);
 
-    it("loads the latest guidance for this org alone into generation context", async () => {
+    it("pins each org's latest role revision on its first successful claim", async () => {
       const { victim, intruder } = await twoOrgs();
-      await db.insert(schema.promptRevisions).values([
-        { orgId: victim.orgId, role: "writer", version: 1, guidance: "VICTIM_OLD" },
-        { orgId: victim.orgId, role: "writer", version: 2, guidance: "VICTIM_LATEST" },
-        { orgId: intruder.orgId, role: "writer", version: 1, guidance: "INTRUDER_ONLY" },
-      ]);
+      const revisions = await db
+        .insert(schema.promptRevisions)
+        .values([
+          { orgId: victim.orgId, role: "writer", version: 1, guidance: "VICTIM_OLD" },
+          { orgId: victim.orgId, role: "writer", version: 2, guidance: "VICTIM_LATEST" },
+          { orgId: intruder.orgId, role: "writer", version: 1, guidance: "INTRUDER_ONLY" },
+        ])
+        .returning({
+          id: schema.promptRevisions.id,
+          orgId: schema.promptRevisions.orgId,
+          version: schema.promptRevisions.version,
+        });
       const repo = new Repository();
+      expect(await repo.claim(intruder.orgId, victim.runId, "cross#1", "cross")).toBeUndefined();
+      expect((await runRow(victim.runId))?.guidanceSnapshot).toBeNull();
+      const victimRun = await repo.claim(victim.orgId, victim.runId, "victim#1", "victim");
+      const intruderRun = await repo.claim(
+        intruder.orgId,
+        intruder.runId,
+        "intruder#1",
+        "intruder",
+      );
+      expect(victimRun?.guidanceSnapshot).toEqual({
+        writer: {
+          revisionId: revisions.find((r) => r.orgId === victim.orgId && r.version === 2)?.id,
+          version: 2,
+          text: "VICTIM_LATEST",
+        },
+      });
+      expect(intruderRun?.guidanceSnapshot).toEqual({
+        writer: {
+          revisionId: revisions.find((r) => r.orgId === intruder.orgId)?.id,
+          version: 1,
+          text: "INTRUDER_ONLY",
+        },
+      });
       expect(
-        (await repo.context(victim.orgId, victim.brandId, victim.channelIds))?.promptGuidance,
+        (
+          await repo.context(
+            victim.orgId,
+            victim.brandId,
+            victim.channelIds,
+            victimRun?.guidanceSnapshot ?? {},
+          )
+        )?.promptGuidance,
       ).toEqual({ writer: "VICTIM_LATEST" });
       expect(
-        (await repo.context(intruder.orgId, intruder.brandId, intruder.channelIds))?.promptGuidance,
+        (
+          await repo.context(
+            intruder.orgId,
+            intruder.brandId,
+            intruder.channelIds,
+            intruderRun?.guidanceSnapshot ?? {},
+          )
+        )?.promptGuidance,
       ).toEqual({ writer: "INTRUDER_ONLY" });
+    }, 25_000);
+
+    it("keeps an empty first-claim snapshot empty after guidance is added", async () => {
+      const seeded = await seed();
+      const repo = new Repository();
+      expect(
+        (await repo.claim(seeded.orgId, seeded.runId, "empty#1", "empty"))?.guidanceSnapshot,
+      ).toEqual({});
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "writer", version: 1, guidance: "ADDED_LATER" });
+      const resumed = await repo.claim(seeded.orgId, seeded.runId, "empty#2", "empty");
+      expect(resumed?.guidanceSnapshot).toEqual({});
+      expect((await runRow(seeded.runId))?.guidanceSnapshot).toEqual({});
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "empty",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.calls.find((call) => call.role === "writer")?.system).not.toContain(
+        "ADDED_LATER",
+      );
+    }, 25_000);
+
+    it("keeps guidance through a lease takeover and checkpoint resume; a new run gets current guidance", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "editor", version: 1, guidance: "PINNED_EDITOR" });
+      const first = await repo.claim(seeded.orgId, seeded.runId, "old-job#1", "old-job");
+      expect(first?.guidanceSnapshot.editor?.text).toBe("PINNED_EDITOR");
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          steps: {
+            researcher: {
+              status: "succeeded",
+              output: { angle: "An angle", keyPoints: ["A key point"], avoid: [] },
+            },
+            writer: { status: "succeeded", output: { body: "Checkpointed draft." } },
+          },
+          leaseExpiresAt: sql`now() - interval '1 second'`,
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "editor", version: 2, guidance: "NEW_EDITOR" });
+      const taken = await repo.claim(seeded.orgId, seeded.runId, "new-job#1", "new-job");
+      expect(taken?.guidanceSnapshot).toEqual(first?.guidanceSnapshot);
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "new-job",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.callsFor("researcher")).toBe(0);
+      expect(script.callsFor("writer")).toBe(0);
+      expect(script.calls.find((call) => call.role === "editor")?.system).toContain(
+        "PINNED_EDITOR",
+      );
+      expect(script.calls.find((call) => call.role === "editor")?.system).not.toContain(
+        "NEW_EDITOR",
+      );
+      const [newRun] = await db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: seeded.orgId,
+          brandId: seeded.brandId,
+          input: { kind: "brief", text: BRIEF, channelIds: seeded.channelIds },
+        })
+        .returning({ id: schema.pipelineRuns.id });
+      expect(
+        (await repo.claim(seeded.orgId, newRun?.id as string, "new-run#1", "new-run"))
+          ?.guidanceSnapshot.editor,
+      ).toMatchObject({ version: 2, text: "NEW_EDITOR" });
     }, 25_000);
 
     it("spends the run's OWN org's provider key, never the oldest key in the table", async () => {

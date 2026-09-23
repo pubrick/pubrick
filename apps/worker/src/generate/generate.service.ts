@@ -738,7 +738,12 @@ export class GenerateService {
     run: ClaimedRun,
     channelIds: readonly string[],
   ): Promise<RunContext | undefined> {
-    const context = await this.repo.context(run.orgId, run.brandId, channelIds);
+    const context = await this.repo.context(
+      run.orgId,
+      run.brandId,
+      channelIds,
+      run.guidanceSnapshot,
+    );
     if (!context) return undefined;
     if (context.channels.length === 0) {
       throw withRunFailure(new PermanentError(EVERY_CHANNEL_DELETED_DETAIL), EVERY_CHANNEL_DELETED);
