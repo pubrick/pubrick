@@ -96,7 +96,11 @@ describe.skipIf(!url)("knowledge e2e", () => {
     // returns the 768 numbers; only their presence is observable.
     await db
       .update(schema.knowledgeEntries)
-      .set({ embedding: Array(768).fill(0.1) })
+      .set({
+        embedding: Array(768).fill(0.1),
+        embeddingModel: "gemini-embedding-001",
+        embeddingDimensions: 768,
+      })
       .where(eq(schema.knowledgeEntries.id, entry.body.id));
     const indexed = await owner
       .get(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
@@ -113,6 +117,14 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .expect(200);
     expect(edited.body.hasEmbedding).toBe(false);
     expect(edited.body.content).toBe("Only Robusta beans.");
+    const [cleared] = await db
+      .select({
+        model: schema.knowledgeEntries.embeddingModel,
+        dimensions: schema.knowledgeEntries.embeddingDimensions,
+      })
+      .from(schema.knowledgeEntries)
+      .where(eq(schema.knowledgeEntries.id, entry.body.id));
+    expect(cleared).toEqual({ model: null, dimensions: null });
     const { KnowledgeRepository } = await import("./knowledge.repository");
     expect(
       await new KnowledgeRepository().setEmbedding(
@@ -161,6 +173,14 @@ describe.skipIf(!url)("knowledge e2e", () => {
     expect(indexed.body.indexed).toBe(true);
     expect(indexed.body.entry.hasEmbedding).toBe(true);
     expect(indexed.body.entry).not.toHaveProperty("embedding");
+    const [provenance] = await db
+      .select({
+        model: schema.knowledgeEntries.embeddingModel,
+        dimensions: schema.knowledgeEntries.embeddingDimensions,
+      })
+      .from(schema.knowledgeEntries)
+      .where(eq(schema.knowledgeEntries.id, note.body.id));
+    expect(provenance).toEqual({ model: "gemini-embedding-001", dimensions: 768 });
     expect(embedKnowledgeText).toHaveBeenCalledWith(
       "fake-provider-key",
       "Green tea\n\nOur tea is roasted.",

@@ -219,6 +219,9 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Vector provenance must accompany every stored embedding. The knowledge
+  // E2E suite covers clearing and writing the metadata with the vector.
+  "knowledge_entries_embedding_metadata_check",
   // Notification tables arrive after the historical seed; worker outbox tests
   // exercise their values, and schema-invariants checks the enum expressions.
   "notification_events_event_check",
