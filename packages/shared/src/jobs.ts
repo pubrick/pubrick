@@ -22,6 +22,18 @@ export const PUBLISH_QUEUE = "publish";
 
 /** Brand-scoped RSS/Atom source poll. */
 export const RSS_POLL_QUEUE = "rss-poll";
+/** AI scoring is intentionally capped at twenty newly collected articles per hour. */
+export const RELEVANCE_QUEUE = "news-relevance";
+export const RELEVANCE_SCAN_QUEUE = "news-relevance-scan";
+export const RELEVANCE_DLQ = "news-relevance-dlq";
+export type RelevanceJob = { orgId: string; brandId: string; itemId: string };
+export const RELEVANCE_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 180,
+  heartbeatSeconds: 30,
+  deadLetter: RELEVANCE_DLQ,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const RSS_POLL_OPTIONS = {

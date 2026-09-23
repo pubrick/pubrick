@@ -58,5 +58,18 @@ export const newsItemDtoSchema = z.object({
   publishedAt: z.string().nullable(),
   createdAt: z.string(),
   editorSignal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),
+  relevanceStatus: z.enum(["unscored", "scored", "failed"]),
+  relevanceScore: z.number().min(0).max(1).nullable(),
+  relevanceReason: z.string().nullable(),
+  relevanceUrgency: z.enum(["breaking", "timely", "evergreen"]).nullable(),
+  relevanceErrorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
+  relevanceScoredAt: z.string().nullable(),
 });
 export type NewsItemDto = z.infer<typeof newsItemDtoSchema>;
+
+export const newsItemListQuerySchema = z.object({
+  brandId: z.string().uuid(),
+  sort: z.enum(["recent", "relevance"]).default("recent"),
+  status: z.enum(["all", "unscored", "scored", "failed"]).default("all"),
+});
+export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;

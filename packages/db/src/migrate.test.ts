@@ -113,6 +113,7 @@ const ZONED_COLUMNS = [
   "feed_entries.published_at",
   "news_items.created_at",
   "news_items.published_at",
+  "news_items.relevance_scored_at",
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
@@ -219,6 +220,12 @@ const NON_ENUM_CHECKS = [
   // values with SQLSTATE 23514.
   "topics_status_check",
   "news_items_editor_signal_check",
+  "news_items_relevance_status_check",
+  "news_items_relevance_urgency_check",
+  "news_items_relevance_error_code_check",
+  "news_items_relevance_score_check",
+  "news_items_relevance_consistency_check",
+  "news_items_relevance_attempts_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

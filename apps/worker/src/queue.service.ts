@@ -9,6 +9,11 @@ import {
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
   type PublishJob,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  RELEVANCE_SCAN_QUEUE,
+  type RelevanceJob,
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
@@ -17,6 +22,7 @@ import {
 import type { PgBoss } from "pg-boss";
 import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
+import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
@@ -103,6 +109,7 @@ export class QueueService {
     private readonly publish: PublishService,
     private readonly generate: GenerateService,
     @Optional() private readonly rss?: RssService,
+    @Optional() private readonly relevance?: RelevanceService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -134,6 +141,27 @@ export class QueueService {
       await boss.createQueue(RSS_SCAN_QUEUE);
       await boss.schedule(RSS_SCAN_QUEUE, "*/15 * * * *");
       await boss.work(RSS_SCAN_QUEUE, { batchSize: 1 }, async () => this.rss?.scan(boss));
+    }
+
+    if (this.relevance && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(RELEVANCE_DLQ);
+      await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+      await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+      await boss.work<RelevanceJob>(
+        RELEVANCE_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.relevance?.handle(job.data);
+        },
+      );
+      await boss.work<RelevanceJob>(RELEVANCE_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.relevance?.exhausted(job.data);
+      });
+      await boss.createQueue(RELEVANCE_SCAN_QUEUE);
+      await boss.schedule(RELEVANCE_SCAN_QUEUE, "0 * * * *");
+      await boss.work(RELEVANCE_SCAN_QUEUE, { batchSize: 1 }, async () =>
+        this.relevance?.scan(boss),
+      );
     }
 
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.

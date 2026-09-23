@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { NewsSourceCreate, NewsSourceUpdate } from "@pubrick/shared";
-import { and, desc, eq } from "drizzle-orm";
+import type { NewsItemListQuery, NewsSourceCreate, NewsSourceUpdate } from "@pubrick/shared";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
@@ -29,6 +29,12 @@ const ITEM_COLUMNS = {
   publishedAt: schema.newsItems.publishedAt,
   createdAt: schema.newsItems.createdAt,
   editorSignal: schema.newsItems.editorSignal,
+  relevanceStatus: schema.newsItems.relevanceStatus,
+  relevanceScore: schema.newsItems.relevanceScore,
+  relevanceReason: schema.newsItems.relevanceReason,
+  relevanceUrgency: schema.newsItems.relevanceUrgency,
+  relevanceErrorCode: schema.newsItems.relevanceErrorCode,
+  relevanceScoredAt: schema.newsItems.relevanceScoredAt,
 };
 
 @Injectable()
@@ -120,13 +126,62 @@ export class SourcesRepository {
     });
   }
 
-  async items(orgId: string, brandId: string) {
-    await this.requireBrand(orgId, brandId);
+  async items(orgId: string, query: NewsItemListQuery) {
+    await this.requireBrand(orgId, query.brandId);
     return db
       .select(ITEM_COLUMNS)
       .from(schema.newsItems)
-      .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.brandId, brandId)))
-      .orderBy(desc(schema.newsItems.publishedAt), desc(schema.newsItems.createdAt))
+      .where(
+        and(
+          eq(schema.newsItems.orgId, orgId),
+          eq(schema.newsItems.brandId, query.brandId),
+          ...(query.status === "all" ? [] : [eq(schema.newsItems.relevanceStatus, query.status)]),
+        ),
+      )
+      .orderBy(
+        ...(query.sort === "relevance"
+          ? [sql`${schema.newsItems.relevanceScore} DESC NULLS LAST`]
+          : [desc(schema.newsItems.publishedAt)]),
+        desc(schema.newsItems.createdAt),
+        desc(schema.newsItems.id),
+      )
       .limit(100);
+  }
+
+  async score(orgId: string, brandId: string, id: string) {
+    return db.transaction(async (tx) => {
+      const rows = await tx
+        .select({
+          id: schema.newsItems.id,
+          relevanceStatus: schema.newsItems.relevanceStatus,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, id),
+          ),
+        )
+        .limit(1);
+      const item = rows[0];
+      if (!item) throw new NotFoundException("Article not found");
+      if (item.relevanceStatus === "scored")
+        throw new ConflictException("Article is already scored");
+      if (item.relevanceStatus === "failed") {
+        await tx
+          .update(schema.newsItems)
+          .set({ relevanceAttempts: 0 })
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.id, id),
+            ),
+          );
+      }
+      const queued = await this.queue.enqueueRelevance(tx, { orgId, brandId, itemId: id });
+      return { queued };
+    });
   }
 }

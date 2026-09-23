@@ -4,6 +4,7 @@ import {
   MAX_SOURCE_TEXT_LENGTH,
   type NewsItemDto,
   type NewsSourceDto,
+  newsItemListQuerySchema,
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -18,7 +19,9 @@ import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Menu } from "@/components/ui/menu";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 type Brand = { id: string; name: string };
@@ -35,6 +38,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [brand, setBrand] = useState<Brand | null>(null);
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
+  const [sort, setSort] = useState<"recent" | "relevance">("recent");
+  const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -58,10 +63,12 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   );
 
   const load = useCallback(() => {
+    const query = newsItemListQuerySchema.parse({ brandId: id, sort, status });
+    const itemQuery = new URLSearchParams(query).toString();
     Promise.all([
       api<Brand>(`/api/brands/${id}`),
       api<NewsSourceDto[]>(`/api/sources?brandId=${id}`),
-      api<NewsItemDto[]>(`/api/sources/items?brandId=${id}`),
+      api<NewsItemDto[]>(`/api/sources/items?${itemQuery}`),
       api<Channel[]>(`/api/channels?brandId=${id}`),
     ])
       .then(([nextBrand, nextSources, nextItems, nextChannels]) => {
@@ -76,7 +83,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         setItems(null);
         setError(describeError(err));
       });
-  }, [id, describeError]);
+  }, [id, sort, status, describeError]);
 
   useEffect(() => {
     load();
@@ -149,6 +156,20 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     try {
       await api(`/api/topics/from-news/${item.id}?brandId=${id}`, { method: "POST" });
       setNotice(t("topicSaved"));
+    } catch (err) {
+      setError(describeError(err));
+    }
+  }
+
+  async function score(item: NewsItemDto) {
+    setError(null);
+    try {
+      const result = await api<{ queued: boolean }>(
+        `/api/sources/items/${item.id}/score?brandId=${id}`,
+        { method: "POST" },
+      );
+      setNotice(t(result.queued ? "scoreQueued" : "scoreRecent"));
+      load();
     } catch (err) {
       setError(describeError(err));
     }
@@ -328,6 +349,26 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       </Card>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("news")}</h2>
+      <div className="mb-3 flex flex-wrap gap-3">
+        <Select
+          label={t("sortLabel")}
+          value={sort}
+          onChange={(event) => setSort(event.target.value as typeof sort)}
+        >
+          <option value="recent">{t("sortRecent")}</option>
+          <option value="relevance">{t("sortRelevance")}</option>
+        </Select>
+        <Select
+          label={t("statusLabel")}
+          value={status}
+          onChange={(event) => setStatus(event.target.value as typeof status)}
+        >
+          <option value="all">{t("statusAll")}</option>
+          <option value="unscored">{t("statusUnscored")}</option>
+          <option value="scored">{t("statusScored")}</option>
+          <option value="failed">{t("statusFailed")}</option>
+        </Select>
+      </div>
       <Card padded={false}>
         {items === null ? (
           <div className="p-4">
@@ -335,21 +376,52 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </div>
         ) : items.length === 0 ? (
           <EmptyState
-            title={t("emptyNews")}
-            action={<span className="text-sm text-fg-secondary">{t("emptyNewsHint")}</span>}
+            title={t(status === "all" ? "emptyNews" : "emptyFiltered")}
+            action={
+              status === "all" ? (
+                <span className="text-sm text-fg-secondary">{t("emptyNewsHint")}</span>
+              ) : (
+                <Button variant="secondary" onClick={() => setStatus("all")}>
+                  {t("showAll")}
+                </Button>
+              )
+            }
           />
         ) : (
           items.map((item) => (
             <ListRow
               key={item.id}
               title={item.title}
+              metaClassName="break-words"
               meta={
-                <span>
-                  {new URL(item.url).hostname} ·{" "}
-                  {item.publishedAt
-                    ? new Date(item.publishedAt).toLocaleDateString(locale)
-                    : new Date(item.createdAt).toLocaleDateString(locale)}
-                  {item.editorSignal ? ` · ${t(item.editorSignal)}` : ""}
+                <span className="block space-y-1">
+                  <span className="block">
+                    {new URL(item.url).hostname} ·{" "}
+                    {item.publishedAt
+                      ? new Date(item.publishedAt).toLocaleDateString(locale)
+                      : new Date(item.createdAt).toLocaleDateString(locale)}
+                    {item.editorSignal ? ` · ${t(item.editorSignal)}` : ""}
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <StatusBadge
+                      status={
+                        item.relevanceStatus === "failed"
+                          ? "failed"
+                          : item.relevanceStatus === "scored"
+                            ? "published"
+                            : "draft"
+                      }
+                    >
+                      {item.relevanceStatus === "scored" && item.relevanceScore !== null
+                        ? t("aiScore", { score: Math.round(item.relevanceScore * 100) })
+                        : t(item.relevanceStatus === "failed" ? "statusFailed" : "statusUnscored")}
+                    </StatusBadge>
+                    {item.relevanceUrgency && <span>{t(item.relevanceUrgency)}</span>}
+                  </span>
+                  {item.relevanceReason && <span className="block">{item.relevanceReason}</span>}
+                  {item.relevanceErrorCode && (
+                    <span className="block">{t(item.relevanceErrorCode)}</span>
+                  )}
                 </span>
               }
               trailing={
@@ -368,6 +440,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   <Menu
                     trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
                     items={[
+                      ...(item.relevanceStatus === "scored"
+                        ? []
+                        : [
+                            {
+                              label: t(item.relevanceStatus === "failed" ? "retryScore" : "score"),
+                              onSelect: () => void score(item),
+                            },
+                          ]),
                       { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
                       {
                         label: t(item.editorSignal === "relevant" ? "clearRelevant" : "relevant"),

@@ -88,4 +88,73 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.delete(`/api/sources/${source.body.id}?brandId=${a.body.id}`).expect(200);
     expect((await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200)).body).toEqual([]);
   });
+
+  it("filters and orders scores without replacing the editor signal or crossing brands", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Cafe" }).expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Journal", url: "https://example.com/relevance.xml" })
+      .expect(201);
+    const { schema } = await import("@pubrick/db");
+    const { db } = await import("../db");
+    const { eq } = await import("drizzle-orm");
+    const orgRows = await db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    const orgId = orgRows[0]?.orgId as string;
+    const [high, low, pending] = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "High",
+          url: "https://example.com/high",
+          relevanceStatus: "scored",
+          relevanceScore: 0.9,
+          relevanceReason: "Highly relevant",
+          relevanceUrgency: "timely",
+          relevanceScoredAt: new Date(),
+          editorSignal: "irrelevant",
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Low",
+          url: "https://example.com/low",
+          relevanceStatus: "scored",
+          relevanceScore: 0.2,
+          relevanceReason: "Weak fit",
+          relevanceUrgency: "evergreen",
+          relevanceScoredAt: new Date(),
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Pending",
+          url: "https://example.com/pending",
+        },
+      ])
+      .returning({ id: schema.newsItems.id });
+    if (!high || !low || !pending) throw new Error("Article seed failed");
+    const ranked = await owner
+      .get(`/api/sources/items?brandId=${brand.body.id}&sort=relevance&status=scored`)
+      .expect(200);
+    expect(ranked.body.map((row: { id: string }) => row.id)).toEqual([high.id, low.id]);
+    expect(ranked.body[0]).toMatchObject({ relevanceScore: 0.9, editorSignal: "irrelevant" });
+    const unscored = await owner
+      .get(`/api/sources/items?brandId=${brand.body.id}&status=unscored`)
+      .expect(200);
+    expect(unscored.body.map((row: { id: string }) => row.id)).toEqual([pending.id]);
+    await other.get(`/api/sources/items?brandId=${brand.body.id}&sort=relevance`).expect(404);
+    await other.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(404);
+    await owner.post(`/api/sources/items/${high.id}/score?brandId=${brand.body.id}`).expect(409);
+    await owner.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(201);
+  });
 });

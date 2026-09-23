@@ -4,6 +4,8 @@ import { GenerateService } from "./generate/generate.service";
 import { PublishRepository } from "./publish/publish.repository";
 import { PublishService } from "./publish/publish.service";
 import { QueueService } from "./queue.service";
+import { RelevanceRepository } from "./relevance/relevance.repository";
+import { RelevanceService } from "./relevance/relevance.service";
 import { RssRepository } from "./rss/rss.repository";
 import { RssService } from "./rss/rss.service";
 
@@ -16,6 +18,8 @@ import { RssService } from "./rss/rss.service";
     GenerateService,
     RssRepository,
     RssService,
+    RelevanceRepository,
+    RelevanceService,
   ],
 })
 export class WorkerModule {}
