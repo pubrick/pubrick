@@ -25,7 +25,7 @@ the brand deletion still succeeds and the server logs any removal failure.
 
 ## Publishing boundary
 
-Telegram and VK accept a single JPEG cover. Telegram uses one `sendPhoto`
+Telegram, VK, and MAX accept a single JPEG cover. Telegram uses one `sendPhoto`
 request with the reviewed text as its caption (maximum 1024 characters).
 VK uses the official `photos.getWallUploadServer` → multipart upload →
 `photos.saveWallPhoto` → `wall.post` path and attaches the saved community photo
@@ -46,6 +46,15 @@ preparation can be retried because no wall post has started. An uncertain
 `wall.post` or Telegram `sendPhoto` is never retried into a possible duplicate.
 VK upload URLs must use HTTPS on a `vk.com` host and cannot redirect. The
 temporary upload URL and its capability query are never logged.
+MAX uses `POST /uploads?type=image`, sends the JPEG in a multipart `data` field
+to the documented `iu.oneme.ru` image host, and sends one `POST /messages` with
+the resulting image token and reviewed text. Its bot token is sent only to the
+MAX API, never to the upload URL. Upload URLs must use HTTPS and cannot redirect;
+their capability query and image token are never logged. Upload preparation can
+be retried because no message was sent. An uncertain final message outcome is
+terminal; MAX's explicit `attachment.not.ready` refusal is safe to retry.
+See the [MAX upload method](https://dev.max.ru/docs-api/methods/POST/uploads)
+and [image message flow](https://dev.max.ru/docs-api/use-cases/sending-messages/media).
 
 ## Generate and revise images
 
@@ -55,7 +64,7 @@ calls Google's stable `gemini-3.1-flash-image` model for a 1K image. **Try
 variation** on an individual image sends that brand's JPEG alongside a new
 instruction. Each result is a new, normalized asset; the source remains intact.
 The result is not attached to any post. Review it and choose **Use** on an
-editable Telegram or VK post before approval. No background generation is triggered
+editable Telegram, VK, or MAX post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
 Every dispatched image request records a BYOK row in `usage_ledger`, including
@@ -67,6 +76,3 @@ one click makes one provider request with no retry. Provider error bodies and
 keys never reach the browser. The image model and rates should be reviewed as
 Google changes its [model](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image)
 and [pricing](https://ai.google.dev/gemini-api/docs/pricing) documentation.
-
-MAX image delivery remains future work. The media library never implies that
-channel will receive a cover.

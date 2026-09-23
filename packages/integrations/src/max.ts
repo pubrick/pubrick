@@ -38,6 +38,10 @@ const sentBody = z.object({
     url: z.string().url().nullish(),
   }),
 });
+const uploadTicket = z.object({ url: z.string().url(), token: z.string().min(1).optional() });
+const uploadedImage = z.object({
+  photos: z.record(z.string(), z.object({ token: z.string().min(1) })),
+});
 
 const CONNECT_PHASE_CODES = new Set([
   "ECONNREFUSED",
@@ -63,6 +67,7 @@ async function call(
   credentials: MaxCredentials,
   body?: unknown,
   options?: PublisherOptions,
+  attachmentToken?: string,
 ): Promise<unknown> {
   let response: Response;
   let raw: unknown;
@@ -77,6 +82,7 @@ async function call(
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(MAX_REQUEST_TIMEOUT_MS),
+        redirect: "error",
       },
     );
     const responseText = await response.text();
@@ -86,7 +92,7 @@ async function call(
       raw = undefined;
     }
   } catch (error) {
-    const message = redact(String(error), credentials.accessToken);
+    const message = redact(redact(String(error), credentials.accessToken), attachmentToken ?? "");
     if (connectFailed(error))
       throw new TransientPublishError(`MAX could not be reached: ${message}`);
     throw new UnknownOutcomePublishError(`MAX request outcome is unknown: ${message}`);
@@ -95,11 +101,19 @@ async function call(
   if (response.status >= 200 && response.status < 300) return raw;
   const parsed = errorBody.safeParse(raw);
   const message = redact(
-    parsed.success
-      ? `MAX ${parsed.data.code}: ${parsed.data.message}`
-      : `MAX HTTP ${response.status}`,
-    credentials.accessToken,
+    redact(
+      parsed.success
+        ? `MAX ${parsed.data.code}: ${parsed.data.message}`
+        : `MAX HTTP ${response.status}`,
+      credentials.accessToken,
+    ),
+    attachmentToken ?? "",
   );
+  // MAX explicitly refuses a message while its image is still processing.
+  // This named provider response proves the message was not accepted.
+  if (attachmentToken && parsed.success && parsed.data.code === "attachment.not.ready") {
+    throw new TransientPublishError("MAX image is still processing");
+  }
   if (response.status === 429) throw new TransientPublishError(message);
   if (response.status >= 400 && response.status < 500) {
     if (parsed.success) throw new PlatformRejectionError(message, response.status);
@@ -108,6 +122,87 @@ async function call(
   // A 5xx, including one carrying an error body, may be a gateway response
   // after MAX accepted the post. Never let pg-boss turn it into a duplicate.
   throw new UnknownOutcomePublishError(message, response.status);
+}
+
+/** Image upload is preparation: no message can exist until POST /messages. */
+async function prepareImageCall(
+  credentials: MaxCredentials,
+  options?: PublisherOptions,
+): Promise<unknown> {
+  try {
+    return await call("POST", "/uploads?type=image", credentials, undefined, options);
+  } catch (error) {
+    if (error instanceof UnknownOutcomePublishError) {
+      throw new TransientPublishError("MAX image upload preparation did not complete");
+    }
+    throw error;
+  }
+}
+
+function trustedImageUploadUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new PermanentPublishError("MAX returned an invalid image upload URL");
+  }
+  // This is a capability URL. Restrict it to the documented image-upload host,
+  // never forward the bot token, and never expose its query string in errors.
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "iu.oneme.ru" ||
+    url.username ||
+    url.password ||
+    url.port
+  ) {
+    throw new PermanentPublishError("MAX returned an untrusted image upload URL");
+  }
+  return url.href;
+}
+
+async function imageAttachment(
+  credentials: MaxCredentials,
+  bytes: Uint8Array,
+  options?: PublisherOptions,
+): Promise<string> {
+  if (!bytes.length) throw new PermanentPublishError("Cover image is empty");
+  const ticket = uploadTicket.safeParse(await prepareImageCall(credentials, options));
+  if (!ticket.success) throw new TransientPublishError("MAX did not return an image upload URL");
+  const uploadUrl = trustedImageUploadUrl(ticket.data.url);
+  const form = new FormData();
+  form.append("data", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), "cover.jpg");
+  let response: Response;
+  try {
+    response = await (options?.fetchImpl ?? fetch)(uploadUrl, {
+      method: "POST",
+      body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(MAX_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new TransientPublishError("MAX image upload did not complete");
+  }
+  if (!response.ok) {
+    const message = `MAX image upload returned HTTP ${response.status}`;
+    if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+      throw new PermanentPublishError(message, response.status);
+    }
+    throw new TransientPublishError(message);
+  }
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new TransientPublishError("MAX image upload returned an unreadable response");
+  }
+  // The image example returns photos.<photoIds>.token. The generic upload
+  // contract also permits a token in the initial ticket.
+  const uploaded = uploadedImage.safeParse(raw);
+  const token = uploaded.success
+    ? (Object.values(uploaded.data.photos)[0]?.token ?? ticket.data.token)
+    : ticket.data.token;
+  if (!token) throw new TransientPublishError("MAX image upload returned no attachment token");
+  return token;
 }
 
 export const maxPublisher: Publisher<MaxCredentials> = {
@@ -121,12 +216,18 @@ export const maxPublisher: Publisher<MaxCredentials> = {
         `Text must be 1..${PLATFORM_MAX_TEXT_LENGTH.max} characters, got ${input.text.length}`,
       );
     }
+    const token = input.image
+      ? await imageAttachment(credentials, input.image.bytes, options)
+      : undefined;
     const raw = await call(
       "POST",
       `/messages?chat_id=${encodeURIComponent(credentials.chatId)}&disable_link_preview=${input.disableLinkPreview !== false}`,
       credentials,
-      { text: input.text },
+      token
+        ? { text: input.text, attachments: [{ type: "image", payload: { token } }] }
+        : { text: input.text },
       options,
+      token,
     );
     // A successful HTTP response already means the message was accepted. Never
     // resend because a field used only to build the receipt is absent.

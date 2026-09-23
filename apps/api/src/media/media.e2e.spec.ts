@@ -268,7 +268,7 @@ describe.skipIf(!url)("media library e2e", () => {
     expect(approved.body.adaptations[0].status).toBe("queued");
   });
 
-  it("approves a Telegram and VK cover when only the Telegram adaptation has a short caption", async () => {
+  it("approves a Telegram, VK, and MAX cover when only Telegram has a short caption", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Mixed brand" }).expect(201);
     const telegram = await owner
@@ -289,12 +289,21 @@ describe.skipIf(!url)("media library e2e", () => {
         credentials: { accessToken: "test-user-token", groupId: "12345" },
       })
       .expect(201);
+    const max = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "max",
+        name: "MAX channel",
+        credentials: { accessToken: "test-max-token", chatId: "-12345" },
+      })
+      .expect(201);
     const post = await owner
       .post("/api/content")
       .send({
         brandId: brand.body.id,
         body: "x".repeat(1025),
-        channelIds: [telegram.body.id, vk.body.id],
+        channelIds: [telegram.body.id, vk.body.id, max.body.id],
       })
       .expect(201);
     const telegramAdaptation = post.body.adaptations.find(
@@ -314,6 +323,7 @@ describe.skipIf(!url)("media library e2e", () => {
       .expect(200);
     const approved = await owner.post(`/api/content/${post.body.id}/approve`).send({}).expect(200);
     expect(approved.body.adaptations.map((row: { status: string }) => row.status)).toEqual([
+      "queued",
       "queued",
       "queued",
     ]);
