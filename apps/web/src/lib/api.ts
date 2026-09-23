@@ -80,6 +80,13 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  private_source_owner_required: "private_source_owner_required",
+  private_source_not_configured: "private_source_not_configured",
+  private_source_not_connected: "private_source_not_connected",
+  private_source_cooldown: "private_source_cooldown",
+  private_source_access_denied: "private_source_access_denied",
+  private_source_session_changed: "private_source_session_changed",
+  private_source_duplicate: "private_source_duplicate",
   content_not_found: "content_not_found",
   publication_not_found: "publication_not_found",
   metrics_refresh_cooldown: "metrics_refresh_cooldown",

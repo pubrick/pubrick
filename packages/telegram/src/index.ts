@@ -11,30 +11,43 @@ export type ChannelComments = {
 export type PrivateChannelPeer = { channelId: number; accessHash: string };
 type Credentials = { apiId: number; apiHash: string };
 
-/** The invite is only accepted in a trusted terminal and is never returned or stored. */
+/** The invite is transient setup input and is never returned or stored. */
 export async function resolveJoinedPrivateChannel(
   input: Credentials & { session: string; invite: string },
 ): Promise<{ peer: PrivateChannelPeer; title: string }> {
   if (!/^https:\/\/t\.me\/(?:\+|joinchat\/)[A-Za-z0-9_-]{8,128}$/.test(input.invite))
     throw new Error("invalid_invite");
   const client = createClient({ apiId: input.apiId, apiHash: input.apiHash });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void client.destroy().catch(() => undefined);
+      reject(new Error("unavailable"));
+    }, 20_000);
+  });
   try {
-    await client.importSession(input.session);
-    // mtcute checks the invite and throws for a channel this account has not joined.
-    // getChat never invokes messages.importChatInvite.
-    const chat = await client.getChat(input.invite);
-    if (chat.chatType !== "channel" || !chat.isMember || chat.isLikelyUnavailable)
-      throw new Error("access_denied");
-    const peer = chat.inputPeer;
-    if (peer._ !== "inputPeerChannel" || !Number.isSafeInteger(peer.channelId))
-      throw new Error("access_denied");
-    return {
-      peer: { channelId: peer.channelId, accessHash: peer.accessHash.toString() },
-      title: chat.title,
-    };
-  } catch {
+    return await Promise.race([
+      deadline,
+      (async () => {
+        await client.importSession(input.session);
+        // getChat checks an invite but never invokes messages.importChatInvite.
+        const chat = await client.getChat(input.invite);
+        if (chat.chatType !== "channel" || !chat.isMember || chat.isLikelyUnavailable)
+          throw new Error("access_denied");
+        const peer = chat.inputPeer;
+        if (peer._ !== "inputPeerChannel" || !Number.isSafeInteger(peer.channelId))
+          throw new Error("access_denied");
+        return {
+          peer: { channelId: peer.channelId, accessHash: peer.accessHash.toString() },
+          title: chat.title,
+        };
+      })(),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message === "unavailable") throw error;
     throw new Error("access_denied");
   } finally {
+    if (timer) clearTimeout(timer);
     await client.destroy().catch(() => undefined);
   }
 }

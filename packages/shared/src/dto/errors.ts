@@ -64,6 +64,13 @@
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
  */
 export const API_ERROR_CODES = [
+  "private_source_owner_required",
+  "private_source_not_configured",
+  "private_source_not_connected",
+  "private_source_cooldown",
+  "private_source_access_denied",
+  "private_source_session_changed",
+  "private_source_duplicate",
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",

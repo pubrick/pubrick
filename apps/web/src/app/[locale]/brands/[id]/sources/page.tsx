@@ -8,6 +8,7 @@ import {
   type NewsSourceDto,
   newsItemListQuerySchema,
   newsSourceCreateSchema,
+  privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -45,9 +46,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [telegramConnected, setTelegramConnected] = useState(false);
-  const [kind, setKind] = useState<"rss" | "telegram">("rss");
+  const [kind, setKind] = useState<"rss" | "telegram" | "telegram_private">("rss");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [invite, setInvite] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -101,7 +103,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     load();
     const timer = window.setInterval(load, 15_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      const input = document.getElementById("private-telegram-invite") as HTMLInputElement | null;
+      if (input) input.value = "";
+    };
   }, [load]);
 
   async function addSource(event: React.FormEvent) {
@@ -109,6 +115,21 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setBusy(true);
     setError(null);
     try {
+      if (kind === "telegram_private") {
+        const parsed = privateTelegramSourceCreateSchema.safeParse({ brandId: id, name, invite });
+        if (!parsed.success) {
+          setError(t("invalidPrivateInvite"));
+          return;
+        }
+        await api("/api/sources/telegram-private", {
+          method: "POST",
+          body: JSON.stringify(parsed.data),
+        });
+        setName("");
+        setNotice(t("added"));
+        load();
+        return;
+      }
       const parsed = newsSourceCreateSchema.safeParse({ brandId: id, name, kind, url });
       if (!parsed.success) {
         setError(t(kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"));
@@ -125,6 +146,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     } catch (err) {
       setError(describeError(err));
     } finally {
+      setInvite("");
       setBusy(false);
     }
   }
@@ -355,12 +377,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             label={t("kind")}
             value={kind}
             onChange={(event) => {
-              setKind(event.target.value as "rss" | "telegram");
+              setKind(event.target.value as typeof kind);
               setUrl("");
+              setInvite("");
             }}
           >
             <option value="rss">{t("rss")}</option>
             <option value="telegram">{t("telegram")}</option>
+            <option value="telegram_private">{t("telegramPrivate")}</option>
           </Select>
           <Input
             label={t("name")}
@@ -369,19 +393,32 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             maxLength={120}
             required
           />
-          <Input
-            label={t(kind === "telegram" ? "telegramUrl" : "url")}
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            inputMode="url"
-            maxLength={2048}
-            required
-          />
+          {kind === "telegram_private" ? (
+            <Input
+              id="private-telegram-invite"
+              label={t("privateInvite")}
+              type="password"
+              autoComplete="off"
+              value={invite}
+              onChange={(event) => setInvite(event.target.value)}
+              maxLength={160}
+              required
+            />
+          ) : (
+            <Input
+              label={t(kind === "telegram" ? "telegramUrl" : "url")}
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              inputMode="url"
+              maxLength={2048}
+              required
+            />
+          )}
         </form>
-        {kind === "telegram" && (
+        {(kind === "telegram" || kind === "telegram_private") && (
           <p className="mt-3 text-sm text-fg-secondary">
             {!telegramConnected && <>{t("telegramSetup")} </>}
-            {t("privateSetup")}{" "}
+            {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
             <a
               href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
               target="_blank"

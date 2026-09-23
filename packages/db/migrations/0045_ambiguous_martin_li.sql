@@ -1,0 +1,1 @@
+ALTER TABLE "telegram_source_accounts" ADD COLUMN "last_private_resolve_at" timestamp with time zone;

@@ -1,10 +1,14 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
+import { encryptJson, privateTelegramSourceCreateSchema } from "@pubrick/shared";
+import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommentAnalysisCaller } from "./comment-analysis.caller";
+
+vi.mock("@pubrick/telegram", () => ({ resolveJoinedPrivateChannel: vi.fn() }));
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -12,10 +16,14 @@ describe.skipIf(!url)("watched sources e2e", () => {
   let app: INestApplication;
   const analysisRun = vi.fn();
 
+  beforeEach(() => vi.mocked(resolveJoinedPrivateChannel).mockReset());
+
   beforeAll(async () => {
     process.env.DATABASE_URL = url;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    process.env.TELEGRAM_API_ID = "12345";
+    process.env.TELEGRAM_API_HASH = "test-hash";
     const { AppModule } = await import("../app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(CommentAnalysisCaller)
@@ -48,6 +56,185 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id };
   }
+
+  it("adds only joined private broadcasts, rate limits atomically, and returns no invite or peer", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Private news" }).expect(201);
+    const invite = "https://t.me/+SecretInvite123";
+    const body = { brandId: brand.body.id, name: "Joined channel", invite };
+    expect(privateTelegramSourceCreateSchema.parse(body)).toEqual(body);
+    const route = "/api/sources/telegram-private";
+    const key = process.env.APP_ENCRYPTION_KEY as string;
+    await agent.post(route).send(body).expect(409); // no connected account
+    expect(resolveJoinedPrivateChannel).not.toHaveBeenCalled();
+    await (await import("../db")).db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: encryptJson({ session: "joined-session" }, key),
+    });
+    vi.mocked(resolveJoinedPrivateChannel).mockResolvedValue({
+      peer: { channelId: 987654321, accessHash: "123456789" },
+      title: "A broadcast",
+    });
+    const [first, second] = await Promise.all([
+      agent.post(route).send(body),
+      agent.post(route).send(body),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([201, 409]);
+    expect(resolveJoinedPrivateChannel).toHaveBeenCalledTimes(1);
+    const created = first.status === 201 ? first : second;
+    expect(created.body).toMatchObject({
+      kind: "telegram_private",
+      url: "https://t.me/c/987654321",
+    });
+    expect(JSON.stringify(created.body)).not.toContain(invite);
+    expect(JSON.stringify(created.body)).not.toContain("123456789");
+    const other = first.status === 409 ? first : second;
+    expect(other.body.code).toBe("private_source_cooldown");
+    expect(JSON.stringify(other.body)).not.toContain(invite);
+    const [stored] = await (await import("../db")).db
+      .select({ privatePeerEncrypted: schema.newsSources.privatePeerEncrypted })
+      .from(schema.newsSources)
+      .where(
+        and(eq(schema.newsSources.orgId, orgId), eq(schema.newsSources.brandId, brand.body.id)),
+      );
+    expect(stored?.privatePeerEncrypted).not.toContain("123456789");
+  });
+
+  it("refuses members and never calls Telegram with invalid invites", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Guard" }).expect(201);
+    const db = (await import("../db")).db;
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.organizationId, orgId));
+    const body = {
+      brandId: brand.body.id,
+      name: "Secret",
+      invite: "https://t.me/+SecretInvite123",
+    };
+    const refused = await agent.post("/api/sources/telegram-private").send(body).expect(403);
+    expect(refused.body.code).toBe("private_source_owner_required");
+    expect(JSON.stringify(refused.body)).not.toContain(body.invite);
+    expect(resolveJoinedPrivateChannel).not.toHaveBeenCalled();
+  });
+
+  it("never reflects an invite or provider error in an access refusal", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Refusal" }).expect(201);
+    const db = (await import("../db")).db;
+    await db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: encryptJson(
+        { session: "joined-session" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    const route = "/api/sources/telegram-private";
+    await agent
+      .post(route)
+      .send({ brandId: brand.body.id, name: "Bad", invite: "https://evil.example/invite" })
+      .expect(400);
+    expect(resolveJoinedPrivateChannel).not.toHaveBeenCalled();
+    const invite = "https://t.me/+SensitiveInvite567";
+    vi.mocked(resolveJoinedPrivateChannel).mockRejectedValueOnce(
+      new Error(`provider echoed ${invite}`),
+    );
+    const refused = await agent
+      .post(route)
+      .send({ brandId: brand.body.id, name: "Denied", invite })
+      .expect(409);
+    expect(refused.body.code).toBe("private_source_access_denied");
+    expect(JSON.stringify(refused.body)).not.toContain(invite);
+    expect(JSON.stringify(refused.body)).not.toContain("provider echoed");
+  });
+
+  it("drops a resolved peer when the organization session is replaced mid-check", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Race" }).expect(201);
+    const db = (await import("../db")).db;
+    const key = process.env.APP_ENCRYPTION_KEY as string;
+    await db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: encryptJson({ session: "old-session" }, key),
+    });
+    let release:
+      | ((value: { peer: { channelId: number; accessHash: string }; title: string }) => void)
+      | undefined;
+    vi.mocked(resolveJoinedPrivateChannel).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = agent.post("/api/sources/telegram-private").send({
+      brandId: brand.body.id,
+      name: "Race channel",
+      invite: "https://t.me/+RaceInvite123",
+    });
+    const response = pending.then((result) => result);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: encryptJson({ session: "new-session" }, key) })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    release?.({ peer: { channelId: 1234567, accessHash: "98765" }, title: "Old account channel" });
+    const refused = await response;
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("private_source_session_changed");
+    const rows = await db
+      .select({ id: schema.newsSources.id })
+      .from(schema.newsSources)
+      .where(eq(schema.newsSources.orgId, orgId));
+    expect(rows).toEqual([]);
+  });
+
+  it("drops a resolved peer when the actor loses admin access mid-check", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Role race" }).expect(201);
+    const db = (await import("../db")).db;
+    await db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: encryptJson(
+        { session: "joined-session" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    let release:
+      | ((value: { peer: { channelId: number; accessHash: string }; title: string }) => void)
+      | undefined;
+    vi.mocked(resolveJoinedPrivateChannel).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = agent
+      .post("/api/sources/telegram-private")
+      .send({
+        brandId: brand.body.id,
+        name: "Role race channel",
+        invite: "https://t.me/+RoleRaceInvite123",
+      })
+      .then((result) => result);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.organizationId, orgId));
+    release?.({
+      peer: { channelId: 4321876, accessHash: "2222" },
+      title: "Former account channel",
+    });
+    const refused = await pending;
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("private_source_owner_required");
+    const rows = await db
+      .select({ id: schema.newsSources.id })
+      .from(schema.newsSources)
+      .where(eq(schema.newsSources.orgId, orgId));
+    expect(rows).toEqual([]);
+  });
 
   it("scopes feed CRUD and news reads by both organization and brand", async () => {
     const { agent: owner, orgId: ownerOrgId } = await orgAgent();
