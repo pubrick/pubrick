@@ -15,6 +15,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedEntryAction } from "@/components/feed-controls";
+import { MediaLibrary } from "@/components/media-library";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -95,6 +96,7 @@ type Adaptation = {
 type ContentItem = {
   id: string;
   brandId: string;
+  coverMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -208,6 +210,7 @@ function toDatetimeLocalValue(date: Date): string {
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Publish");
+  const tm = useTranslations("Media");
   const tc = useTranslations("Content");
   /**
    * One string, from the namespace it belongs to: the label names the run
@@ -228,6 +231,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
 
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [showMedia, setShowMedia] = useState(false);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
@@ -1896,6 +1900,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </li>
         ))}
       </ul>
+      <div className="mt-6">
+        <Button variant="secondary" onClick={() => setShowMedia((current) => !current)}>
+          {item.coverMediaId ? tm("selected") : tm("title")}
+        </Button>
+      </div>
+      {showMedia && (
+        <MediaLibrary
+          brandId={item.brandId}
+          itemId={item.id}
+          selectedId={item.coverMediaId}
+          editable={["draft", "rejected", "failed"].includes(item.status)}
+          onChange={() => void reload()}
+        />
+      )}
       <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
     </AppShell>
   );

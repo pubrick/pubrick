@@ -20,6 +20,8 @@ import type { z } from "zod";
 export interface PublishInput {
   text: string;
   disableLinkPreview?: boolean;
+  /** Normalized JPEG bytes. Only adapters that implement image delivery may accept it. */
+  image?: { bytes: Uint8Array; mimeType: "image/jpeg" };
 }
 
 export interface PublishResult {

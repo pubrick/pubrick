@@ -67,6 +67,12 @@ export const API_ERROR_CODES = [
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
+  "content_media_unsupported",
+  "content_media_caption_too_long",
+  "media_invalid",
+  "media_not_found",
+  "media_in_use",
+  "media_cover_pinned",
   /** Public syndication is opt-in; the feed may have been disabled. */
   "feed_not_found",
   /** A feed entry must be a titled post already delivered somewhere. */

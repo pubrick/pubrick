@@ -72,7 +72,8 @@
     "calendarLink": "Open content calendar",
     "knowledgeTitle": "Brand knowledge",
     "knowledgeHint": "Store product details, examples and brand notes for future drafts.",
-    "knowledgeOpen": "Open knowledge"
+    "knowledgeOpen": "Open knowledge",
+    "mediaLink": "Media library"
   },
   "Sources": {
     "title": "Sources for {brand}",
@@ -624,7 +625,13 @@
     "topic_not_approved": "Approve this topic before generating.",
     "source_fetch_failed": "Could not fetch that public page. Check the link or paste its text.",
     "source_response_too_large": "That page is too large to import. Paste the relevant text instead.",
-    "source_unreadable": "No article text could be extracted. Paste the relevant text instead."
+    "source_unreadable": "No article text could be extracted. Paste the relevant text instead.",
+    "content_media_unsupported": "Covers can currently be published only to Telegram channels.",
+    "content_media_caption_too_long": "Telegram photo captions must be 1024 characters or fewer.",
+    "media_invalid": "Choose a valid JPEG, PNG, or WebP image up to 10 MB.",
+    "media_not_found": "This image is no longer available in this brand.",
+    "media_in_use": "Remove this image from its post before deleting it.",
+    "media_cover_pinned": "This post is already approved or published. Reject it before changing the cover."
   },
   "Calendar": {
     "title": "Content calendar",
@@ -690,5 +697,19 @@
     "listError": "Topics could not be loaded.",
     "retry": "Try again",
     "openSource": "Open source"
+  },
+  "Media": {
+    "title": "Media library",
+    "back": "Back to brand",
+    "hint": "JPEG, PNG, or WebP up to 10 MB. Pubrick removes metadata and saves a JPEG. Covers publish to Telegram only; photo captions can be up to 1024 characters.",
+    "add": "Add image",
+    "empty": "Add an image to use as a Telegram cover.",
+    "selected": "Current cover",
+    "use": "Use",
+    "remove": "Remove",
+    "detach": "Remove cover",
+    "more": "Load more",
+    "retry": "Try again",
+    "failed": "Could not load the media library."
   }
 }

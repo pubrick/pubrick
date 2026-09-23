@@ -72,7 +72,8 @@
     "calendarLink": "Abrir calendário de conteúdo",
     "knowledgeTitle": "Conhecimento da marca",
     "knowledgeHint": "Guarde detalhes de produtos, exemplos e notas para futuros rascunhos.",
-    "knowledgeOpen": "Abrir conhecimento"
+    "knowledgeOpen": "Abrir conhecimento",
+    "mediaLink": "Biblioteca de mídia"
   },
   "Sources": {
     "title": "Fontes de {brand}",
@@ -624,7 +625,13 @@
     "topic_not_approved": "Aprove este tópico antes de gerar.",
     "source_fetch_failed": "Não foi possível carregar essa página pública. Confira o link ou cole o texto.",
     "source_response_too_large": "A página é grande demais para importar. Cole o texto relevante.",
-    "source_unreadable": "Não foi possível extrair o texto do artigo. Cole o texto relevante."
+    "source_unreadable": "Não foi possível extrair o texto do artigo. Cole o texto relevante.",
+    "content_media_unsupported": "No momento, as capas só podem ser publicadas em canais do Telegram.",
+    "content_media_caption_too_long": "As legendas de fotos do Telegram devem ter no máximo 1024 caracteres.",
+    "media_invalid": "Escolha uma imagem JPEG, PNG ou WebP válida de até 10 MB.",
+    "media_not_found": "Esta imagem não está mais disponível nesta marca.",
+    "media_in_use": "Remova a imagem da publicação antes de excluí-la.",
+    "media_cover_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar a capa."
   },
   "Calendar": {
     "title": "Calendário de conteúdo",
@@ -690,5 +697,19 @@
     "listError": "Não foi possível carregar os tópicos.",
     "retry": "Tentar novamente",
     "openSource": "Abrir fonte"
+  },
+  "Media": {
+    "title": "Biblioteca de mídia",
+    "back": "Voltar à marca",
+    "hint": "JPEG, PNG ou WebP de até 10 MB. O Pubrick remove metadados e salva um JPEG. Capas são publicadas apenas no Telegram; a legenda aceita até 1024 caracteres.",
+    "add": "Adicionar imagem",
+    "empty": "Adicione uma imagem para usar como capa no Telegram.",
+    "selected": "Capa atual",
+    "use": "Usar",
+    "remove": "Remover",
+    "detach": "Remover capa",
+    "more": "Carregar mais",
+    "retry": "Tentar novamente",
+    "failed": "Não foi possível carregar a biblioteca de mídia."
   }
 }

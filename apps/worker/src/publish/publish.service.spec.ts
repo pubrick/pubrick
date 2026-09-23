@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { schema } from "@pubrick/db";
 import {
   PermanentPublishError,
@@ -54,6 +57,10 @@ function fixture(overrides: Record<string, unknown> = {}) {
     status: "queued",
     body: null,
     itemBody: "Hello",
+    itemBrandId: "b1",
+    channelBrandId: "b1",
+    coverMediaId: null,
+    coverAuthorizedId: overrides.coverMediaId ?? null,
     itemStatus: "approved",
     platform: "telegram",
     attemptCount: 0,
@@ -88,6 +95,97 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PublishService.handle", () => {
+  it("loads a stored cover and passes its bytes to the Telegram publisher", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-cover-"));
+    const previous = process.env.MEDIA_STORAGE_DIR;
+    process.env.MEDIA_STORAGE_DIR = directory;
+    const coverMediaId = "00000000-0000-4000-8000-000000000001";
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    try {
+      await writeFile(path.join(directory, `${coverMediaId}.jpg`), bytes);
+      const { repo } = fixture({ coverMediaId });
+      const publish = vi
+        .fn()
+        .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(publish).toHaveBeenCalledWith(
+        { botToken: "1:a", chatId: "-100" },
+        { text: "Hello", image: { bytes, mimeType: "image/jpeg" } },
+        expect.anything(),
+      );
+      expect(repo.markPublished).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
+      else process.env.MEDIA_STORAGE_DIR = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails explicitly when a channel cannot publish the stored cover", async () => {
+    const { repo } = fixture({
+      coverMediaId: "00000000-0000-4000-8000-000000000001",
+      platform: "vk",
+    });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("cannot publish a cover"),
+      "rejected_before_send",
+      expect.anything(),
+      "failed",
+      CLAIM,
+    );
+  });
+
+  it("refuses a cover whose asset is outside this post's brand", async () => {
+    const { repo } = fixture({
+      coverMediaId: "00000000-0000-4000-8000-000000000001",
+      coverAuthorizedId: null,
+    });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("organization and brand"),
+      "rejected_before_send",
+      expect.anything(),
+      "failed",
+      CLAIM,
+    );
+  });
+
+  it("refuses a covered post whose channel belongs to another brand", async () => {
+    const { repo } = fixture({
+      coverMediaId: "00000000-0000-4000-8000-000000000001",
+      channelBrandId: "b2",
+    });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("another brand"),
+      "rejected_before_send",
+      expect.anything(),
+      "failed",
+      CLAIM,
+    );
+  });
+
   it("publishes the item body and records the result", async () => {
     const { repo } = fixture();
     const publish = vi

@@ -1344,13 +1344,19 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions, run, refineProposal, adaptationProposals] = await Promise.all([
-      this.adaptationsFor(orgId, item.id),
-      this.aiVersionRows(orgId, item.id),
-      this.runFor(orgId, item.id),
-      this.stagedProposal(orgId, item.id),
-      this.stagedAdaptationProposals(orgId, item.id),
-    ]);
+    const [adaptations, aiVersions, run, refineProposal, adaptationProposals, cover] =
+      await Promise.all([
+        this.adaptationsFor(orgId, item.id),
+        this.aiVersionRows(orgId, item.id),
+        this.runFor(orgId, item.id),
+        this.stagedProposal(orgId, item.id),
+        this.stagedAdaptationProposals(orgId, item.id),
+        db
+          .select({ coverMediaId: schema.contentItems.coverMediaId })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+          .limit(1),
+      ]);
     /**
      * The provenance lens's reference text. Returned rather than a
      * server-computed mask because the browser would have to split the
@@ -1372,6 +1378,7 @@ export class ContentRepository {
       collectAiEvidence(aiVersions, (row) => row.adaptationId).get(null) ?? NO_AI_EVIDENCE;
     return {
       ...item,
+      coverMediaId: cover[0]?.coverMediaId ?? null,
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable
@@ -3648,6 +3655,32 @@ export class ContentRepository {
               ),
             )
         : [];
+      const cover = await tx
+        .select({ id: schema.contentItems.coverMediaId, body: schema.contentItems.body })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1);
+      const coveredItem = cover[0];
+      if (coveredItem?.id) {
+        if (platforms.some((channel) => channel.platform !== "telegram") || manualReady.length) {
+          throw conflict(
+            "content_media_unsupported",
+            "Covers currently publish only to Telegram channels",
+          );
+        }
+        const overrideBodies = await tx
+          .select({ body: schema.adaptations.body })
+          .from(schema.adaptations)
+          .where(
+            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
+          );
+        if (overrideBodies.some((row) => (row.body ?? coveredItem.body).length > 1024)) {
+          throw conflict(
+            "content_media_caption_too_long",
+            "Telegram photo captions must be 1024 characters or fewer",
+          );
+        }
+      }
       const platformByChannel = new Map(platforms.map((row) => [row.id, row.platform]));
       if (
         scheduledAt !== null &&

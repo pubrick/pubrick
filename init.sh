@@ -45,6 +45,7 @@ docker compose up -d --wait postgres
 # Built from the same POSTGRES_* the compose file uses, so a .env with a real password
 # does not leave this script talking to a database that does not exist.
 export DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@localhost:5432/${POSTGRES_DB:-pubrick}}
+export MEDIA_STORAGE_DIR=${MEDIA_STORAGE_DIR:-"$PWD/.data/media"}
 pnpm install
 pnpm build
 echo "Starting api (:3001), worker, web (:3000). Ctrl-C stops all."

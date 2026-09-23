@@ -28,6 +28,7 @@
     "pg-boss": "^12.28.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "sharp": "^0.35.3",
     "uuid": "^14.0.2",
     "zod": "^4.4.3"
   },
@@ -35,8 +36,10 @@
     "@nestjs/cli": "^11.0.24",
     "@nestjs/testing": "^11.2.1",
     "@swc/core": "^1.16.1",
+    "@types/express": "^5.0.6",
     "@types/html-escaper": "^3.0.4",
     "@types/jsdom": "^27.0.0",
+    "@types/node": "^22.20.1",
     "@types/supertest": "^7.2.1",
     "ai": "^7.0.83",
     "fast-xml-parser": "^5.11.1",

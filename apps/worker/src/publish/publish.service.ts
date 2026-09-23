@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
@@ -480,7 +482,45 @@ export class PublishService {
           : adaptation.platform === "max"
             ? env.MAX_API_BASE_URL
             : this.baseUrl;
-      result = await publisher.publish(parsed.data, { text }, { baseUrl });
+      let image: { bytes: Uint8Array; mimeType: "image/jpeg" } | undefined;
+      if (adaptation.coverMediaId) {
+        if (adaptation.itemBrandId !== adaptation.channelBrandId) {
+          throw new ClassifiedPermanentError(
+            "Cover image cannot publish to a channel in another brand",
+            "rejected_before_send",
+          );
+        }
+        if (adaptation.coverAuthorizedId !== adaptation.coverMediaId) {
+          throw new ClassifiedPermanentError(
+            "Cover image does not belong to this post's organization and brand",
+            "rejected_before_send",
+          );
+        }
+        if (adaptation.platform !== "telegram") {
+          throw new ClassifiedPermanentError(
+            "This channel cannot publish a cover image",
+            "rejected_before_send",
+          );
+        }
+        const file = path.join(
+          process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media"),
+          `${adaptation.coverMediaId}.jpg`,
+        );
+        try {
+          image = { bytes: await readFile(file), mimeType: "image/jpeg" };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ClassifiedPermanentError(
+              "Cover image is missing from media storage",
+              "rejected_before_send",
+            );
+          }
+          throw error;
+        }
+      }
+      result = await publisher.publish(parsed.data, image ? { text, image } : { text }, {
+        baseUrl,
+      });
     } catch (error) {
       const message = (error as Error).message;
       if (error instanceof UnknownOutcomePublishError) {

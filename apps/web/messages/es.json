@@ -72,7 +72,8 @@
     "calendarLink": "Abrir calendario de contenido",
     "knowledgeTitle": "Conocimiento de marca",
     "knowledgeHint": "Guarda detalles de productos, ejemplos y notas para futuros borradores.",
-    "knowledgeOpen": "Abrir conocimiento"
+    "knowledgeOpen": "Abrir conocimiento",
+    "mediaLink": "Biblioteca multimedia"
   },
   "Sources": {
     "title": "Fuentes de {brand}",
@@ -624,7 +625,13 @@
     "topic_not_approved": "Aprueba este tema antes de generar.",
     "source_fetch_failed": "No se pudo cargar esa página pública. Comprueba el enlace o pega su texto.",
     "source_response_too_large": "La página es demasiado grande para importarla. Pega el texto relevante.",
-    "source_unreadable": "No se pudo extraer el texto del artículo. Pega el texto relevante."
+    "source_unreadable": "No se pudo extraer el texto del artículo. Pega el texto relevante.",
+    "content_media_unsupported": "Por ahora, las portadas solo se pueden publicar en canales de Telegram.",
+    "content_media_caption_too_long": "Los pies de foto de Telegram deben tener como máximo 1024 caracteres.",
+    "media_invalid": "Elige una imagen JPEG, PNG o WebP válida de hasta 10 MB.",
+    "media_not_found": "Esta imagen ya no está disponible en esta marca.",
+    "media_in_use": "Quita esta imagen de la publicación antes de eliminarla.",
+    "media_cover_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar la portada."
   },
   "Calendar": {
     "title": "Calendario de contenido",
@@ -690,5 +697,19 @@
     "listError": "No se pudieron cargar los temas.",
     "retry": "Intentar de nuevo",
     "openSource": "Abrir fuente"
+  },
+  "Media": {
+    "title": "Biblioteca multimedia",
+    "back": "Volver a la marca",
+    "hint": "JPEG, PNG o WebP de hasta 10 MB. Pubrick elimina los metadatos y guarda un JPEG. Las portadas solo se publican en Telegram; el pie admite hasta 1024 caracteres.",
+    "add": "Añadir imagen",
+    "empty": "Añade una imagen para usarla como portada de Telegram.",
+    "selected": "Portada actual",
+    "use": "Usar",
+    "remove": "Eliminar",
+    "detach": "Quitar portada",
+    "more": "Cargar más",
+    "retry": "Reintentar",
+    "failed": "No se pudo cargar la biblioteca multimedia."
   }
 }
