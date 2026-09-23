@@ -76,4 +76,22 @@ export class SourcesController {
   items(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
     return this.sources.items(orgId, brandId);
   }
+
+  @Get("items/:itemId/comments")
+  comments(
+    @OrgId() orgId: string,
+    @Param("itemId", ParseUUIDPipe) itemId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.comments(orgId, brandId, itemId);
+  }
+
+  @Post("items/:itemId/comments/refresh")
+  refreshComments(
+    @OrgId() orgId: string,
+    @Param("itemId", ParseUUIDPipe) itemId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.refreshComments(orgId, brandId, itemId);
+  }
 }

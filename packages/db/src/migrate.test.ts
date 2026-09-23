@@ -111,6 +111,9 @@ const ZONED_COLUMNS = [
   "content_items.updated_at",
   "content_versions.created_at",
   "feed_entries.published_at",
+  "news_comments.created_at",
+  "news_comments.published_at",
+  "news_items.comments_checked_at",
   "news_items.created_at",
   "news_items.published_at",
   "news_sources.created_at",
@@ -194,6 +197,9 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Added with the comment sample after the historical seed; worker persistence e2e
+  // proves the database rejects an off-list status on a populated story.
+  "news_items_comments_status_check",
   // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
   "news_sources_kind_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.

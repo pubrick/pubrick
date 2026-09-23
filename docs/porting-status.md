@@ -18,7 +18,7 @@ documents when they disagree.
 | Calendar | Scheduled publishing present | Calendar view, slots and planned generation |
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
 | Analytics | Usage and cost ledger present | Channel metrics, content performance and feedback |
-| Comment analysis | Not ported | Collection, analysis and feedback signals |
+| Comment analysis | On-demand, brand-scoped sample of up to 50 Telegram replies per public channel post | Metered BYOK summary, sentiment analysis and feedback signals |
 | Knowledge base / RAG | Not ported | Brand documents, retrieval and citation in generation |
 | Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |
 | Prompt management | Prompts live in code | Versioned registry and experiments |

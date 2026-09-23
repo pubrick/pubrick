@@ -118,6 +118,67 @@ describe.skipIf(!url)("watched sources e2e", () => {
     expect((await owner.get(`/api/sources/items?brandId=${a.body.id}`).expect(200)).body).toEqual(
       [],
     );
+    const [telegramItem] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId: ownerOrgId,
+        brandId: a.body.id,
+        sourceId: telegram.body.id,
+        title: "Public story",
+        summary: "A public Telegram story",
+        url: "https://t.me/example_channel/42",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!telegramItem) throw new Error("Telegram story fixture was not inserted");
+    expect(
+      (
+        await owner
+          .get(`/api/sources/items/${telegramItem.id}/comments?brandId=${a.body.id}`)
+          .expect(200)
+      ).body,
+    ).toEqual([]);
+    await other
+      .get(`/api/sources/items/${telegramItem.id}/comments?brandId=${a.body.id}`)
+      .expect(404);
+    await owner
+      .get(`/api/sources/items/${telegramItem.id}/comments?brandId=${b.body.id}`)
+      .expect(404);
+    expect(
+      (
+        await owner
+          .post(`/api/sources/items/${telegramItem.id}/comments/refresh?brandId=${a.body.id}`)
+          .expect(201)
+      ).body,
+    ).toEqual({ queued: true });
+    const [queuedItem] = (await owner.get(`/api/sources/items?brandId=${a.body.id}`).expect(200))
+      .body;
+    expect(queuedItem).toMatchObject({
+      id: telegramItem.id,
+      commentsStatus: "pending",
+      commentsCheckedAt: null,
+      commentsErrorCode: null,
+    });
+    expect(
+      (
+        await owner
+          .post(`/api/sources/items/${telegramItem.id}/comments/refresh?brandId=${a.body.id}`)
+          .expect(201)
+      ).body,
+    ).toEqual({ queued: false });
+    await owner
+      .post(`/api/sources/items/${telegramItem.id}/comments/refresh?brandId=${b.body.id}`)
+      .expect(404);
+    await owner
+      .patch(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`)
+      .send({ isActive: false })
+      .expect(200);
+    await owner
+      .post(`/api/sources/items/${telegramItem.id}/comments/refresh?brandId=${a.body.id}`)
+      .expect(409);
+    await owner
+      .patch(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`)
+      .send({ isActive: true })
+      .expect(200);
     await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await other.get(`/api/sources/items?brandId=${a.body.id}`).expect(404);
     await other

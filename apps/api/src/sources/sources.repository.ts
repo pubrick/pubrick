@@ -37,6 +37,9 @@ const ITEM_COLUMNS = {
   summary: schema.newsItems.summary,
   url: schema.newsItems.url,
   publishedAt: schema.newsItems.publishedAt,
+  commentsStatus: schema.newsItems.commentsStatus,
+  commentsCheckedAt: schema.newsItems.commentsCheckedAt,
+  commentsErrorCode: schema.newsItems.commentsErrorCode,
   createdAt: schema.newsItems.createdAt,
 };
 
@@ -164,5 +167,77 @@ export class SourcesRepository {
       .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.brandId, brandId)))
       .orderBy(desc(schema.newsItems.publishedAt), desc(schema.newsItems.createdAt))
       .limit(100);
+  }
+
+  private async requireTelegramItem(orgId: string, brandId: string, itemId: string) {
+    await this.requireBrand(orgId, brandId);
+    const rows = await db
+      .select({
+        id: schema.newsItems.id,
+        commentsCheckedAt: schema.newsItems.commentsCheckedAt,
+        commentsStatus: schema.newsItems.commentsStatus,
+        sourceKind: schema.newsSources.kind,
+        sourceActive: schema.newsSources.isActive,
+      })
+      .from(schema.newsItems)
+      .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
+      .where(
+        and(
+          eq(schema.newsItems.orgId, orgId),
+          eq(schema.newsItems.brandId, brandId),
+          eq(schema.newsItems.id, itemId),
+          eq(schema.newsSources.orgId, orgId),
+          eq(schema.newsSources.brandId, brandId),
+        ),
+      )
+      .limit(1);
+    const item = rows[0];
+    if (!item) throw new NotFoundException("Story not found");
+    if (item.sourceKind !== "telegram")
+      throw new ConflictException("Comments are available for Telegram stories only");
+    return item;
+  }
+
+  async comments(orgId: string, brandId: string, itemId: string) {
+    await this.requireTelegramItem(orgId, brandId, itemId);
+    return db
+      .select({
+        id: schema.newsComments.id,
+        body: schema.newsComments.body,
+        publishedAt: schema.newsComments.publishedAt,
+      })
+      .from(schema.newsComments)
+      .where(
+        and(
+          eq(schema.newsComments.orgId, orgId),
+          eq(schema.newsComments.brandId, brandId),
+          eq(schema.newsComments.itemId, itemId),
+        ),
+      )
+      .orderBy(desc(schema.newsComments.publishedAt))
+      .limit(50);
+  }
+
+  async refreshComments(orgId: string, brandId: string, itemId: string) {
+    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    if (!item.sourceActive)
+      throw new ConflictException("Enable this source before collecting comments");
+    if (item.commentsCheckedAt && Date.now() - item.commentsCheckedAt.getTime() < 15 * 60_000)
+      return { queued: false };
+    return db.transaction(async (tx) => {
+      const queued = await this.queue.enqueueTelegramComments(tx, { orgId, itemId });
+      if (queued)
+        await tx
+          .update(schema.newsItems)
+          .set({ commentsStatus: "pending", commentsErrorCode: null })
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.id, itemId),
+            ),
+          );
+      return { queued };
+    });
   }
 }

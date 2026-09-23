@@ -12,6 +12,13 @@ export const NEWS_SOURCE_ERROR_CODES = [
 
 export const NEWS_SOURCE_KINDS = ["rss", "telegram"] as const;
 export type NewsSourceKind = (typeof NEWS_SOURCE_KINDS)[number];
+export const NEWS_COMMENT_STATUSES = [
+  "pending",
+  "available",
+  "unavailable",
+  "private",
+  "error",
+] as const;
 
 const feedUrl = z
   .url({ protocol: /^https?$/ })
@@ -96,6 +103,16 @@ export const newsItemDtoSchema = z.object({
   summary: z.string(),
   url: z.string(),
   publishedAt: z.string().nullable(),
+  commentsStatus: z.enum(NEWS_COMMENT_STATUSES).nullable(),
+  commentsCheckedAt: z.string().nullable(),
+  commentsErrorCode: z.string().nullable(),
   createdAt: z.string(),
 });
 export type NewsItemDto = z.infer<typeof newsItemDtoSchema>;
+
+export const newsCommentDtoSchema = z.object({
+  id: z.string().uuid(),
+  body: z.string(),
+  publishedAt: z.string(),
+});
+export type NewsCommentDto = z.infer<typeof newsCommentDtoSchema>;

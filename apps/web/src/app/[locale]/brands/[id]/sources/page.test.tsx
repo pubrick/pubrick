@@ -28,7 +28,7 @@ describe("watched sources page", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  function install(items: unknown[] = []) {
+  function install(items: unknown[] = [], sources: unknown[] = []) {
     const calls: { url: string; method: string; body: unknown }[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
@@ -37,9 +37,11 @@ describe("watched sources page", () => {
       calls.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/sources/items?")) return response(200, items);
+      if (url.includes("/comments/refresh")) return response(201, { queued: true });
+      if (url.includes("/comments?")) return response(200, []);
       if (url.endsWith("/api/sources/telegram-connection"))
         return response(200, { connected: false });
-      if (url.includes("/api/sources?")) return response(200, []);
+      if (url.includes("/api/sources?")) return response(200, sources);
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
       if (url.endsWith("/api/runs"))
@@ -148,5 +150,48 @@ describe("watched sources page", () => {
       sourceUrl: item.url,
     });
     expect(runCreateSchema.parse(payload)).toEqual(payload);
+  });
+
+  it("shows a Telegram story's discussion status and queues a bounded collection", async () => {
+    const item = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Channel story",
+      summary: "A story from the channel.",
+      url: "https://t.me/example_channel/42",
+      publishedAt: null,
+      commentsStatus: "unavailable",
+      commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+      commentsErrorCode: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const calls = install(
+      [item],
+      [
+        {
+          id: SOURCE_ID,
+          kind: "telegram",
+          isActive: true,
+          name: "Channel",
+          url: "https://t.me/example_channel",
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(dialog.getByRole("status")).toHaveTextContent(en.Sources.commentsUnavailable);
+    await user.click(dialog.getByRole("button", { name: en.Sources.collectComments }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "POST" &&
+            call.url.includes(`/items/${ITEM_ID}/comments/refresh?brandId=${BRAND_ID}`),
+        ),
+      ).toBe(true),
+    );
   });
 });

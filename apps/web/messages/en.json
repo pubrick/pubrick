@@ -113,7 +113,21 @@
     "invalidArticle": "This story cannot be used as a source. Open it and paste its text in the compose screen.",
     "selectChannels": "Choose the channels for this draft.",
     "noChannels": "Add a channel to this brand before generating.",
-    "generate": "Generate"
+    "generate": "Generate",
+    "comments": "Comments",
+    "commentsTitle": "Telegram comments",
+    "close": "Close",
+    "collectComments": "Collect comments",
+    "commentsQueued": "A comment check is queued. Results will appear here shortly.",
+    "commentsRecent": "Comments were checked or queued recently. Try again later.",
+    "commentsPending": "Collecting comments…",
+    "commentsUnavailable": "This post has no linked discussion.",
+    "commentsPrivate": "This account cannot access the linked discussion.",
+    "commentsFailed": "Comment check failed. Try again later.",
+    "commentsChecked": "Checked {date}",
+    "commentsNotChecked": "Comments have not been checked yet.",
+    "commentsEmpty": "No readable comments in this sample.",
+    "commentsSample": "Saved sample of up to 50 text replies. Short and duplicate replies are skipped; authors are not stored. An older sample remains visible if a check fails."
   },
   "Channels": {
     "title": "Channels",

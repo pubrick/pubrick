@@ -113,7 +113,21 @@
     "invalidArticle": "Este artigo não pode ser usado como fonte. Abra-o e cole o texto no editor.",
     "selectChannels": "Escolha os canais para este rascunho.",
     "noChannels": "Adicione um canal à marca antes de gerar.",
-    "generate": "Gerar"
+    "generate": "Gerar",
+    "comments": "Comentários",
+    "commentsTitle": "Comentários do Telegram",
+    "close": "Fechar",
+    "collectComments": "Coletar comentários",
+    "commentsQueued": "A verificação de comentários entrou na fila. Os resultados aparecerão em breve.",
+    "commentsRecent": "Os comentários foram consultados recentemente. Tente mais tarde.",
+    "commentsPending": "Coletando comentários…",
+    "commentsUnavailable": "Esta publicação não tem uma discussão vinculada.",
+    "commentsPrivate": "Esta conta não pode acessar a discussão vinculada.",
+    "commentsFailed": "Falha ao verificar comentários. Tente mais tarde.",
+    "commentsChecked": "Consultado em {date}",
+    "commentsNotChecked": "Os comentários ainda não foram consultados.",
+    "commentsEmpty": "Não há comentários legíveis nesta amostra.",
+    "commentsSample": "Amostra salva de até 50 respostas com texto. Respostas curtas e duplicadas são ignoradas; autores não são armazenados. Se a consulta falhar, a amostra anterior continua visível."
   },
   "Channels": {
     "title": "Canais",
