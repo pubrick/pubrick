@@ -344,6 +344,7 @@ export const API_ERROR_CODES = [
   "topic_suggestions_cooldown",
   "brand_not_found",
   "knowledge_not_found",
+  "knowledge_batch_owner_required",
   /** Generating for a brand that has nothing to publish to. */
   "brand_has_no_channels",
   /** The admission cap. Its number is `MAX_CONCURRENT_RUNS`, not an argument. */

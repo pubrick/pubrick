@@ -51,6 +51,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [indexing, setIndexing] = useState<string | null>(null);
+  const [batchIndexing, setBatchIndexing] = useState(false);
   const csvInput = useRef<HTMLInputElement>(null);
   const [importPreview, setImportPreview] = useState<{
     filename: string;
@@ -170,9 +171,11 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           t(
             result.reason === "google_key_required"
               ? "keyRequired"
-              : result.reason === "entry_changed"
-                ? "entryChanged"
-                : "indexFailed",
+              : result.reason === "already_running"
+                ? "batchRunning"
+                : result.reason === "entry_changed"
+                  ? "entryChanged"
+                  : "indexFailed",
           ),
         );
       }
@@ -180,6 +183,48 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
       setError(describeError(err));
     } finally {
       setIndexing(null);
+    }
+  }
+
+  async function indexBatch() {
+    setBatchIndexing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api<{
+        selected: number;
+        indexed: number;
+        changed: number;
+        invalid: number;
+        remaining: number;
+        reason?: string;
+        providerOutcome?: "completed" | "refused" | "unknown";
+        usageRecorded: boolean;
+        tokensKnown: boolean;
+      }>("/api/knowledge/index-batch", {
+        method: "POST",
+        body: JSON.stringify({ brandId }),
+      });
+      if (result.reason === "google_key_required") setError(t("keyRequired"));
+      else if (result.reason === "provider_unavailable")
+        setError(t(result.providerOutcome === "unknown" ? "batchOutcomeUnknown" : "indexFailed"));
+      else if (result.reason === "already_running") setError(t("batchRunning"));
+      else if (result.reason === "nothing_to_index") setNotice(t("batchDone"));
+      else
+        setNotice(
+          t("batchResult", {
+            indexed: result.indexed,
+            changed: result.changed,
+            invalid: result.invalid,
+            remaining: result.remaining,
+          }),
+        );
+      if (!result.usageRecorded) setError(t("usageFailed"));
+      load();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBatchIndexing(false);
     }
   }
 
@@ -269,6 +314,23 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
         <Button variant="secondary" className="mt-4" onClick={() => csvInput.current?.click()}>
           {t("csvImport")}
         </Button>
+        {entries?.some((entry) => entry.isActive && !entry.hasEmbedding) && (
+          <div className="mt-4 rounded-xl border border-border bg-surface-raised p-4">
+            <p className="text-sm text-fg-secondary">
+              {t("batchIntro", {
+                count: entries.filter((entry) => entry.isActive && !entry.hasEmbedding).length,
+              })}
+            </p>
+            <Button
+              variant="secondary"
+              className="mt-3"
+              disabled={batchIndexing || indexing !== null}
+              onClick={() => void indexBatch()}
+            >
+              {batchIndexing ? t("batchIndexing") : t("batchAction")}
+            </Button>
+          </div>
+        )}
       </div>
       {error && editor === null && importPreview === null && (
         <p role="alert" className="mb-4 text-sm text-danger">

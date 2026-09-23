@@ -44,15 +44,35 @@ import. It accepts up to 500 rows and a file up to 1 MB. An invalid row stops
 the whole import, and the API inserts the accepted batch in one transaction.
 
 Imported notes are searchable by text immediately. They do not get embeddings
-automatically; use **Index** on notes where semantic matching matters. This
-keeps a large legacy import from making unreviewed provider calls.
+automatically. An organization owner or admin can click **Index next 10** to
+index up to ten active, unindexed notes in one explicit Google request. Repeat
+the click to continue. The page shows how many notes remain and the outcome of
+the most recent batch. Paused notes are skipped. Each click uses the
+organization's Google key and is serialized per brand across API instances;
+an edit or pause during the request prevents the old vector from being saved.
+The server uses the AI SDK's `embedMany` with `gemini-embedding-001` at 768
+dimensions. It checks returned vector count and dimensions before saving.
+Malformed vectors remain unindexed and can be retried. A provider failure
+leaves notes searchable by text. No indexing request is made by CSV import.
+If Google does not confirm a result, the ledger records an unknown outcome;
+the page warns that the call might still have been billed before a retry.
+The schema fixes all stored vectors at 768 dimensions, and every current
+document and query embedding path pins `gemini-embedding-001`. Notes do not yet
+store embedding model provenance. Supporting a second embedding model requires
+model/dimension metadata, retrieval filters, and a deliberate reindex plan;
+changing the model constant alone would mix incomparable vectors.
 The importer accepts a CSV selected by the user; it does not connect to the
 previous Ozon Tools database or migrate its stored notes automatically.
 
-Embedding calls have no price in Pubrick's current model price table. Their
-token use is recorded in `usage_ledger` with an unknown cost, so spend totals
-are displayed as a lower bound. The SDK makes no internal retry for an
-embedding call. Generating a query vector is checkpointed as a `knowledge`
+Embedding calls have no price in Pubrick's current model price table. Each
+batch provider attempt creates one `knowledge_batch_index` row in
+`usage_ledger`, with unknown cost. The pinned Google adapter does not return
+token usage; the ledger stores zero as an unavailable placeholder rather than
+an estimate, and the batch response marks `tokensKnown: false`. Thus spend
+totals are a lower bound. If a provider call succeeds but the ledger cannot be
+written, the response sets `usageRecorded: false` and still saves valid
+vectors; inspect the ledger before retrying. The SDK makes no internal retry
+for an embedding call. Generating a query vector is checkpointed as a `knowledge`
 step, so a resumed run does not pay for it again after a successful checkpoint.
 
 Retrieval currently covers the brand's knowledge notes. It does not search
@@ -67,6 +87,12 @@ available.
   `category`, and optional `tags`.
 - `POST /api/knowledge/bulk-import` accepts `{brandId, entries}` with 1–500
   validated entries and returns `{created, ids}`.
+- `GET /api/knowledge/index-summary?brandId=<uuid>` returns the count of active,
+  unindexed notes.
+- `POST /api/knowledge/index-batch` accepts `{brandId}` from an organization
+  owner or admin. It returns counts for selected, indexed, changed, invalid,
+  and remaining notes; the optional reason; `usageRecorded`, `tokensKnown`,
+  model ID, and dimensions. It sends at most ten notes per call.
 - `GET`, `PATCH`, `DELETE /api/knowledge/:id?brandId=<uuid>` address one note.
 - `POST /api/knowledge/:id/index?brandId=<uuid>` builds a vector and reports
   `{indexed: true, entry}` or `{indexed: false, reason}`.
