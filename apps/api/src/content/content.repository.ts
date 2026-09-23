@@ -19,6 +19,7 @@ import {
   decodeContentCursor,
   encodeContentCursor,
   isMalformedStoredAiCredential,
+  isManualPlatform,
   isSameText,
   isUnreadableCiphertext,
   MAX_BODY_LENGTH,
@@ -210,14 +211,16 @@ type PinnedAdaptationStatus = Exclude<AdaptationStatus, EditableAdaptationStatus
 
 /** Per-status 409 body for one channel's override — exhaustive, as above. */
 const PINNED_ADAPTATION_MESSAGE: Record<PinnedAdaptationStatus, string> = {
+  manual_ready: "This post is ready for manual publishing; reject it before editing",
   scheduled: "A scheduled post cannot be edited; reject the content first",
   queued: "A post already queued for publishing cannot be edited; reject the content first",
   publishing: "A post that is being published right now cannot be edited; reject the content first",
   published: "This channel's post has already been published and can no longer be edited",
 };
 
-/** The same four refusals as codes — see `PINNED_ITEM_CODE`. */
+/** The same per-status refusals as codes — see `PINNED_ITEM_CODE`. */
 const PINNED_ADAPTATION_CODE: Record<PinnedAdaptationStatus, ApiErrorCode> = {
+  manual_ready: "adaptation_pinned_manual_ready",
   scheduled: "adaptation_pinned_scheduled",
   queued: "adaptation_pinned_queued",
   publishing: "adaptation_pinned_publishing",
@@ -3588,7 +3591,12 @@ export class ContentRepository {
     }
     await db.transaction(async (tx) => {
       await this.requireItem(tx, orgId, id);
-      const targets = await this.lockAdaptations(tx, orgId, id, ["pending", "failed", "scheduled"]);
+      const targets = await this.lockAdaptations(tx, orgId, id, [
+        "pending",
+        "failed",
+        "scheduled",
+        "manual_ready",
+      ]);
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
@@ -3622,7 +3630,37 @@ export class ContentRepository {
         orgId,
         targets.map((target) => target.id),
       );
-      const sendable = targets.filter((target) => !unknown.has(target.id));
+      const manualReady = targets.filter((target) => target.status === "manual_ready");
+      const sendable = targets.filter(
+        (target) => target.status !== "manual_ready" && !unknown.has(target.id),
+      );
+      const platforms = sendable.length
+        ? await tx
+            .select({ id: schema.channels.id, platform: schema.channels.platform })
+            .from(schema.channels)
+            .where(
+              and(
+                eq(schema.channels.orgId, orgId),
+                inArray(
+                  schema.channels.id,
+                  sendable.map((target) => target.channelId),
+                ),
+              ),
+            )
+        : [];
+      const platformByChannel = new Map(platforms.map((row) => [row.id, row.platform]));
+      if (
+        scheduledAt !== null &&
+        (manualReady.length > 0 ||
+          sendable.some((target) =>
+            isManualPlatform(platformByChannel.get(target.channelId) ?? ""),
+          ))
+      ) {
+        throw badRequest(
+          "manual_schedule_unsupported",
+          "Manual VC.ru publishing cannot be scheduled from Pubrick",
+        );
+      }
       /*
        * A REQUEST THAT NAMES A TIME MAY NOT SKIP A CHANNEL AT ALL — and this is
        * why the unknown rows are read BEFORE the schedule is checked rather
@@ -3674,8 +3712,28 @@ export class ContentRepository {
       if (sendable.length === 0 && unknown.size > 0) {
         throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
       }
+      if (sendable.length === 0 && manualReady.length > 0) {
+        throw conflict(
+          "manual_publication_pending",
+          "This post is ready for you to publish manually",
+        );
+      }
 
       for (const adaptation of sendable) {
+        if (isManualPlatform(platformByChannel.get(adaptation.channelId) ?? "")) {
+          await tx
+            .update(schema.adaptations)
+            .set({
+              status: "manual_ready",
+              scheduledAt: null,
+              lastError: null,
+              failureReason: null,
+            })
+            .where(
+              and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
+            );
+          continue;
+        }
         // CURRENT attempt count (before this attempt) — see publishJobId's contract.
         let attemptCount = adaptation.attemptCount;
         if (adaptation.status === "scheduled") {
@@ -3903,6 +3961,88 @@ export class ContentRepository {
     return this.get(orgId, contentItemId);
   }
 
+  /** Record a person's VC.ru publication only after they supply its public URL. */
+  async confirmManualPublication(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    url: string,
+    userId: string,
+  ) {
+    await db.transaction(async (tx) => {
+      const locked = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (locked.length === 0) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      const current = (
+        await tx
+          .select({
+            channelId: schema.adaptations.channelId,
+            status: schema.adaptations.status,
+            attemptCount: schema.adaptations.attemptCount,
+            platform: schema.channels.platform,
+          })
+          .from(schema.adaptations)
+          .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
+          .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+          .limit(1)
+      )[0];
+      if (current?.platform !== "vc_ru" || current.status !== "manual_ready") {
+        throw conflict(
+          "manual_publication_not_ready",
+          "This VC.ru post is not ready for manual confirmation",
+        );
+      }
+
+      await tx.insert(schema.publications).values({
+        orgId,
+        adaptationId,
+        channelId: current.channelId,
+        status: "published",
+        externalUrl: url,
+        externalId: null,
+        error: null,
+        attempt: current.attemptCount,
+        assertedBy: userId,
+        assertedAt: sql`now()`,
+      });
+      await tx
+        .update(schema.adaptations)
+        .set({ status: "published", lastError: null, failureReason: null })
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+
+      const parent = await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1)
+        .for("update");
+      if (parent.length === 0) return;
+      const siblings = await tx
+        .select({ status: schema.adaptations.status })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+          ),
+        );
+      const next = nextItemStatus(siblings.map((sibling) => sibling.status));
+      if (next) await this.setItemStatus(tx, orgId, contentItemId, next);
+    });
+    return this.get(orgId, contentItemId);
+  }
+
   /**
    * Rejects an item AND stops anything it already had in flight.
    *
@@ -3964,6 +4104,7 @@ export class ContentRepository {
       await this.requireItem(tx, orgId, id);
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,
+        "manual_ready",
       ]);
       const live = await this.requireNotPublished(tx, orgId, id, {
         of: "the fan-out",
@@ -3971,13 +4112,18 @@ export class ContentRepository {
       });
 
       for (const adaptation of outstanding) {
-        await this.queue.cancelPublish(tx, adaptation.id, orgId);
+        if (adaptation.status !== "manual_ready") {
+          await this.queue.cancelPublish(tx, adaptation.id, orgId);
+        }
         await tx
           .update(schema.adaptations)
           .set({
             status: "pending",
             scheduledAt: null,
-            attemptCount: adaptation.attemptCount + 1,
+            attemptCount:
+              adaptation.status === "manual_ready"
+                ? adaptation.attemptCount
+                : adaptation.attemptCount + 1,
             // Cleared for the same reason `approve` clears it: the row is back
             // to "nothing has been attempted", and leaving the last platform
             // error behind makes a rejected adaptation look like a failed one.

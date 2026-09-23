@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ADAPTATION_STATUSES, type AdaptationStatus, nextItemStatus } from "@pubrick/shared";
+import { type AdaptationStatus, nextItemStatus } from "@pubrick/shared";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
@@ -187,6 +187,9 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // 0022's: only the manual VC.ru channel may omit encrypted credentials.
+  // The API e2e suite proves both accepted and refused channel shapes.
+  "channels_credentials_mode_check",
   // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
   // — it pins a value into a RELATIONSHIP with another column, so there is no
   // single `bogus` scalar the loop could try. Proved directly by "adds the
@@ -476,7 +479,9 @@ function multisets<T>(values: readonly T[], size: number): T[][] {
 /**
  * THE FAN-OUTS THE RATCHET BELOW RUNS OVER.
  *
- * Every multiset over the six adaptation statuses up to TWO deliveries (6 + 21)
+ * Every multiset over the six statuses available at migration 0018 up to TWO
+ * deliveries (6 + 21). The later `manual_ready` status cannot be seeded before
+ * 0018, so this historical migration ratchet deliberately pins that vocabulary.
  * — the size at which the fold's every clause can already disagree with the
  * SQL's — plus every multiset of size three over the three statuses that decide
  * anything (10), which is where a predicate written with `bool_and`/`bool_or`
@@ -485,10 +490,18 @@ function multisets<T>(values: readonly T[], size: number): T[][] {
  * item whose channels have all been deleted, where `every` is vacuously true
  * for all three arms and `bool_and` is `NULL`.
  */
+const PRE_MANUAL_STATUSES = [
+  "pending",
+  "scheduled",
+  "queued",
+  "publishing",
+  "published",
+  "failed",
+] as const satisfies readonly AdaptationStatus[];
 const FAN_OUTS: AdaptationStatus[][] = [
-  ...multisets(ADAPTATION_STATUSES, 0),
-  ...multisets(ADAPTATION_STATUSES, 1),
-  ...multisets(ADAPTATION_STATUSES, 2),
+  ...multisets(PRE_MANUAL_STATUSES, 0),
+  ...multisets(PRE_MANUAL_STATUSES, 1),
+  ...multisets(PRE_MANUAL_STATUSES, 2),
   ...multisets(["published", "failed", "queued"] as const, 3),
 ];
 
@@ -1139,6 +1152,11 @@ describe.skipIf(!url)("runMigrations", () => {
         // wrote one row per table through these same columns, above.
         const rows = await pool.query("SELECT count(*)::int AS n FROM adaptations");
         expect(rows.rows[0].n).toBe(1);
+        expect(await refusal(pool, "UPDATE channels SET credentials_encrypted = NULL")).toBe(
+          CHECK_VIOLATION,
+        );
+        expect(await refusal(pool, "UPDATE channels SET platform = 'vc_ru'")).toBe(CHECK_VIOLATION);
+        await pool.query("UPDATE channels SET platform = 'vc_ru', credentials_encrypted = NULL");
       } finally {
         await pool.end();
       }

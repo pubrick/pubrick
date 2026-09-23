@@ -92,7 +92,10 @@
     "editCancel": "Cancel",
     "platformUnsupported": "Not yet supported",
     "vkTokenHint": "Use a VK user access token with wall permission and the positive numeric community ID. The user must manage that community.",
-    "maxTokenHint": "Use a MAX bot token and the numeric chat or channel ID. Make the bot an admin with permission to post."
+    "maxTokenHint": "Use a MAX bot token and the numeric chat or channel ID. Make the bot an admin with permission to post.",
+    "vcManualHint": "VC.ru is a manual channel. Approve a post, copy its text into VC.ru, then record its public URL here. No token is needed.",
+    "vcManualMeta": "Manual publishing — no connection test",
+    "removeManualBody": "Removing {channel} removes its pending manual posts from Pubrick. Articles already published on VC.ru stay on VC.ru."
   },
   "Content": {
     "title": "Queue",
@@ -117,7 +120,8 @@
       "publishing": "Publishing",
       "published": "Published",
       "failed": "Failed",
-      "unknown": "Outcome unknown"
+      "unknown": "Outcome unknown",
+      "manual_ready": "Ready for manual publishing"
     },
     "genericError": "Something went wrong. Please try again.",
     "origin": {
@@ -250,7 +254,21 @@
     "versionRestoring": "Restoring…",
     "versionRestoreConfirm": "This replaces the current saved text. The restored text will be saved as a new version.",
     "versionRestored": "Saved version restored.",
-    "versionAlreadyCurrent": "This version already matches the saved text."
+    "versionAlreadyCurrent": "This version already matches the saved text.",
+    "approveManual": "Approve and prepare",
+    "manualReadyAction": "Ready for VC.ru",
+    "manualScheduleHint": "VC.ru posts cannot be scheduled from Pubrick. Publish them on VC.ru when ready.",
+    "vcManualInstructions": "Copy the reviewed title and body, open VC.ru, publish the article there, then paste its public URL below. Pubrick does not send it to VC.ru.",
+    "copyTitle": "Copy title",
+    "copyBody": "Copy body",
+    "copied": "Copied",
+    "copyFailed": "Could not copy to the clipboard. Select and copy the text above instead.",
+    "openVc": "Open VC.ru",
+    "vcUrlLabel": "Published VC.ru article URL",
+    "recordManualPublication": "Record publication",
+    "manualAssertionHint": "Recording this URL states that you published the article yourself. Pubrick makes no request to VC.ru to confirm it.",
+    "manualPublicationAsserted": "Recorded by {name} on {date} — self reported; Pubrick did not ask VC.ru.",
+    "manualPublicationAssertedRemoved": "Recorded by a removed member on {date} — self reported; Pubrick did not ask VC.ru."
   },
   "SettingsPage": {
     "title": "Settings",
@@ -428,6 +446,10 @@
     "invalid_request": "Some of what you entered is not valid. Check the form and try again.",
     "signed_out": "You're signed out. Log in again to continue.",
     "no_active_organization": "No active organization — create or select one first.",
-    "forbidden": "You don't have access to this."
+    "forbidden": "You don't have access to this.",
+    "adaptation_pinned_manual_ready": "This post is ready for manual publishing. Reject it before editing.",
+    "manual_schedule_unsupported": "VC.ru posts cannot be scheduled from Pubrick. Approve them for manual publishing instead.",
+    "manual_publication_pending": "This post is ready for you to publish manually on VC.ru.",
+    "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL."
   }
 }

@@ -51,6 +51,7 @@ export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 /** Per-channel delivery lifecycle. One declaration, for the reasons above. */
 export const ADAPTATION_STATUSES = [
   "pending",
+  "manual_ready",
   "scheduled",
   "queued",
   "publishing",
@@ -607,6 +608,22 @@ export const deliveryAssertionSchema = z.object({
   delivered: z.boolean(),
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
+
+/** A person supplied the public VC.ru article URL after publishing it there. */
+export const manualPublicationSchema = z.object({
+  url: z.url().refine((value) => {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname === "vc.ru" &&
+      parsed.port === "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname !== "/"
+    );
+  }, "Enter an HTTPS vc.ru article URL"),
+});
+export type ManualPublication = z.infer<typeof manualPublicationSchema>;
 
 /**
  * WHAT HAPPENED TO ONE CHANNEL'S POST — the `deliveryOutcome` the api reports

@@ -22,6 +22,7 @@ import { env } from "../env";
 import {
   type AttemptFence,
   ChannelNotFoundError,
+  NoAutomaticCredentialsError,
   PublishRepository,
   type SendClaim,
 } from "./publish.repository";
@@ -205,7 +206,7 @@ export class PublishService {
 
   async handle(job: PublishJob): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
-    if (!adaptation || adaptation.status === "published") return;
+    if (!adaptation || adaptation.status === "published" || adaptation.platform === "vc_ru") return;
 
     // Defense in depth against a delivered rejection. The api cancels the
     // pg-boss job when an approved item is rejected, but a job that was
@@ -450,6 +451,9 @@ export class PublishService {
         }
         if (credentialsError instanceof ChannelNotFoundError) {
           throw new ClassifiedPermanentError(credentialsError.message, "credentials_missing");
+        }
+        if (credentialsError instanceof NoAutomaticCredentialsError) {
+          throw new ClassifiedPermanentError(credentialsError.message, "credentials_invalid");
         }
         throw credentialsError;
       }

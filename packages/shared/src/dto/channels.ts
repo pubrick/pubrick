@@ -48,6 +48,18 @@ export type PlatformId = (typeof PLATFORM_IDS)[number];
 export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max"] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
+/** Channels that prepare a post for a person to publish outside Pubrick. */
+export const MANUAL_PLATFORM_IDS = ["vc_ru"] as const;
+export type ManualPlatformId = (typeof MANUAL_PLATFORM_IDS)[number];
+
+export function isManualPlatform(id: string): id is ManualPlatformId {
+  return (MANUAL_PLATFORM_IDS as readonly string[]).includes(id);
+}
+
+export function isAvailablePlatform(id: string): boolean {
+  return isPublishablePlatform(id) || isManualPlatform(id);
+}
+
 /** Can Pubrick deliver a post to this platform today? */
 export function isPublishablePlatform(id: string): id is PublishablePlatformId {
   return (PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(id);
@@ -62,7 +74,7 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   telegram: ["botToken", "chatId"],
   vk: ["accessToken", "groupId"],
   dzen: ["token"],
-  vc_ru: ["token"],
+  vc_ru: [],
   max: ["accessToken", "chatId"],
   bluesky: ["handle", "appPassword"],
   mastodon: ["instanceUrl", "accessToken"],
@@ -101,12 +113,26 @@ const credentialsBag = z
     message: "credentials must not be empty",
   });
 
-export const channelCreateSchema = z.object({
-  brandId: z.string().uuid(),
-  platform: z.enum(PLATFORM_IDS),
-  name: channelName,
-  credentials: credentialsBag,
-});
+export const channelCreateSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    platform: z.enum(PLATFORM_IDS),
+    name: channelName,
+    credentials: credentialsBag.optional(),
+  })
+  .superRefine((channel, ctx) => {
+    if (isManualPlatform(channel.platform)) {
+      if (channel.credentials !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["credentials"],
+          message: "manual channels do not use credentials",
+        });
+      }
+    } else if (channel.credentials === undefined) {
+      ctx.addIssue({ code: "custom", path: ["credentials"], message: "credentials are required" });
+    }
+  });
 export type ChannelCreate = z.infer<typeof channelCreateSchema>;
 
 /**

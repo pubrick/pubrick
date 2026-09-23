@@ -1,7 +1,8 @@
 "use client";
 
 import {
-  isPublishablePlatform,
+  isAvailablePlatform,
+  isManualPlatform,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -77,11 +78,11 @@ const LANGUAGE_HINT_ID = "brand-language-hint";
  * `POST /api/channels` refuses the same set server-side (derived there from the
  * publisher registry) in case anything ever does.
  */
-const OFFERED_PLATFORMS = PLATFORM_IDS.filter((p) => isPublishablePlatform(p));
-const UNSUPPORTED_PLATFORMS = PLATFORM_IDS.filter((p) => !isPublishablePlatform(p));
+const OFFERED_PLATFORMS = PLATFORM_IDS.filter((p) => isAvailablePlatform(p));
+const UNSUPPORTED_PLATFORMS = PLATFORM_IDS.filter((p) => !isAvailablePlatform(p));
 
 /**
- * The picker's initial value, taken from the publishable set rather than
+ * The picker's initial value, taken from the available set rather than
  * written down again: a hard-coded `"telegram"` would put an unselectable
  * platform in `platform` the day Telegram's adapter is the one that goes.
  */
@@ -191,7 +192,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     try {
       await api("/api/channels", {
         method: "POST",
-        body: JSON.stringify({ brandId: id, platform, name, credentials: creds }),
+        body: JSON.stringify({
+          brandId: id,
+          platform,
+          name,
+          ...(isManualPlatform(platform) ? {} : { credentials: creds }),
+        }),
       });
       setName("");
       setCreds({});
@@ -460,7 +466,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                   // The failure case needs a real element for role="alert", so
                   // it stays an element — that test matches by role, not text,
                   // so the double wrapper there is harmless.
-                  result === "loading" ? (
+                  isManualPlatform(c.platform) ? (
+                    t("vcManualMeta")
+                  ) : result === "loading" ? (
                     "…"
                   ) : result && !result.ok ? (
                     <span role="alert" className="text-danger">
@@ -472,9 +480,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 }
                 trailing={
                   <>
-                    <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
-                      {t("test")}
-                    </Button>
+                    {!isManualPlatform(c.platform) && (
+                      <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
+                        {t("test")}
+                      </Button>
+                    )}
                     <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
                       {t("edit")}
                     </Button>
@@ -559,6 +569,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </div>
           {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
           {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
+          {platform === "vc_ru" && <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>}
         </form>
       </Card>
 
@@ -589,7 +600,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             label={t("namePlaceholder")}
             required
           />
-          <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          {editing?.platform === "vc_ru" ? (
+            <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>
+          ) : (
+            <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          )}
           {editing?.platform === "vk" && (
             <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>
           )}
@@ -686,7 +701,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         }
       >
         <p className="text-sm text-fg-secondary">
-          {t("removeBody", {
+          {t(pendingRemoval?.platform === "vc_ru" ? "removeManualBody" : "removeBody", {
             channel:
               pendingRemoval === null
                 ? ""

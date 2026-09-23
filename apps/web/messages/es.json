@@ -92,7 +92,10 @@
     "editCancel": "Cancelar",
     "platformUnsupported": "Todavía no compatible",
     "vkTokenHint": "Usa un token de acceso de usuario de VK con permiso wall y el ID numérico positivo de la comunidad. El usuario debe administrarla.",
-    "maxTokenHint": "Usa el token del bot de MAX y el ID numérico del chat o canal. Haz al bot administrador con permiso para publicar."
+    "maxTokenHint": "Usa el token del bot de MAX y el ID numérico del chat o canal. Haz al bot administrador con permiso para publicar.",
+    "vcManualHint": "VC.ru es un canal manual. Aprueba una publicación, copia el texto en VC.ru y registra aquí su URL pública. No hace falta un token.",
+    "vcManualMeta": "Publicación manual — sin prueba de conexión",
+    "removeManualBody": "Al eliminar {channel}, se quitan de Pubrick sus publicaciones manuales pendientes. Los artículos ya publicados en VC.ru permanecen allí."
   },
   "Content": {
     "title": "Cola",
@@ -117,7 +120,8 @@
       "publishing": "Publicando",
       "published": "Publicado",
       "failed": "Fallido",
-      "unknown": "Resultado desconocido"
+      "unknown": "Resultado desconocido",
+      "manual_ready": "Lista para publicación manual"
     },
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "origin": {
@@ -250,7 +254,21 @@
     "versionRestoring": "Restaurando…",
     "versionRestoreConfirm": "Esto reemplazará el texto guardado actual. El texto restaurado se guardará como una nueva versión.",
     "versionRestored": "Versión guardada restaurada.",
-    "versionAlreadyCurrent": "Esta versión ya coincide con el texto guardado."
+    "versionAlreadyCurrent": "Esta versión ya coincide con el texto guardado.",
+    "approveManual": "Aprobar y preparar",
+    "manualReadyAction": "Listo para VC.ru",
+    "manualScheduleHint": "Pubrick no puede programar publicaciones en VC.ru. Publícalas en VC.ru cuando quieras.",
+    "vcManualInstructions": "Copia el título y el texto revisados, abre VC.ru, publica allí el artículo y pega abajo su URL pública. Pubrick no lo envía a VC.ru.",
+    "copyTitle": "Copiar título",
+    "copyBody": "Copiar texto",
+    "copied": "Copiado",
+    "copyFailed": "No se pudo copiar al portapapeles. Selecciona y copia el texto de arriba.",
+    "openVc": "Abrir VC.ru",
+    "vcUrlLabel": "URL del artículo publicado en VC.ru",
+    "recordManualPublication": "Registrar publicación",
+    "manualAssertionHint": "Al registrar esta URL declaras que publicaste el artículo. Pubrick no lo verifica en VC.ru.",
+    "manualPublicationAsserted": "Registrado por {name} el {date}; dato facilitado por la persona, sin consulta a VC.ru.",
+    "manualPublicationAssertedRemoved": "Registrado por un miembro eliminado el {date}; dato facilitado por la persona, sin consulta a VC.ru."
   },
   "SettingsPage": {
     "title": "Ajustes",
@@ -428,6 +446,10 @@
     "invalid_request": "Algo de lo que has introducido no es válido. Revisa el formulario e inténtalo de nuevo.",
     "signed_out": "Has cerrado la sesión. Vuelve a iniciar sesión para continuar.",
     "no_active_organization": "No hay ninguna organización activa: crea o selecciona una primero.",
-    "forbidden": "No tienes acceso a esto."
+    "forbidden": "No tienes acceso a esto.",
+    "adaptation_pinned_manual_ready": "Esta publicación está lista para publicación manual. Recházala antes de editarla.",
+    "manual_schedule_unsupported": "Pubrick no puede programar publicaciones en VC.ru. Apruébalas para publicación manual.",
+    "manual_publication_pending": "Esta publicación está lista para que la publiques manualmente en VC.ru.",
+    "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública."
   }
 }

@@ -27,6 +27,8 @@ import {
   contentVersionRestoreSchema,
   type DeliveryAssertion,
   deliveryAssertionSchema,
+  type ManualPublication,
+  manualPublicationSchema,
   NEXT_CURSOR_HEADER,
   type RefineRequest,
   refineRequestSchema,
@@ -290,6 +292,18 @@ export class ContentController {
     @Body(new ZodValidationPipe(deliveryAssertionSchema)) body: DeliveryAssertion,
   ) {
     return this.content.assertDelivery(orgId, id, adaptationId, body.delivered, userId);
+  }
+
+  @Post(":id/adaptations/:adaptationId/manual-publication")
+  @HttpCode(200)
+  confirmManualPublication(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(manualPublicationSchema)) body: ManualPublication,
+  ) {
+    return this.content.confirmManualPublication(orgId, id, adaptationId, body.url, userId);
   }
 
   @Post(":id/approve")

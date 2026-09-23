@@ -1,6 +1,7 @@
 import {
   brandUpdateSchema,
   channelUpdateSchema,
+  isAvailablePlatform,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -965,9 +966,7 @@ describe("BrandPage — the platform picker", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  const unsupported = PLATFORM_IDS.filter(
-    (p) => !(PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(p),
-  );
+  const unsupported = PLATFORM_IDS.filter((p) => !isAvailablePlatform(p));
 
   it("has platforms to mark (this is what the API refuses)", () => {
     expect(unsupported.length).toBeGreaterThan(0);
@@ -982,6 +981,29 @@ describe("BrandPage — the platform picker", () => {
       expect(option).toBeEnabled();
     });
   }
+
+  it("offers VC.ru as manual and submits no credential bag", async () => {
+    const requests: { url: string; body: string | undefined }[] = [];
+    installHandlers([], (url, init) => {
+      if (url.endsWith("/api/channels") && init?.method === "POST") {
+        requests.push({ url, body: init.body as string | undefined });
+        return jsonResponse(201, { id: "vc1", platform: "vc_ru", name: "VC blog" });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole("combobox"), "vc_ru");
+    expect(screen.getByText(en.Channels.vcManualHint)).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: en.Channels.namePlaceholder }), "VC blog");
+    await user.click(screen.getByRole("button", { name: en.Channels.add }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({
+      platform: "vc_ru",
+      name: "VC blog",
+    });
+    expect(JSON.parse(requests[0]?.body ?? "{}")).not.toHaveProperty("credentials");
+  });
 
   for (const platform of unsupported) {
     it(`names ${platform} but will not let it be chosen`, async () => {

@@ -80,6 +80,7 @@ export const API_ERROR_CODES = [
   "content_pinned_approved",
   "content_pinned_published",
   "adaptation_pinned_scheduled",
+  "adaptation_pinned_manual_ready",
   "adaptation_pinned_queued",
   "adaptation_pinned_publishing",
   "adaptation_pinned_published",
@@ -148,6 +149,9 @@ export const API_ERROR_CODES = [
    * `publications_one_published_per_adaptation` as a raw 23505.
    */
   "delivery_outcome_already_known",
+  "manual_schedule_unsupported",
+  "manual_publication_pending",
+  "manual_publication_not_ready",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
   /**
