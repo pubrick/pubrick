@@ -13,6 +13,7 @@ import {
   runClaims,
   runEditorChanges,
   runFailureMessage,
+  runKnowledgeNotes,
   runStepStates,
   sourceHost,
 } from "./runs";
@@ -211,6 +212,52 @@ describe("runFailureMessage", () => {
  * Collapsing the last two is how "the step found nothing to flag" gets printed
  * over a step that never ran.
  */
+describe("runKnowledgeNotes", () => {
+  const noteId = "77777777-7777-4777-8777-777777777777";
+
+  it("shows selected notes with IDs while keeping old checkpoints readable", () => {
+    const run = makeRun({
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [
+              { id: noteId, title: "Brand guide", category: "brand_voice", content: "Private" },
+              { title: "Old note", category: "product_info", content: "Private" },
+            ],
+          },
+        },
+      },
+    });
+    expect(runKnowledgeNotes(run)).toEqual([
+      { id: noteId, title: "Brand guide" },
+      { id: null, title: "Old note" },
+    ]);
+  });
+
+  it("does not turn malformed stored IDs into links or show partial context", () => {
+    const malformed = makeRun({
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: { entries: [{ id: "../settings", title: "Note" }] },
+        },
+      },
+    });
+    expect(runKnowledgeNotes(malformed)).toEqual([{ id: null, title: "Note" }]);
+    expect(runKnowledgeNotes(makeRun())).toBeNull();
+    expect(
+      runKnowledgeNotes(
+        makeRun({
+          steps: {
+            knowledge: { status: "succeeded", output: { entries: [{ title: 42 }] } },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("runClaims", () => {
   const claims = [
     { text: "Revenue tripled in Q2.", needsCheck: true },

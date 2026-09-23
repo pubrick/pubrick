@@ -20,6 +20,13 @@ system instructions. This adds context; Pubrick does not check whether a note
 is accurate, or whether the resulting post is original. The usual human review
 and approval gate still applies.
 
+The generation receipt lists the notes selected for that run and links to each
+note in the brand library. It retains the selection in the run checkpoint, so
+later edits to a note do not rewrite the receipt. Older checkpoints without
+note IDs show titles without links. A selected note is context supplied to the
+model, not evidence that a particular claim was verified or that the model
+used every part of it.
+
 Use **Index** on a saved note to create its vector. This needs the
 organization's Google key from Settings and uses `gemini-embedding-001` at 768
 dimensions. An edited title or body clears the old vector immediately, so the

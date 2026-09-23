@@ -564,6 +564,9 @@
     "noBrief": "Sem briefing: redigido a partir do texto colado.",
     "pastedLabel": "Redigido a partir de texto colado",
     "stepsTitle": "Etapas",
+    "knowledgeNotesTitle": "Notas da marca selecionadas para esta geração",
+    "knowledgeNotesEmpty": "Nenhuma nota da marca correspondente foi selecionada.",
+    "knowledgeNotesHint": "As notas selecionadas fornecem contexto; não verificam afirmações factuais.",
     "step": {
       "researcher": "Pesquisa",
       "writer": "Rascunho",

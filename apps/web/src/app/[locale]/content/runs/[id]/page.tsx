@@ -21,6 +21,7 @@ import {
   runClaims,
   runEditorChanges,
   runFailureMessage,
+  runKnowledgeNotes,
   runStepStates,
 } from "@/lib/runs";
 
@@ -173,6 +174,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
    * where the link used to be.
    */
   const draftDeleted = run?.status === "succeeded" && run.contentItemId === null;
+  const knowledgeNotes = run ? runKnowledgeNotes(run) : null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
   // One primary action, and only one: the finished draft while there is one to
@@ -317,6 +319,34 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               )}
             </div>
           </Card>
+
+          {knowledgeNotes !== null && (
+            <Card className="mb-6">
+              <h2 className="mb-2 text-base font-semibold text-fg">{t("knowledgeNotesTitle")}</h2>
+              {knowledgeNotes.length === 0 ? (
+                <p className="text-sm text-fg-secondary">{t("knowledgeNotesEmpty")}</p>
+              ) : (
+                <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+                  {knowledgeNotes.map((note, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: frozen checkpoint entries are never reordered or edited
+                    <li key={`${note.id ?? note.title}-${index}`}>
+                      {note.id ? (
+                        <Link
+                          href={`/${locale}/brands/${run.brandId}/knowledge#knowledge-${note.id}`}
+                          className="text-accent hover:underline"
+                        >
+                          {note.title}
+                        </Link>
+                      ) : (
+                        <span className="text-fg">{note.title}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-3 text-sm text-fg-tertiary">{t("knowledgeNotesHint")}</p>
+            </Card>
+          )}
 
           {/* A failed run produces no content item, so this sentence is the
               only place the failure is explained at all — collapsing it into a

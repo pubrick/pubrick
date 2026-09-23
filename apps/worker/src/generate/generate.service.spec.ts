@@ -617,37 +617,40 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         .insert(schema.brands)
         .values({ orgId: victim.orgId, name: "Other brand" })
         .returning({ id: schema.brands.id });
-      await db.insert(schema.knowledgeEntries).values([
-        {
-          orgId: victim.orgId,
-          brandId: victim.brandId,
-          title: "Autumn menu",
-          content: "OWN_KNOWLEDGE_MARKER espresso uses Arabica.",
-          category: "product_info",
-        },
-        {
-          orgId: victim.orgId,
-          brandId: victim.brandId,
-          title: "Autumn menu",
-          content: "PAUSED_KNOWLEDGE_MARKER",
-          category: "product_info",
-          isActive: false,
-        },
-        {
-          orgId: victim.orgId,
-          brandId: otherBrand?.id as string,
-          title: "Autumn menu",
-          content: "OTHER_BRAND_MARKER",
-          category: "product_info",
-        },
-        {
-          orgId: intruder.orgId,
-          brandId: intruder.brandId,
-          title: "Autumn menu",
-          content: "OTHER_ORG_MARKER",
-          category: "product_info",
-        },
-      ]);
+      const inserted = await db
+        .insert(schema.knowledgeEntries)
+        .values([
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            title: "Autumn menu",
+            content: "OWN_KNOWLEDGE_MARKER espresso uses Arabica.",
+            category: "product_info",
+          },
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            title: "Autumn menu",
+            content: "PAUSED_KNOWLEDGE_MARKER",
+            category: "product_info",
+            isActive: false,
+          },
+          {
+            orgId: victim.orgId,
+            brandId: otherBrand?.id as string,
+            title: "Autumn menu",
+            content: "OTHER_BRAND_MARKER",
+            category: "product_info",
+          },
+          {
+            orgId: intruder.orgId,
+            brandId: intruder.brandId,
+            title: "Autumn menu",
+            content: "OTHER_ORG_MARKER",
+            category: "product_info",
+          },
+        ])
+        .returning({ id: schema.knowledgeEntries.id });
       const script = scriptedModel();
       await serviceFor(script).handle({
         id: "knowledge-job",
@@ -664,6 +667,9 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       }
       const run = await runRow(victim.runId);
       expect(run?.steps.knowledge?.status).toBe("succeeded");
+      expect(run?.steps.knowledge?.output).toMatchObject({
+        entries: [{ id: inserted[0].id, title: "Autumn menu" }],
+      });
       expect((await ledgerOf(victim.orgId)).filter((row) => row.step === "knowledge")).toHaveLength(
         0,
       );

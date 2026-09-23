@@ -564,6 +564,9 @@
     "noBrief": "Sin brief: redactado a partir del texto pegado.",
     "pastedLabel": "Redactado a partir de texto pegado",
     "stepsTitle": "Pasos",
+    "knowledgeNotesTitle": "Notas de marca seleccionadas para esta generación",
+    "knowledgeNotesEmpty": "No se seleccionaron notas de marca coincidentes.",
+    "knowledgeNotesHint": "Las notas seleccionadas aportan contexto; no verifican las afirmaciones fácticas.",
     "step": {
       "researcher": "Investigación",
       "writer": "Redacción",

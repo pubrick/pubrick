@@ -115,7 +115,7 @@ export type StepContext = ModelCallOptions & {
  */
 export type RunStepContext = StepContext & {
   /** Brand-owned notes selected for this run. Always material, never system instructions. */
-  knowledge?: Array<{ title: string; category: string; content: string }>;
+  knowledge?: Array<{ id?: string; title: string; category: string; content: string }>;
   /**
    * The human's brief, or `null` when they pasted material instead of writing
    * one. Untrusted input: it reaches the model as `prompt`, never as

@@ -107,6 +107,39 @@ describe("the step checklist", () => {
     expect(await screen.findByText("A post about our new pricing")).toBeInTheDocument();
   });
 
+  it("links selected brand notes without claiming they verify the draft", async () => {
+    const noteId = "77777777-7777-4777-8777-777777777777";
+    installHandlers({
+      current: makeRun({
+        steps: {
+          knowledge: {
+            status: "succeeded",
+            output: {
+              entries: [
+                {
+                  id: noteId,
+                  title: "Autumn guide",
+                  category: "product_info",
+                  content: "Private context",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.knowledgeNotesTitle)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Autumn guide" })).toHaveAttribute(
+      "href",
+      `/en/brands/55555555-5555-4555-8555-555555555555/knowledge#knowledge-${noteId}`,
+    );
+    expect(screen.getByText(en.Runs.knowledgeNotesHint)).toBeInTheDocument();
+    expect(screen.queryByText("Private context")).not.toBeInTheDocument();
+  });
+
   it("marks the step the run died on as failed and shows the run's own error", async () => {
     installHandlers({
       current: makeRun({

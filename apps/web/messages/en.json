@@ -564,6 +564,9 @@
     "noBrief": "No brief — drafted from the pasted text.",
     "pastedLabel": "Drafted from pasted text",
     "stepsTitle": "Steps",
+    "knowledgeNotesTitle": "Brand notes selected for this run",
+    "knowledgeNotesEmpty": "No matching brand notes were selected.",
+    "knowledgeNotesHint": "Selected notes provide context; they do not verify factual claims.",
     "step": {
       "researcher": "Research",
       "writer": "Draft",

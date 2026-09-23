@@ -19,7 +19,7 @@ documents when they disagree.
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
 | Analytics | Usage and cost ledger present | Channel metrics, content performance and feedback |
 | Comment analysis | On-demand, brand-scoped sample of up to 50 Telegram replies per public channel post | Metered BYOK summary, sentiment analysis and feedback signals |
-| Knowledge base / RAG | Brand notes, CSV import, optional Gemini indexing and hybrid retrieval in generation | Migration of old notes, automatic indexing and source citations |
+| Knowledge base / RAG | Brand notes, CSV import, optional Gemini indexing, hybrid retrieval and selected-note links in run receipts | Migration of old notes, automatic indexing and claim-level source citations |
 | Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |
 | Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |

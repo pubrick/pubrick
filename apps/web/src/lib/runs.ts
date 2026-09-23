@@ -283,13 +283,37 @@ export type RunClaim = { text: string; needsCheck: boolean };
  * its `output` is not a result. Returning it would put half a list under a
  * heading promising a whole one.
  */
-function succeededOutput(run: RunDetail, key: RunStepKey): unknown {
+function succeededOutput(run: RunDetail, key: RunStepKey | "knowledge"): unknown {
   const checkpoint = run.steps?.[key];
   return checkpoint?.status === "succeeded" ? checkpoint.output : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type RunKnowledgeNote = { id: string | null; title: string };
+
+/** Notes actually selected for this run's model context, not claims verified by them. */
+export function runKnowledgeNotes(run: RunDetail): RunKnowledgeNote[] | null {
+  const output = succeededOutput(run, "knowledge");
+  if (!isRecord(output) || !Array.isArray(output.entries)) return null;
+  const notes: RunKnowledgeNote[] = [];
+  for (const entry of output.entries) {
+    if (!isRecord(entry) || typeof entry.title !== "string" || entry.title === "") return null;
+    const id = entry.id;
+    // Older checkpoints have no ID. Never put an arbitrary stored value into
+    // a URL; display its title without a link if the ID is missing or invalid.
+    notes.push({
+      id:
+        typeof id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+          ? id
+          : null,
+      title: entry.title,
+    });
+  }
+  return notes;
 }
 
 /**

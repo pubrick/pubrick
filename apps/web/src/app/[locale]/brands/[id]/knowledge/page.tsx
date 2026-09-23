@@ -314,6 +314,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           {entries.map((entry) => (
             <ListRow
               key={entry.id}
+              id={`knowledge-${entry.id}`}
               className="flex-wrap"
               title={entry.title}
               meta={`${t(`categories.${entry.category}`)} · ${entry.isActive ? t("active") : t("paused")} · ${entry.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}`}

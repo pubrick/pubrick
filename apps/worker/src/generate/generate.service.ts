@@ -154,7 +154,16 @@ type RunState = {
 
 const knowledgeContextSchema = z.object({
   entries: z
-    .array(z.object({ title: z.string(), category: z.string(), content: z.string() }))
+    .array(
+      z.object({
+        // Optional so an in-flight run can resume a checkpoint written before
+        // note IDs were retained. New retrievals always include the ID.
+        id: z.uuid().optional(),
+        title: z.string(),
+        category: z.string(),
+        content: z.string(),
+      }),
+    )
     .max(5),
 });
 
