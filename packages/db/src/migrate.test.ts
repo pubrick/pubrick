@@ -130,6 +130,9 @@ const ZONED_COLUMNS = [
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
+  "notification_events.created_at",
+  "notification_events.updated_at",
+  "notification_settings.updated_at",
   "prompt_revisions.created_at",
   "publication_metrics.checked_at",
   "publications.asserted_at",
@@ -214,6 +217,10 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Notification tables arrive after the historical seed; worker outbox tests
+  // exercise their values, and schema-invariants checks the enum expressions.
+  "notification_events_event_check",
+  "notification_events_status_check",
   // Added with the comment sample after the historical seed; worker persistence e2e
   // proves the database rejects an off-list status on a populated story.
   "news_items_comments_status_check",

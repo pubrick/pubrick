@@ -35,6 +35,7 @@ import {
 } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { enqueueNotification } from "../notifications/notifications.outbox";
 
 /**
  * Every write in this file that touches `pipeline_runs` sets `updated_at`
@@ -1004,6 +1005,8 @@ export class GenerateRepository {
         // the alternative to rolling back is an orphan content item belonging to
         // a run that says it never produced one.
         if (updated.length === 0) throw new TerminalFenceLost();
+
+        await enqueueNotification(tx, orgId, "draft_ready", runId, contentItemId);
 
         return "held";
       });

@@ -569,7 +569,10 @@
     "peopleRevokeBody": "O link enviado para {email} deixa de funcionar e esse endereço não pode mais se cadastrar aqui. Você pode convidá-lo novamente depois.",
     "peopleInviteFailMember": "Esse endereço já é membro desta organização.",
     "peopleInviteFailEmail": "Esse não é um endereço de e-mail válido.",
-    "peopleInviteFailLimit": "Esta organização tem convites pendentes demais. Remova um antes de enviar outro."
+    "peopleInviteFailLimit": "Esta organização tem convites pendentes demais. Remova um antes de enviar outro.",
+    "notificationsTitle": "Notificações",
+    "notificationsHint": "Receba avisos no Telegram quando houver um rascunho para revisar ou um problema na entrega.",
+    "notificationsOpen": "Configurar notificações"
   },
   "Language": {
     "title": "Idioma",
@@ -886,5 +889,25 @@
     "checked": "Dados de {date}",
     "checking": "Verificando…",
     "refresh": "Verificar métricas"
+  },
+  "Notifications": {
+    "title": "Notificações",
+    "back": "Voltar às definições",
+    "telegramTitle": "Avisos do Telegram",
+    "hint": "Ligue o seu bot e chat privado. O Pubrick envia apenas os eventos ativados abaixo; as falhas continuam visíveis na aplicação.",
+    "botToken": "Token do bot",
+    "chatId": "ID do chat de destino",
+    "stored": "Guardado em segurança — deixe em branco para manter",
+    "enabled": "Ativar notificações",
+    "draftReady": "Rascunho pronto para revisão",
+    "deliveryProblem": "Falha na entrega ou resultado desconhecido",
+    "save": "Guardar",
+    "test": "Testar",
+    "saved": "Definições de notificações guardadas.",
+    "testOk": "Mensagem de teste enviada.",
+    "testFailed": "O Telegram não confirmou a mensagem. Verifique o bot e o chat.",
+    "bothCredentials": "Introduza um token válido (dígitos:segredo) e um ID de chat numérico.",
+    "genericError": "Ocorreu um erro. Tente novamente.",
+    "retry": "Tentar novamente"
   }
 }

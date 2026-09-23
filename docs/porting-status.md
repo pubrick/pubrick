@@ -12,7 +12,7 @@ documents when they disagree.
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
 | News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed and public Telegram channel sources, polling, story list, advisory AI relevance scoring and draft start | Private invite-only Telegram channels and feedback-informed ranking |
 | Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive and generation via existing runs | Editorial planning calendar |
-| Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, and selected social post/news digest/expert article/how-to formats | Video/newsletter repurposing, link policy and deeper SEO workflow |
+| Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, selected social post/news digest/expert article/how-to formats, and opt-in homepage UTM tagging | Video/newsletter repurposing and deeper SEO workflow |
 | Images and media | Brand-scoped upload library, manual Gemini image generation and per-image variation, cover selection and Telegram photo delivery | Other channel media and richer image provenance |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
 | Calendar | Scheduled publishing, brand calendar, slots and planned draft generation | Memorable dates and richer planning |
@@ -23,9 +23,9 @@ documents when they disagree.
 | Autopilot | Owner-controlled scheduled draft generation from approved topics, with per-brand quota and spend admission threshold | Morning digest, richer planning and review signals |
 | Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
-| Notifications | Not ported | Actionable admin notifications |
+| Notifications | Org-scoped Telegram bot and chat, encrypted at rest, opt-in draft alerts, delivery failure/unknown alerts, Test action, durable at-most-once outbox | Morning digest, richer event preferences and delivery history UI |
 | Public API | Internal authenticated API present | Public keys, documented endpoints, webhooks and MCP |
-| Additional reference utilities | Uploads present | Link sanitization and cross-channel media propagation |
+| Additional reference utilities | Uploads and safe homepage link tagging present | Cross-channel media propagation |
 
 News scores and AI topic suggestions remain advisory; an editor chooses and
 approves each topic before generation. The public RSS output is available for

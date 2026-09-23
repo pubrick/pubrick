@@ -569,7 +569,10 @@
     "peopleRevokeBody": "The link sent to {email} stops working and that address can no longer register here. You can invite them again afterwards.",
     "peopleInviteFailMember": "That address is already a member of this organization.",
     "peopleInviteFailEmail": "That is not a valid email address.",
-    "peopleInviteFailLimit": "This organization has too many invitations waiting. Remove one before sending another."
+    "peopleInviteFailLimit": "This organization has too many invitations waiting. Remove one before sending another.",
+    "notificationsTitle": "Notifications",
+    "notificationsHint": "Get Telegram alerts when a draft needs review or delivery needs attention.",
+    "notificationsOpen": "Configure notifications"
   },
   "Language": {
     "title": "Language",
@@ -886,5 +889,25 @@
     "checked": "Checked {date}",
     "checking": "Checking…",
     "refresh": "Check metrics"
+  },
+  "Notifications": {
+    "title": "Notifications",
+    "back": "Back to settings",
+    "telegramTitle": "Telegram alerts",
+    "hint": "Connect your own bot and private chat. Pubrick sends only events enabled below; delivery failures stay visible in the app.",
+    "botToken": "Bot token",
+    "chatId": "Destination chat ID",
+    "stored": "Stored securely — leave blank to keep",
+    "enabled": "Enable notifications",
+    "draftReady": "Draft ready for review",
+    "deliveryProblem": "Delivery failed or outcome unknown",
+    "save": "Save",
+    "test": "Test",
+    "saved": "Notification settings saved.",
+    "testOk": "Test message sent.",
+    "testFailed": "Telegram did not confirm the test message. Check the bot and chat.",
+    "bothCredentials": "Enter a valid bot token (digits:secret) and numeric chat ID.",
+    "genericError": "Something went wrong. Please try again.",
+    "retry": "Retry"
   }
 }

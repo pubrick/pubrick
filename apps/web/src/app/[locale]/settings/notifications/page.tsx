@@ -1,0 +1,200 @@
+"use client";
+
+import { type NotificationSettings, notificationSettingsUpdateSchema } from "@pubrick/shared";
+import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
+import { useCallback, useEffect, useState } from "react";
+import { AppShell } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api, errorMessage } from "@/lib/api";
+
+const FORM_ID = "notification-settings-form";
+
+export default function NotificationsPage() {
+  const t = useTranslations("Notifications");
+  const te = useTranslations("Errors");
+  const locale = useLocale();
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [botToken, setBotToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setSettings(await api<NotificationSettings>("/api/notifications"));
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err, t("genericError"), te));
+    }
+  }, [t, te]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (!settings || busy) return;
+    setError(null);
+    setValidationError(null);
+    setNotice(null);
+    const body = {
+      enabled: settings.enabled,
+      draftReady: settings.draftReady,
+      deliveryProblem: settings.deliveryProblem,
+      ...(botToken || chatId ? { botToken, chatId } : {}),
+    };
+    const parsed = notificationSettingsUpdateSchema.safeParse(body);
+    if (
+      !parsed.success ||
+      Boolean(botToken) !== Boolean(chatId) ||
+      (settings.enabled && !settings.hasCredentials && !botToken)
+    ) {
+      setValidationError(t("bothCredentials"));
+      document.getElementById("notification-bot-token")?.focus();
+      return;
+    }
+    setBusy(true);
+    try {
+      const saved = await api<NotificationSettings>("/api/notifications", {
+        method: "PUT",
+        body: JSON.stringify(parsed.data),
+      });
+      setSettings(saved);
+      setBotToken("");
+      setChatId("");
+      setValidationError(null);
+      setNotice(t("saved"));
+    } catch (err) {
+      setError(errorMessage(err, t("genericError"), te));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test() {
+    setBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await api<{ ok: boolean }>("/api/notifications/test", { method: "POST" });
+      setNotice(t(result.ok ? "testOk" : "testFailed"));
+    } catch (err) {
+      setError(errorMessage(err, t("genericError"), te));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppShell
+      title={t("title")}
+      primaryAction={
+        <Button type="submit" form={FORM_ID} disabled={busy || settings === null}>
+          {t("save")}
+        </Button>
+      }
+    >
+      <div className="flex max-w-xl flex-col gap-4">
+        <Link href={`/${locale}/settings`} className="text-sm text-accent underline">
+          {t("back")}
+        </Link>
+        <Card>
+          <h2 className="mb-2 text-base font-semibold text-fg">{t("telegramTitle")}</h2>
+          <p className="mb-4 text-sm text-fg-secondary">{t("hint")}</p>
+          {settings === null ? (
+            error ? (
+              <Button variant="secondary" onClick={() => void load()}>
+                {t("retry")}
+              </Button>
+            ) : (
+              <Skeleton lines={4} />
+            )
+          ) : (
+            <form id={FORM_ID} onSubmit={save} className="flex flex-col gap-4">
+              <Input
+                type="password"
+                id="notification-bot-token"
+                autoComplete="off"
+                label={t("botToken")}
+                value={botToken}
+                onChange={(e) => {
+                  setBotToken(e.target.value);
+                  setValidationError(null);
+                }}
+                aria-invalid={validationError !== null}
+                aria-describedby={validationError ? "notification-credentials-error" : undefined}
+                placeholder={settings.hasCredentials ? t("stored") : ""}
+              />
+              <Input
+                label={t("chatId")}
+                value={chatId}
+                onChange={(e) => {
+                  setChatId(e.target.value);
+                  setValidationError(null);
+                }}
+                aria-invalid={validationError !== null}
+                aria-describedby={validationError ? "notification-credentials-error" : undefined}
+                placeholder={settings.hasCredentials ? t("stored") : ""}
+              />
+              {validationError && (
+                <p id="notification-credentials-error" role="alert" className="text-sm text-danger">
+                  {validationError}
+                </p>
+              )}
+              <label className="flex min-h-11 items-center gap-2 text-sm text-fg">
+                <input
+                  type="checkbox"
+                  checked={settings.enabled}
+                  onChange={(e) => setSettings({ ...settings, enabled: e.target.checked })}
+                />
+                {t("enabled")}
+              </label>
+              <label className="flex min-h-11 items-center gap-2 text-sm text-fg">
+                <input
+                  type="checkbox"
+                  checked={settings.draftReady}
+                  onChange={(e) => setSettings({ ...settings, draftReady: e.target.checked })}
+                />
+                {t("draftReady")}
+              </label>
+              <label className="flex min-h-11 items-center gap-2 text-sm text-fg">
+                <input
+                  type="checkbox"
+                  checked={settings.deliveryProblem}
+                  onChange={(e) => setSettings({ ...settings, deliveryProblem: e.target.checked })}
+                />
+                {t("deliveryProblem")}
+              </label>
+            </form>
+          )}
+          {settings?.hasCredentials && (
+            <Button
+              variant="secondary"
+              className="mt-4"
+              disabled={busy || botToken !== "" || chatId !== ""}
+              onClick={() => void test()}
+            >
+              {t("test")}
+            </Button>
+          )}
+          {error && (
+            <p role="alert" className="mt-3 text-sm text-danger">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p role="status" className="mt-3 text-sm text-fg-secondary">
+              {notice}
+            </p>
+          )}
+        </Card>
+      </div>
+    </AppShell>
+  );
+}
