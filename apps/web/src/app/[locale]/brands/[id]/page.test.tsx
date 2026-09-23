@@ -946,6 +946,42 @@ describe("BrandPage — the brand's voice", () => {
   });
 });
 
+describe("BrandPage — link policy", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows the opt-in rule and saves the configured website without publishing", async () => {
+    const calls: Array<{ method: string; body?: string }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, body: init?.body as string | undefined });
+      if (String(input).includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (String(input).includes("/api/brands/")) {
+        return jsonResponse(200, {
+          ...brand,
+          linkPolicy: method === "PATCH" ? JSON.parse(String(init?.body)).linkPolicy : null,
+        });
+      }
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(await screen.findByText(en.Brands.linksUnset)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Brands.linksEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.linksTitle }));
+    await user.type(dialog.getByLabelText(en.Brands.linksWebsite), "https://example.com");
+    await user.click(dialog.getByRole("button", { name: en.Brands.voiceSave }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    const patch = JSON.parse(calls.find((call) => call.method === "PATCH")?.body ?? "{}");
+    expect(brandUpdateSchema.parse(patch).linkPolicy).toEqual({
+      website: "https://example.com",
+      campaignTemplate: "cf_{content_type}_{YYYY_MM}",
+      platforms: {},
+    });
+    expect(await screen.findByText("https://example.com")).toBeInTheDocument();
+  });
+});
+
 /**
  * The platform picker offers only what Pubrick can actually deliver to.
  *

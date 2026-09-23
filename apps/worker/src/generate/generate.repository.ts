@@ -140,6 +140,7 @@ export type ClaimedRun = {
   brandId: string;
   input: unknown;
   steps: RunSteps;
+  createdAt: Date;
 };
 
 /** The brand and channels one run writes for, in the shape `@pubrick/ai` takes. */
@@ -147,12 +148,14 @@ export type RunContext = {
   brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
   channels: Array<{ id: string; name: string; platform: PlatformId }>;
   promptGuidance?: Partial<Record<PromptRole, string>>;
+  linkPolicy: (typeof schema.brands.$inferSelect)["linkPolicy"];
 };
 
 /** What one finished run writes: the master body plus one body per channel. */
 export type TerminalPayload = {
   body: string;
   adaptations: ReadonlyArray<{ channelId: string; body: string }>;
+  linkPolicyWebsite?: string | null;
 };
 
 /**
@@ -281,10 +284,18 @@ export class GenerateRepository {
         brandId: schema.pipelineRuns.brandId,
         input: schema.pipelineRuns.input,
         steps: schema.pipelineRuns.steps,
+        createdAt: schema.pipelineRuns.createdAt,
       });
     const row = rows[0];
     if (!row) return undefined;
-    return { id: row.id, orgId, brandId: row.brandId, input: row.input, steps: row.steps ?? {} };
+    return {
+      id: row.id,
+      orgId,
+      brandId: row.brandId,
+      input: row.input,
+      steps: row.steps ?? {},
+      createdAt: row.createdAt,
+    };
   }
 
   /**
@@ -547,6 +558,7 @@ export class GenerateRepository {
         voice: schema.brands.voice,
         audience: schema.brands.audience,
         contentLanguage: schema.brands.contentLanguage,
+        linkPolicy: schema.brands.linkPolicy,
       })
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
@@ -582,7 +594,13 @@ export class GenerateRepository {
       .where(eq(schema.promptRevisions.orgId, orgId))
       .orderBy(asc(schema.promptRevisions.role), desc(schema.promptRevisions.version));
     return {
-      brand,
+      brand: {
+        name: brand.name,
+        voice: brand.voice,
+        audience: brand.audience,
+        contentLanguage: brand.contentLanguage,
+      },
+      linkPolicy: brand.linkPolicy,
       channels,
       promptGuidance: Object.fromEntries(guidance.map((row) => [row.role, row.text])),
     };
@@ -914,7 +932,14 @@ export class GenerateRepository {
 
         const items = await tx
           .insert(schema.contentItems)
-          .values({ orgId, brandId, body: payload.body, status: "draft", origin: "ai" })
+          .values({
+            orgId,
+            brandId,
+            body: payload.body,
+            status: "draft",
+            origin: "ai",
+            linkPolicyWebsite: payload.linkPolicyWebsite ?? null,
+          })
           .returning({ id: schema.contentItems.id });
         const contentItemId = items[0]?.id;
         if (contentItemId === undefined) throw new Error("content item insert returned no row");

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   type AiCredential,
+  adaptationLimit,
   adapterFor,
   callOutcomeOf,
   EDITOR,
@@ -20,6 +21,7 @@ import {
   withRunFailure,
 } from "@pubrick/ai";
 import {
+  brandLinkPolicySchema,
   briefRunInputSchema,
   type GenerateJob,
   PermanentError,
@@ -34,6 +36,7 @@ import {
   type RunContext,
   type TerminalPayload,
 } from "./generate.repository";
+import { applyLinkPolicy } from "./link-policy";
 
 export type { GenerateJob } from "@pubrick/shared";
 
@@ -321,6 +324,10 @@ export class GenerateService {
       this.logger.log(`Run ${run.id} stopped: its brand no longer exists`);
       return STOPPED;
     }
+    // JSONB can be changed outside the API. A malformed rule cannot invalidate
+    // model output after the run has already spent the organization's credits.
+    const parsedPolicy = brandLinkPolicySchema.safeParse(context.linkPolicy);
+    const linkPolicy = parsedPolicy.success ? parsedPolicy.data : null;
 
     const credential = await this.repo.credential(run.orgId);
     if (!credential) {
@@ -529,10 +536,24 @@ export class GenerateService {
       // re-runs only the channels that had not finished.
       const adapted = await this.runStep(state, adapterFor(channel), { body: edited.body });
       if (adapted === STOPPED) return STOPPED;
-      adaptations.push({ channelId: channel.id, body: adapted.body });
+      adaptations.push({
+        channelId: channel.id,
+        body: applyLinkPolicy(
+          adapted.body,
+          linkPolicy,
+          channel.platform,
+          run.createdAt,
+          input.contentType ?? "social_post",
+          adaptationLimit(channel.platform),
+        ),
+      });
     }
 
-    return { body: edited.body, adaptations };
+    return {
+      body: edited.body,
+      adaptations,
+      linkPolicyWebsite: linkPolicy?.website ?? null,
+    };
   }
 
   /**

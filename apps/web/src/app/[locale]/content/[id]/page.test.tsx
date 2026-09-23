@@ -69,6 +69,7 @@ type ContentItem = {
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
   /** The run that generated this item, or null for a hand-written one. */
   runId: string | null;
+  linkPolicyWebsite: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
   adaptationProposals: AdaptationProposal[];
@@ -125,6 +126,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // the key either way, so a fixture that omitted it would be a payload the
     // API cannot produce.
     runId: null as string | null,
+    linkPolicyWebsite: null as string | null,
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
     refineProposal: null as RefineProposal | null,
@@ -2174,6 +2176,16 @@ describe("the way back to the run that made this", () => {
 
     await screen.findByText(en.Publish.backToQueue);
     expect(screen.queryByTestId("source-strip")).not.toBeInTheDocument();
+  });
+
+  it("shows the link policy receipt on a generated draft before review", async () => {
+    installBaseHandlers({ current: makeItem({ linkPolicyWebsite: "https://example.com" }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(/Brand link policy was applied/)).toHaveTextContent(
+      "https://example.com",
+    );
   });
 });
 

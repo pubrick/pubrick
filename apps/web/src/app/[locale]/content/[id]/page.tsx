@@ -132,6 +132,7 @@ type ContentItem = {
    * cannot go stale against it.
    */
   runId: string | null;
+  linkPolicyWebsite: string | null;
   /**
    * The one refine proposal staged against this draft, or `null`.
    *
@@ -1219,6 +1220,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <Card className="mb-6">
         <SourceStrip input={item.runInput} />
+        {item.linkPolicyWebsite && (
+          <p className="mb-4 text-sm text-fg-secondary">
+            {t("linkPolicyApplied", { website: item.linkPolicyWebsite })}
+          </p>
+        )}
         {/*
           WHAT EDITING COSTS ON A HALF-SENT POST, said before it is paid.
 
