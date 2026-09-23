@@ -202,7 +202,13 @@ describe.skipIf(!url)("knowledge e2e", () => {
     const brand = await owner.post("/api/brands").send({ name: "Books" }).expect(201);
     const entries = [
       { title: "Binding", content: "Sewn binding", category: "product_info", tags: ["books"] },
-      { title: "Voice", content: "Use a warm tone", category: "brand_guidelines", tags: [] },
+      {
+        title: "Voice",
+        content: "Use a warm tone",
+        category: "brand_guidelines",
+        tags: ["coffee, roasted", "bulk|B2B"],
+        isActive: false,
+      },
     ];
     const imported = await owner
       .post("/api/knowledge/bulk-import")
@@ -217,6 +223,18 @@ describe.skipIf(!url)("knowledge e2e", () => {
     ]);
     expect(own.body.every((entry: { hasEmbedding: boolean }) => !entry.hasEmbedding)).toBe(true);
     expect(
+      own.body
+        .map((entry: { title: string; tags: string[]; isActive: boolean }) => ({
+          title: entry.title,
+          tags: entry.tags,
+          isActive: entry.isActive,
+        }))
+        .sort((a: { title: string }, b: { title: string }) => a.title.localeCompare(b.title)),
+    ).toEqual([
+      { title: "Binding", tags: ["books"], isActive: true },
+      { title: "Voice", tags: ["coffee, roasted", "bulk|B2B"], isActive: false },
+    ]);
+    expect(
       (await outsider.get(`/api/knowledge?brandId=${brand.body.id}`).expect(200)).body,
     ).toEqual([]);
     await outsider
@@ -228,6 +246,13 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .send({
         brandId: brand.body.id,
         entries: [...entries, { ...entries[0], category: "unknown" }],
+      })
+      .expect(400);
+    await owner
+      .post("/api/knowledge/bulk-import")
+      .send({
+        brandId: brand.body.id,
+        entries: [...entries, { ...entries[0], isActive: "false" }],
       })
       .expect(400);
     expect(

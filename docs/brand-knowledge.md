@@ -37,11 +37,33 @@ the provider call. A provider failure leaves the note available to text search.
 ## Importing an existing knowledge base
 
 Select **Import CSV** on the brand knowledge page. The file must be UTF-8 CSV
-with `title`, `content`, and `category` headers; `tags` is optional. Quoted
-commas, quotes, and newlines are supported. Separate multiple tags with `|`
-or `,` inside the tags cell. The browser previews the validated batch before
-import. It accepts up to 500 rows and a file up to 1 MB. An invalid row stops
-the whole import, and the API inserts the accepted batch in one transaction.
+with `title`, `content`, and `category` headers. Optional `is_active` preserves
+the note's paused state: its cells must be exactly `true` or `false` in
+lowercase. When the header is absent, notes are active by default for
+compatibility with older CSV files. An empty or malformed `is_active` cell is
+rejected rather than silently activating the note. Optional `tags_json` is a
+JSON array of strings, such as `["coffee, roasted","bulk|B2B"]`. Use it when a
+tag itself contains a comma or pipe. If both `tags_json` and the older `tags`
+column are present, `tags_json` takes precedence; every cell in that column
+must contain a valid JSON array (use `[]` for no tags). Files with only `tags`
+still work, splitting its cell on `|` or `,`. Quoted CSV commas, quotes, and
+newlines are supported. The browser previews the validated batch, marking
+paused notes. It accepts up to 500 rows and a file up to 1 MB. An invalid row
+stops the whole import, and the API inserts the entire batch in one transaction.
+The API also accepts an optional boolean `isActive` on each bulk-import entry.
+Titles, content, categories, and tags must pass the same limits as an individual
+note (500 title characters, 20,000 content characters, 20 tags of 50 characters
+each).
+
+For a portable export from another system, first extract its notes to a local
+UTF-8 CSV without embeddings, provider keys, or internal IDs. Map each note's
+title, content, and category to Pubrick's columns; serialize its tag array as
+JSON into `tags_json`, and its enabled state as lowercase `true` or `false` in
+`is_active`. A CSV writer should quote fields containing delimiters or
+newlines. Split exports into files of at most 500 rows and 1 MB each, then
+import each file into the correct brand. The importer does not connect to the
+previous Ozon Tools database or copy its vectors. Reindex active notes in
+Pubrick after import if semantic search is needed.
 
 Imported notes are searchable by text immediately. They do not get embeddings
 automatically. An organization owner or admin can click **Index next 10** to
@@ -62,8 +84,6 @@ the only model previously used, `gemini-embedding-001`. Vector retrieval accepts
 only that model and dimension pair. Supporting a second embedding model still
 requires a deliberate reindex plan and a compatible vector schema; changing the
 model constant alone would not make old vectors comparable.
-The importer accepts a CSV selected by the user; it does not connect to the
-previous Ozon Tools database or migrate its stored notes automatically.
 
 Embedding calls have no price in Pubrick's current model price table. Each
 batch provider attempt creates one `knowledge_batch_index` row in

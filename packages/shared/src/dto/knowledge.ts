@@ -48,7 +48,9 @@ export type KnowledgeUpdate = z.infer<typeof knowledgeUpdateSchema>;
 export const knowledgeImportSchema = z.object({
   brandId: z.uuid(),
   entries: z
-    .array(knowledgeCreateSchema.omit({ brandId: true }))
+    .array(
+      knowledgeCreateSchema.omit({ brandId: true }).extend({ isActive: z.boolean().default(true) }),
+    )
     .min(1)
     .max(500),
 });
