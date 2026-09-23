@@ -1,4 +1,5 @@
 import type {
+  AdaptationProposal,
   AdaptationStatus,
   ContentStatus,
   DeliveryOutcome,
@@ -70,6 +71,7 @@ type ContentItem = {
   runId: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
+  adaptationProposals: AdaptationProposal[];
   /** What that run was asked for — the source strip's input. */
   runInput: RunInput | null;
 };
@@ -126,6 +128,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
     refineProposal: null as RefineProposal | null,
+    adaptationProposals: [] as AdaptationProposal[],
     // ...and this one. The api returns the key on every item, `null` for the
     // hand-written draft that no run made.
     runInput: null as RunInput | null,
@@ -942,6 +945,78 @@ describe("per-channel override (Step 6)", () => {
     );
     expect(patchCall?.body).toBe(JSON.stringify({ body: null }));
     expect(adaptationUpdateSchema.safeParse(JSON.parse(patchCall?.body ?? "")).success).toBe(true);
+  });
+});
+
+describe("channel adaptation suggestion", () => {
+  const suggested: AdaptationProposal = {
+    id: "p1",
+    adaptationId: "a1",
+    masterBody: "Hello world",
+    previousBody: null,
+    proposal: "Hello, channel readers.",
+    reason: "A clearer opening for this channel.",
+  };
+
+  it("previews the model's text and applies only the server's accepted response", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/readapt") return suggested;
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/readapt/p1/accept") {
+        served.current = makeItem({
+          adaptations: [makeAdaptation({ body: "Server-approved wording.", origin: "ai" })],
+          adaptationProposals: [],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Publish.readaptAction }));
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(en.Publish.overridePlaceholder)).toHaveValue("");
+    expect(screen.getByText(suggested.reason)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Publish.readaptAccept }));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(en.Publish.overridePlaceholder)).toHaveValue(
+        "Server-approved wording.",
+      ),
+    );
+    expect(calls.filter((call) => call.path.endsWith("/readapt"))).toHaveLength(1);
+    expect(screen.queryByText(suggested.proposal)).not.toBeInTheDocument();
+  });
+
+  it("preserves a staged suggestion but blocks acceptance after the source changes", async () => {
+    const served = {
+      current: makeItem({
+        adaptations: [makeAdaptation()],
+        adaptationProposals: [suggested],
+        body: "Changed source",
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByText(en.Publish.readaptStale)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAccept })).toBeDisabled();
+  });
+
+  it("keeps a pinned suggestion visible for discard while blocking model and accept actions", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+        adaptationProposals: [suggested],
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAction })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAccept })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineDiscard })).toBeEnabled();
   });
 });
 

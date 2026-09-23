@@ -1,7 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
-import type { AiCredential, StepBrand } from "@pubrick/ai";
+import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  type AdaptationProposal,
   type AdaptationStatus,
   type AdaptationUpdate,
   type AiVersionRow,
@@ -41,6 +42,7 @@ import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.reposi
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
 
@@ -317,6 +319,15 @@ const PROPOSAL_COLUMNS = {
   start: schema.refineProposals.startOffset,
   end: schema.refineProposals.endOffset,
   selectedText: schema.refineProposals.selectedText,
+};
+
+const ADAPTATION_PROPOSAL_COLUMNS = {
+  id: schema.adaptationProposals.id,
+  adaptationId: schema.adaptationProposals.adaptationId,
+  proposal: schema.adaptationProposals.proposal,
+  reason: schema.adaptationProposals.reason,
+  masterBody: schema.adaptationProposals.masterBody,
+  previousBody: schema.adaptationProposals.previousBody,
 };
 
 /**
@@ -982,6 +993,7 @@ export class ContentRepository {
     private readonly credentials: AiCredentialsRepository,
     /** Every network line of a refine, and nothing else — see `RefineCaller`. */
     private readonly refiner: RefineCaller,
+    private readonly readapter: ReadaptCaller,
   ) {}
 
   /**
@@ -1329,11 +1341,12 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions, run, refineProposal] = await Promise.all([
+    const [adaptations, aiVersions, run, refineProposal, adaptationProposals] = await Promise.all([
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
       this.runFor(orgId, item.id),
       this.stagedProposal(orgId, item.id),
+      this.stagedAdaptationProposals(orgId, item.id),
     ]);
     /**
      * The provenance lens's reference text. Returned rather than a
@@ -1417,6 +1430,7 @@ export class ContentRepository {
        * the same argument that keeps `aiVersionBodies` off the list.
        */
       refineProposal,
+      adaptationProposals,
       aiVersionBodies,
     };
   }
@@ -1623,6 +1637,21 @@ export class ContentRepository {
       )
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  private async stagedAdaptationProposals(
+    orgId: string,
+    contentItemId: string,
+  ): Promise<AdaptationProposal[]> {
+    return db
+      .select(ADAPTATION_PROPOSAL_COLUMNS)
+      .from(schema.adaptationProposals)
+      .where(
+        and(
+          eq(schema.adaptationProposals.orgId, orgId),
+          eq(schema.adaptationProposals.contentItemId, contentItemId),
+        ),
+      );
   }
 
   async create(orgId: string, data: ContentCreate) {
@@ -1847,10 +1876,10 @@ export class ContentRepository {
     const body = normalizeNewlines(item.body);
     const selection = selectionOf(body, request);
     await this.requireAiDraft(orgId, id);
-    if (await this.overRefineBudget(orgId)) {
+    if (await this.overEditorAiBudget(orgId)) {
       throw conflict(
         "refine_limit_reached",
-        `This organization has already made ${MAX_REFINE_CALLS_PER_HOUR} refine calls in the last hour`,
+        `This organization has already made ${MAX_REFINE_CALLS_PER_HOUR} editor AI calls in the last hour`,
       );
     }
     const credential = await this.refineCredential(orgId);
@@ -1874,7 +1903,7 @@ export class ContentRepository {
     // that ends in a 409 can still have cost money. A ledger that recorded only
     // the answers we liked would understate the org's spend AND hand this
     // route's own allowance a count that misses the calls most worth counting.
-    await this.recordRefineUsage(orgId, id, outcome.usage);
+    await this.recordEditorUsage(orgId, id, outcome.usage);
     if (!outcome.ok) {
       throw conflict(REFINE_FAILURE_CODE[outcome.failure], REFINE_FAILURE_MESSAGE[outcome.failure]);
     }
@@ -1998,16 +2027,11 @@ export class ContentRepository {
   }
 
   /**
-   * Has this org used up its hourly allowance of billed refine calls?
+   * Has this org used up its hourly allowance of billed editor AI calls?
    *
-   * `AiCredentialsRepository.overTestBudget`'s design, deliberately, down to
-   * the reasons — and NOT its budget. That one counts `step = 'test'` and this
-   * one `step = 'refine'`, so neither button can spend the other's allowance:
-   * a person out of Test presses can still refine, and a generation run's dozen
-   * calls do not lock the editor. `REFINE_STEP` is imported rather than spelled
-   * out here, because the two ends of that filter — the step's own name and
-   * this predicate — must be the same string for the limit to bound anything
-   * at all.
+   * The editor shares one allowance between selection refinement and channel
+   * adaptation. Credential tests and generation runs have their own budgets.
+   * `REFINE_STEP` is imported so its ledger name and this filter cannot drift.
    *
    * COUNTED FROM THE LEDGER the calls themselves wrote, so: the number is the
    * same for every api replica and survives a restart (an in-process bucket is
@@ -2032,14 +2056,14 @@ export class ContentRepository {
    * `>=`, not `>`: the count is of calls ALREADY MADE, so a count that has
    * reached the limit means the allowance is spent.
    */
-  private async overRefineBudget(orgId: string): Promise<boolean> {
+  private async overEditorAiBudget(orgId: string): Promise<boolean> {
     const rows = await db
       .select({ calls: sql<string>`count(*)` })
       .from(schema.usageLedger)
       .where(
         and(
           eq(schema.usageLedger.orgId, orgId),
-          eq(schema.usageLedger.step, REFINE_STEP),
+          inArray(schema.usageLedger.step, [REFINE_STEP, "readapt"]),
           sql`${schema.usageLedger.createdAt} > now() - ${REFINE_BUDGET_WINDOW}`,
         ),
       );
@@ -2067,22 +2091,28 @@ export class ContentRepository {
    * languages. What this owes the reader is that their refine did not happen
    * and nothing was charged for it.
    */
-  private async refineCredential(orgId: string): Promise<AiCredential> {
+  private async refineCredential(
+    orgId: string,
+    action: "refine" | "readapt" = "refine",
+  ): Promise<AiCredential> {
     let credential: AiCredential | undefined;
     try {
       credential = await this.credentials.credential(orgId);
     } catch (error) {
       if (!isUnreadableCiphertext(error) && !isMalformedStoredAiCredential(error)) throw error;
       this.logger.error(
-        `Refine on content item of org ${orgId} could not read the stored API key: ` +
+        `Editor AI call for org ${orgId} could not read the stored API key: ` +
           `${error instanceof Error ? error.message : String(error)}. ` +
           "Test the key in Settings for a verdict about it.",
       );
-      throw conflict(REFINE_FAILURE_CODE.failed, REFINE_FAILURE_MESSAGE.failed);
+      throw conflict(
+        action === "refine" ? "refine_failed" : "readapt_failed",
+        REFINE_FAILURE_MESSAGE.failed,
+      );
     }
     if (!credential) {
       throw conflict(
-        "refine_no_credential",
+        action === "refine" ? "refine_no_credential" : "readapt_no_credential",
         "This organization has no AI provider key stored; add one in Settings",
       );
     }
@@ -2110,11 +2140,8 @@ export class ContentRepository {
    * One ledger row per physical call, attributed to the DRAFT rather than to a
    * run.
    *
-   * `run_id` is null and `content_item_id` is set — the column migration 0006
-   * added for exactly this caller and that nothing has written since. Without
-   * it, "what did refining this draft cost" would have no answer at all, since
-   * a refine belongs to no run. `adaptation_id` stays null: this increment does
-   * not refine a per-channel override.
+   * Editor calls have no run but do have a content item. Channel adaptation
+   * additionally sets `adaptation_id`; master refinement leaves it null.
    *
    * `step` and `channel_id` come from the STEP's own attribution, never from
    * this method — the same rule the worker's `recordUsage` follows, and here it
@@ -2133,10 +2160,11 @@ export class ContentRepository {
    * a brand delete cascades into `content_items`), and the money was still
    * spent. The rows are then written with `content_item_id` null — see below.
    */
-  private async recordRefineUsage(
+  private async recordEditorUsage(
     orgId: string,
     contentItemId: string,
     usage: readonly RefineUsage[],
+    adaptationId: string | null = null,
   ): Promise<void> {
     if (usage.length === 0) return;
     const rows = usage.map(({ record, attribution }) => ({
@@ -2145,7 +2173,7 @@ export class ContentRepository {
       step: attribution.step,
       channelId: attribution.channelId ?? null,
       contentItemId,
-      adaptationId: null,
+      adaptationId,
       attempt: record.attempt,
       provider: record.provider,
       modelId: record.modelId,
@@ -2181,13 +2209,13 @@ export class ContentRepository {
         // draft to be about; what is kept is the org's bill, and the allowance
         // that bounds it.
         this.logger.warn(
-          `Content item ${contentItemId} disappeared before its ${REFINE_STEP} ledger row(s) ` +
+          `Content item ${contentItemId} disappeared before its ${usage[0]?.attribution.step} ledger row(s) ` +
             `could be written; recording the spend with content_item_id=null. orgId=${orgId}`,
         );
         try {
           await db
             .insert(schema.usageLedger)
-            .values(rows.map((row) => ({ ...row, contentItemId: null })));
+            .values(rows.map((row) => ({ ...row, contentItemId: null, adaptationId: null })));
           return;
         } catch (retryError) {
           this.logger.error(
@@ -2199,8 +2227,8 @@ export class ContentRepository {
       }
       this.logger.error(
         `USAGE RECORDING FAILED: ${usage.length} billed ${usage[0]?.record.provider} call(s) could not be written to the ledger — ` +
-          `this org's spend is understated by them, and its refine allowance will not count them. ` +
-          `orgId=${orgId} contentItemId=${contentItemId} step=${REFINE_STEP} ` +
+          `this org's spend is understated by them, and its editor AI allowance will not count them. ` +
+          `orgId=${orgId} contentItemId=${contentItemId} step=${usage[0]?.attribution.step} ` +
           `error=${error instanceof Error ? error.message : String(error)}`,
       );
     }
@@ -2602,20 +2630,205 @@ export class ContentRepository {
     }
   }
 
+  /** Spend one bounded model call, then stage its answer without changing publishable text. */
+  async readapt(
+    orgId: string,
+    itemId: string,
+    adaptationId: string,
+    userId: string,
+  ): Promise<AdaptationProposal> {
+    const item = await this.refinableItem(orgId, itemId);
+    const [adaptation] = await db
+      .select({
+        id: schema.adaptations.id,
+        status: schema.adaptations.status,
+        body: schema.adaptations.body,
+        channelId: schema.adaptations.channelId,
+      })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, itemId),
+          eq(schema.adaptations.id, adaptationId),
+        ),
+      )
+      .limit(1);
+    if (!adaptation) throw notFound("adaptation_not_found", "Adaptation not found");
+    if (!isEditableAdaptationStatus(adaptation.status)) {
+      throw conflict(
+        PINNED_ADAPTATION_CODE[adaptation.status],
+        PINNED_ADAPTATION_MESSAGE[adaptation.status],
+      );
+    }
+    const [channel] = await db
+      .select({
+        id: schema.channels.id,
+        name: schema.channels.name,
+        platform: schema.channels.platform,
+      })
+      .from(schema.channels)
+      .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, adaptation.channelId)))
+      .limit(1);
+    if (!channel) throw notFound("channel_not_found", "Channel not found");
+    if (await this.overEditorAiBudget(orgId)) {
+      throw conflict(
+        "readapt_limit_reached",
+        `This organization has already made ${MAX_REFINE_CALLS_PER_HOUR} editor AI calls in the last hour`,
+      );
+    }
+    const credential = await this.refineCredential(orgId, "readapt");
+    const outcome = await this.readapter.run({
+      credential,
+      brand: await this.brandFor(orgId, item.brandId),
+      channel: channel as StepChannel,
+      masterBody: normalizeNewlines(item.body),
+      previousBody: adaptation.body === null ? null : normalizeNewlines(adaptation.body),
+    });
+    await this.recordEditorUsage(orgId, itemId, outcome.usage, adaptationId);
+    if (!outcome.ok) {
+      throw conflict(
+        outcome.failure === "timed_out" ? "readapt_timed_out" : "readapt_failed",
+        "The model could not adapt this channel; nothing was changed",
+      );
+    }
+    const row = {
+      orgId,
+      contentItemId: itemId,
+      adaptationId,
+      createdBy: userId,
+      masterBody: normalizeNewlines(item.body),
+      previousBody: adaptation.body === null ? null : normalizeNewlines(adaptation.body),
+      proposal: normalizeNewlines(outcome.text),
+      reason: outcome.reason,
+    };
+    return db.transaction(async (tx) => {
+      // The adaptation precedes the item everywhere in this repository.
+      const [locked] = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, itemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("no key update");
+      if (!locked) throw notFound("adaptation_not_found", "Adaptation not found");
+      const [parent] = await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
+        .limit(1)
+        .for("no key update");
+      if (!parent) throw notFound("content_not_found", "Content item not found");
+      await tx
+        .delete(schema.adaptationProposals)
+        .where(eq(schema.adaptationProposals.adaptationId, adaptationId));
+      const [staged] = await tx
+        .insert(schema.adaptationProposals)
+        .values(row)
+        .returning(ADAPTATION_PROPOSAL_COLUMNS);
+      if (!staged) throw new Error("adaptation proposal was not staged");
+      return staged;
+    });
+  }
+
+  async acceptReadapt(orgId: string, itemId: string, adaptationId: string, proposalId: string) {
+    await db.transaction(async (tx) => {
+      const [adaptation] = await tx
+        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, itemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!adaptation) throw notFound("adaptation_not_found", "Adaptation not found");
+      const item = await this.requireEditableItem(tx, orgId, itemId);
+      if (!isEditableAdaptationStatus(adaptation.status)) {
+        throw conflict(
+          PINNED_ADAPTATION_CODE[adaptation.status],
+          PINNED_ADAPTATION_MESSAGE[adaptation.status],
+        );
+      }
+      const [proposal] = await tx
+        .select(ADAPTATION_PROPOSAL_COLUMNS)
+        .from(schema.adaptationProposals)
+        .where(
+          and(
+            eq(schema.adaptationProposals.orgId, orgId),
+            eq(schema.adaptationProposals.contentItemId, itemId),
+            eq(schema.adaptationProposals.adaptationId, adaptationId),
+            eq(schema.adaptationProposals.id, proposalId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!proposal) throw notFound("readapt_proposal_not_found", "Channel suggestion not found");
+      if (
+        normalizeNewlines(item.body) !== proposal.masterBody ||
+        (adaptation.body === null ? null : normalizeNewlines(adaptation.body)) !==
+          proposal.previousBody
+      ) {
+        throw conflict(
+          "readapt_source_changed",
+          "The source or channel text changed; ask for a new adaptation",
+        );
+      }
+      if (adaptation.body !== proposal.proposal) {
+        await tx
+          .update(schema.adaptations)
+          .set({ body: proposal.proposal, origin: "ai" })
+          .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+        await tx.insert(schema.contentVersions).values({
+          orgId,
+          contentItemId: itemId,
+          adaptationId,
+          body: proposal.proposal,
+          origin: "ai",
+          scope: "full",
+          createdBy: null,
+        });
+      }
+      await tx
+        .delete(schema.adaptationProposals)
+        .where(eq(schema.adaptationProposals.id, proposalId));
+    });
+    return this.get(orgId, itemId);
+  }
+
+  async discardReadapt(
+    orgId: string,
+    itemId: string,
+    adaptationId: string,
+    proposalId: string,
+  ): Promise<void> {
+    const [deleted] = await db
+      .delete(schema.adaptationProposals)
+      .where(
+        and(
+          eq(schema.adaptationProposals.orgId, orgId),
+          eq(schema.adaptationProposals.contentItemId, itemId),
+          eq(schema.adaptationProposals.adaptationId, adaptationId),
+          eq(schema.adaptationProposals.id, proposalId),
+        ),
+      )
+      .returning({ id: schema.adaptationProposals.id });
+    if (!deleted) throw notFound("readapt_proposal_not_found", "Channel suggestion not found");
+  }
+
   /**
    * Same pin as `update`, one level down: an approved item's per-channel
    * override is the exact text that channel will receive, so it is frozen for
-   * as long as a delivery is outstanding.
-   *
-   * Both conditions are checked, not just the item's: the two can disagree
-   * after a partial fan-out, where one channel published and the item is still
-   * `approved`.
-   *
-   * A changed override leaves a version row of its own, at the ADAPTATION's
-   * level — the same rule as `update`, one level down, and the level matters:
-   * filing one channel's text as the master body's would make a history that
-   * restores the wrong text into the wrong place. The authorship-per-sentence spec's §6 says so explicitly
-   * because the design's earlier draft was silent about this method.
+   * as long as a delivery is outstanding. A changed override leaves a version
+   * row at the adaptation level, where restore will find it.
    */
   async updateAdaptation(
     orgId: string,

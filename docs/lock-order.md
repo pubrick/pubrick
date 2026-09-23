@@ -4,12 +4,18 @@
 
 ```
 brands  →  pipeline_runs  →  adaptations  →  channels  →  content_items  →
-refine_proposals
+refine_proposals / adaptation_proposals
 ```
 
 Every transaction that takes row locks on more than one of these tables takes
 them in that order. A transaction that needs only some of them skips the rest;
 it never goes backwards.
+
+Channel re-adaptation stages its proposal after the model returns. The stage
+transaction locks its adaptation, then its item, then replaces the proposal.
+Accept takes the same two parent locks before reading the proposal and writing
+an AI version. Discard only deletes the proposal. The proposal's composite
+foreign key also checks that its adaptation belongs to its content item.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,

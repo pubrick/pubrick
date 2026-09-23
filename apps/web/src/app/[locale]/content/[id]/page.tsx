@@ -1,5 +1,6 @@
 "use client";
 
+import type { AdaptationProposal } from "@pubrick/shared";
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -138,6 +139,7 @@ type ContentItem = {
    * after any of those — there is no separate GET.
    */
   refineProposal: RefineProposal | null;
+  adaptationProposals: AdaptationProposal[];
   /**
    * What that run was asked for — the source strip's whole input, or `null`
    * for a hand-written draft. `RunInput` is the column's own schema, so this
@@ -145,6 +147,14 @@ type ContentItem = {
    */
   runInput: RunInput | null;
 };
+
+/** Match the API's edit gate for a channel and its parent post. */
+function canEditChannel(item: ContentItem, adaptation: Adaptation): boolean {
+  return (
+    ["draft", "partially_published", "rejected", "failed"].includes(item.status) &&
+    ["pending", "failed"].includes(adaptation.status)
+  );
+}
 
 /**
  * One frozen empty array for every adaptation with no `ai` version of its own.
@@ -220,6 +230,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+  const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   /**
@@ -581,6 +592,80 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
     } catch (err) {
       handleError(err);
+    }
+  }
+
+  async function proposeReadapt(adaptationId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      const staged = await api<AdaptationProposal>(
+        `/api/content/${id}/adaptations/${adaptationId}/readapt`,
+        { method: "POST" },
+      );
+      applyToItem((previous) =>
+        previous
+          ? {
+              ...previous,
+              adaptationProposals: [
+                ...(previous.adaptationProposals ?? []).filter(
+                  (p) => p.adaptationId !== adaptationId,
+                ),
+                staged,
+              ],
+            }
+          : previous,
+      );
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
+    }
+  }
+
+  async function acceptReadapt(adaptationId: string, proposalId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      const updated = await api<ContentItem>(
+        `/api/content/${id}/adaptations/${adaptationId}/readapt/${proposalId}/accept`,
+        { method: "POST" },
+      );
+      applyToItem(() => updated);
+      const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
+      if (adaptation)
+        setOverrideDrafts((drafts) => ({ ...drafts, [adaptationId]: adaptation.body ?? "" }));
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
+    }
+  }
+
+  async function discardReadapt(adaptationId: string, proposalId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      await apiVoid(`/api/content/${id}/adaptations/${adaptationId}/readapt/${proposalId}`, {
+        method: "DELETE",
+      });
+      applyToItem((previous) =>
+        previous
+          ? {
+              ...previous,
+              adaptationProposals: (previous.adaptationProposals ?? []).filter(
+                (p) => p.id !== proposalId,
+              ),
+            }
+          : previous,
+      );
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
     }
   }
 
@@ -1355,11 +1440,88 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               showCount
               rows={4}
             />
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
                 {t("saveOverride")}
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => proposeReadapt(a.id)}
+                disabled={
+                  readaptBusy !== null ||
+                  draftMoved ||
+                  (overrideDrafts[a.id] ?? "") !== (a.body ?? "") ||
+                  !canEditChannel(item, a)
+                }
+              >
+                {readaptBusy === a.id ? t("readaptWorking") : t("readaptAction")}
+              </Button>
             </div>
+            {(draftMoved || (overrideDrafts[a.id] ?? "") !== (a.body ?? "")) && (
+              <p className="mt-2 text-sm text-fg-tertiary">{t("readaptSaveFirst")}</p>
+            )}
+            {!canEditChannel(item, a) && (
+              <p className="mt-2 text-sm text-fg-tertiary">{t("versionPinned")}</p>
+            )}
+            {(item.adaptationProposals ?? [])
+              .filter((p) => p.adaptationId === a.id)
+              .map((p) => {
+                const stale = p.masterBody !== item.body || p.previousBody !== a.body;
+                return (
+                  <section
+                    key={p.id}
+                    aria-label={t("readaptSuggestion")}
+                    className="mt-4 rounded-md border border-border-soft bg-bg-sunken p-4"
+                  >
+                    <h3 className="text-sm font-semibold text-fg">{t("readaptSuggestion")}</h3>
+                    <p className="mt-1 text-sm text-fg-secondary">{p.reason}</p>
+                    <p className="mt-3 whitespace-pre-wrap text-sm text-fg">{p.proposal}</p>
+                    {stale && (
+                      <p role="alert" className="mt-2 text-sm text-danger">
+                        {t("readaptStale")}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => acceptReadapt(a.id, p.id)}
+                        disabled={
+                          readaptBusy !== null ||
+                          stale ||
+                          draftMoved ||
+                          !canEditChannel(item, a) ||
+                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                        }
+                      >
+                        {t("readaptAccept")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => proposeReadapt(a.id)}
+                        disabled={
+                          readaptBusy !== null ||
+                          draftMoved ||
+                          !canEditChannel(item, a) ||
+                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                        }
+                      >
+                        {t("refineRetry")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => discardReadapt(a.id, p.id)}
+                        disabled={readaptBusy !== null}
+                      >
+                        {t("refineDiscard")}
+                      </Button>
+                    </div>
+                  </section>
+                );
+              })}
             <VersionHistory
               itemId={id}
               adaptationId={a.id}
@@ -1367,10 +1529,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               draftBody={
                 (overrideDrafts[a.id] ?? "").trim() === "" ? null : (overrideDrafts[a.id] ?? "")
               }
-              editable={
-                ["draft", "partially_published", "rejected", "failed"].includes(item.status) &&
-                ["pending", "failed"].includes(a.status)
-              }
+              editable={canEditChannel(item, a)}
               onRestored={async (body) => {
                 setOverrideDrafts((current) => ({ ...current, [a.id]: body }));
                 await reload();

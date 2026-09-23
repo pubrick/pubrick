@@ -115,6 +115,25 @@ version body cannot be null. Both limits follow the existing version writer;
 future history work should address them deliberately rather than synthesize a
 body that was never saved.
 
+### Re-adapting a channel in the editor
+
+`POST /api/content/:id/adaptations/:adaptationId/readapt` asks the configured
+BYOK model to rewrite the saved master post for one channel. It sends the
+current channel text as context when present. The response is stored in
+`adaptation_proposals`, one immutable proposal per adaptation, and returned
+with the item on reload. The model call runs outside any row lock; every
+physical call is recorded in `usage_ledger` with the content item, adaptation,
+and channel. Refinement and re-adaptation share the editor's hourly allowance.
+
+Accept uses only the stored model answer. Under the adaptation and item locks,
+it checks that both source texts still match those shown to the model, updates
+the channel body and its AI origin, and appends a full AI version. If either
+source changed, it returns `readapt_source_changed` and keeps the paid
+proposal for review or discard. A newer request supersedes the old proposal
+with a new ID; a failed request leaves the existing proposal intact. Discard
+never changes the channel text. Published or in-flight adaptations cannot be
+re-adapted until the existing edit rules make them editable again.
+
 ## The rules that cross package boundaries
 
 Each of these is enforced somewhere specific. If you change one, find every

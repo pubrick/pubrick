@@ -140,6 +140,38 @@ export class ContentController {
     return this.content.updateAdaptation(orgId, id, adaptationId, body, userId);
   }
 
+  @Post(":id/adaptations/:adaptationId/readapt")
+  readapt(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+  ) {
+    return this.content.readapt(orgId, id, adaptationId, userId);
+  }
+
+  @Post(":id/adaptations/:adaptationId/readapt/:proposalId/accept")
+  @HttpCode(200)
+  acceptReadapt(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptReadapt(orgId, id, adaptationId, proposalId);
+  }
+
+  @Delete(":id/adaptations/:adaptationId/readapt/:proposalId")
+  @HttpCode(204)
+  async discardReadapt(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardReadapt(orgId, id, adaptationId, proposalId);
+  }
+
   /**
    * The read receipt. A POST, never the GET above: the public API and the MCP
    * server will issue GETs with no human present, and stamping there would let
