@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
 import { decryptJson, type NotificationEvent } from "@pubrick/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -12,11 +12,184 @@ const COPY: Record<NotificationEvent, string> = {
     "A publication failed. Open the post to review the reason and retry if appropriate.",
   delivery_unknown:
     "Delivery could not be confirmed. Check the channel before retrying: the post may already be live.",
+  morning_digest: "",
 };
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
+
+  /** Five-minute, bounded keyset scan. Each brand/date is claimed transactionally. */
+  async scanDigests(): Promise<void> {
+    let after: string | null = null;
+    for (;;) {
+      const configs = await db
+        .select({
+          brandId: schema.notificationDigestConfigs.brandId,
+          orgId: schema.notificationDigestConfigs.orgId,
+        })
+        .from(schema.notificationDigestConfigs)
+        .innerJoin(
+          schema.brands,
+          and(
+            eq(schema.brands.id, schema.notificationDigestConfigs.brandId),
+            eq(schema.brands.orgId, schema.notificationDigestConfigs.orgId),
+          ),
+        )
+        .innerJoin(
+          schema.notificationSettings,
+          and(
+            eq(schema.notificationSettings.orgId, schema.notificationDigestConfigs.orgId),
+            eq(schema.notificationSettings.enabled, true),
+            sql`${schema.notificationSettings.credentialsEncrypted} is not null`,
+          ),
+        )
+        .where(
+          and(
+            eq(schema.notificationDigestConfigs.enabled, true),
+            after ? gt(schema.notificationDigestConfigs.brandId, after) : undefined,
+          ),
+        )
+        .orderBy(schema.notificationDigestConfigs.brandId)
+        .limit(100);
+      for (const config of configs) {
+        try {
+          await this.snapshotDigest(config.orgId, config.brandId);
+        } catch {
+          this.logger.warn(`Digest snapshot failed for brand ${config.brandId}`);
+        }
+      }
+      if (configs.length < 100) return;
+      after = configs[configs.length - 1]?.brandId ?? null;
+    }
+  }
+
+  private async snapshotDigest(orgId: string, brandId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [config] = await tx
+        .select({
+          enabled: schema.notificationDigestConfigs.enabled,
+          timezone: schema.notificationDigestConfigs.timezone,
+          localHour: schema.notificationDigestConfigs.localHour,
+        })
+        .from(schema.notificationDigestConfigs)
+        .where(
+          and(
+            eq(schema.notificationDigestConfigs.orgId, orgId),
+            eq(schema.notificationDigestConfigs.brandId, brandId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!config?.enabled) return;
+      const [destination] = await tx
+        .select({
+          enabled: schema.notificationSettings.enabled,
+          hasCredentials: sql<boolean>`${schema.notificationSettings.credentialsEncrypted} is not null`,
+        })
+        .from(schema.notificationSettings)
+        .where(eq(schema.notificationSettings.orgId, orgId))
+        .limit(1);
+      if (!destination?.enabled || !destination.hasCredentials) return;
+      const [brand] = await tx
+        .select({ name: schema.brands.name })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.id, brandId), eq(schema.brands.orgId, orgId)))
+        .limit(1);
+      if (!brand) return;
+      const [clock] = await tx
+        .select({
+          localDate: sql<string>`(timezone(${config.timezone}, now())::date)::text`,
+          previousDate: sql<string>`((timezone(${config.timezone}, now())::date - 1))::text`,
+          localHour: sql<number>`extract(hour from timezone(${config.timezone}, now()))::int`,
+        })
+        .from(schema.notificationDigestConfigs)
+        .where(eq(schema.notificationDigestConfigs.brandId, brandId))
+        .limit(1);
+      if (!clock || clock.localHour !== config.localHour) return;
+      const previousStart = sql`((${clock.previousDate}::date)::timestamp at time zone ${config.timezone})`;
+      const todayStart = sql`((${clock.localDate}::date)::timestamp at time zone ${config.timezone})`;
+      const [runs] = await tx
+        .select({
+          generated: sql<number>`count(*) filter (where ${schema.pipelineRuns.status} = 'succeeded')::int`,
+          failed: sql<number>`count(*) filter (where ${schema.pipelineRuns.status} = 'failed')::int`,
+          unrecorded: sql<boolean>`coalesce(bool_or(${schema.pipelineRuns.unrecordedCalls} is null or ${schema.pipelineRuns.unrecordedCalls} > 0), false)`,
+        })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+            sql`${schema.pipelineRuns.createdAt} >= (${previousStart} at time zone 'UTC')`,
+            sql`${schema.pipelineRuns.createdAt} < (${todayStart} at time zone 'UTC')`,
+          ),
+        );
+      const [backlog] = await tx
+        .select({ review: sql<number>`count(*)::int` })
+        .from(schema.contentItems)
+        .where(
+          and(
+            eq(schema.contentItems.orgId, orgId),
+            eq(schema.contentItems.brandId, brandId),
+            eq(schema.contentItems.status, "draft"),
+          ),
+        );
+      const [spend] = await tx
+        .select({
+          usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}), 0)::text`,
+          unknown: sql<boolean>`coalesce(bool_or(${schema.usageLedger.costUsd} is null and ${schema.usageLedger.outcome} is distinct from 'rejected'), false)`,
+        })
+        .from(schema.usageLedger)
+        .innerJoin(
+          schema.pipelineRuns,
+          and(
+            eq(schema.pipelineRuns.id, schema.usageLedger.runId),
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.usageLedger.orgId, orgId),
+            sql`${schema.usageLedger.createdAt} >= (${previousStart} at time zone 'UTC')`,
+            sql`${schema.usageLedger.createdAt} < (${todayStart} at time zone 'UTC')`,
+          ),
+        );
+      const summary = {
+        generated: runs?.generated ?? 0,
+        failed: runs?.failed ?? 0,
+        review: backlog?.review ?? 0,
+        spendUsd: Number(spend?.usd ?? 0).toFixed(2),
+        unknownCost: Boolean(spend?.unknown || runs?.unrecorded),
+      };
+      const message = [
+        `Pubrick daily digest · ${brand.name.slice(0, 100)} · ${clock.previousDate}`,
+        `Runs started yesterday, now completed: ${summary.generated}`,
+        `Runs started yesterday, now failed: ${summary.failed}`,
+        `Drafts awaiting review now: ${summary.review}`,
+        `Generation-run spend: ${summary.unknownCost ? "at least " : ""}$${summary.spendUsd}${summary.unknownCost ? " (some cost is unknown)" : ""}`,
+      ].join("\n");
+      const [snapshot] = await tx
+        .insert(schema.notificationDigestSnapshots)
+        .values({
+          orgId,
+          brandId,
+          localDate: clock.localDate,
+          timezone: config.timezone,
+          summary,
+          message,
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.notificationDigestSnapshots.id });
+      if (!snapshot) return;
+      await tx.insert(schema.notificationEvents).values({
+        orgId,
+        event: "morning_digest",
+        subjectId: snapshot.id,
+        targetId: brandId,
+      });
+    });
+  }
 
   /** Claims BEFORE sending: an interrupted request is ambiguous and never auto-retried. */
   async scan(): Promise<void> {
@@ -37,6 +210,7 @@ export class NotificationsService {
           id: schema.notificationEvents.id,
           orgId: schema.notificationEvents.orgId,
           event: schema.notificationEvents.event,
+          subjectId: schema.notificationEvents.subjectId,
           targetId: schema.notificationEvents.targetId,
         });
       const event = rows[0];
@@ -49,9 +223,11 @@ export class NotificationsService {
     id: string;
     orgId: string;
     event: NotificationEvent;
+    subjectId: string;
     targetId: string;
   }) {
     let status: "sent" | "failed" | "skipped" | "attempted" = "skipped";
+    let attemptedSend = false;
     try {
       const rows = await db
         .select({
@@ -65,22 +241,71 @@ export class NotificationsService {
         .limit(1);
       const settings = rows[0];
       const wanted =
-        event.event === "draft_ready" ? settings?.draftReady : settings?.deliveryProblem;
+        event.event === "morning_digest"
+          ? true
+          : event.event === "draft_ready"
+            ? settings?.draftReady
+            : settings?.deliveryProblem;
       if (settings?.enabled && wanted && settings.credentialsEncrypted) {
-        const credentials = decryptJson<{ botToken: string; chatId: string }>(
-          settings.credentialsEncrypted,
-          env.APP_ENCRYPTION_KEY,
-        );
-        const url = new URL(`/en/content/${event.targetId}`, env.WEB_ORIGIN).toString();
-        const result = await sendTelegramNotification(credentials, COPY[event.event], {
-          baseUrl: env.TELEGRAM_API_BASE_URL,
-          button: { text: "Open post", url },
-        });
-        status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+        const digest =
+          event.event === "morning_digest"
+            ? (
+                await db
+                  .select({
+                    message: schema.notificationDigestSnapshots.message,
+                    brandId: schema.notificationDigestSnapshots.brandId,
+                  })
+                  .from(schema.notificationDigestSnapshots)
+                  .where(
+                    and(
+                      eq(schema.notificationDigestSnapshots.id, event.subjectId),
+                      eq(schema.notificationDigestSnapshots.orgId, event.orgId),
+                      eq(schema.notificationDigestSnapshots.brandId, event.targetId),
+                    ),
+                  )
+                  .limit(1)
+              )[0]
+            : null;
+        let digestEnabled = event.event !== "morning_digest";
+        if (event.event === "morning_digest") {
+          const [config] = await db
+            .select({ enabled: schema.notificationDigestConfigs.enabled })
+            .from(schema.notificationDigestConfigs)
+            .where(
+              and(
+                eq(schema.notificationDigestConfigs.orgId, event.orgId),
+                eq(schema.notificationDigestConfigs.brandId, event.targetId),
+              ),
+            )
+            .limit(1);
+          digestEnabled = Boolean(config?.enabled && digest);
+        }
+        if (digestEnabled) {
+          const credentials = decryptJson<{ botToken: string; chatId: string }>(
+            settings.credentialsEncrypted,
+            env.APP_ENCRYPTION_KEY,
+          );
+          const url = new URL(
+            event.event === "morning_digest"
+              ? `/en/brands/${event.targetId}`
+              : `/en/content/${event.targetId}`,
+            env.WEB_ORIGIN,
+          ).toString();
+          attemptedSend = true;
+          const result = await sendTelegramNotification(
+            credentials,
+            digest?.message ?? COPY[event.event],
+            {
+              baseUrl: env.TELEGRAM_API_BASE_URL,
+              button: { text: event.event === "morning_digest" ? "Open brand" : "Open post", url },
+            },
+          );
+          status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+        }
       }
     } catch {
       // A fetch exception can contain the bot token in its URL. Log only identifiers.
-      status = "failed";
+      status = attemptedSend ? "attempted" : "failed";
       this.logger.warn(`Notification ${event.id} could not be delivered`);
     }
     await db

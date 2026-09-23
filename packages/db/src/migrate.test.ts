@@ -132,6 +132,8 @@ const ZONED_COLUMNS = [
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
+  "notification_digest_configs.updated_at",
+  "notification_digest_snapshots.created_at",
   "notification_events.created_at",
   "notification_events.updated_at",
   "notification_settings.updated_at",
@@ -225,6 +227,7 @@ const NON_ENUM_CHECKS = [
   // Notification tables arrive after the historical seed; worker outbox tests
   // exercise their values, and schema-invariants checks the enum expressions.
   "notification_events_event_check",
+  "notification_digest_configs_hour_check",
   "notification_events_status_check",
   // Added with the comment sample after the historical seed; worker persistence e2e
   // proves the database rejects an off-list status on a populated story.

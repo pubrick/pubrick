@@ -2,13 +2,38 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
 import { decryptJson, encryptJson, type NotificationSettingsUpdate } from "@pubrick/shared";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
 @Injectable()
 export class NotificationsRepository {
   async get(orgId: string) {
+    const digests = await db
+      .select({
+        brandId: schema.brands.id,
+        brandName: schema.brands.name,
+        enabled: schema.notificationDigestConfigs.enabled,
+        timezone: schema.notificationDigestConfigs.timezone,
+        localHour: schema.notificationDigestConfigs.localHour,
+      })
+      .from(schema.brands)
+      .leftJoin(
+        schema.notificationDigestConfigs,
+        and(
+          eq(schema.notificationDigestConfigs.brandId, schema.brands.id),
+          eq(schema.notificationDigestConfigs.orgId, orgId),
+        ),
+      )
+      .where(eq(schema.brands.orgId, orgId))
+      .orderBy(schema.brands.name, schema.brands.id);
+    const digestSettings = digests.map((digest) => ({
+      brandId: digest.brandId,
+      brandName: digest.brandName,
+      enabled: digest.enabled ?? false,
+      timezone: digest.timezone ?? "UTC",
+      localHour: digest.localHour ?? 9,
+    }));
     const rows = await db
       .select({
         enabled: schema.notificationSettings.enabled,
@@ -26,8 +51,15 @@ export class NotificationsRepository {
           draftReady: row.draftReady,
           deliveryProblem: row.deliveryProblem,
           hasCredentials: row.hasCredentials,
+          digests: digestSettings,
         }
-      : { enabled: false, draftReady: false, deliveryProblem: true, hasCredentials: false };
+      : {
+          enabled: false,
+          draftReady: false,
+          deliveryProblem: true,
+          hasCredentials: false,
+          digests: digestSettings,
+        };
   }
 
   async update(orgId: string, value: NotificationSettingsUpdate) {
@@ -48,25 +80,59 @@ export class NotificationsRepository {
             },
             env.APP_ENCRYPTION_KEY,
           );
-    await db
-      .insert(schema.notificationSettings)
-      .values({
-        orgId,
-        enabled: value.enabled,
-        draftReady: value.draftReady,
-        deliveryProblem: value.deliveryProblem,
-        credentialsEncrypted: credentialsEncrypted ?? null,
-      })
-      .onConflictDoUpdate({
-        target: schema.notificationSettings.orgId,
-        set: {
+    const digests = value.digests ?? [];
+    if (new Set(digests.map((digest) => digest.brandId)).size !== digests.length) {
+      throw new BadRequestException("A brand may appear only once in a digest update");
+    }
+    if (digests.length) {
+      const owned = new Set(
+        (
+          await db
+            .select({ id: schema.brands.id })
+            .from(schema.brands)
+            .where(eq(schema.brands.orgId, orgId))
+        ).map((brand) => brand.id),
+      );
+      if (digests.some((digest) => !owned.has(digest.brandId))) {
+        throw new BadRequestException("Digest brand is outside the active organization");
+      }
+    }
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(schema.notificationSettings)
+        .values({
+          orgId,
           enabled: value.enabled,
           draftReady: value.draftReady,
           deliveryProblem: value.deliveryProblem,
-          ...(credentialsEncrypted ? { credentialsEncrypted } : {}),
-          updatedAt: new Date(),
-        },
-      });
+          credentialsEncrypted: credentialsEncrypted ?? null,
+        })
+        .onConflictDoUpdate({
+          target: schema.notificationSettings.orgId,
+          set: {
+            enabled: value.enabled,
+            draftReady: value.draftReady,
+            deliveryProblem: value.deliveryProblem,
+            ...(credentialsEncrypted ? { credentialsEncrypted } : {}),
+            updatedAt: new Date(),
+          },
+        });
+      for (const digest of digests) {
+        await tx
+          .insert(schema.notificationDigestConfigs)
+          .values({ orgId, ...digest })
+          .onConflictDoUpdate({
+            target: schema.notificationDigestConfigs.brandId,
+            set: {
+              enabled: digest.enabled,
+              timezone: digest.timezone,
+              localHour: digest.localHour,
+              updatedAt: new Date(),
+            },
+            setWhere: eq(schema.notificationDigestConfigs.orgId, orgId),
+          });
+      }
+    });
     return this.get(orgId);
   }
 

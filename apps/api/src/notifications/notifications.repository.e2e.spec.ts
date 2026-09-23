@@ -48,6 +48,7 @@ describe.skipIf(!url)("notification settings repository", () => {
       draftReady: true,
       deliveryProblem: true,
       hasCredentials: true,
+      digests: [],
     });
     const [stored] = await direct.db
       .select({ credentialsEncrypted: schema.notificationSettings.credentialsEncrypted })
@@ -60,7 +61,43 @@ describe.skipIf(!url)("notification settings repository", () => {
       draftReady: false,
       deliveryProblem: true,
       hasCredentials: false,
+      digests: [],
     });
     expect(await repo.test(second)).toEqual({ ok: false });
+    const [owned] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: first, name: "Owned" })
+      .returning({ id: schema.brands.id });
+    const [foreign] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: second, name: "Foreign" })
+      .returning({ id: schema.brands.id });
+    const selected = {
+      brandId: owned?.id as string,
+      enabled: true,
+      timezone: "Europe/Moscow",
+      localHour: 9,
+    };
+    await expect(
+      repo.update(first, {
+        enabled: true,
+        draftReady: true,
+        deliveryProblem: true,
+        digests: [{ ...selected, brandId: foreign?.id as string }],
+      }),
+    ).rejects.toThrow("outside");
+    expect((await repo.get(first)).digests).toEqual([
+      { ...selected, brandName: "Owned", enabled: false, timezone: "UTC" },
+    ]);
+    const updated = await repo.update(first, {
+      enabled: true,
+      draftReady: true,
+      deliveryProblem: true,
+      digests: [selected],
+    });
+    expect(updated.digests).toEqual([{ ...selected, brandName: "Owned" }]);
+    expect((await repo.get(second)).digests).toEqual([
+      { brandId: foreign?.id, brandName: "Foreign", enabled: false, timezone: "UTC", localHour: 9 },
+    ]);
   });
 });

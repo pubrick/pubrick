@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -47,16 +48,26 @@ export default function NotificationsPage() {
       enabled: settings.enabled,
       draftReady: settings.draftReady,
       deliveryProblem: settings.deliveryProblem,
+      digests: settings.digests.map(({ brandId, enabled, timezone, localHour }) => ({
+        brandId,
+        enabled,
+        timezone,
+        localHour,
+      })),
       ...(botToken || chatId ? { botToken, chatId } : {}),
     };
     const parsed = notificationSettingsUpdateSchema.safeParse(body);
+    const invalidDigest =
+      !parsed.success && parsed.error.issues.some((issue) => issue.path[0] === "digests");
     if (
       !parsed.success ||
       Boolean(botToken) !== Boolean(chatId) ||
       (settings.enabled && !settings.hasCredentials && !botToken)
     ) {
-      setValidationError(t("bothCredentials"));
-      document.getElementById("notification-bot-token")?.focus();
+      setValidationError(t(invalidDigest ? "digestInvalid" : "bothCredentials"));
+      document
+        .getElementById(invalidDigest ? "notification-digest-timezone" : "notification-bot-token")
+        ?.focus();
       return;
     }
     setBusy(true);
@@ -171,6 +182,74 @@ export default function NotificationsPage() {
                 />
                 {t("deliveryProblem")}
               </label>
+              {settings.digests.length > 0 && (
+                <section aria-label={t("digestTitle")} className="border-t border-border-soft pt-4">
+                  <h3 className="text-sm font-semibold text-fg">{t("digestTitle")}</h3>
+                  <p className="mb-3 text-sm text-fg-secondary">{t("digestHint")}</p>
+                  <div className="flex flex-col gap-3">
+                    {settings.digests.map((digest, index) => (
+                      <div
+                        key={digest.brandId}
+                        className="rounded-card border border-border px-3 py-2"
+                      >
+                        <label className="flex min-h-11 items-center gap-2 text-sm text-fg">
+                          <input
+                            type="checkbox"
+                            checked={digest.enabled}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                digests: settings.digests.map((item) =>
+                                  item.brandId === digest.brandId
+                                    ? { ...item, enabled: e.target.checked }
+                                    : item,
+                                ),
+                              })
+                            }
+                          />
+                          {t("digestBrand", { brand: digest.brandName })}
+                        </label>
+                        <Advanced dirty={digest.timezone !== "UTC" || digest.localHour !== 9}>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <Input
+                              id={index === 0 ? "notification-digest-timezone" : undefined}
+                              label={t("digestTimezone", { brand: digest.brandName })}
+                              value={digest.timezone}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  digests: settings.digests.map((item) =>
+                                    item.brandId === digest.brandId
+                                      ? { ...item, timezone: e.target.value }
+                                      : item,
+                                  ),
+                                })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              min={0}
+                              max={23}
+                              label={t("digestHour", { brand: digest.brandName })}
+                              value={digest.localHour}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  digests: settings.digests.map((item) =>
+                                    item.brandId === digest.brandId
+                                      ? { ...item, localHour: Number(e.target.value) }
+                                      : item,
+                                  ),
+                                })
+                              }
+                            />
+                          </div>
+                        </Advanced>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
             </form>
           )}
           {settings?.hasCredentials && (
