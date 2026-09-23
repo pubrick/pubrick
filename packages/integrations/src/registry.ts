@@ -1,6 +1,7 @@
 import type { PublishablePlatformId } from "@pubrick/shared";
 import { telegramPublisher } from "./telegram.js";
 import type { Publisher } from "./types.js";
+import { vkPublisher } from "./vk.js";
 
 /**
  * Every platform Pubrick can deliver a post to — one entry per implemented
@@ -23,6 +24,7 @@ import type { Publisher } from "./types.js";
  */
 const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   telegram: telegramPublisher as unknown as Publisher<never>,
+  vk: vkPublisher as unknown as Publisher<never>,
 };
 
 /**

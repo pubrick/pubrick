@@ -90,7 +90,8 @@
     "editCredsPartial": "Preencha todos os campos de credenciais ou deixe todos em branco. As credenciais novas substituem as guardadas por inteiro, então um formulário pela metade deixaria este canal sem conseguir publicar.",
     "editSave": "Salvar",
     "editCancel": "Cancelar",
-    "platformUnsupported": "Ainda não suportado"
+    "platformUnsupported": "Ainda não suportado",
+    "vkTokenHint": "Use um token de acesso de usuário do VK com permissão wall e o ID numérico positivo da comunidade. O usuário deve administrá-la."
   },
   "Content": {
     "title": "Fila",

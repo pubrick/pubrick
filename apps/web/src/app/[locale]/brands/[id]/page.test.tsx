@@ -256,7 +256,7 @@ describe("addChannel POST body (Step 3, Critical)", () => {
  * which fails this test for that platform, rather than silently skipping it.
  *
  * The ADD form can only reach the platforms Pubrick has an adapter for; the
- * seven it does not are disabled in the picker, and `user.selectOptions`
+ * unsupported ones are disabled in the picker, and `user.selectOptions`
  * refuses a disabled option exactly as a browser does. Every other platform's
  * field mapping is covered through the EDIT modal below, which renders for
  * whatever platform a stored channel says it is — including a row created
@@ -301,6 +301,13 @@ describe.each(PUBLISHABLE_PLATFORM_IDS)(
   },
 );
 
+it("explains the user token and community ID when VK is selected", async () => {
+  installHandlers([]);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "vk");
+  expect(screen.getByText(/VK user access token with wall permission/)).toBeInTheDocument();
+});
+
 /**
  * The add form's credential fields are cleared when the platform changes —
  * otherwise a value typed under one platform resurfaces in a same-named field
@@ -308,8 +315,8 @@ describe.each(PUBLISHABLE_PLATFORM_IDS)(
  *
  * The pair this needs is two PUBLISHABLE platforms sharing a credential field
  * name, computed here rather than hard-coded. It used to be vk + mastodon, both
- * of which the picker now disables: while Telegram is the only adapter there is
- * no such pair, the switch this describes cannot be performed at all, and
+ * of which the picker once disabled: while no two publishable adapters share a
+ * credential field, the switch this describes cannot be performed at all, and
  * driving it with a `fireEvent` the browser would refuse would be theatre. So
  * the suite is generated — no pair, no suite — and the guard in the picker's
  * `onChange` comes back under test on its own the day a second publisher lands.

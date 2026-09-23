@@ -68,7 +68,7 @@ const LANGUAGE_HINT_ID = "brand-language-hint";
 /**
  * The picker's two groups.
  *
- * Every platform this product names is still shown, and the seven with no
+ * Every platform this product names is still shown, and those with no
  * adapter are shown as what they are — `disabled`, under a heading that says
  * so — rather than hidden. Hiding them would answer "does Pubrick support VK?"
  * with silence; the honest answer is "not yet", and this is a product whose
@@ -519,7 +519,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               ))}
               {/* Named, and plainly marked as not yet deliverable. Disabled
                   rather than hidden: hiding them answers "does Pubrick support
-                  VK?" with silence, and this is the product that refuses to
+                  a platform?" with silence, and this is the product that refuses to
                   overstate what it can do. The browser will not select a
                   disabled option, so the credential fields for one are
                   unreachable — and `POST /api/channels` refuses the same set
@@ -557,6 +557,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               />
             ))}
           </div>
+          {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
         </form>
       </Card>
 
@@ -588,6 +589,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             required
           />
           <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          {editing?.platform === "vk" && (
+            <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>
+          )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (
               <Input

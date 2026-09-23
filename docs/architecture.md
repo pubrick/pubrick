@@ -60,7 +60,8 @@ steps live in `steps/`; the metering (`usage.ts`), the call budget
 (`pricing.ts`) are shared by every caller.
 
 **`packages/integrations`** — publishers, one per platform, behind a registry
-typed over the platforms `shared` declares as publishable. Today: Telegram. A
+typed over the platforms `shared` declares as publishable. Today: Telegram and
+VK community walls. A
 publisher's errors are one of three kinds — permanent, transient, or unknown
 outcome — and that distinction is the whole delivery story (below).
 

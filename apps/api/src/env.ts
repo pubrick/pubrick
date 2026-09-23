@@ -56,6 +56,7 @@ export const env = parseEnv({
     .default("true")
     .transform((v) => v === "true"),
   TELEGRAM_API_BASE_URL: z.string().default("https://api.telegram.org"),
+  VK_API_BASE_URL: z.string().default("https://api.vk.com/method"),
 });
 
 // A secret whose value is printed in this repository is not a secret. Refusing at boot

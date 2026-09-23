@@ -45,6 +45,7 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # Leave on unless something in front of Pubrick already rate-limits /api/auth.
       AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
+      VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
     # Localhost-only: the web service proxies /api, so the api needs no public port.
     # This mapping exists for local debugging (curl the health endpoint directly);
     # override the host side in .env if 3001 is already taken — API_HOST_PORT is
@@ -75,6 +76,7 @@ services:
       # failure at boot. Worker-only — the web needs no bound to paint an
       # overdue row (see .env.example).
       PUBLISH_MAX_LATENESS_HOURS: "${PUBLISH_MAX_LATENESS_HOURS:-6}"
+      VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
     depends_on:
       postgres: { condition: service_healthy }
       api: { condition: service_healthy }   # api healthcheck passes only after migrations ran (listen comes after runMigrations)

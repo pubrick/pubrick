@@ -90,7 +90,8 @@
     "editCredsPartial": "Rellena todos los campos de credenciales o déjalos todos vacíos. Las credenciales nuevas reemplazan a las guardadas en bloque, así que un formulario a medias dejaría este canal sin poder publicar.",
     "editSave": "Guardar",
     "editCancel": "Cancelar",
-    "platformUnsupported": "Todavía no compatible"
+    "platformUnsupported": "Todavía no compatible",
+    "vkTokenHint": "Usa un token de acceso de usuario de VK con permiso wall y el ID numérico positivo de la comunidad. El usuario debe administrarla."
   },
   "Content": {
     "title": "Cola",

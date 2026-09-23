@@ -25,6 +25,22 @@ describe.skipIf(!url)("channels verify e2e", () => {
     telegram = createServer((req, res) => {
       telegramCalls.push(req.url ?? "");
       const method = (req.url ?? "").split("/").pop();
+      if (req.url?.startsWith("/method/")) {
+        const vkBodies: Record<string, unknown> = {
+          "users.get": { response: [{ id: 7 }] },
+          "account.getAppPermissions": { response: 8192 },
+          "groups.getById": {
+            response: { groups: [{ id: 12345, name: "Bakery", is_admin: 1 }] },
+          },
+        };
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify(
+            vkBodies[method ?? ""] ?? { error: { error_code: 3, error_msg: "unknown" } },
+          ),
+        );
+        return;
+      }
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
@@ -54,6 +70,7 @@ describe.skipIf(!url)("channels verify e2e", () => {
     await new Promise<void>((resolve) => telegram.listen(0, resolve));
     const port = (telegram.address() as { port: number }).port;
     process.env.TELEGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
+    process.env.VK_API_BASE_URL = `http://127.0.0.1:${port}/method`;
 
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
@@ -115,6 +132,24 @@ describe.skipIf(!url)("channels verify e2e", () => {
     expect(result.body).toEqual({ ok: true, account: "@my_bot", target: "My Channel" });
     expect(JSON.stringify(result.body)).not.toContain("123:abc");
     expect(telegramCalls.some((u) => u.includes("getChatMember"))).toBe(true);
+  });
+
+  it("verifies a VK community through the API without exposing its token", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK",
+        credentials: { accessToken: "vk-api-secret", groupId: "12345" },
+      })
+      .expect(201);
+    const result = await agent.post(`/api/channels/${channel.body.id}/test`).send({}).expect(200);
+    expect(result.body).toEqual({ ok: true, account: "id7", target: "Bakery" });
+    expect(JSON.stringify(result.body)).not.toContain("vk-api-secret");
+    expect(telegramCalls).toContain("/method/groups.getById");
   });
 
   it("answers 200 with ok:false, not a 500, when the adapter gets a malformed platform response", async () => {

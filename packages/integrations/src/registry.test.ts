@@ -2,14 +2,16 @@ import { PLATFORM_IDS, PUBLISHABLE_PLATFORM_IDS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
 import { telegramPublisher } from "./telegram.js";
+import { vkPublisher } from "./vk.js";
 
 describe("getPublisher", () => {
   it("returns the adapter for an implemented platform", () => {
     expect(getPublisher("telegram")).toBe(telegramPublisher);
+    expect(getPublisher("vk")).toBe(vkPublisher);
   });
 
   it("returns undefined for a platform with no adapter yet", () => {
-    expect(getPublisher("vk")).toBeUndefined();
+    expect(getPublisher("dzen")).toBeUndefined();
   });
 
   it("returns undefined for Object.prototype members, not an inherited function", () => {
