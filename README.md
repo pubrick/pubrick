@@ -18,9 +18,10 @@
 
 ---
 
-Pubrick watches your sources (RSS, Telegram channels), drafts on-brand posts and
-articles with a team of AI agents — text and images — queues everything for
-**your** approval, publishes on schedule, and learns from what performs.
+Pubrick watches RSS and other web feeds, drafts on-brand posts with AI agents,
+queues them for **your** approval, and publishes approved posts on schedule.
+Telegram source monitoring, image generation, and performance feedback are in
+active development.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
@@ -37,8 +38,10 @@ per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
 provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
-brand; an article's title and summary can start a draft. See
-[watched sources](docs/watched-sources.md) for the exact limits. The per-brand
+brand; an article's title and summary can start a draft. You can also
+[fetch a public article into an editable preview](docs/source-extraction.md) and
+generate posts for selected channels. See [watched sources](docs/watched-sources.md)
+for the exact limits. The per-brand
 knowledge base uses text search and optional Gemini vector indexing. Other
 platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
@@ -49,8 +52,8 @@ Public RSS syndication is available for selected published posts; see
 
 ## Why Pubrick
 
-- **Human-in-the-loop by design** — nothing is published without approval
-  unless you explicitly enable autopilot. Anti-slop is the point.
+- **Human-in-the-loop by design** — every post needs approval before publishing.
+  Autopilot is planned as an explicit owner-controlled option.
 - **Brand voice** — voice, audience and content language are set per brand and
   go into every generation's instructions, so drafts sound like you rather than
   like a model. Brand knowledge notes can be selected as material for a draft;

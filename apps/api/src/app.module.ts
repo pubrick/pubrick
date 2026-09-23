@@ -13,6 +13,7 @@ import { OrgModule } from "./org/org.module";
 import { PromptsModule } from "./prompts/prompts.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
+import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
 import { SourcesModule } from "./sources/sources.module";
 import { TopicsModule } from "./topics/topics.module";
 
@@ -31,6 +32,7 @@ import { TopicsModule } from "./topics/topics.module";
     PromptsModule,
     AiCredentialsModule,
     RunsModule,
+    SourceExtractionModule,
     SourcesModule,
     TopicsModule,
   ],

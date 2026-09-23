@@ -210,7 +210,8 @@ export const runCreateSchema = z
       .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
       .optional(),
     /**
-     * The article, pasted. Normalised first and bounded second — the rule
+     * Article text, pasted or accepted from an explicit extraction preview.
+     * Normalised first and bounded second — the rule
      * `contentCreateSchema.body` follows for the same reason
      * (`CLAUDE.md`, `normalizeNewlines`): a `<textarea>` strips CR from its own
      * value, so `MAX_SOURCE_TEXT_LENGTH` has to measure what gets stored rather
@@ -223,7 +224,8 @@ export const runCreateSchema = z
     material: pastedMaterial,
     /**
      * Where the material came from. Recorded for the receipt and the draft; the
-     * server never fetches it, and it never reaches a model.
+     * generation never fetches it, and it never reaches a model. The separate
+     * preview endpoint can fetch a page before the person accepts its text.
      *
      * `http`/`https` only. `z.url()` alone constrains no scheme in zod 4, and
      * this value is rendered as an `<a href>` on two screens and read by the
@@ -425,9 +427,9 @@ export const sourceRunInputSchema = z.object({
    */
   text: z.string().min(1).nullable(),
   /**
-   * Where the material came from. Recorded; never fetched, and never sent to a
-   * model in any step — a URL in a prompt invites the model to write as though
-   * it had read the page, which nothing here ever did.
+   * Where the material came from. Recorded; never fetched by a run, and never
+   * sent to a model in any step — the separate preview endpoint may have fetched
+   * it before the text was accepted, but generation works from the stored copy.
    *
    * `http`/`https` only, for the reason `runCreateSchema.sourceUrl` gives, and
    * TOP-LEVEL rather than nested under an attribution object: the gate that
