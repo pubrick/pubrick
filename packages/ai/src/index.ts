@@ -11,6 +11,7 @@ export {
   type ModelCallOptions,
 } from "./generate.js";
 export {
+  embedKnowledgeBatch,
   embedKnowledgeText,
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,

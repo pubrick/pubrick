@@ -145,6 +145,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   topic_suggestions_cooldown: "topic_suggestions_cooldown",
   brand_not_found: "brand_not_found",
   knowledge_not_found: "knowledge_not_found",
+  knowledge_batch_owner_required: "knowledge_batch_owner_required",
   brand_has_no_channels: "brand_has_no_channels",
   run_limit_reached: "run_limit_reached",
   run_not_cancellable_succeeded: "run_not_cancellable_succeeded",

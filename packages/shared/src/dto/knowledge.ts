@@ -53,3 +53,6 @@ export const knowledgeImportSchema = z.object({
     .max(500),
 });
 export type KnowledgeImport = z.infer<typeof knowledgeImportSchema>;
+
+export const knowledgeBatchIndexSchema = z.object({ brandId: z.uuid() });
+export type KnowledgeBatchIndex = z.infer<typeof knowledgeBatchIndexSchema>;

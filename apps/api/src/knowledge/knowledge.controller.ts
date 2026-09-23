@@ -11,9 +11,11 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type KnowledgeBatchIndex,
   type KnowledgeCreate,
   type KnowledgeImport,
   type KnowledgeUpdate,
+  knowledgeBatchIndexSchema,
   knowledgeCreateSchema,
   knowledgeImportSchema,
   knowledgeUpdateSchema,
@@ -23,6 +25,7 @@ import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { KnowledgeRepository } from "./knowledge.repository";
 import { KnowledgeService } from "./knowledge.service";
+import { KnowledgeIndexOwnerGuard } from "./knowledge-index-owner.guard";
 
 @Controller("knowledge")
 @UseGuards(ActiveOrgGuard)
@@ -51,6 +54,20 @@ export class KnowledgeController {
     @Body(new ZodValidationPipe(knowledgeImportSchema)) data: KnowledgeImport,
   ) {
     return this.entries.import(orgId, data);
+  }
+
+  @Get("index-summary")
+  indexSummary(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.entries.unindexedCount(orgId, brandId).then((remaining) => ({ remaining }));
+  }
+
+  @Post("index-batch")
+  @UseGuards(KnowledgeIndexOwnerGuard)
+  indexBatch(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(knowledgeBatchIndexSchema)) data: KnowledgeBatchIndex,
+  ) {
+    return this.service.indexBatch(orgId, data.brandId);
   }
 
   @Get(":id")

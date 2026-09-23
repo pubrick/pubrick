@@ -7,9 +7,9 @@ import {
   type KnowledgeUpdate,
   parseStoredAiCredential,
 } from "@pubrick/shared";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { notFound } from "../api-error";
-import { db } from "../db";
+import { db, pool } from "../db";
 import { env } from "../env";
 
 const PUBLIC_COLUMNS = {
@@ -27,6 +27,111 @@ const PUBLIC_COLUMNS = {
 
 @Injectable()
 export class KnowledgeRepository {
+  /** A session lock spans the provider call and all writes, including other API instances. */
+  async withIndexLock<T>(orgId: string, brandId: string, run: () => Promise<T>): Promise<T | null> {
+    const client = await pool.connect();
+    const key = `knowledge:${orgId}:${brandId}`;
+    let discardConnection = false;
+    try {
+      const lock = await client.query<{ acquired: boolean }>(
+        "select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired",
+        [key],
+      );
+      if (!lock.rows[0]?.acquired) return null;
+      try {
+        return await run();
+      } finally {
+        try {
+          await client.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+        } catch {
+          // An uncertain unlock must never return a locked session to the pool.
+          discardConnection = true;
+        }
+      }
+    } finally {
+      client.release(discardConnection);
+    }
+  }
+
+  async unindexed(orgId: string, brandId: string, limit: number) {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    return db
+      .select({
+        id: schema.knowledgeEntries.id,
+        title: schema.knowledgeEntries.title,
+        content: schema.knowledgeEntries.content,
+        // PostgreSQL's row version detects even edit-then-revert while Google runs.
+        // `updated_at` loses sub-millisecond precision when decoded into a JS Date.
+        revision: sql<string>`xmin::text`,
+      })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNull(schema.knowledgeEntries.embedding),
+        ),
+      )
+      .orderBy(asc(schema.knowledgeEntries.createdAt), asc(schema.knowledgeEntries.id))
+      .limit(limit);
+  }
+
+  async unindexedCount(orgId: string, brandId: string) {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNull(schema.knowledgeEntries.embedding),
+        ),
+      );
+    return row?.count ?? 0;
+  }
+
+  async setBatchEmbedding(
+    orgId: string,
+    brandId: string,
+    entry: {
+      id: string;
+      title: string;
+      content: string;
+      revision: string;
+    },
+    embedding: number[],
+  ) {
+    const rows = await db
+      .update(schema.knowledgeEntries)
+      .set({ embedding })
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.id, entry.id),
+          eq(schema.knowledgeEntries.title, entry.title),
+          eq(schema.knowledgeEntries.content, entry.content),
+          sql`xmin::text = ${entry.revision}`,
+          eq(schema.knowledgeEntries.isActive, true),
+          isNull(schema.knowledgeEntries.embedding),
+        ),
+      )
+      .returning({ id: schema.knowledgeEntries.id });
+    return rows.length === 1;
+  }
   list(orgId: string, brandId: string) {
     return db
       .select(PUBLIC_COLUMNS)
@@ -180,13 +285,14 @@ export class KnowledgeRepository {
     responseMs: number,
     status: "ok" | "errored",
     outcome: "completed" | "refused" | "unknown",
+    step: "knowledge_index" | "knowledge_batch_index" = "knowledge_index",
   ) {
     await db.insert(schema.usageLedger).values({
       orgId,
-      step: "knowledge_index",
+      step,
       provider: "google",
       modelId: "gemini-embedding-001",
-      inputTokens: tokens,
+      inputTokens: Number.isFinite(tokens) ? tokens : 0,
       outputTokens: 0,
       cachedInputTokens: 0,
       reasoningTokens: 0,
