@@ -32,16 +32,13 @@ import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform
 
 type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
 /**
- * The brand as this screen edits it. `voice`, `audience` and `contentLanguage`
- * are not decoration: every generation step interpolates all three into the
- * model's `instructions` (`instructionsFor` in `@pubrick/ai`), and until this
- * screen grew the editor below there was no way for anyone to fill them — the
- * create form sends a name and nothing else, so "on-brand, on-voice" rested on
- * columns that were always null.
+ * Voice, audience and language shape generation. Description is used for
+ * source relevance and topic suggestions, not generation instructions.
  */
 type Brand = {
   id: string;
   name: string;
+  description: string | null;
   voice: string | null;
   audience: string | null;
   contentLanguage: string;
@@ -68,6 +65,7 @@ const EDIT_FORM_ID = "channel-edit-form";
 
 // The brand-voice modal's form id — same arrangement, its Save is in the footer.
 const VOICE_FORM_ID = "brand-voice-form";
+const PROFILE_FORM_ID = "brand-profile-form";
 const LINKS_FORM_ID = "brand-links-form";
 
 // The language field's hint is a sibling paragraph rather than a placeholder:
@@ -111,6 +109,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const closeProfileEditor = useCallback(() => setProfileOpen(false), []);
   const [linksOpen, setLinksOpen] = useState(false);
   const [websiteDraft, setWebsiteDraft] = useState("");
   const [campaignDraft, setCampaignDraft] = useState(DEFAULT_CAMPAIGN_TEMPLATE);
@@ -200,6 +204,32 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   }, [id, describeError]);
 
   useEffect(load, [load]);
+
+  function startProfileEditing() {
+    if (!brand) return;
+    setProfileName(brand.name);
+    setProfileDescription(brand.description ?? "");
+    setProfileError(null);
+    setProfileOpen(true);
+  }
+
+  async function saveProfile(e: React.FormEvent) {
+    e.preventDefault();
+    setProfileError(null);
+    setProfileBusy(true);
+    try {
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: profileName.trim(), description: profileDescription.trim() }),
+      });
+      setBrand(updated);
+      setProfileOpen(false);
+    } catch (err) {
+      setProfileError(describeError(err));
+    } finally {
+      setProfileBusy(false);
+    }
+  }
 
   async function addChannel(e: React.FormEvent) {
     e.preventDefault();
@@ -449,13 +479,48 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </p>
       )}
 
-      {/* The brand's own settings, above its channels: this is the one place
-          voice, audience and content language can be set, and all three are
-          interpolated into every generation prompt. They used to exist only in
-          the schema, the PATCH route and the prompt builder — never on a
-          screen — so "on-brand, on-voice" was a promise resting on null
-          columns. `description` is deliberately absent: no prompt reads it, and
-          a field that changes nothing is the same overstatement in miniature. */}
+      <Card className="mb-6">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-fg">{tb("profileTitle")}</h2>
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={startProfileEditing}
+            disabled={!brand}
+          >
+            {tb("profileEdit")}
+          </Button>
+        </div>
+        <p className="mb-4 text-sm text-fg-secondary">{tb("descriptionHint")}</p>
+        {brand === null ? (
+          <div aria-busy="true">
+            <Skeleton lines={2} />
+          </div>
+        ) : (
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-sm font-medium text-fg-secondary">{tb("nameLabel")}</dt>
+              <dd className="mt-1 break-words text-sm text-fg">{brand.name}</dd>
+            </div>
+            <div>
+              <dt className="text-sm font-medium text-fg-secondary">{tb("descriptionLabel")}</dt>
+              <dd
+                className={
+                  brand.description?.trim()
+                    ? "mt-1 whitespace-pre-wrap text-sm text-fg"
+                    : "mt-1 text-sm text-fg-tertiary"
+                }
+              >
+                {brand.description?.trim() ? brand.description : tb("descriptionUnset")}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </Card>
+
+      {/* Voice, audience and content language are interpolated into generation
+          instructions. Description above has a separate targeting purpose. */}
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("voiceTitle")}</h2>
@@ -530,7 +595,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </Link>
       </Card>
 
-      <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
+      <h2 id="channels" className="mb-3 scroll-mt-6 text-lg font-semibold text-fg">
+        {t("title")}
+      </h2>
 
       {/* Failed / not answered yet / genuinely none — three different things
           to say, where there used to be one silence for all three. */}
@@ -762,6 +829,44 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               />
             ),
           )}
+        </form>
+      </Modal>
+
+      <Modal
+        open={profileOpen}
+        onClose={closeProfileEditor}
+        title={tb("profileTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeProfileEditor}>
+              {tb("voiceCancel")}
+            </Button>
+            <Button type="submit" form={PROFILE_FORM_ID} disabled={profileBusy}>
+              {tb("voiceSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={PROFILE_FORM_ID} onSubmit={saveProfile} className="flex flex-col gap-3">
+          {profileError && (
+            <p role="alert" className="text-sm text-danger">
+              {profileError}
+            </p>
+          )}
+          <Input
+            value={profileName}
+            onChange={(e) => setProfileName(e.target.value)}
+            label={tb("nameLabel")}
+            required
+            maxLength={200}
+          />
+          <Textarea
+            value={profileDescription}
+            onChange={(e) => setProfileDescription(e.target.value)}
+            label={tb("descriptionLabel")}
+            maxLength={2000}
+          />
+          <p className="text-sm text-fg-secondary">{tb("descriptionHint")}</p>
         </form>
       </Modal>
 
