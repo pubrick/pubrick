@@ -27,11 +27,11 @@ documents when they disagree.
 | Public API | Internal authenticated API present | Public keys, documented endpoints, webhooks and MCP |
 | Additional reference utilities | Uploads present | Link sanitization and cross-channel media propagation |
 
-The nearest dependency chain follows the generation design's shipping order:
-Add feedback-informed ranking on top of the shared feed and Telegram source
-inventory, advisory AI scores, and human-reviewed topics. A topic uses the existing generation engine rather
-than a second generation path. The public RSS output is available for
-syndication, but it does not assert that Dzen imported a post.
+The next generation slice adds explicit content types to the existing run:
+digest, expert article and how-to. News scores and AI topic suggestions remain
+advisory; an editor chooses and approves each topic before generation. The
+public RSS output is available for syndication, but it does not assert that
+Dzen imported a post.
 
 Every ported slice should be usable on its own, tenant-scoped, metered when it
 calls a model, translated in all four locales, tested locally, and described in
