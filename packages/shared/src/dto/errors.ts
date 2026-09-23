@@ -209,6 +209,12 @@ export const API_ERROR_CODES = [
    * `run_limit_reached` has, and the same `ERROR_MESSAGE_VALUES` entry.
    */
   "refine_limit_reached",
+  "readapt_limit_reached",
+  "readapt_no_credential",
+  "readapt_timed_out",
+  "readapt_failed",
+  "readapt_proposal_not_found",
+  "readapt_source_changed",
   /**
    * The draft has no `ai` `full` version row at the item level: nobody has
    * generated this text, so there is no anchor for the publish gate's deletion

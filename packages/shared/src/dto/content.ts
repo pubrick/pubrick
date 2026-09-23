@@ -548,6 +548,16 @@ export type RefineProposal = {
   selectedText: string;
 };
 
+/** A model suggestion for one channel, held until a person accepts or discards it. */
+export type AdaptationProposal = {
+  id: string;
+  adaptationId: string;
+  proposal: string;
+  reason: string;
+  masterBody: string;
+  previousBody: string | null;
+};
+
 export const contentApproveSchema = z.object({
   /**
    * ISO timestamp; when omitted the post is queued immediately.
