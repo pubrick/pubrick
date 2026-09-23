@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_runs" ADD COLUMN "guidance_snapshot" jsonb;
