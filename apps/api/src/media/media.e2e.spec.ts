@@ -240,6 +240,85 @@ describe.skipIf(!url)("media library e2e", () => {
     await owner.delete(`/api/media/${image.body.id}`).expect(204);
   });
 
+  it("accepts a VK cover with text beyond Telegram's caption limit", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "VK brand" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK wall",
+        credentials: { accessToken: "test-user-token", groupId: "12345" },
+      })
+      .expect(201);
+    const post = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "x".repeat(1025), channelIds: [channel.body.id] })
+      .expect(201);
+    const image = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "cover.png", contentType: "image/png" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${post.body.id}/cover`)
+      .send({ mediaId: image.body.id })
+      .expect(200);
+    const approved = await owner.post(`/api/content/${post.body.id}/approve`).send({}).expect(200);
+    expect(approved.body.adaptations[0].status).toBe("queued");
+  });
+
+  it("approves a Telegram and VK cover when only the Telegram adaptation has a short caption", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Mixed brand" }).expect(201);
+    const telegram = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Telegram",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const vk = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK",
+        credentials: { accessToken: "test-user-token", groupId: "12345" },
+      })
+      .expect(201);
+    const post = await owner
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "x".repeat(1025),
+        channelIds: [telegram.body.id, vk.body.id],
+      })
+      .expect(201);
+    const telegramAdaptation = post.body.adaptations.find(
+      (row: { channelId: string }) => row.channelId === telegram.body.id,
+    );
+    await owner
+      .patch(`/api/content/${post.body.id}/adaptations/${telegramAdaptation.id}`)
+      .send({ body: "Short Telegram caption" })
+      .expect(200);
+    const image = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "cover.png", contentType: "image/png" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${post.body.id}/cover`)
+      .send({ mediaId: image.body.id })
+      .expect(200);
+    const approved = await owner.post(`/api/content/${post.body.id}/approve`).send({}).expect(200);
+    expect(approved.body.adaptations.map((row: { status: string }) => row.status)).toEqual([
+      "queued",
+      "queued",
+    ]);
+  });
+
   it("bills an explicit Gemini generation and keeps the new image detached for review", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Image brand" }).expect(201);

@@ -25,14 +25,27 @@ the brand deletion still succeeds and the server logs any removal failure.
 
 ## Publishing boundary
 
-Telegram is the first image-capable publisher. A covered post uses one
-`sendPhoto` request with a JPEG multipart file and the reviewed text as its
-caption. Telegram limits captions to 1024 characters. The attach and approval
-paths refuse unsupported channel mixes or overlong captions; the worker also
-refuses an unsupported channel or missing/mismatched image before a send and
-records an actionable failed delivery. Provider responses keep the same
-permanent/transient/unknown-outcome classification as text publishing, so an
-uncertain `sendPhoto` is never retried into a possible duplicate.
+Telegram and VK accept a single JPEG cover. Telegram uses one `sendPhoto`
+request with the reviewed text as its caption (maximum 1024 characters).
+VK uses the official `photos.getWallUploadServer` → multipart upload →
+`photos.saveWallPhoto` → `wall.post` path and attaches the saved community photo
+to the reviewed text ([VK photo methods](https://github.com/VKCOM/vk-api-schema/blob/master/photos/methods.json),
+[wall.post](https://github.com/VKCOM/vk-api-schema/blob/master/wall/methods.json)).
+The VK connection test requires a user token with `wall`
+permission and administration of the selected community. Sending a cover also
+checks the `photos` permission before requesting an upload URL, so existing
+text-only channels can continue to use a wall-only token.
+VK's own API schema lists user tokens for these photo methods; community tokens
+cannot be used for this path.
+
+The attach and approval paths refuse unsupported channel mixes. The Telegram
+caption limit applies only to Telegram adaptations, including a mixed Telegram
+and VK post. The worker refuses an unsupported channel or missing/mismatched
+image before a send and records an actionable failed delivery. VK photo
+preparation can be retried because no wall post has started. An uncertain
+`wall.post` or Telegram `sendPhoto` is never retried into a possible duplicate.
+VK upload URLs must use HTTPS on a `vk.com` host and cannot redirect. The
+temporary upload URL and its capability query are never logged.
 
 ## Generate and revise images
 
@@ -42,7 +55,7 @@ calls Google's stable `gemini-3.1-flash-image` model for a 1K image. **Try
 variation** on an individual image sends that brand's JPEG alongside a new
 instruction. Each result is a new, normalized asset; the source remains intact.
 The result is not attached to any post. Review it and choose **Use** on an
-editable Telegram post before approval. No background generation is triggered
+editable Telegram or VK post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
 Every dispatched image request records a BYOK row in `usage_ledger`, including
@@ -55,5 +68,5 @@ keys never reach the browser. The image model and rates should be reviewed as
 Google changes its [model](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image)
 and [pricing](https://ai.google.dev/gemini-api/docs/pricing) documentation.
 
-VK/MAX image delivery remains future work. The media library never implies
-those channels will receive a cover.
+MAX image delivery remains future work. The media library never implies that
+channel will receive a cover.
