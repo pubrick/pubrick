@@ -218,6 +218,13 @@
       "when": 1790166542842,
       "tag": "0031_tan_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790167411548,
+      "tag": "0032_robust_triathlon",
+      "breakpoints": true
     }
   ]
 }

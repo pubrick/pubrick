@@ -91,6 +91,10 @@ export {
   RUN_ADMISSION_LOCK_NAMESPACE,
   rssPollJobOptions,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
+  TELEGRAM_COMMENTS_OPTIONS,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
+  telegramCommentsJobOptions,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";

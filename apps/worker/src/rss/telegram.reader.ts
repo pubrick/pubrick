@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { decryptJson } from "@pubrick/shared";
-import { readChannel } from "@pubrick/telegram";
+import { type ChannelComments, readChannel, readComments } from "@pubrick/telegram";
 import { env } from "../env";
 import type { FeedItem } from "./rss.fetcher";
 
@@ -18,7 +18,7 @@ export class TelegramSourceError extends Error {
 
 @Injectable()
 export class TelegramReader {
-  async read(url: string, encryptedSession: string | null): Promise<FeedItem[]> {
+  private session(encryptedSession: string | null): string {
     if (!encryptedSession) throw new TelegramSourceError("telegram_not_connected");
     if (!env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH)
       throw new TelegramSourceError("telegram_not_configured");
@@ -36,17 +36,46 @@ export class TelegramReader {
     ) {
       throw new TelegramSourceError("telegram_not_connected");
     }
+    return stored.session;
+  }
+
+  private async call<T>(
+    operation: (session: string) => Promise<T>,
+    encryptedSession: string | null,
+  ): Promise<T> {
+    const session = this.session(encryptedSession);
     try {
-      return await readChannel({
-        apiId: Number(env.TELEGRAM_API_ID),
-        apiHash: env.TELEGRAM_API_HASH,
-        session: stored.session,
-        url,
-      });
+      return await operation(session);
     } catch (error) {
       if (error instanceof Error && error.message === "access_denied")
         throw new TelegramSourceError("telegram_access_denied");
       throw new TelegramSourceError("telegram_unavailable");
     }
+  }
+
+  async read(url: string, encryptedSession: string | null): Promise<FeedItem[]> {
+    return this.call(
+      (session) =>
+        readChannel({
+          apiId: Number(env.TELEGRAM_API_ID),
+          apiHash: env.TELEGRAM_API_HASH ?? "",
+          session,
+          url,
+        }),
+      encryptedSession,
+    );
+  }
+
+  async comments(url: string, encryptedSession: string | null): Promise<ChannelComments> {
+    return this.call(
+      (session) =>
+        readComments({
+          apiId: Number(env.TELEGRAM_API_ID),
+          apiHash: env.TELEGRAM_API_HASH ?? "",
+          session,
+          url,
+        }),
+      encryptedSession,
+    );
   }
 }

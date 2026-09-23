@@ -20,6 +20,10 @@ import {
   RSS_POLL_QUEUE,
   type RssPollJob,
   rssPollJobOptions,
+  TELEGRAM_COMMENTS_OPTIONS,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
+  telegramCommentsJobOptions,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
@@ -96,6 +100,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
+    await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.createQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
     // createQueue is an ON CONFLICT DO NOTHING insert: on a database where the
     // queue already exists (any dev box or environment that ran an earlier
@@ -131,6 +137,15 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       singletonKey: payload.itemId,
       singletonSeconds: 300,
       group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    return id !== null;
+  }
+
+  async enqueueTelegramComments(tx: Tx, payload: TelegramCommentsJob): Promise<boolean> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(TELEGRAM_COMMENTS_QUEUE, payload, {
+      ...telegramCommentsJobOptions(payload.itemId, payload.orgId),
       db: fromDrizzle(tx, sql),
     });
     return id !== null;

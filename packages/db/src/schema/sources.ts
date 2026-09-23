@@ -1,4 +1,4 @@
-import { NEWS_FEEDBACK_SIGNALS, NEWS_SOURCE_KINDS } from "@pubrick/shared";
+import { NEWS_COMMENT_STATUSES, NEWS_FEEDBACK_SIGNALS, NEWS_SOURCE_KINDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -69,6 +69,9 @@ export const newsItems = pgTable(
     summary: text("summary").notNull().default(""),
     url: text("url").notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
+    commentsStatus: text("comments_status", { enum: NEWS_COMMENT_STATUSES }),
+    commentsCheckedAt: timestamp("comments_checked_at", { withTimezone: true }),
+    commentsErrorCode: text("comments_error_code"),
     editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
     relevanceStatus: text("relevance_status", { enum: ["unscored", "scored", "failed"] })
       .notNull()
@@ -87,6 +90,7 @@ export const newsItems = pgTable(
     uniqueIndex("news_items_org_brand_url_idx").on(t.orgId, t.brandId, t.url),
     index("news_items_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     index("news_items_source_idx").on(t.sourceId),
+    enumCheck("news_items_comments_status_check", t.commentsStatus, NEWS_COMMENT_STATUSES),
     enumCheck("news_items_editor_signal_check", t.editorSignal, NEWS_FEEDBACK_SIGNALS),
     enumCheck("news_items_relevance_status_check", t.relevanceStatus, [
       "unscored",
@@ -118,5 +122,30 @@ export const newsItems = pgTable(
       t.relevanceStatus,
       t.relevanceScore,
     ),
+  ],
+);
+
+/** Text-only sampled replies; authors are deliberately not retained. */
+export const newsComments = pgTable(
+  "news_comments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => newsItems.id, { onDelete: "cascade" }),
+    telegramMessageId: integer("telegram_message_id").notNull(),
+    body: text("body").notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("news_comments_item_message_idx").on(t.itemId, t.telegramMessageId),
+    index("news_comments_org_brand_item_idx").on(t.orgId, t.brandId, t.itemId),
   ],
 );

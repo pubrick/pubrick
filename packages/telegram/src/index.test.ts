@@ -1,18 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readChannel } from "./index.js";
+import { readChannel, readComments } from "./index.js";
 
 const fake = vi.hoisted(() => ({
   importSession: vi.fn(),
   getChat: vi.fn(),
   getHistory: vi.fn(),
+  getDiscussionMessage: vi.fn(),
+  call: vi.fn(),
+  created: vi.fn(),
   destroy: vi.fn(),
 }));
-vi.mock("@mtcute/core", () => ({ MemoryStorage: class {} }));
+vi.mock("@mtcute/core", () => ({ MemoryStorage: class {}, Long: { ZERO: 0 } }));
 vi.mock("@mtcute/node", () => ({
   TelegramClient: class {
+    constructor(options: unknown) {
+      fake.created(options);
+    }
     importSession = fake.importSession;
     getChat = fake.getChat;
     getHistory = fake.getHistory;
+    getDiscussionMessage = fake.getDiscussionMessage;
+    call = fake.call;
     destroy = fake.destroy;
   },
 }));
@@ -102,5 +110,75 @@ describe("Telegram source adapter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Telegram discussion adapter", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    fake.destroy.mockResolvedValue(undefined);
+    fake.importSession.mockResolvedValue(undefined);
+  });
+
+  const input = {
+    apiId: 1,
+    apiHash: "hash",
+    session: "private",
+    url: "https://t.me/example_channel/42",
+  };
+
+  it("collects only the bounded reply thread and filters noise", async () => {
+    fake.getDiscussionMessage.mockResolvedValue({
+      id: 100,
+      chat: { inputPeer: { _: "inputPeerChannel", channelId: 123 } },
+    });
+    fake.call.mockResolvedValue({
+      _: "messages.messages",
+      messages: [
+        { _: "message", id: 100, message: "Root discussion post", date: 1 },
+        { _: "message", id: 101, message: "A useful and detailed response.", date: 2 },
+        { _: "message", id: 102, message: "A useful and detailed response!", date: 3 },
+        { _: "message", id: 103, message: "https://spam.example", date: 4 },
+        { _: "messageService", id: 104, date: 5 },
+      ],
+    });
+    expect(await readComments(input)).toEqual({
+      status: "available",
+      comments: [
+        { messageId: 101, body: "A useful and detailed response.", publishedAt: new Date(2000) },
+      ],
+    });
+    expect(fake.getDiscussionMessage).toHaveBeenCalledWith({
+      chatId: "example_channel",
+      message: 42,
+    });
+    expect(fake.created).toHaveBeenCalledWith({
+      apiId: 1,
+      apiHash: "hash",
+      storage: expect.anything(),
+    });
+    expect(fake.call).toHaveBeenCalledWith(
+      expect.objectContaining({ _: "messages.getReplies", msgId: 100, limit: 50 }),
+    );
+  });
+
+  it("distinguishes absent and inaccessible discussions", async () => {
+    fake.getDiscussionMessage
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce({ text: "CHANNEL_PRIVATE" });
+    await expect(readComments(input)).resolves.toEqual({ status: "unavailable", comments: [] });
+    await expect(readComments(input)).resolves.toEqual({ status: "private", comments: [] });
+  });
+
+  it("does not expose provider errors", async () => {
+    fake.getDiscussionMessage.mockRejectedValue({ text: "SERVER_ERROR", secret: "do not show" });
+    await expect(readComments(input)).rejects.toThrow("unavailable");
+  });
+
+  it("rejects a post URL with extra path segments before opening a session", async () => {
+    await expect(readComments({ ...input, url: `${input.url}/extra` })).rejects.toThrow(
+      "unavailable",
+    );
+    expect(fake.importSession).not.toHaveBeenCalled();
   });
 });

@@ -36,6 +36,16 @@ export const RELEVANCE_QUEUE_OPTIONS = {
 } as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
+export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
+export type TelegramCommentsJob = { orgId: string; itemId: string };
+export const TELEGRAM_COMMENTS_OPTIONS = {
+  retryLimit: 1,
+  retryDelay: 60,
+  expireInSeconds: 90,
+} as const;
+export function telegramCommentsJobOptions(itemId: string, orgId: string) {
+  return { singletonKey: itemId, singletonSeconds: 900, group: { id: orgId } } as const;
+}
 export const RSS_POLL_OPTIONS = {
   retryLimit: 2,
   retryDelay: 60,

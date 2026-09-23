@@ -18,9 +18,13 @@ import {
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
   type RssPollJob,
+  TELEGRAM_COMMENTS_OPTIONS,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { CalendarService } from "./calendar/calendar.service";
+import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
@@ -112,6 +116,7 @@ export class QueueService {
     @Optional() private readonly rss?: RssService,
     @Optional() private readonly calendar?: CalendarService,
     @Optional() private readonly relevance?: RelevanceService,
+    @Optional() private readonly comments?: CommentsService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -163,6 +168,18 @@ export class QueueService {
       await boss.schedule(RELEVANCE_SCAN_QUEUE, "0 * * * *");
       await boss.work(RELEVANCE_SCAN_QUEUE, { batchSize: 1 }, async () =>
         this.relevance?.scan(boss),
+      );
+    }
+
+    if (this.comments && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
+      await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
+      await boss.work<TelegramCommentsJob>(
+        TELEGRAM_COMMENTS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.comments?.handle(job.data);
+        },
       );
     }
 

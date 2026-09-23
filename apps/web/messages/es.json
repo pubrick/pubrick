@@ -148,7 +148,21 @@
     "score": "Puntuar",
     "retryScore": "Reintentar",
     "scoreQueued": "Puntuación en cola. La decisión editorial sigue siendo independiente.",
-    "scoreRecent": "Este artículo se puso en cola hace poco. Inténtalo en unos minutos."
+    "scoreRecent": "Este artículo se puso en cola hace poco. Inténtalo en unos minutos.",
+    "comments": "Comentarios",
+    "commentsTitle": "Comentarios de Telegram",
+    "close": "Cerrar",
+    "collectComments": "Recopilar comentarios",
+    "commentsQueued": "La consulta de comentarios está en cola. Los resultados aparecerán pronto.",
+    "commentsRecent": "Los comentarios se consultaron recientemente. Inténtalo más tarde.",
+    "commentsPending": "Recopilando comentarios…",
+    "commentsUnavailable": "Esta publicación no tiene un debate vinculado.",
+    "commentsPrivate": "Esta cuenta no puede acceder al debate vinculado.",
+    "commentsFailed": "Falló la consulta de comentarios. Inténtalo más tarde.",
+    "commentsChecked": "Consultado {date}",
+    "commentsNotChecked": "Aún no se han consultado los comentarios.",
+    "commentsEmpty": "No hay comentarios legibles en esta muestra.",
+    "commentsSample": "Muestra guardada de hasta 50 respuestas con texto. Se omiten las breves y duplicadas; no se guardan los autores. Si falla la consulta, la muestra anterior sigue visible."
   },
   "Knowledge": {
     "title": "Conocimiento de marca",

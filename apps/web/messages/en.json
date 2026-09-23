@@ -148,7 +148,21 @@
     "score": "Score",
     "retryScore": "Retry score",
     "scoreQueued": "Scoring queued. The AI score is advisory; your editorial decision stays separate.",
-    "scoreRecent": "This article was queued recently. Try again in a few minutes."
+    "scoreRecent": "This article was queued recently. Try again in a few minutes.",
+    "comments": "Comments",
+    "commentsTitle": "Telegram comments",
+    "close": "Close",
+    "collectComments": "Collect comments",
+    "commentsQueued": "A comment check is queued. Results will appear here shortly.",
+    "commentsRecent": "Comments were checked or queued recently. Try again later.",
+    "commentsPending": "Collecting comments…",
+    "commentsUnavailable": "This post has no linked discussion.",
+    "commentsPrivate": "This account cannot access the linked discussion.",
+    "commentsFailed": "Comment check failed. Try again later.",
+    "commentsChecked": "Checked {date}",
+    "commentsNotChecked": "Comments have not been checked yet.",
+    "commentsEmpty": "No readable comments in this sample.",
+    "commentsSample": "Saved sample of up to 50 text replies. Short and duplicate replies are skipped; authors are not stored. An older sample remains visible if a check fails."
   },
   "Knowledge": {
     "title": "Brand knowledge",
