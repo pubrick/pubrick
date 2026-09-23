@@ -93,6 +93,15 @@ describe.skipIf(!url)("watched sources e2e", () => {
         url: "https://evil.example.com/channel",
       })
       .expect(400);
+    await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Invite",
+        kind: "telegram_private",
+        url: "https://t.me/+SensitiveInvite",
+      })
+      .expect(400);
     expect((await owner.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
       connected: false,
     });
@@ -100,6 +109,32 @@ describe.skipIf(!url)("watched sources e2e", () => {
       connected: false,
     });
     const { db } = await import("../db");
+    const [privateSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: ownerOrgId,
+        brandId: a.body.id,
+        name: "Joined private channel",
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+        privatePeerEncrypted: "encrypted-access-hash",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!privateSource) throw new Error("Private source fixture was not inserted");
+    const privateList = await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200);
+    expect(privateList.body).toContainEqual(
+      expect.objectContaining({
+        id: privateSource.id,
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+      }),
+    );
+    expect(JSON.stringify(privateList.body)).not.toContain("encrypted-access-hash");
+    await owner
+      .patch(`/api/sources/${privateSource.id}?brandId=${a.body.id}`)
+      .send({ url: "https://t.me/other_channel" })
+      .expect(400);
+    await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await db
       .insert(schema.telegramSourceAccounts)
       .values({ orgId: ownerOrgId, sessionEncrypted: "never-expose-this-session" });
@@ -209,6 +244,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/${source.body.id}/refresh?brandId=${a.body.id}`).expect(409);
     await owner.delete(`/api/sources/${source.body.id}?brandId=${a.body.id}`).expect(200);
     await owner.delete(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`).expect(200);
+    await owner.delete(`/api/sources/${privateSource.id}?brandId=${a.body.id}`).expect(200);
     expect((await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200)).body).toEqual([]);
   });
 

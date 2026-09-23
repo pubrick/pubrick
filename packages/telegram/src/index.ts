@@ -8,7 +8,117 @@ export type ChannelComments = {
   status: "available" | "unavailable" | "private";
   comments: ChannelComment[];
 };
+export type PrivateChannelPeer = { channelId: number; accessHash: string };
 type Credentials = { apiId: number; apiHash: string };
+
+/** The invite is only accepted in a trusted terminal and is never returned or stored. */
+export async function resolveJoinedPrivateChannel(
+  input: Credentials & { session: string; invite: string },
+): Promise<{ peer: PrivateChannelPeer; title: string }> {
+  if (!/^https:\/\/t\.me\/(?:\+|joinchat\/)[A-Za-z0-9_-]{8,128}$/.test(input.invite))
+    throw new Error("invalid_invite");
+  const client = createClient({ apiId: input.apiId, apiHash: input.apiHash });
+  try {
+    await client.importSession(input.session);
+    // mtcute checks the invite and throws for a channel this account has not joined.
+    // getChat never invokes messages.importChatInvite.
+    const chat = await client.getChat(input.invite);
+    if (chat.chatType !== "channel" || !chat.isMember || chat.isLikelyUnavailable)
+      throw new Error("access_denied");
+    const peer = chat.inputPeer;
+    if (peer._ !== "inputPeerChannel" || !Number.isSafeInteger(peer.channelId))
+      throw new Error("access_denied");
+    return {
+      peer: { channelId: peer.channelId, accessHash: peer.accessHash.toString() },
+      title: chat.title,
+    };
+  } catch {
+    throw new Error("access_denied");
+  } finally {
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+type History = Awaited<ReturnType<TelegramClient["getHistory"]>>;
+function postsFromHistory(history: History, link: (id: number) => string): ChannelPost[] {
+  return history.flatMap((message) => {
+    if (
+      !message.isChannelPost ||
+      message.isService ||
+      message.isContentProtected ||
+      message.media?.type === "poll"
+    )
+      return [];
+    const body = message.text.replaceAll("\u0000", "").trim();
+    if (body.length < 50) return [];
+    return [
+      {
+        title:
+          body
+            .split("\n")
+            .find((line) => line.trim())
+            ?.slice(0, 100) ?? body.slice(0, 100),
+        summary: body.slice(0, 8000),
+        url: link(message.id),
+        publishedAt: message.date,
+      },
+    ];
+  });
+}
+
+/** Polls a previously resolved channel peer; no invite hash is needed at runtime. */
+export async function readPrivateChannel(
+  input: Credentials & { session: string; peer: PrivateChannelPeer },
+): Promise<ChannelPost[]> {
+  const { channelId, accessHash } = input.peer;
+  if (!Number.isSafeInteger(channelId) || channelId < 1 || !/^-?\d+$/.test(accessHash))
+    throw new Error("access_denied");
+  const client = createClient({ apiId: input.apiId, apiHash: input.apiHash });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void client.destroy().catch(() => undefined);
+      reject(new Error("unavailable"));
+    }, 20_000);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        await client.importSession(input.session);
+        const peer = {
+          _: "inputPeerChannel" as const,
+          channelId,
+          accessHash: Long.fromString(accessHash),
+        };
+        const chat = await client.getChat(peer);
+        if (chat.chatType !== "channel" || !chat.isMember || chat.isLikelyUnavailable)
+          throw new Error("access_denied");
+        const history = await client.getHistory(peer, { limit: 50 });
+        return postsFromHistory(history, (id) => `https://t.me/c/${channelId}/${id}`);
+      })(),
+      deadline,
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message === "access_denied") throw error;
+    const code =
+      typeof error === "object" && error !== null && "text" in error ? String(error.text) : "";
+    if (
+      [
+        "CHANNEL_PRIVATE",
+        "CHAT_ADMIN_REQUIRED",
+        "PEER_ID_INVALID",
+        "USER_BANNED_IN_CHANNEL",
+        "AUTH_KEY_UNREGISTERED",
+        "SESSION_REVOKED",
+      ].includes(code)
+    )
+      throw new Error("access_denied");
+    throw new Error("unavailable");
+  } finally {
+    clearTimeout(timer);
+    await client.destroy().catch(() => undefined);
+  }
+}
 
 function createClient(credentials: Credentials): TelegramClient {
   return new TelegramClient({ ...credentials, storage: new MemoryStorage() });
@@ -49,29 +159,7 @@ export async function readChannel(
         const chat = await client.getChat(handle);
         if (chat.chatType !== "channel") throw new Error("access_denied");
         const messages = await client.getHistory(handle, { limit: 50 });
-        return messages.flatMap((message) => {
-          if (
-            !message.isChannelPost ||
-            message.isService ||
-            message.isContentProtected ||
-            message.media?.type === "poll"
-          )
-            return [];
-          const body = message.text.replaceAll("\u0000", "").trim();
-          if (body.length < 50) return [];
-          return [
-            {
-              title:
-                body
-                  .split("\n")
-                  .find((line) => line.trim())
-                  ?.slice(0, 100) ?? body.slice(0, 100),
-              summary: body.slice(0, 8000),
-              url: `https://t.me/${handle}/${message.id}`,
-              publishedAt: message.date,
-            },
-          ];
-        });
+        return postsFromHistory(messages, (id) => `https://t.me/${handle}/${id}`);
       })(),
       deadline,
     ]);

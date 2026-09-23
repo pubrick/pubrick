@@ -19,9 +19,14 @@ export class RssService {
     let items: FeedItem[];
     try {
       items =
-        source.kind === "telegram"
-          ? await this.telegram.read(source.url, await this.sources.telegramSession(job.orgId))
-          : await fetchFeed(source.url);
+        source.kind === "telegram_private"
+          ? await this.telegram.readPrivate(
+              source.privatePeerEncrypted,
+              await this.sources.telegramSession(job.orgId),
+            )
+          : source.kind === "telegram"
+            ? await this.telegram.read(source.url, await this.sources.telegramSession(job.orgId))
+            : await fetchFeed(source.url);
     } catch (error) {
       if (!(error instanceof FeedFetchError) && !(error instanceof TelegramSourceError))
         throw error;

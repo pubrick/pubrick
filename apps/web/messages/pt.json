@@ -90,6 +90,8 @@
     "kind": "Tipo de fonte",
     "rss": "Feed",
     "telegram": "Telegram",
+    "telegramPrivate": "Canal privado do Telegram",
+    "privateSetup": "Um administrador pode adicionar pelo terminal do servidor um canal já acessado pela conta deste espaço. Não cole um convite aqui.",
     "telegramUrl": "URL do canal público",
     "telegramSetup": "Um administrador deve conectar uma conta do Telegram a este espaço.",
     "setupGuide": "Guia de configuração",

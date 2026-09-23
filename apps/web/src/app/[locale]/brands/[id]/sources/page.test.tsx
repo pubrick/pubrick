@@ -132,6 +132,46 @@ describe("watched sources page", () => {
     );
   });
 
+  it("labels a private channel with its safe link and does not offer public comment collection", async () => {
+    install(
+      [
+        {
+          id: ITEM_ID,
+          brandId: BRAND_ID,
+          sourceId: SOURCE_ID,
+          title: "Member story",
+          summary: "A private story summary.",
+          url: "https://t.me/c/123456/1",
+          publishedAt: null,
+          createdAt: "2026-09-23T12:00:00.000Z",
+          relevanceStatus: "unscored",
+          relevanceScore: null,
+          relevanceReason: null,
+          relevanceUrgency: null,
+          relevanceErrorCode: null,
+          relevanceScoredAt: null,
+        },
+      ],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          kind: "telegram_private",
+          name: "Joined channel",
+          url: "https://t.me/c/123456",
+          isActive: true,
+          lastErrorCode: null,
+          lastCheckedAt: null,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText("Joined channel")).toBeInTheDocument();
+    expect(document.body.textContent).toContain(en.Sources.telegramPrivate);
+    expect(document.body.textContent).toContain("https://t.me/c/123456");
+    expect(screen.queryByRole("button", { name: en.Sources.comments })).not.toBeInTheDocument();
+  });
+
   it("starts a source run with the article summary, URL, and explicitly chosen channel", async () => {
     const item = {
       id: ITEM_ID,

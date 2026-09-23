@@ -75,11 +75,20 @@ export class SuggestionsRepository {
         editorSignal: schema.newsItems.editorSignal,
       })
       .from(schema.newsItems)
+      .innerJoin(
+        schema.newsSources,
+        and(
+          eq(schema.newsItems.sourceId, schema.newsSources.id),
+          eq(schema.newsItems.orgId, schema.newsSources.orgId),
+          eq(schema.newsItems.brandId, schema.newsSources.brandId),
+        ),
+      )
       .where(
         and(
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, brandId),
           eq(schema.newsItems.relevanceStatus, "scored"),
+          sql`${schema.newsSources.kind} <> 'telegram_private'`,
         ),
       )
       .orderBy(desc(schema.newsItems.relevanceScore), desc(schema.newsItems.createdAt))

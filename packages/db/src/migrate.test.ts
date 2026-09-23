@@ -226,6 +226,9 @@ const NON_ENUM_CHECKS = [
   "news_items_comments_status_check",
   // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
   "news_sources_kind_check",
+  // A private source always carries an encrypted channel peer, while public
+  // sources cannot carry one. Exercised by private source persistence e2e.
+  "news_sources_private_peer_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",

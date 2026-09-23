@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readChannel, readComments } from "./index.js";
+import {
+  readChannel,
+  readComments,
+  readPrivateChannel,
+  resolveJoinedPrivateChannel,
+} from "./index.js";
 
 const fake = vi.hoisted(() => ({
   importSession: vi.fn(),
@@ -10,7 +15,10 @@ const fake = vi.hoisted(() => ({
   created: vi.fn(),
   destroy: vi.fn(),
 }));
-vi.mock("@mtcute/core", () => ({ MemoryStorage: class {}, Long: { ZERO: 0 } }));
+vi.mock("@mtcute/core", () => ({
+  MemoryStorage: class {},
+  Long: { ZERO: 0, fromString: (value: string) => value },
+}));
 vi.mock("@mtcute/node", () => ({
   TelegramClient: class {
     constructor(options: unknown) {
@@ -102,6 +110,115 @@ describe("Telegram source adapter", () => {
         apiHash: "hash",
         session: "private",
         url: "https://t.me/example_channel",
+      });
+      const failure = expect(reading).rejects.toThrow("unavailable");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await failure;
+      expect(fake.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("private Telegram channel adapter", () => {
+  const input = { apiId: 1, apiHash: "hash", session: "private" };
+  const invite = "https://t.me/+JoinedChannelSecret";
+  const chat = {
+    chatType: "channel",
+    isMember: true,
+    isLikelyUnavailable: false,
+    title: "Joined channel",
+    inputPeer: {
+      _: "inputPeerChannel",
+      channelId: 123456,
+      accessHash: { toString: () => "987654321" },
+    },
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    fake.importSession.mockResolvedValue(undefined);
+    fake.destroy.mockResolvedValue(undefined);
+  });
+
+  it("resolves a joined invite to a peer without importing membership or returning the invite", async () => {
+    fake.getChat.mockResolvedValue(chat);
+    const result = await resolveJoinedPrivateChannel({ ...input, invite });
+    expect(fake.getChat).toHaveBeenCalledWith(invite);
+    expect(JSON.stringify(fake.created.mock.calls)).not.toContain("JoinedChannelSecret");
+    expect(fake.call).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      peer: { channelId: 123456, accessHash: "987654321" },
+      title: "Joined channel",
+    });
+    expect(JSON.stringify(result)).not.toContain("JoinedChannelSecret");
+  });
+
+  it("refuses unjoined channels and groups without leaking the invite", async () => {
+    fake.getChat
+      .mockResolvedValueOnce({ ...chat, isMember: false })
+      .mockResolvedValueOnce({ ...chat, chatType: "supergroup" });
+    await expect(resolveJoinedPrivateChannel({ ...input, invite })).rejects.toThrow(
+      "access_denied",
+    );
+    await expect(resolveJoinedPrivateChannel({ ...input, invite })).rejects.toThrow(
+      "access_denied",
+    );
+    expect(fake.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("polls exactly 50 recent posts by saved peer and emits member-only links", async () => {
+    fake.getChat.mockResolvedValue(chat);
+    fake.getHistory.mockResolvedValue([
+      {
+        id: 17,
+        isChannelPost: true,
+        isService: false,
+        isContentProtected: false,
+        media: null,
+        text: "A channel update with enough text to be retained as a news story.",
+        date: new Date("2026-01-01"),
+      },
+      {
+        id: 18,
+        isChannelPost: true,
+        isService: false,
+        isContentProtected: true,
+        media: null,
+        text: "Protected content must never be stored or shown.",
+        date: new Date("2026-01-01"),
+      },
+    ]);
+    const posts = await readPrivateChannel({
+      ...input,
+      peer: { channelId: 123456, accessHash: "987654321" },
+    });
+    expect(fake.getHistory).toHaveBeenCalledWith(
+      { _: "inputPeerChannel", channelId: 123456, accessHash: "987654321" },
+      { limit: 50 },
+    );
+    expect(posts).toMatchObject([{ url: "https://t.me/c/123456/17" }]);
+    expect(posts).toHaveLength(1);
+    expect(JSON.stringify(posts)).not.toContain("JoinedChannelSecret");
+  });
+
+  it("refuses revoked access before reading history", async () => {
+    fake.getChat.mockRejectedValue({ text: "CHANNEL_PRIVATE", secret: "do not leak" });
+    await expect(
+      readPrivateChannel({ ...input, peer: { channelId: 123456, accessHash: "987654321" } }),
+    ).rejects.toThrow("access_denied");
+    expect(fake.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("ends a stalled private history request at the 20-second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      fake.getChat.mockResolvedValue(chat);
+      fake.getHistory.mockReturnValue(new Promise(() => undefined));
+      const reading = readPrivateChannel({
+        ...input,
+        peer: { channelId: 123456, accessHash: "987654321" },
       });
       const failure = expect(reading).rejects.toThrow("unavailable");
       await vi.advanceTimersByTimeAsync(20_000);

@@ -16,9 +16,18 @@ export class RelevanceRepository {
         itemId: schema.newsItems.id,
       })
       .from(schema.newsItems)
+      .innerJoin(
+        schema.newsSources,
+        and(
+          eq(schema.newsItems.sourceId, schema.newsSources.id),
+          eq(schema.newsItems.orgId, schema.newsSources.orgId),
+          eq(schema.newsItems.brandId, schema.newsSources.brandId),
+        ),
+      )
       .where(
         and(
           eq(schema.newsItems.relevanceStatus, "unscored"),
+          sql`${schema.newsSources.kind} <> 'telegram_private'`,
           ...(afterId ? [gt(schema.newsItems.id, afterId)] : []),
         ),
       )

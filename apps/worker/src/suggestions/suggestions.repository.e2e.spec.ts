@@ -67,6 +67,30 @@ describe.skipIf(!url)("SuggestionsRepository (Postgres)", () => {
         editorSignal: "irrelevant",
       },
     ]);
+    const [privateSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        name: "Private",
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+        privatePeerEncrypted: "encrypted-peer",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!privateSource) throw new Error("Private source seed failed");
+    await db.insert(schema.newsItems).values({
+      orgId: stamp,
+      brandId: brand.id,
+      sourceId: privateSource.id,
+      title: "Private scored story",
+      url: "https://t.me/c/123456/1",
+      relevanceStatus: "scored",
+      relevanceScore: 0.99,
+      relevanceReason: "Fit",
+      relevanceUrgency: "timely",
+      relevanceScoredAt: new Date(),
+    });
     await db
       .insert(schema.topics)
       .values({ orgId: stamp, brandId: brand.id, title: "Existing Topic", status: "approved" });

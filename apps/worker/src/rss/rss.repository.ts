@@ -22,6 +22,29 @@ export class RssRepository {
       });
   }
 
+  async addPrivateTelegramSource(
+    orgId: string,
+    brandId: string,
+    name: string,
+    channelId: number,
+    privatePeerEncrypted: string,
+  ): Promise<void> {
+    const brand = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand.length) throw new Error("Brand not found in this workspace");
+    await db.insert(schema.newsSources).values({
+      orgId,
+      brandId,
+      name,
+      kind: "telegram_private",
+      url: `https://t.me/c/${channelId}`,
+      privatePeerEncrypted,
+    });
+  }
+
   async get(orgId: string, sourceId: string) {
     const rows = await db
       .select({
@@ -30,6 +53,7 @@ export class RssRepository {
         brandId: schema.newsSources.brandId,
         kind: schema.newsSources.kind,
         url: schema.newsSources.url,
+        privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
         isActive: schema.newsSources.isActive,
       })
       .from(schema.newsSources)

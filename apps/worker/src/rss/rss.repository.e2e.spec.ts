@@ -9,6 +9,7 @@ describe.skipIf(!url)("RSS persistence e2e", () => {
   let pool: ReturnType<typeof import("@pubrick/db").createDb>["pool"];
   let schema: typeof import("@pubrick/db").schema;
   let eq: typeof import("drizzle-orm").eq;
+  let and: typeof import("drizzle-orm").and;
   const orgId = randomUUID();
   let brandId: string;
   let sourceId: string;
@@ -18,7 +19,7 @@ describe.skipIf(!url)("RSS persistence e2e", () => {
     const module = await import("@pubrick/db");
     schema = module.schema;
     ({ db, pool } = module.createDb(url as string));
-    ({ eq } = await import("drizzle-orm"));
+    ({ and, eq } = await import("drizzle-orm"));
     const { RssRepository } = await import("./rss.repository");
     repo = new RssRepository();
 
@@ -77,5 +78,62 @@ describe.skipIf(!url)("RSS persistence e2e", () => {
       .from(schema.newsItems)
       .where(eq(schema.newsItems.sourceId, sourceId));
     expect(after).toEqual([{ url: article.url }]);
+  });
+
+  it("stores only a safe private-channel URL and encrypted peer, scoped to the owning brand", async () => {
+    const { encryptJson } = await import("@pubrick/shared");
+    const key = "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    const secret = encryptJson({ channelId: 123456, accessHash: "987654321" }, key);
+    await expect(
+      repo.addPrivateTelegramSource(randomUUID(), brandId, "Private", 123456, secret),
+    ).rejects.toThrow("Brand not found");
+    await repo.addPrivateTelegramSource(orgId, brandId, "Private", 123456, secret);
+    const [row] = await db
+      .select({
+        id: schema.newsSources.id,
+        url: schema.newsSources.url,
+        privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
+        kind: schema.newsSources.kind,
+      })
+      .from(schema.newsSources)
+      .where(
+        and(
+          eq(schema.newsSources.orgId, orgId),
+          eq(schema.newsSources.url, "https://t.me/c/123456"),
+        ),
+      );
+    expect(row).toMatchObject({ kind: "telegram_private", url: "https://t.me/c/123456" });
+    expect(row?.privatePeerEncrypted).toBe(secret);
+    expect(secret).not.toContain("987654321");
+    expect(JSON.stringify(row)).not.toContain("+invite");
+    if (!row) throw new Error("Private source fixture was not inserted");
+    expect(await repo.get(randomUUID(), row.id)).toBeNull();
+    const item = {
+      title: "Private story",
+      summary: "A private channel post",
+      url: "https://t.me/c/123456/1",
+      publishedAt: null,
+    };
+    await repo.save(orgId, row.id, row.url, [item]);
+    await repo.save(orgId, row.id, row.url, [item]);
+    expect(
+      await db
+        .select({ id: schema.newsItems.id })
+        .from(schema.newsItems)
+        .where(eq(schema.newsItems.sourceId, row.id)),
+    ).toHaveLength(1);
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: false })
+      .where(eq(schema.newsSources.id, row.id));
+    await repo.save(orgId, row.id, row.url, [{ ...item, url: "https://t.me/c/123456/2" }]);
+    expect(
+      await db
+        .select({ id: schema.newsItems.id })
+        .from(schema.newsItems)
+        .where(eq(schema.newsItems.sourceId, row.id)),
+    ).toHaveLength(1);
+    await db.delete(schema.newsSources).where(eq(schema.newsSources.id, row.id));
+    expect(await repo.get(orgId, row.id)).toBeNull();
   });
 });

@@ -125,6 +125,8 @@ export class SourcesRepository {
         .limit(1);
       const source = existing[0];
       if (!source) throw new NotFoundException("Source not found");
+      if (source.kind === "telegram_private" && data.url)
+        throw new BadRequestException("Private channel identity cannot be changed through the API");
       if (data.url && !newsSourceCreateSchema.safeParse({ ...source, ...data, brandId }).success) {
         throw new BadRequestException("The URL does not match this source type");
       }

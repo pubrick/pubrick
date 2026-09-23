@@ -6,7 +6,6 @@ import {
   type NewsCommentDto,
   type NewsItemDto,
   type NewsSourceDto,
-  type NewsSourceKind,
   newsItemListQuerySchema,
   newsSourceCreateSchema,
   runCreateSchema,
@@ -46,7 +45,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [telegramConnected, setTelegramConnected] = useState(false);
-  const [kind, setKind] = useState<NewsSourceKind>("rss");
+  const [kind, setKind] = useState<"rss" | "telegram">("rss");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -356,7 +355,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             label={t("kind")}
             value={kind}
             onChange={(event) => {
-              setKind(event.target.value as NewsSourceKind);
+              setKind(event.target.value as "rss" | "telegram");
               setUrl("");
             }}
           >
@@ -379,20 +378,20 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             required
           />
         </form>
-        {!telegramConnected &&
-          (kind === "telegram" || sources?.some((source) => source.kind === "telegram")) && (
-            <p className="mt-3 text-sm text-fg-secondary">
-              {t("telegramSetup")}{" "}
-              <a
-                href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline"
-              >
-                {t("setupGuide")}
-              </a>
-            </p>
-          )}
+        {kind === "telegram" && (
+          <p className="mt-3 text-sm text-fg-secondary">
+            {!telegramConnected && <>{t("telegramSetup")} </>}
+            {t("privateSetup")}{" "}
+            <a
+              href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              {t("setupGuide")}
+            </a>
+          </p>
+        )}
       </Card>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
@@ -422,7 +421,12 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               title={source.name}
               meta={
                 <span>
-                  {source.kind === "telegram" ? t("telegram") : t("rss")} · {source.url} ·{" "}
+                  {source.kind === "telegram_private"
+                    ? t("telegramPrivate")
+                    : source.kind === "telegram"
+                      ? t("telegram")
+                      : t("rss")}{" "}
+                  · {source.url} ·{" "}
                   {source.lastErrorCode
                     ? t(
                         source.lastErrorCode === "telegram_not_connected"

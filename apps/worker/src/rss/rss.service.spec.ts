@@ -18,7 +18,7 @@ const source = {
   kind: "rss",
 };
 
-const telegram = { read: vi.fn() };
+const telegram = { read: vi.fn(), readPrivate: vi.fn() };
 
 describe("RssService", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -106,5 +106,29 @@ describe("RssService", () => {
       watched.url,
       "telegram_access_denied",
     );
+  });
+
+  it("polls a private source with only encrypted peer and session, and skips paused or deleted sources", async () => {
+    const watched = {
+      ...source,
+      kind: "telegram_private",
+      url: "https://t.me/c/123456",
+      privatePeerEncrypted: "encrypted-peer",
+    };
+    const repo = {
+      get: vi.fn().mockResolvedValue(watched),
+      telegramSession: vi.fn().mockResolvedValue("encrypted-session"),
+      save: vi.fn(),
+      fail: vi.fn(),
+    };
+    telegram.readPrivate.mockResolvedValueOnce([]);
+    const service = new RssService(repo as never, telegram as never);
+    await service.handle({ orgId: watched.orgId, sourceId: watched.id });
+    expect(telegram.readPrivate).toHaveBeenCalledWith("encrypted-peer", "encrypted-session");
+    expect(repo.save).toHaveBeenCalledWith(watched.orgId, watched.id, watched.url, []);
+    repo.get.mockResolvedValueOnce({ ...watched, isActive: false }).mockResolvedValueOnce(null);
+    await service.handle({ orgId: watched.orgId, sourceId: watched.id });
+    await service.handle({ orgId: watched.orgId, sourceId: watched.id });
+    expect(telegram.readPrivate).toHaveBeenCalledTimes(1);
   });
 });
