@@ -1,4 +1,4 @@
-import { knowledgeCreateSchema } from "@pubrick/shared";
+import { knowledgeImportSchema } from "@pubrick/shared";
 import { parse } from "csv-parse/browser/esm/sync";
 
 export type KnowledgeCsvErrorCode = "invalid_header" | "invalid_row" | "too_many";
@@ -39,16 +39,33 @@ export function parseKnowledgeCsv(text: string) {
   }
   if (records.length === 0) throw new KnowledgeCsvError("invalid_row");
   if (records.length > 500) throw new KnowledgeCsvError("too_many");
-  const entrySchema = knowledgeCreateSchema.omit({ brandId: true });
+  const entrySchema = knowledgeImportSchema.shape.entries.element;
   return records.map((record, index) => {
+    let tags: unknown;
+    try {
+      // An explicit JSON column is authoritative, including []. A blank or malformed
+      // cell is refused so a lossy fallback cannot silently change imported tags.
+      tags = Object.hasOwn(record, "tags_json")
+        ? JSON.parse(record.tags_json ?? "")
+        : (record.tags ?? "")
+            .split(/[|,]/)
+            .map((tag) => tag.trim())
+            .filter(Boolean);
+    } catch {
+      throw new KnowledgeCsvError("invalid_row", index + 2);
+    }
     const parsed = entrySchema.safeParse({
       title: record.title,
       content: record.content,
       category: record.category,
-      tags: (record.tags ?? "")
-        .split(/[|,]/)
-        .map((tag) => tag.trim())
-        .filter(Boolean),
+      tags,
+      isActive: Object.hasOwn(record, "is_active")
+        ? record.is_active === "true"
+          ? true
+          : record.is_active === "false"
+            ? false
+            : "invalid"
+        : undefined,
     });
     if (!parsed.success) throw new KnowledgeCsvError("invalid_row", index + 2);
     return parsed.data;

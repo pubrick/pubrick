@@ -105,19 +105,22 @@ describe("brand knowledge screen", () => {
     );
     await screen.findByText(en.Knowledge.empty);
     const csv = new File(
-      ["title,content,category,tags\nOrigin,Arabica only,product_info,coffee\n"],
+      [
+        'title,content,category,tags_json,is_active\nOrigin,Arabica only,product_info,"[""coffee, roasted""]",false\n',
+      ],
       "notes.csv",
       { type: "text/csv" },
     );
     Object.defineProperty(csv, "text", {
-      value: async () => "title,content,category,tags\nOrigin,Arabica only,product_info,coffee\n",
+      value: async () =>
+        'title,content,category,tags_json,is_active\nOrigin,Arabica only,product_info,"[""coffee, roasted""]",false\n',
     });
     const input = container.querySelector('input[type="file"]');
     expect(input).not.toBeNull();
     const user = userEvent.setup();
     await user.upload(input as HTMLInputElement, csv);
     const dialog = within(await screen.findByRole("dialog"));
-    expect(dialog.getByText("Origin")).toBeInTheDocument();
+    expect(dialog.getByText(`Origin (${en.Knowledge.paused})`)).toBeInTheDocument();
     expect(mockApi.mock.calls.some(([path]) => path === "/api/knowledge/bulk-import")).toBe(false);
     await user.click(dialog.getByRole("button", { name: en.Knowledge.csvImport }));
     await waitFor(() =>
@@ -130,7 +133,13 @@ describe("brand knowledge screen", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({
       brandId,
       entries: [
-        { title: "Origin", content: "Arabica only", category: "product_info", tags: ["coffee"] },
+        {
+          title: "Origin",
+          content: "Arabica only",
+          category: "product_info",
+          tags: ["coffee, roasted"],
+          isActive: false,
+        },
       ],
     });
   });

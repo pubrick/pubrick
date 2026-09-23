@@ -508,7 +508,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
         <p className="mt-3 text-sm text-fg">
           {importPreview?.entries
             .slice(0, 5)
-            .map((entry) => entry.title)
+            .map((entry) => (entry.isActive ? entry.title : `${entry.title} (${t("paused")})`))
             .join(" · ")}
         </p>
         <p className="mt-3 text-xs text-fg-tertiary">{t("csvIndexHint")}</p>
