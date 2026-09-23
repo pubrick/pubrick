@@ -1,3 +1,4 @@
+import { type Facet, RichText } from "@bsky/sdk/richtext";
 import { z } from "zod";
 import {
   PermanentPublishError,
@@ -44,6 +45,7 @@ const recordSchema = z.object({
   uri: z.string().regex(/^at:\/\/did:(?:plc|web):[^/]+\/app\.bsky\.feed\.post\/[a-zA-Z0-9._~:-]+$/),
 });
 const errorSchema = z.object({ error: z.string().min(1), message: z.string().optional() });
+const resolvedHandleSchema = z.object({ did: sessionSchema.shape.did });
 type Phase = "prepare" | "publish";
 
 function endpoint(options?: PublisherOptions): string {
@@ -174,6 +176,65 @@ function validateImage(bytes: Uint8Array): void {
   }
 }
 
+/** Resolve a mention on our fixed PDS; an unresolved handle stays plain text. */
+async function resolveHandle(handle: string, options?: PublisherOptions): Promise<string | null> {
+  let response: Response;
+  try {
+    response = await (options?.fetchImpl ?? fetch)(
+      `${endpoint(options)}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`,
+      {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(BLUESKY_REQUEST_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) return null;
+    const parsed = resolvedHandleSchema.safeParse(await response.json());
+    return parsed.success ? parsed.data.did : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMention(
+  feature: Facet["features"][number],
+): feature is Facet["features"][number] & { did: string } {
+  return (
+    feature.$type === "app.bsky.richtext.facet#mention" &&
+    "did" in feature &&
+    typeof feature.did === "string"
+  );
+}
+
+async function resolvedFacets(richText: RichText, options?: PublisherOptions) {
+  richText.detectFacetsWithoutResolution();
+  const facets = richText.facets;
+  if (!facets?.length) return undefined;
+  const handles = new Set<string>();
+  for (const facet of facets) {
+    for (const feature of facet.features) {
+      if (isMention(feature)) handles.add(feature.did);
+    }
+  }
+  const resolved = new Map(
+    await Promise.all(
+      [...handles].map(async (handle) => [handle, await resolveHandle(handle, options)] as const),
+    ),
+  );
+  // The SDK deliberately retains unresolved mentions with did="". Such a
+  // facet is invalid under the Lexicon, so omit it and keep the source text.
+  return facets.filter((facet) => {
+    for (const feature of facet.features) {
+      if (!isMention(feature)) continue;
+      const did = resolved.get(feature.did);
+      if (!did) return false;
+      // resolveHandle's schema checked this DID syntax before it reached us.
+      feature.did = did as `did:${string}:${string}`;
+    }
+    return true;
+  });
+}
+
 export const blueskyPublisher: Publisher<BlueskyCredentials> = {
   platform: "bluesky",
   maxTextLength: MAX_GRAPHEMES,
@@ -196,9 +257,8 @@ export const blueskyPublisher: Publisher<BlueskyCredentials> = {
   },
 
   async publish(credentials, input, options): Promise<PublishResult> {
-    const length = [
-      ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(input.text),
-    ].length;
+    const richText = new RichText({ text: input.text });
+    const length = richText.graphemeLength;
     if (length < 1 || length > MAX_GRAPHEMES) {
       throw new PermanentPublishError(
         `Bluesky text must be 1..${MAX_GRAPHEMES} graphemes, got ${length}`,
@@ -206,6 +266,7 @@ export const blueskyPublisher: Publisher<BlueskyCredentials> = {
     }
     if (input.image) validateImage(input.image.bytes);
     const authenticated = await session(credentials, options);
+    const facets = await resolvedFacets(richText, options);
     let embed: unknown;
     if (input.image) {
       const uploaded = blobSchema.safeParse(
@@ -232,8 +293,9 @@ export const blueskyPublisher: Publisher<BlueskyCredentials> = {
         collection: COLLECTION,
         record: {
           $type: COLLECTION,
-          text: input.text,
+          text: richText.text,
           createdAt: new Date().toISOString(),
+          ...(facets?.length ? { facets } : {}),
           ...(embed ? { embed } : {}),
         },
       }),

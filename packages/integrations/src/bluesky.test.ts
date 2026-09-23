@@ -135,6 +135,57 @@ describe("Bluesky publishing", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("publishes clickable URL and resolved mention facets after Unicode text", async () => {
+    const text = "💡 See https://example.com/path and @alice.bsky.social";
+    const mentionedDid = "did:plc:aliceabcdefghijklmnopq";
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("createSession")) return answer(session);
+      if (requestUrl.includes("resolveHandle")) {
+        expect(requestUrl).toBe(
+          "https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=alice.bsky.social",
+        );
+        expect(init?.method).toBe("GET");
+        expect(init?.headers).toBeUndefined();
+        return answer({ did: mentionedDid });
+      }
+      const record = JSON.parse(String(init?.body)).record;
+      expect(record.text).toBe(text);
+      expect(record.facets).toEqual([
+        {
+          index: { byteStart: 9, byteEnd: 33 },
+          features: [{ $type: "app.bsky.richtext.facet#link", uri: "https://example.com/path" }],
+        },
+        {
+          $type: "app.bsky.richtext.facet",
+          index: { byteStart: 38, byteEnd: 56 },
+          features: [{ $type: "app.bsky.richtext.facet#mention", did: mentionedDid }],
+        },
+      ]);
+      return answer({ uri });
+    }) as unknown as typeof fetch;
+    await expect(
+      blueskyPublisher.publish(credentials, { text }, options(fetchImpl)),
+    ).resolves.toMatchObject({ externalId: uri });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps an unresolved mention as plain text without an invalid DID facet", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith("createSession")) return answer(session);
+      if (String(url).includes("resolveHandle")) return answer({ error: "HandleNotFound" }, 400);
+      expect(JSON.parse(String(init?.body)).record).not.toHaveProperty("facets");
+      return answer({ uri });
+    }) as unknown as typeof fetch;
+    await expect(
+      blueskyPublisher.publish(
+        credentials,
+        { text: "Hello @missing.bsky.social" },
+        options(fetchImpl),
+      ),
+    ).resolves.toMatchObject({ externalId: uri });
+  });
+
   it("classifies a structured 400 post refusal and redacts credentials", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) =>
       String(url).endsWith("createSession")
