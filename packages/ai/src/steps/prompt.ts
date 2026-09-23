@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { PermanentError } from "@pubrick/shared";
+import { PermanentError, PROMPT_ROLES } from "@pubrick/shared";
 import type { ZodType } from "zod";
 import { withRunFailure } from "../classify.js";
 import { generateStructured } from "../generate.js";
@@ -118,13 +118,19 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
   return {
     name: spec.name,
     schema: spec.schema,
-    run: (ctx, input) =>
-      callStep(ctx, {
+    run: (ctx, input) => {
+      const key = spec.name.startsWith("adapter:") ? "adapter" : spec.name;
+      const role = PROMPT_ROLES.find((candidate) => candidate === key);
+      const guidance = role ? ctx.promptGuidance?.[role] : undefined;
+      return callStep(ctx, {
         schema: spec.schema,
         attribution,
-        role: spec.role,
+        role: guidance
+          ? [...spec.role, "", "Additional guidance set by this organization:", guidance]
+          : spec.role,
         material: spec.material(ctx, input),
-      }),
+      });
+    },
   };
 }
 

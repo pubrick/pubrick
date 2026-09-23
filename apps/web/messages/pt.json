@@ -228,6 +228,29 @@
     "genericError": "Algo deu errado. Tente novamente.",
     "overrideLabel": "Texto próprio para {channel}"
   },
+  "Prompts": {
+    "title": "Orientações de geração",
+    "back": "Voltar às configurações",
+    "intro": "Cada função de IA tem regras internas. Adicione aqui orientações da organização; novas gerações usam a versão mais recente. Limpe o campo e salve para voltar às regras internas.",
+    "role": "Função de IA",
+    "guidance": "Orientações adicionais",
+    "guidanceHint": "Esta é uma instrução ao modelo. Não inclua material de origem nem segredos (máximo de 6000 caracteres).",
+    "save": "Salvar",
+    "saved": "Orientações salvas como nova versão.",
+    "history": "Histórico de versões",
+    "noHistory": "Ainda não há orientações personalizadas. Salve uma versão para começar.",
+    "version": "Versão {version}",
+    "restore": "Restaurar",
+    "tooLong": "As orientações devem ter no máximo 6000 caracteres.",
+    "genericError": "Não foi possível carregar ou salvar as orientações. Tente novamente.",
+    "roles": {
+      "researcher": "Pesquisa",
+      "writer": "Redação",
+      "editor": "Edição",
+      "factcheck": "Afirmações para conferir",
+      "adapter": "Adaptação por canal"
+    }
+  },
   "SettingsPage": {
     "title": "Configurações",
     "appearanceTitle": "Aparência",
@@ -238,6 +261,9 @@
     "workspaceTitle": "Espaço de trabalho",
     "workspaceNoOrg": "Sem organização",
     "aiTitle": "Provedor de IA",
+    "promptsTitle": "Orientações de geração",
+    "promptsHint": "Adicione orientações para cada função de IA. As regras internas de segurança e formato continuam em vigor.",
+    "promptsOpen": "Editar orientações",
     "aiSpend": "Gasto até agora: {amount}",
     "aiEmpty": "Ainda não há chave de API — adicione uma abaixo para o Pubrick gerar conteúdo.",
     "aiProviderLabel": "Provedor",

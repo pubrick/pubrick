@@ -172,6 +172,17 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
       return { id: model, paths: ["/api/ai-credentials"] };
     },
   },
+  {
+    controller: "prompts",
+    identify: id,
+    seed: async (agent) => {
+      const revision = await agent
+        .post("/api/prompts/researcher/revisions")
+        .send({ guidance: "Prefer primary sources." })
+        .expect(201);
+      return { id: revision.body.id as string, paths: ["/api/prompts"] };
+    },
+  },
 ];
 
 describe.skipIf(!url)("every list endpoint returns only this org's rows", () => {

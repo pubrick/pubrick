@@ -10,6 +10,7 @@ import {
   formatUsd,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
+import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
@@ -586,6 +587,17 @@ export default function SettingsPage() {
               />
             </Advanced>
           </form>
+        </Card>
+
+        <Card>
+          <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>
+          <p className="mb-3 text-sm text-fg-secondary">{t("promptsHint")}</p>
+          <Link
+            href={`/${locale}/settings/prompts`}
+            className="text-sm font-medium text-accent underline"
+          >
+            {t("promptsOpen")}
+          </Link>
         </Card>
 
         <Card>

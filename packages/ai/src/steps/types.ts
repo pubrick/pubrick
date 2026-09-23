@@ -1,4 +1,5 @@
 import type { LanguageModelV4 } from "@ai-sdk/provider";
+import type { PromptRole } from "@pubrick/shared";
 import type { ZodType } from "zod";
 import type { ModelCallOptions } from "../generate.js";
 import type { AiProvider } from "../provider.js";
@@ -70,6 +71,8 @@ export type StepUsageSink = (
  */
 export type StepContext = ModelCallOptions & {
   brand: StepBrand;
+  /** Extra trusted instructions written by this organization, keyed by role. */
+  promptGuidance?: Partial<Record<PromptRole, string>>;
   model: LanguageModelV4;
   provider: AiProvider;
   onUsage: StepUsageSink;

@@ -672,6 +672,22 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(own?.channels.map((channel) => channel.id)).toEqual(victim.channelIds);
     }, 25_000);
 
+    it("loads the latest guidance for this org alone into generation context", async () => {
+      const { victim, intruder } = await twoOrgs();
+      await db.insert(schema.promptRevisions).values([
+        { orgId: victim.orgId, role: "writer", version: 1, guidance: "VICTIM_OLD" },
+        { orgId: victim.orgId, role: "writer", version: 2, guidance: "VICTIM_LATEST" },
+        { orgId: intruder.orgId, role: "writer", version: 1, guidance: "INTRUDER_ONLY" },
+      ]);
+      const repo = new Repository();
+      expect(
+        (await repo.context(victim.orgId, victim.brandId, victim.channelIds))?.promptGuidance,
+      ).toEqual({ writer: "VICTIM_LATEST" });
+      expect(
+        (await repo.context(intruder.orgId, intruder.brandId, intruder.channelIds))?.promptGuidance,
+      ).toEqual({ writer: "INTRUDER_ONLY" });
+    }, 25_000);
+
     it("spends the run's OWN org's provider key, never the oldest key in the table", async () => {
       const { victim, intruder } = await twoOrgs();
       const repo = new Repository();

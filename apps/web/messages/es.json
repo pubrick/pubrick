@@ -228,6 +228,29 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "overrideLabel": "Texto propio para {channel}"
   },
+  "Prompts": {
+    "title": "Guía de generación",
+    "back": "Volver a ajustes",
+    "intro": "Cada rol de IA tiene reglas integradas. Añade aquí la guía de la organización; las nuevas generaciones usan la última versión. Borra el campo y guarda para volver a las reglas integradas.",
+    "role": "Rol de IA",
+    "guidance": "Guía adicional",
+    "guidanceHint": "Esta es una instrucción para el modelo. No incluyas material de origen ni secretos (máximo 6000 caracteres).",
+    "save": "Guardar",
+    "saved": "Guía guardada como nueva versión.",
+    "history": "Historial de versiones",
+    "noHistory": "Todavía no hay guía personalizada. Guarda una versión para empezar.",
+    "version": "Versión {version}",
+    "restore": "Restaurar",
+    "tooLong": "La guía debe tener como máximo 6000 caracteres.",
+    "genericError": "No se pudo cargar o guardar la guía. Inténtalo de nuevo.",
+    "roles": {
+      "researcher": "Investigación",
+      "writer": "Redacción",
+      "editor": "Edición",
+      "factcheck": "Afirmaciones para revisar",
+      "adapter": "Adaptación por canal"
+    }
+  },
   "SettingsPage": {
     "title": "Ajustes",
     "appearanceTitle": "Apariencia",
@@ -238,6 +261,9 @@
     "workspaceTitle": "Espacio de trabajo",
     "workspaceNoOrg": "Sin organización",
     "aiTitle": "Proveedor de IA",
+    "promptsTitle": "Guía de generación",
+    "promptsHint": "Añade instrucciones para cada rol de IA. Las reglas de seguridad y formato siguen vigentes.",
+    "promptsOpen": "Editar guía",
     "aiSpend": "Gastado hasta ahora: {amount}",
     "aiEmpty": "Aún no hay clave de API: añade una abajo para que Pubrick pueda generar contenido.",
     "aiProviderLabel": "Proveedor",

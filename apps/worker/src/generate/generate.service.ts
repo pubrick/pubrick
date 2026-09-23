@@ -350,6 +350,7 @@ export class GenerateService {
       // finish so the work it is already paying for gets checkpointed.
       ctx: {
         brand: context.brand,
+        promptGuidance: context.promptGuidance,
         // THE THREE TEXT FIELDS COME FROM THE ARM THE RUN WAS STORED AS, and
         // each arm names all three: `RunStepContext` makes them
         // required-and-nullable so that an absence is STATED by the builder
