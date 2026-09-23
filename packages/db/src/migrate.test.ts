@@ -90,17 +90,17 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * somebody wrote down, and a list computed from the same types the migration
  * was generated from could only ever agree with itself.
  *
- * Twelve of them are the publishing path, converted by 0014. The last two were
- * born zoned: `refine_proposals` (0016) is a table the editor writes, and
- * `publications.asserted_at` (0017) is the moment a person settled a delivery
- * nobody else could — and neither has any reason to inherit the "naive means
- * UTC" convention the conversion existed to end. They are deliberately NOT in
- * `UNZONED_TABLES`, which is the list of tables somebody decided to LEAVE.
+ * Twelve of them are the publishing path, converted by 0014. Four were born
+ * zoned: `refine_proposals` (0016), `publications.asserted_at` (0017), and
+ * the two public feed timestamps (0021). None has a reason to inherit the
+ * "naive means UTC" convention the conversion existed to end. They are
+ * deliberately NOT in `UNZONED_TABLES`.
  */
 const ZONED_COLUMNS = [
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
   "channels.created_at",
@@ -109,6 +109,7 @@ const ZONED_COLUMNS = [
   "content_items.first_opened_at",
   "content_items.updated_at",
   "content_versions.created_at",
+  "feed_entries.published_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",

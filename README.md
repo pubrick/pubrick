@@ -40,6 +40,9 @@ base, refining text inside the editor, and drafting from watched sources.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
+Public RSS syndication is available for selected published posts; see
+[docs/public-rss.md](docs/public-rss.md). It does not confirm delivery to Dzen.
+
 ## Why Pubrick
 
 - **Human-in-the-loop by design** — nothing is published without approval

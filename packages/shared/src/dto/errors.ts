@@ -67,6 +67,10 @@ export const API_ERROR_CODES = [
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
+  /** Public syndication is opt-in; the feed may have been disabled. */
+  "feed_not_found",
+  /** A feed entry must be a titled post already delivered somewhere. */
+  "feed_item_not_ready",
   /** The channel override's row is gone — usually its channel was deleted. */
   "adaptation_not_found",
 

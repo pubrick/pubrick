@@ -180,6 +180,29 @@
     "discardConfirm": "Descartar e gerar",
     "discardCancel": "Cancelar"
   },
+  "Feed": {
+    "title": "Feed RSS público",
+    "description": "Partilhe publicações selecionadas num feed RSS público. Ativar o feed não partilha nenhuma publicação por si só.",
+    "dzenNotice": "Para tentar importar para o Dzen, configure este URL manualmente se a sua conta o permitir. O Pubrick não consegue verificar a importação.",
+    "entryCount": "{count, plural, one {# publicação no feed} other {# publicações no feed}}",
+    "enable": "Ativar",
+    "disable": "Desativar",
+    "disableTitle": "Desativar o feed público?",
+    "disableHint": "O URL e os links dos artigos deixarão de funcionar. Ao reativar, será criado um novo URL e o feed ficará vazio.",
+    "disabledHint": "Ative o feed público nas",
+    "brandSettings": "definições da marca",
+    "available": "Disponível no feed RSS. Isto não confirma a importação por nenhuma plataforma.",
+    "notIncluded": "Esta publicação não está no feed público.",
+    "add": "Adicionar",
+    "remove": "Remover",
+    "addTitle": "Partilhar esta publicação publicamente?",
+    "addHint": "Qualquer pessoa com o URL do feed ou do artigo poderá ler uma cópia. Isto não publica no Dzen.",
+    "removeTitle": "Remover esta publicação do feed?",
+    "removeHint": "O link público do artigo deixará de funcionar. Uma plataforma que já o importou pode guardar a sua cópia.",
+    "cancel": "Cancelar",
+    "loadError": "Não foi possível carregar o feed.",
+    "saveError": "Não foi possível atualizar o feed."
+  },
   "Publish": {
     "backToQueue": "Voltar à fila",
     "bodyLabel": "Texto",
@@ -354,6 +377,8 @@
   },
   "Errors": {
     "content_not_found": "Esta publicação não existe mais — pode ter sido excluída.",
+    "feed_not_found": "Este feed público não está disponível. Ative-o novamente para partilhar publicações.",
+    "feed_item_not_ready": "Adicione um título e publique este post antes de o partilhar num feed público.",
     "adaptation_not_found": "O texto próprio deste canal não existe mais — o canal pode ter sido excluído.",
     "content_pinned_approved": "Uma publicação aprovada não pode ser editada. Rejeite-a primeiro.",
     "content_pinned_published": "Esta publicação já foi publicada e não pode mais ser editada.",

@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { FeedSettings } from "@/components/feed-controls";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -559,6 +560,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </div>
         </form>
       </Card>
+
+      <FeedSettings brandId={id} />
 
       <Modal
         open={editing !== null}
