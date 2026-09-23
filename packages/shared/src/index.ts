@@ -45,6 +45,7 @@ export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
 export * from "./dto/runs.js";
+export * from "./dto/sources.js";
 export * from "./dto/text.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
@@ -63,6 +64,12 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  RSS_POLL_MIN_GAP_SECONDS,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
+  type RssPollJob,
+  rssPollJobOptions,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";

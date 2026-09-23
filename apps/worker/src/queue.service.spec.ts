@@ -6,6 +6,9 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { publishSweepQueueOf, QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
@@ -37,6 +40,29 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers the RSS poll and scan queues when the RSS service is installed", async () => {
+    const boss = bossStub();
+    const rss = { handle: vi.fn(), scan: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(publish as never, generate as never, rss as never);
+    await service.registerAll(boss as never);
+
+    expect(boss.createQueue).toHaveBeenCalledWith(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    expect(boss.updateQueue).toHaveBeenCalledWith(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    expect(boss.schedule).toHaveBeenCalledWith(RSS_SCAN_QUEUE, "*/15 * * * *");
+    const poll = boss.work.mock.calls.find((call) => call[0] === RSS_POLL_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const scan = boss.work.mock.calls.find(
+      (call) => call[0] === RSS_SCAN_QUEUE,
+    )?.[2] as () => Promise<void>;
+    const payload = { orgId: "org", sourceId: "source" };
+    await poll([{ data: payload }]);
+    await scan();
+    expect(rss.handle).toHaveBeenCalledWith(payload);
+    expect(rss.scan).toHaveBeenCalledWith(boss);
+  });
+
   it("consumes the shared publish queue with the shared options", async () => {
     const boss = bossStub();
     const { service } = serviceStub();

@@ -7,6 +7,7 @@ import {
   PLATFORM_IDS,
   PUBLISHABLE_PLATFORM_IDS,
 } from "@pubrick/shared";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
@@ -350,6 +351,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </Button>
       }
     >
+      <Link
+        href={`/${locale}/brands/${id}/sources`}
+        className="mb-5 inline-block text-sm text-fg-secondary underline"
+      >
+        {tb("sourcesLink")}
+      </Link>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}

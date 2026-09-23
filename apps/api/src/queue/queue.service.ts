@@ -12,6 +12,10 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  type RssPollJob,
+  rssPollJobOptions,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
@@ -83,6 +87,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
     // Names/options come from @pubrick/shared so the worker cannot drift from them.
     await boss.createQueue(PUBLISH_DLQ);
+    await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
     // createQueue is an ON CONFLICT DO NOTHING insert: on a database where the
     // queue already exists (any dev box or environment that ran an earlier
@@ -101,6 +107,15 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.boss?.stop({ graceful: true });
+  }
+
+  async enqueueRssPoll(tx: Tx, payload: RssPollJob): Promise<boolean> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(RSS_POLL_QUEUE, payload, {
+      ...rssPollJobOptions(payload.sourceId),
+      db: fromDrizzle(tx, sql),
+    });
+    return id !== null;
   }
 
   /**
