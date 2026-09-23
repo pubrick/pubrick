@@ -73,6 +73,8 @@ export const API_ERROR_CODES = [
   "media_not_found",
   "media_in_use",
   "media_cover_pinned",
+  "media_generation_limit",
+  "media_generation_failed",
   /** Public syndication is opt-in; the feed may have been disabled. */
   "feed_not_found",
   /** A feed entry must be a titled post already delivered somewhere. */

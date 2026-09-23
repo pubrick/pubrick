@@ -663,7 +663,9 @@
     "media_invalid": "Escolha uma imagem JPEG, PNG ou WebP válida de até 10 MB.",
     "media_not_found": "Esta imagem não está mais disponível nesta marca.",
     "media_in_use": "Remova a imagem da publicação antes de excluí-la.",
-    "media_cover_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar a capa."
+    "media_cover_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar a capa.",
+    "media_generation_limit": "O limite de geração de imagens por hora foi atingido. Tente mais tarde.",
+    "media_generation_failed": "O Gemini não retornou uma imagem utilizável. Tente outra descrição."
   },
   "Calendar": {
     "title": "Calendário de conteúdo",
@@ -742,6 +744,20 @@
     "detach": "Remover capa",
     "more": "Carregar mais",
     "retry": "Tentar novamente",
-    "failed": "Não foi possível carregar a biblioteca de mídia."
+    "failed": "Não foi possível carregar a biblioteca de mídia.",
+    "generateTitle": "Criar imagem com Gemini",
+    "generateHint": "Cada pedido usa a chave do Google da sua organização. A imagem fica na biblioteca até você revisá-la e escolhê-la.",
+    "prompt": "Descreva a imagem",
+    "promptPlaceholder": "Uma foto editorial tranquila de…",
+    "variationPlaceholder": "Descreva o que mudar nesta imagem…",
+    "generate": "Gerar imagem",
+    "generateVariation": "Gerar variação",
+    "generating": "Gerando…",
+    "tryVariation": "Testar variação",
+    "variationOf": "Variação de {name}",
+    "cancelVariation": "Cancelar variação",
+    "image": "imagem",
+    "reviewImage": "Nova imagem: revise antes de escolher",
+    "generateFailed": "Não foi possível gerar a imagem. Tente novamente."
   }
 }

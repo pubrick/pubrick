@@ -15,3 +15,11 @@ export type MediaAssetDto = z.infer<typeof mediaAssetDtoSchema>;
 
 export const mediaCoverUpdateSchema = z.strictObject({ mediaId: z.uuid().nullable() });
 export type MediaCoverUpdate = z.infer<typeof mediaCoverUpdateSchema>;
+
+/** A deliberate, single image call. Editing preserves the source as another asset. */
+export const mediaGenerateSchema = z.strictObject({
+  brandId: z.uuid(),
+  prompt: z.string().trim().min(8).max(2000),
+  sourceMediaId: z.uuid().optional(),
+});
+export type MediaGenerate = z.infer<typeof mediaGenerateSchema>;
