@@ -15,6 +15,7 @@ COPY packages/shared/package.json packages/shared/package.json
 COPY packages/integrations/package.json packages/integrations/package.json
 COPY packages/ai/package.json packages/ai/package.json
 COPY packages/db/package.json packages/db/package.json
+COPY packages/telegram/package.json packages/telegram/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

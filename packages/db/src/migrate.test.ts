@@ -119,6 +119,7 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "telegram_source_accounts.connected_at",
 ];
 
 /**
@@ -193,6 +194,8 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
+  "news_sources_kind_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",

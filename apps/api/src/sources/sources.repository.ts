@@ -1,6 +1,15 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { NewsSourceCreate, NewsSourceUpdate } from "@pubrick/shared";
+import {
+  type NewsSourceCreate,
+  type NewsSourceUpdate,
+  newsSourceCreateSchema,
+} from "@pubrick/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db } from "../db";
@@ -10,6 +19,7 @@ const SOURCE_COLUMNS = {
   id: schema.newsSources.id,
   brandId: schema.newsSources.brandId,
   name: schema.newsSources.name,
+  kind: schema.newsSources.kind,
   url: schema.newsSources.url,
   isActive: schema.newsSources.isActive,
   checkIntervalMinutes: schema.newsSources.checkIntervalMinutes,
@@ -43,6 +53,15 @@ export class SourcesRepository {
     if (!rows.length) throw notFound("brand_not_found", "Brand not found");
   }
 
+  async telegramConnection(orgId: string): Promise<{ connected: boolean }> {
+    const rows = await db
+      .select({ orgId: schema.telegramSourceAccounts.orgId })
+      .from(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+      .limit(1);
+    return { connected: rows.length > 0 };
+  }
+
   async list(orgId: string, brandId: string) {
     await this.requireBrand(orgId, brandId);
     return db
@@ -61,26 +80,44 @@ export class SourcesRepository {
         .onConflictDoNothing()
         .returning(SOURCE_COLUMNS);
       const source = rows[0];
-      if (!source) throw new ConflictException("This feed is already watched for the brand");
+      if (!source) throw new ConflictException("This source is already watched for the brand");
       await this.queue.enqueueRssPoll(tx, { orgId, sourceId: source.id });
       return source;
     });
   }
 
   async update(orgId: string, brandId: string, id: string, data: NewsSourceUpdate) {
-    const rows = await db
-      .update(schema.newsSources)
-      .set({ ...data, updatedAt: new Date() })
-      .where(
-        and(
-          eq(schema.newsSources.orgId, orgId),
-          eq(schema.newsSources.brandId, brandId),
-          eq(schema.newsSources.id, id),
-        ),
-      )
-      .returning(SOURCE_COLUMNS);
-    if (!rows.length) throw new NotFoundException("RSS source not found");
-    return rows[0];
+    return db.transaction(async (tx) => {
+      const existing = await tx
+        .select(SOURCE_COLUMNS)
+        .from(schema.newsSources)
+        .where(
+          and(
+            eq(schema.newsSources.orgId, orgId),
+            eq(schema.newsSources.brandId, brandId),
+            eq(schema.newsSources.id, id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      const source = existing[0];
+      if (!source) throw new NotFoundException("Source not found");
+      if (data.url && !newsSourceCreateSchema.safeParse({ ...source, ...data, brandId }).success) {
+        throw new BadRequestException("The URL does not match this source type");
+      }
+      const rows = await tx
+        .update(schema.newsSources)
+        .set({ ...data, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.newsSources.orgId, orgId),
+            eq(schema.newsSources.brandId, brandId),
+            eq(schema.newsSources.id, id),
+          ),
+        )
+        .returning(SOURCE_COLUMNS);
+      return rows[0];
+    });
   }
 
   async delete(orgId: string, brandId: string, id: string) {

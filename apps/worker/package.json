@@ -6,7 +6,8 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --reporter=dot",
-    "start": "node dist/main.cjs"
+    "start": "node dist/main.cjs",
+    "telegram:connect": "node dist/telegram-connect.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.1",
@@ -15,6 +16,7 @@
     "@pubrick/db": "workspace:*",
     "@pubrick/integrations": "workspace:*",
     "@pubrick/shared": "workspace:*",
+    "@pubrick/telegram": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "feedsmith": "^3.0.0",
     "guarded-fetch": "^0.1.4",

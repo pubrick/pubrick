@@ -30,11 +30,12 @@ export const RSS_POLL_OPTIONS = {
   expireInSeconds: 120,
 } as const;
 export const RSS_POLL_MIN_GAP_SECONDS = 300;
-export function rssPollJobOptions(sourceId: string) {
+export function rssPollJobOptions(sourceId: string, orgId: string) {
   return {
     singletonKey: sourceId,
     singletonSeconds: RSS_POLL_MIN_GAP_SECONDS,
-    group: { id: sourceId },
+    // One workspace's MTProto session must never be opened concurrently across workers.
+    group: { id: orgId },
   } as const;
 }
 

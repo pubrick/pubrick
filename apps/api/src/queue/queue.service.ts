@@ -112,7 +112,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueRssPoll(tx: Tx, payload: RssPollJob): Promise<boolean> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(RSS_POLL_QUEUE, payload, {
-      ...rssPollJobOptions(payload.sourceId),
+      ...rssPollJobOptions(payload.sourceId, payload.orgId),
       db: fromDrizzle(tx, sql),
     });
     return id !== null;

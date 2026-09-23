@@ -4,6 +4,8 @@ import {
   MAX_SOURCE_TEXT_LENGTH,
   type NewsItemDto,
   type NewsSourceDto,
+  type NewsSourceKind,
+  newsSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -17,6 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
@@ -35,6 +38,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [telegramConnected, setTelegramConnected] = useState(false);
+  const [kind, setKind] = useState<NewsSourceKind>("rss");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,12 +67,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       api<NewsSourceDto[]>(`/api/sources?brandId=${id}`),
       api<NewsItemDto[]>(`/api/sources/items?brandId=${id}`),
       api<Channel[]>(`/api/channels?brandId=${id}`),
+      api<{ connected: boolean }>("/api/sources/telegram-connection"),
     ])
-      .then(([nextBrand, nextSources, nextItems, nextChannels]) => {
+      .then(([nextBrand, nextSources, nextItems, nextChannels, connection]) => {
         setBrand(nextBrand);
         setSources(nextSources);
         setItems(nextItems);
         setChannels(nextChannels);
+        setTelegramConnected(connection.connected);
         setError(null);
       })
       .catch((err) => {
@@ -88,9 +95,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setBusy(true);
     setError(null);
     try {
+      const parsed = newsSourceCreateSchema.safeParse({ brandId: id, name, kind, url });
+      if (!parsed.success) {
+        setError(t(kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"));
+        return;
+      }
       await api("/api/sources", {
         method: "POST",
-        body: JSON.stringify({ brandId: id, name, url }),
+        body: JSON.stringify(parsed.data),
       });
       setName("");
       setUrl("");
@@ -210,7 +222,18 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       )}
 
       <Card className="mb-6">
-        <form id={FORM_ID} onSubmit={addSource} className="grid gap-3 sm:grid-cols-[1fr_2fr]">
+        <form id={FORM_ID} onSubmit={addSource} className="grid gap-3 sm:grid-cols-[1fr_1fr_2fr]">
+          <Select
+            label={t("kind")}
+            value={kind}
+            onChange={(event) => {
+              setKind(event.target.value as NewsSourceKind);
+              setUrl("");
+            }}
+          >
+            <option value="rss">{t("rss")}</option>
+            <option value="telegram">{t("telegram")}</option>
+          </Select>
           <Input
             label={t("name")}
             value={name}
@@ -219,7 +242,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             required
           />
           <Input
-            label={t("url")}
+            label={t(kind === "telegram" ? "telegramUrl" : "url")}
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             inputMode="url"
@@ -227,6 +250,20 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             required
           />
         </form>
+        {!telegramConnected &&
+          (kind === "telegram" || sources?.some((source) => source.kind === "telegram")) && (
+            <p className="mt-3 text-sm text-fg-secondary">
+              {t("telegramSetup")}{" "}
+              <a
+                href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {t("setupGuide")}
+              </a>
+            </p>
+          )}
       </Card>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
@@ -256,9 +293,17 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               title={source.name}
               meta={
                 <span>
-                  {source.url} ·{" "}
+                  {source.kind === "telegram" ? t("telegram") : t("rss")} · {source.url} ·{" "}
                   {source.lastErrorCode
-                    ? t("pollFailed")
+                    ? t(
+                        source.lastErrorCode === "telegram_not_connected"
+                          ? "telegramNotConnected"
+                          : source.lastErrorCode === "telegram_not_configured"
+                            ? "telegramNotConfigured"
+                            : source.lastErrorCode === "telegram_access_denied"
+                              ? "telegramAccessDenied"
+                              : "pollFailed",
+                      )
                     : source.lastCheckedAt
                       ? t("lastChecked", {
                           date: new Date(source.lastCheckedAt).toLocaleString(locale),

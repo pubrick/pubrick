@@ -169,6 +169,13 @@
       "when": 1790161977267,
       "tag": "0024_youthful_santa_claus",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790164178706,
+      "tag": "0025_giant_bloodscream",
+      "breakpoints": true
     }
   ]
 }
