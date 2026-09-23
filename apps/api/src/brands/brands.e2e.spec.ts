@@ -84,6 +84,30 @@ describe.skipIf(!url)("brands e2e", () => {
     expect(after.body).toHaveLength(0);
   });
 
+  it("stores link policy per brand and never exposes another org's policy", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const created = await owner.post("/api/brands").send({ name: "Example" }).expect(201);
+    const policy = {
+      website: "https://example.com",
+      campaignTemplate: "launch_{YYYY_MM}",
+      platforms: { telegram: { source: "owned", medium: "post" } },
+    };
+    const updated = await owner
+      .patch(`/api/brands/${created.body.id}`)
+      .send({ linkPolicy: policy })
+      .expect(200);
+    expect(updated.body.linkPolicy).toEqual(policy);
+    const fetched = await owner.get(`/api/brands/${created.body.id}`).expect(200);
+    expect(fetched.body.linkPolicy).toEqual(policy);
+    await other.get(`/api/brands/${created.body.id}`).expect(404);
+    await other.patch(`/api/brands/${created.body.id}`).send({ linkPolicy: null }).expect(404);
+    await owner.patch(`/api/brands/${created.body.id}`).send({ linkPolicy: null }).expect(200);
+    expect(
+      (await owner.get(`/api/brands/${created.body.id}`).expect(200)).body.linkPolicy,
+    ).toBeNull();
+  });
+
   /**
    * A model that answers with one canned JSON body. The V4 usage shape is
    * nested and `finishReason` is an object — a bare string passes vitest and

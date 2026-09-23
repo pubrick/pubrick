@@ -334,6 +334,46 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     expect(ledger).toHaveLength(6);
   }, 40_000);
 
+  it("writes tagged channel drafts while preserving source links and the master", async () => {
+    const seeded = await seed(1);
+    await db
+      .update(schema.brands)
+      .set({
+        linkPolicy: {
+          website: "https://example.com",
+          campaignTemplate: "cf_{YYYY_MM}",
+          platforms: {},
+        },
+      })
+      .where(eq(schema.brands.id, seeded.brandId));
+    const channelBody =
+      "[Source](https://news.test/story) Visit https://example.com/ and https://example.com/pricing";
+    active = scriptedModel({ adapter: () => ({ body: channelBody }) });
+
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    const run = await runRow(seeded.runId);
+    expect(run?.status).toBe("succeeded");
+    const month = `${run?.createdAt.getUTCFullYear()}_${String((run?.createdAt.getUTCMonth() ?? 0) + 1).padStart(2, "0")}`;
+    const [item] = await db
+      .select()
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, run?.contentItemId as string));
+    expect(item?.linkPolicyWebsite).toBe("https://example.com");
+    expect(item?.body).not.toContain("utm_source");
+    const [adaptation] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.contentItemId, item?.id as string));
+    const expected = `[Source](https://news.test/story) Visit https://example.com/?utm_source=tg_channel&utm_medium=post&utm_campaign=cf_${month} and https://example.com/pricing`;
+    expect(adaptation?.body).toBe(expected);
+    const [version] = await db
+      .select()
+      .from(schema.contentVersions)
+      .where(eq(schema.contentVersions.adaptationId, adaptation?.id as string));
+    expect(version?.body).toBe(expected);
+  }, 40_000);
+
   /**
    * THE TERMINAL WRITE STORES WHAT THE OUTPUT SCHEMA RETURNED, VERBATIM —
    * so the canonical form of a generated body is settled in `packages/ai`, at

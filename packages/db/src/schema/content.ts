@@ -1,6 +1,6 @@
-import { PLATFORM_IDS } from "@pubrick/shared";
+import { type BrandLinkPolicy, PLATFORM_IDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
-import { check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { check, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { enumCheck } from "./enum-check.js";
 
@@ -16,6 +16,7 @@ export const brands = pgTable(
     voice: text("voice"),
     audience: text("audience"),
     contentLanguage: text("content_language").notNull().default("en"),
+    linkPolicy: jsonb("link_policy").$type<BrandLinkPolicy>(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())

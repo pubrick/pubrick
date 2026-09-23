@@ -1352,7 +1352,10 @@ export class ContentRepository {
         this.stagedProposal(orgId, item.id),
         this.stagedAdaptationProposals(orgId, item.id),
         db
-          .select({ coverMediaId: schema.contentItems.coverMediaId })
+          .select({
+            coverMediaId: schema.contentItems.coverMediaId,
+            linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
+          })
           .from(schema.contentItems)
           .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
           .limit(1),
@@ -1379,6 +1382,7 @@ export class ContentRepository {
     return {
       ...item,
       coverMediaId: cover[0]?.coverMediaId ?? null,
+      linkPolicyWebsite: cover[0]?.linkPolicyWebsite ?? null,
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable

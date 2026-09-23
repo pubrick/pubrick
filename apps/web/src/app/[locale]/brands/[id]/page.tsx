@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  type BrandLinkPolicy,
+  DEFAULT_CAMPAIGN_TEMPLATE,
+  DEFAULT_UTM,
   isAvailablePlatform,
   isManualPlatform,
   NON_SECRET_FIELDS,
@@ -14,6 +17,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedSettings } from "@/components/feed-controls";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,6 +45,7 @@ type Brand = {
   voice: string | null;
   audience: string | null;
   contentLanguage: string;
+  linkPolicy: BrandLinkPolicy | null;
 };
 type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
 
@@ -63,6 +68,7 @@ const EDIT_FORM_ID = "channel-edit-form";
 
 // The brand-voice modal's form id — same arrangement, its Save is in the footer.
 const VOICE_FORM_ID = "brand-voice-form";
+const LINKS_FORM_ID = "brand-links-form";
 
 // The language field's hint is a sibling paragraph rather than a placeholder:
 // the field is always prefilled, so a placeholder would never be seen.
@@ -105,6 +111,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [linksOpen, setLinksOpen] = useState(false);
+  const [websiteDraft, setWebsiteDraft] = useState("");
+  const [campaignDraft, setCampaignDraft] = useState(DEFAULT_CAMPAIGN_TEMPLATE);
+  const [platformDraft, setPlatformDraft] = useState<BrandLinkPolicy["platforms"]>({});
+  const [linksError, setLinksError] = useState<string | null>(null);
+  const [linksBusy, setLinksBusy] = useState(false);
   // `null` is "not asked yet / could not ask", never "none" — the same
   // distinction the title skeleton below already draws, and the one the
   // channels list was missing.
@@ -288,6 +300,41 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
    * symptom is a textarea that accepts exactly one character.
    */
   const closeVoiceEditor = useCallback(() => setVoiceOpen(false), []);
+  const closeLinksEditor = useCallback(() => setLinksOpen(false), []);
+
+  function startLinksEditing() {
+    if (!brand) return;
+    setWebsiteDraft(brand.linkPolicy?.website ?? "");
+    setCampaignDraft(brand.linkPolicy?.campaignTemplate ?? DEFAULT_CAMPAIGN_TEMPLATE);
+    setPlatformDraft(brand.linkPolicy?.platforms ?? {});
+    setLinksError(null);
+    setLinksOpen(true);
+  }
+
+  async function saveLinks(e: React.FormEvent) {
+    e.preventDefault();
+    setLinksError(null);
+    setLinksBusy(true);
+    try {
+      const linkPolicy = websiteDraft.trim()
+        ? {
+            website: websiteDraft.trim(),
+            campaignTemplate: campaignDraft.trim(),
+            platforms: platformDraft,
+          }
+        : null;
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ linkPolicy }),
+      });
+      setBrand(updated);
+      setLinksOpen(false);
+    } catch (err) {
+      setLinksError(describeError(err));
+    } finally {
+      setLinksBusy(false);
+    }
+  }
 
   function startVoiceEditing() {
     if (brand === null) return;
@@ -427,6 +474,27 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               </div>
             ))}
           </dl>
+        )}
+      </Card>
+
+      <Card className="mb-6">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-fg">{tb("linksTitle")}</h2>
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={startLinksEditing}
+            disabled={!brand}
+          >
+            {tb("linksEdit")}
+          </Button>
+        </div>
+        <p className="text-sm text-fg-secondary">{tb("linksHint")}</p>
+        {brand?.linkPolicy ? (
+          <p className="mt-3 break-all text-sm font-medium text-fg">{brand.linkPolicy.website}</p>
+        ) : (
+          <p className="mt-3 text-sm text-fg-tertiary">{tb("linksUnset")}</p>
         )}
       </Card>
 
@@ -713,6 +781,83 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               {tb("languageHint")}
             </p>
           </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={linksOpen}
+        onClose={closeLinksEditor}
+        title={tb("linksTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeLinksEditor}>
+              {tb("voiceCancel")}
+            </Button>
+            <Button type="submit" form={LINKS_FORM_ID} disabled={linksBusy}>
+              {tb("voiceSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={LINKS_FORM_ID} onSubmit={saveLinks} className="flex flex-col gap-3">
+          {linksError && (
+            <p role="alert" className="text-sm text-danger">
+              {linksError}
+            </p>
+          )}
+          <p className="text-sm text-fg-secondary">{tb("linksFormHint")}</p>
+          <Input
+            type="url"
+            value={websiteDraft}
+            onChange={(e) => setWebsiteDraft(e.target.value)}
+            label={tb("linksWebsite")}
+            placeholder="https://example.com"
+          />
+          <Advanced
+            dirty={
+              campaignDraft !== DEFAULT_CAMPAIGN_TEMPLATE || Object.keys(platformDraft).length > 0
+            }
+          >
+            <div className="flex flex-col gap-3">
+              <Input
+                value={campaignDraft}
+                onChange={(e) => setCampaignDraft(e.target.value)}
+                label={tb("linksCampaign", {
+                  YYYY_MM: "{YYYY_MM}",
+                  content_type: "{content_type}",
+                })}
+              />
+              <p className="text-sm text-fg-secondary">{tb("linksPlatformsHint")}</p>
+              {PLATFORM_IDS.map((p) => {
+                const mapping = platformDraft[p] ?? DEFAULT_UTM[p];
+                return (
+                  <div key={p} className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <span className="text-sm font-medium text-fg">{platformName(p)}</span>
+                    <Input
+                      value={mapping.source}
+                      onChange={(e) =>
+                        setPlatformDraft({
+                          ...platformDraft,
+                          [p]: { ...mapping, source: e.target.value },
+                        })
+                      }
+                      label={`${platformName(p)} ${tb("linksSource")}`}
+                    />
+                    <Input
+                      value={mapping.medium}
+                      onChange={(e) =>
+                        setPlatformDraft({
+                          ...platformDraft,
+                          [p]: { ...mapping, medium: e.target.value },
+                        })
+                      }
+                      label={`${platformName(p)} ${tb("linksMedium")}`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </Advanced>
         </form>
       </Modal>
 

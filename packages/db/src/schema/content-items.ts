@@ -48,6 +48,8 @@ export const contentItems = pgTable(
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
+    /** Website used by the generation-time link policy; null means none ran. */
+    linkPolicyWebsite: text("link_policy_website"),
     /**
      * Stamped by an explicit `POST /content/:id/opened` the item page fires once
      * after render — never as a side effect of the GET, which the future public

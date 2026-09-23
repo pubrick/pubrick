@@ -103,6 +103,7 @@ export {
   telegramCommentsJobOptions,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
+export * from "./link-policy-defaults.js";
 export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
 export {
   type AiVersionRow,

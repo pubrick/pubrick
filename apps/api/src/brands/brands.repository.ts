@@ -22,6 +22,7 @@ const PUBLIC_COLUMNS = {
   voice: schema.brands.voice,
   audience: schema.brands.audience,
   contentLanguage: schema.brands.contentLanguage,
+  linkPolicy: schema.brands.linkPolicy,
   createdAt: schema.brands.createdAt,
   updatedAt: schema.brands.updatedAt,
 };
