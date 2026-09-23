@@ -654,6 +654,9 @@
     "stepProgress": "{done} of {total} channels",
     "claimsEmpty": "No factual claims were listed for this draft.",
     "claimNeedsCheck": "Worth checking",
+    "foundInMaterial": "Found in supplied material",
+    "foundInBrandNote": "Found in brand note ·",
+    "currentNote": "Current library note",
     "changesEmpty": "The editor changed nothing.",
     "status": {
       "queued": "Queued",

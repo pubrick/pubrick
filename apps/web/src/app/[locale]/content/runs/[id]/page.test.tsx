@@ -301,6 +301,50 @@ describe("the finished draft is offered, never forced", () => {
  * prompt promises the model the list will be shown under.
  */
 describe("the claims the run listed", () => {
+  it("shows a frozen excerpt and links separately to the current brand note without a verified badge", async () => {
+    const noteId = "11111111-1111-4111-8111-111111111111";
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: {
+          knowledge: {
+            status: "succeeded",
+            output: {
+              entries: [
+                { id: noteId, title: "Office", content: "The Lisbon office opened in 2024." },
+              ],
+            },
+          },
+          factcheck: {
+            status: "succeeded",
+            output: {
+              claims: [
+                {
+                  text: "The office opened in 2024.",
+                  needsCheck: true,
+                  sourceId: `note:${noteId}`,
+                  sourceQuote: "The Lisbon office opened in 2024.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    const heading = await screen.findByText(en.Runs.step.factcheck);
+    const row = heading.closest("li") as HTMLElement;
+    expect(within(row).getByText(en.Runs.foundInBrandNote)).toBeInTheDocument();
+    expect(within(row).getByText(/The Lisbon office opened in 2024/)).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: en.Runs.currentNote })).toHaveAttribute(
+      "href",
+      `/en/brands/55555555-5555-4555-8555-555555555555/knowledge#knowledge-${noteId}`,
+    );
+    expect(row).not.toHaveTextContent(/verified|fact-checked/i);
+  });
+
   const CLAIMS = [
     { text: "Revenue tripled in the second quarter.", needsCheck: true },
     { text: "Our office is in Lisbon.", needsCheck: false },

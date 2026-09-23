@@ -42,7 +42,9 @@ export {
   FACTCHECK,
   type FactcheckInput,
   type FactcheckOutput,
+  type FactcheckSource,
   factcheckSchema,
+  factcheckSources,
   type Material,
   type Platform,
   RESEARCHER,
@@ -55,6 +57,7 @@ export {
   type StepChannel,
   type StepContext,
   type StepUsageSink,
+  validateFactcheckSources,
   WRITER,
   type WriterInput,
 } from "./steps/index.js";

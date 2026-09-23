@@ -654,6 +654,9 @@
     "stepProgress": "{done} de {total} canais",
     "claimsEmpty": "Nenhuma afirmação factual foi listada para este rascunho.",
     "claimNeedsCheck": "Vale verificar",
+    "foundInMaterial": "Encontrado no material fornecido",
+    "foundInBrandNote": "Encontrado em uma nota da marca ·",
+    "currentNote": "Nota atual da biblioteca",
     "changesEmpty": "A edição não mudou nada.",
     "status": {
       "queued": "Na fila",

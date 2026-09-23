@@ -8,6 +8,7 @@ import {
   EDITOR,
   embedKnowledgeText,
   FACTCHECK,
+  factcheckSources,
   KNOWLEDGE_EMBEDDING_MODEL,
   RESEARCHER,
   type RunStepContext,
@@ -527,7 +528,10 @@ export class GenerateService {
     // The claims list rides with the draft in the run's own checkpoint map; this
     // increment verifies nothing and stores nothing on the content item that
     // could be mistaken for a check having happened.
-    const checked = await this.runStep(state, FACTCHECK, { body: edited.body });
+    const checked = await this.runStep(state, FACTCHECK, {
+      body: edited.body,
+      sources: factcheckSources(state.ctx.knowledge, state.ctx.material),
+    });
     if (checked === STOPPED) return STOPPED;
 
     const adaptations: Array<{ channelId: string; body: string }> = [];
