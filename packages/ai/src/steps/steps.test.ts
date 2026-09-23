@@ -697,6 +697,19 @@ describe("the prompt boundary", () => {
     expect(halvesOf(model).system).toContain('code \\"ru\\"');
   });
 
+  it("uses the injected UTC date in every step's instructions without claiming the material is current", () => {
+    const model = jsonModel("{}");
+    const ctx = contextFor(model);
+    const first = instructionsFor({ ...ctx, now: () => new Date("2026-09-23T23:59:59Z") }, []);
+    const next = instructionsFor({ ...ctx, now: () => new Date("2026-09-24T00:00:00Z") }, []);
+
+    expect(first).toContain("Current date (UTC): 2026-09-23.");
+    expect(next).toContain("Current date (UTC): 2026-09-24.");
+    expect(next).toContain(
+      "do not treat it as evidence that a claim in the supplied material is current",
+    );
+  });
+
   it("quotes the content language as a JSON string, so it cannot break out of its quotes", () => {
     // The column is free text. Hand-rolled quotes let a value ending in `"`
     // close them and continue as a sentence of the instructions.
