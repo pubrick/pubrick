@@ -1,3 +1,4 @@
+import { calendarSlotCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -54,6 +55,47 @@ describe("brand calendar", () => {
       channelIds: ["c1"],
       scheduledAt: new Date(local).toISOString(),
     });
+  });
+
+  it("schedules an approved topic by id without accepting a stale browser brief", async () => {
+    const brandId = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
+    const topicId = "40a21268-4c10-4ad9-b05d-519c11231322";
+    const channelId = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
+    window.history.replaceState({}, "", `/?topicId=${topicId}`);
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
+      if (url.includes("/api/topics?"))
+        return jsonResponse([{ id: topicId, title: "Approved topic", status: "approved" }]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/slots") && init?.method === "POST")
+        return jsonResponse({ id: "slot-1" });
+      return jsonResponse([]);
+    });
+    try {
+      await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
+      await waitFor(() =>
+        expect(screen.getByRole("option", { name: "Approved topic" })).toBeInTheDocument(),
+      );
+      expect(screen.queryByLabelText(en.Calendar.brief)).not.toBeInTheDocument();
+      await userEvent.setup().click(screen.getByLabelText("Main"));
+      await userEvent
+        .setup()
+        .click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
+      await waitFor(() => expect(calls.some((call) => call.init?.method === "POST")).toBe(true));
+      const sent = JSON.parse(
+        String(calls.find((call) => call.init?.method === "POST")?.init?.body),
+      );
+      expect(sent).toMatchObject({ brandId, topicId, channelIds: [channelId] });
+      expect(sent).not.toHaveProperty("brief");
+      expect(calendarSlotCreateSchema.parse(sent)).toEqual(sent);
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
   });
 
   it("explains a due slot delayed by the generation cap", async () => {

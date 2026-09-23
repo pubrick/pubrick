@@ -346,9 +346,17 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                     </Button>
                   )}
                   {topic.status === "approved" && (
-                    <Button size="sm" variant="secondary" onClick={() => openRun(topic)}>
-                      {t("generate")}
-                    </Button>
+                    <>
+                      <Link
+                        className={buttonClasses("secondary", "sm")}
+                        href={`/${locale}/brands/${id}/calendar?topicId=${topic.id}`}
+                      >
+                        {t("schedule")}
+                      </Link>
+                      <Button size="sm" variant="secondary" onClick={() => openRun(topic)}>
+                        {t("generate")}
+                      </Button>
+                    </>
                   )}
                   <Menu
                     trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { MAX_BRIEF_LENGTH } from "./runs.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
-export const CALENDAR_SLOT_ERRORS = ["channels_missing", "invalid_input"] as const;
+export const CALENDAR_SLOT_ERRORS = ["channels_missing", "invalid_input", "topic_changed"] as const;
 export type CalendarSlotError = (typeof CALENDAR_SLOT_ERRORS)[number];
 
 const slotFields = z.object({
@@ -14,7 +14,9 @@ const slotFields = z.object({
     .max(MAX_BRIEF_LENGTH)
     .refine((v) => !hasNulByte(v), {
       message: NO_NUL_BYTE_MESSAGE,
-    }),
+    })
+    .optional(),
+  topicId: z.uuid().nullable().optional(),
   channelIds: z
     .array(z.uuid())
     .min(1)
@@ -32,8 +34,14 @@ const slotFields = z.object({
     .optional(),
 });
 
-export const calendarSlotCreateSchema = slotFields.extend({ brandId: z.uuid() });
-export const calendarSlotUpdateSchema = slotFields.partial();
+export const calendarSlotCreateSchema = slotFields
+  .extend({ brandId: z.uuid() })
+  .refine((v) => v.topicId || v.brief, { message: "Brief or approved topic is required" });
+export const calendarSlotUpdateSchema = slotFields
+  .partial()
+  .refine((v) => v.topicId !== null || v.brief, {
+    message: "A brief is required when unlinking a topic",
+  });
 export const calendarRangeSchema = z
   .object({
     brandId: z.uuid(),

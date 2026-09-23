@@ -363,6 +363,8 @@ export const API_ERROR_CODES = [
   "memorable_date_not_found",
   "calendar_slot_started",
   "calendar_time_in_past",
+  "calendar_topic_linked",
+  "topic_has_calendar_slots",
 
   // ── the session's organization ────────────────────────────────────────────
   /**

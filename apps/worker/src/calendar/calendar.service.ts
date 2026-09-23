@@ -56,6 +56,12 @@ export class CalendarService {
           id: schema.calendarSlots.id,
           brandId: schema.calendarSlots.brandId,
           brief: schema.calendarSlots.brief,
+          topicId: schema.calendarSlots.topicId,
+          topicTitle: schema.calendarSlots.topicTitle,
+          topicDescription: schema.calendarSlots.topicDescription,
+          topicSourceUrl: schema.calendarSlots.topicSourceUrl,
+          topicUpdatedAt: schema.calendarSlots.topicUpdatedAt,
+          topicRevision: schema.calendarSlots.topicRevision,
           channelIds: schema.calendarSlots.channelIds,
         })
         .from(schema.calendarSlots)
@@ -76,6 +82,42 @@ export class CalendarService {
         .limit(1);
       const slot = rows[0];
       if (!slot) return;
+      if (slot.topicId) {
+        // Hold the topic read lock until the run and job commit: an editor cannot
+        // revoke approval between this check and the paid generation enqueue.
+        const [topic] = await tx
+          .select({
+            status: schema.topics.status,
+            title: schema.topics.title,
+            description: schema.topics.description,
+            sourceUrl: schema.topics.sourceUrl,
+            updatedAt: schema.topics.updatedAt,
+            revision: schema.topics.revision,
+          })
+          .from(schema.topics)
+          .where(
+            and(
+              eq(schema.topics.orgId, orgId),
+              eq(schema.topics.brandId, slot.brandId),
+              eq(schema.topics.id, slot.topicId),
+            ),
+          )
+          .for("share");
+        if (
+          topic?.status !== "approved" ||
+          topic.title !== slot.topicTitle ||
+          topic.description !== slot.topicDescription ||
+          topic.sourceUrl !== slot.topicSourceUrl ||
+          topic.updatedAt.getTime() !== slot.topicUpdatedAt?.getTime() ||
+          topic.revision !== slot.topicRevision
+        ) {
+          await tx
+            .update(schema.calendarSlots)
+            .set({ errorCode: "topic_changed" })
+            .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, slotId)));
+          return;
+        }
+      }
       const active = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(schema.pipelineRuns)
@@ -109,7 +151,16 @@ export class CalendarService {
           .where(eq(schema.calendarSlots.id, slotId));
         return;
       }
-      const input: RunInput = { kind: "brief", text: slot.brief, channelIds: slot.channelIds };
+      const input: RunInput =
+        slot.topicId && slot.topicSourceUrl
+          ? {
+              kind: "source",
+              text: null,
+              sourceUrl: slot.topicSourceUrl,
+              material: slot.brief,
+              channelIds: slot.channelIds,
+            }
+          : { kind: "brief", text: slot.brief, channelIds: slot.channelIds };
       if (!runInputSchema.safeParse(input).success) {
         await tx
           .update(schema.calendarSlots)

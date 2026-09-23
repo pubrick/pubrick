@@ -128,4 +128,109 @@ describe.skipIf(!url)("planned calendar generation", () => {
       .where(eq(schema.calendarSlots.id, slotId));
     expect(slot).toEqual({ runId: null, errorCode: "channels_missing" });
   });
+
+  it("refuses an archived or edited linked topic before enqueueing a paid run", async () => {
+    const { eq } = await import("drizzle-orm");
+    const [topic] = await db
+      .insert(schema.topics)
+      .values({ orgId, brandId, title: "Approved", description: "Facts", status: "approved" })
+      .returning({
+        id: schema.topics.id,
+        updatedAt: schema.topics.updatedAt,
+        revision: schema.topics.revision,
+      });
+    const topicId = topic?.id as string;
+    const makeLinkedSlot = async () => {
+      const [slot] = await db
+        .insert(schema.calendarSlots)
+        .values({
+          orgId,
+          brandId,
+          scheduledAt: new Date(Date.now() - 60_000),
+          brief: "Approved\n\nFacts",
+          channelIds: [channelId],
+          topicId,
+          topicTitle: "Approved",
+          topicDescription: "Facts",
+          topicUpdatedAt: topic?.updatedAt,
+          topicRevision: topic?.revision,
+        })
+        .returning({ id: schema.calendarSlots.id });
+      return slot?.id as string;
+    };
+    const archivedSlot = await makeLinkedSlot();
+    await db
+      .update(schema.topics)
+      .set({ status: "archived", updatedAt: new Date(Date.now() + 1000) })
+      .where(eq(schema.topics.id, topicId));
+    await service.trigger(boss, orgId, archivedSlot);
+    const [archived] = await db
+      .select({ runId: schema.calendarSlots.runId, errorCode: schema.calendarSlots.errorCode })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, archivedSlot));
+    expect(archived).toEqual({ runId: null, errorCode: "topic_changed" });
+    const changedSlot = await makeLinkedSlot();
+    await db
+      .update(schema.topics)
+      .set({ status: "approved", title: "Changed" })
+      .where(eq(schema.topics.id, topicId));
+    await service.trigger(boss, orgId, changedSlot);
+    const [changed] = await db
+      .select({ runId: schema.calendarSlots.runId, errorCode: schema.calendarSlots.errorCode })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, changedSlot));
+    expect(changed).toEqual({ runId: null, errorCode: "topic_changed" });
+  });
+
+  it("queues the approved linked topic with its stored source as an immutable run input", async () => {
+    const { eq } = await import("drizzle-orm");
+    const [topic] = await db
+      .insert(schema.topics)
+      .values({
+        orgId,
+        brandId,
+        title: "Reference",
+        description: "Approved facts",
+        sourceUrl: "https://example.com/reference",
+        status: "approved",
+      })
+      .returning({
+        id: schema.topics.id,
+        updatedAt: schema.topics.updatedAt,
+        revision: schema.topics.revision,
+      });
+    const [slot] = await db
+      .insert(schema.calendarSlots)
+      .values({
+        orgId,
+        brandId,
+        scheduledAt: new Date(Date.now() - 60_000),
+        brief: "Reference\n\nApproved facts",
+        channelIds: [channelId],
+        topicId: topic?.id,
+        topicTitle: "Reference",
+        topicDescription: "Approved facts",
+        topicSourceUrl: "https://example.com/reference",
+        topicUpdatedAt: topic?.updatedAt,
+        topicRevision: topic?.revision,
+      })
+      .returning({ id: schema.calendarSlots.id });
+    await service.trigger(boss, orgId, slot?.id as string);
+    const [started] = await db
+      .select({ runId: schema.calendarSlots.runId })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slot?.id as string));
+    expect(started?.runId).toBeTruthy();
+    const [run] = await db
+      .select({ input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, started?.runId as string));
+    expect(run?.input).toEqual({
+      kind: "source",
+      text: null,
+      sourceUrl: "https://example.com/reference",
+      material: "Reference\n\nApproved facts",
+      channelIds: [channelId],
+    });
+  });
 });

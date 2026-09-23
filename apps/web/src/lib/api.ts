@@ -158,6 +158,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   memorable_date_not_found: "memorable_date_not_found",
   calendar_slot_started: "calendar_slot_started",
   calendar_time_in_past: "calendar_time_in_past",
+  calendar_topic_linked: "calendar_topic_linked",
+  topic_has_calendar_slots: "topic_has_calendar_slots",
   invalid_request: "invalid_request",
   signed_out: "signed_out",
   no_active_organization: "no_active_organization",

@@ -108,6 +108,7 @@ const ZONED_COLUMNS = [
   "calendar_slots.created_at",
   "calendar_slots.retry_after",
   "calendar_slots.scheduled_at",
+  "calendar_slots.topic_updated_at",
   "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
@@ -269,6 +270,7 @@ const NON_ENUM_CHECKS = [
   // schema-invariants.test.ts verifies the schema declaration; this count
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
+  "calendar_slots_topic_snapshot_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
   "memorable_dates_month_day_check",

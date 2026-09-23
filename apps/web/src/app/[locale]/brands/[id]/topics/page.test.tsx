@@ -73,6 +73,10 @@ describe("topic bank page", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: en.Topics.generate })).toBeInTheDocument(),
     );
+    expect(screen.getByRole("link", { name: en.Topics.schedule })).toHaveAttribute(
+      "href",
+      `/en/brands/${BRAND_ID}/calendar?topicId=${TOPIC_ID}`,
+    );
     await user.click(screen.getByRole("button", { name: en.Topics.generate }));
     const dialog = within(screen.getByRole("dialog", { name: en.Topics.runTitle }));
     await user.click(dialog.getByRole("checkbox", { name: /Updates/ }));
