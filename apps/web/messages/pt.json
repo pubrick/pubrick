@@ -92,7 +92,10 @@
     "editCancel": "Cancelar",
     "platformUnsupported": "Ainda não suportado",
     "vkTokenHint": "Use um token de acesso de usuário do VK com permissão wall e o ID numérico positivo da comunidade. O usuário deve administrá-la.",
-    "maxTokenHint": "Use o token do bot do MAX e o ID numérico do chat ou canal. Torne o bot administrador com permissão para publicar."
+    "maxTokenHint": "Use o token do bot do MAX e o ID numérico do chat ou canal. Torne o bot administrador com permissão para publicar.",
+    "vcManualHint": "VC.ru é um canal manual. Aprove a publicação, copie o texto para o VC.ru e registe aqui o URL público. Não é necessário token.",
+    "vcManualMeta": "Publicação manual — sem teste de ligação",
+    "removeManualBody": "Remover {channel} elimina do Pubrick as publicações manuais pendentes. Os artigos já publicados no VC.ru continuam lá."
   },
   "Content": {
     "title": "Fila",
@@ -117,7 +120,8 @@
       "publishing": "Publicando",
       "published": "Publicado",
       "failed": "Falhou",
-      "unknown": "Resultado desconhecido"
+      "unknown": "Resultado desconhecido",
+      "manual_ready": "Pronta para publicação manual"
     },
     "genericError": "Algo deu errado. Tente novamente.",
     "origin": {
@@ -228,7 +232,21 @@
     "viewPost": "Ver publicação",
     "scheduledFor": "Agendado para",
     "genericError": "Algo deu errado. Tente novamente.",
-    "overrideLabel": "Texto próprio para {channel}"
+    "overrideLabel": "Texto próprio para {channel}",
+    "approveManual": "Aprovar e preparar",
+    "manualReadyAction": "Pronto para VC.ru",
+    "manualScheduleHint": "O Pubrick não pode agendar publicações no VC.ru. Publique-as no VC.ru quando quiser.",
+    "vcManualInstructions": "Copie o título e o texto revistos, abra o VC.ru, publique o artigo e cole abaixo o URL público. O Pubrick não o envia ao VC.ru.",
+    "copyTitle": "Copiar título",
+    "copyBody": "Copiar texto",
+    "copied": "Copiado",
+    "copyFailed": "Não foi possível copiar para a área de transferência. Selecione e copie o texto acima.",
+    "openVc": "Abrir VC.ru",
+    "vcUrlLabel": "URL do artigo publicado no VC.ru",
+    "recordManualPublication": "Registar publicação",
+    "manualAssertionHint": "Ao registar este URL, declara que publicou o artigo. O Pubrick não o verifica no VC.ru.",
+    "manualPublicationAsserted": "Registado por {name} em {date}; informação fornecida pela pessoa, sem consulta ao VC.ru.",
+    "manualPublicationAssertedRemoved": "Registado por um membro removido em {date}; informação fornecida pela pessoa, sem consulta ao VC.ru."
   },
   "SettingsPage": {
     "title": "Configurações",
@@ -398,6 +416,10 @@
     "invalid_request": "Parte do que você digitou não é válida. Verifique o formulário e tente de novo.",
     "signed_out": "Você saiu da conta. Entre novamente para continuar.",
     "no_active_organization": "Nenhuma organização ativa — crie ou selecione uma primeiro.",
-    "forbidden": "Você não tem acesso a isto."
+    "forbidden": "Você não tem acesso a isto.",
+    "adaptation_pinned_manual_ready": "Esta publicação está pronta para publicação manual. Rejeite-a antes de editar.",
+    "manual_schedule_unsupported": "O Pubrick não pode agendar publicações no VC.ru. Aprove-as para publicação manual.",
+    "manual_publication_pending": "Esta publicação está pronta para ser publicada manualmente no VC.ru.",
+    "manual_publication_not_ready": "Aprove esta publicação do VC.ru antes de registar o URL público."
   }
 }

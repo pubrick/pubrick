@@ -3148,3 +3148,76 @@ describe("a post whose channels disagreed", () => {
     expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
   });
 });
+
+describe("VC.ru manual publication", () => {
+  it("exports the reviewed override and records a user-supplied URL only after approval", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
+    const current = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Reviewed VC article." })],
+    });
+    const served = { current };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method, _init) => {
+        if (method === "POST" && path.endsWith("/manual-publication")) {
+          served.current = makeItem({
+            ...current,
+            status: "published",
+            adaptations: [
+              makeAdaptation({
+                status: "published",
+                body: "Reviewed VC article.",
+                externalUrl: "https://vc.ru/marketing/123-article",
+                assertedByName: "Editor",
+                assertedAt: "2026-09-23T12:00:00.000Z",
+              }),
+            ],
+          });
+          return served.current;
+        }
+        return undefined;
+      },
+      [manualChannel],
+    );
+
+    const copy = vi.fn().mockResolvedValue(undefined);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const results = within(resultsList());
+    expect(results.getByText(en.Content.adaptationStatus.manual_ready)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.manualReadyAction })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeDisabled();
+    expect(results.getByRole("link", { name: en.Publish.openVc })).toHaveAttribute(
+      "href",
+      "https://vc.ru/",
+    );
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: copy },
+    });
+    await user.click(results.getByRole("button", { name: en.Publish.copyBody }));
+    expect(copy).toHaveBeenCalledWith("Reviewed VC article.");
+    await user.type(
+      results.getByRole("textbox", { name: en.Publish.vcUrlLabel }),
+      "https://vc.ru/marketing/123-article",
+    );
+    await user.click(results.getByRole("button", { name: en.Publish.recordManualPublication }));
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.path.endsWith("/manual-publication"))).toBe(true),
+    );
+    const posted = calls.find((call) => call.path.endsWith("/manual-publication"));
+    expect(posted?.body && JSON.parse(posted.body)).toEqual({
+      url: "https://vc.ru/marketing/123-article",
+    });
+    expect(await results.findByRole("link", { name: en.Publish.viewPost })).toHaveAttribute(
+      "href",
+      "https://vc.ru/marketing/123-article",
+    );
+    expect(results.getByText(/self reported; Pubrick did not ask VC.ru/)).toBeInTheDocument();
+  });
+});

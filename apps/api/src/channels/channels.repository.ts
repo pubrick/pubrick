@@ -6,6 +6,7 @@ import {
   type ChannelUpdate,
   decryptJson,
   encryptJson,
+  isManualPlatform,
   isOutstandingAdaptation,
   isUnreadableCiphertext,
   rewrapJson,
@@ -87,10 +88,17 @@ export class ChannelsRepository {
    * written, so a refused create leaves no row and no ciphertext behind.
    */
   async create(orgId: string, data: ChannelCreate) {
-    if (!getPublisher(data.platform)) {
+    if (!getPublisher(data.platform) && !isManualPlatform(data.platform)) {
       throw new BadRequestException(
         `Pubrick cannot publish to ${data.platform} yet, so a channel for it would never deliver a post`,
       );
+    }
+    let credentialsEncrypted: string | null = null;
+    if (!isManualPlatform(data.platform)) {
+      if (!data.credentials) {
+        throw new BadRequestException("Automatic channels require credentials");
+      }
+      credentialsEncrypted = encryptJson(data.credentials, env.APP_ENCRYPTION_KEY);
     }
     const brand = await db
       .select({ id: schema.brands.id })
@@ -105,7 +113,7 @@ export class ChannelsRepository {
         brandId: data.brandId,
         platform: data.platform,
         name: data.name,
-        credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY),
+        credentialsEncrypted,
       })
       .returning(PUBLIC_COLUMNS);
     return rows[0];
@@ -142,6 +150,16 @@ export class ChannelsRepository {
    * and `updated_at` always moves.
    */
   async update(orgId: string, id: string, data: ChannelUpdate) {
+    if (data.credentials !== undefined) {
+      const channel = await db
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
+        .limit(1);
+      if (channel[0] && isManualPlatform(channel[0].platform)) {
+        throw new BadRequestException("Manual channels do not use credentials");
+      }
+    }
     const rows = await db
       .update(schema.channels)
       .set({
@@ -291,6 +309,12 @@ export class ChannelsRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw notFound("channel_not_found", "Channel not found");
+    if (row.credentialsEncrypted === null) {
+      throw conflict(
+        "unreadable_credentials",
+        "This channel has no automatic publishing credentials",
+      );
+    }
 
     let credentials: Record<string, string>;
     try {
@@ -396,6 +420,13 @@ export class ChannelsRepository {
       .limit(1);
     const channel = rows[0];
     if (!channel) throw notFound("channel_not_found", "Channel not found");
+
+    if (isManualPlatform(channel.platform)) {
+      return {
+        ok: false,
+        reason: "Manual channels are prepared in Pubrick and published by a person",
+      };
+    }
 
     const publisher = getPublisher(channel.platform);
     if (!publisher) return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };

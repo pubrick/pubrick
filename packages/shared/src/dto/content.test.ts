@@ -130,6 +130,7 @@ describe("the draft and delivery lifecycles keep every status they had", () => {
   it("adaptation status", () => {
     expect(ADAPTATION_STATUSES).toEqual([
       "pending",
+      "manual_ready",
       "scheduled",
       "queued",
       "publishing",
@@ -389,9 +390,10 @@ describe("which deliveries still have a publish job", () => {
     expect([...OUTSTANDING_ADAPTATION_STATUSES]).toEqual(["queued", "scheduled", "publishing"]);
   });
 
-  it("answers for every adaptation status, and leaves the three with no job out", () => {
+  it("answers for every adaptation status, including manual work with no job", () => {
     expect(ADAPTATION_STATUSES.filter((s) => !isOutstandingAdaptation(s))).toEqual([
       "pending",
+      "manual_ready",
       "published",
       "failed",
     ]);
@@ -439,6 +441,7 @@ describe("what an item's status becomes when its deliveries have moved", () => {
     // below owns this shape.
     expect(nextItemStatus(["published", "failed"])).toBe("partially_published");
     expect(nextItemStatus(["published", "queued"])).toBeUndefined();
+    expect(nextItemStatus(["published", "manual_ready"])).toBeUndefined();
   });
 
   it("fails the item only when every delivery failed", () => {

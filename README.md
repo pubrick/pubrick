@@ -27,14 +27,16 @@ brands — each with a voice, an audience and a content language the generator i
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to
 Telegram, VK communities, and MAX chats or channels — through a restyled,
-installable (PWA) web app. AI generation works too, with **your own** Gemini or
+installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
+uses a manual copy and confirmation workflow. AI generation works too, with
+**your own** Gemini or
 OpenRouter key (there is no hosted key): type a brief and five roles —
 researcher, writer, editor, a fact-checker that lists claims to verify rather
 than checking them, and one adapter per channel — produce a draft with
 per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
-provider had counted tokens. Not yet: publishers for the other five platforms
+provider had counted tokens. Not yet: publishers for the other four platforms
 (the channel form names them and refuses to connect one), a per-brand knowledge
 base, refining text inside the editor, and drafting from watched sources.
 Features land phase by phase — see

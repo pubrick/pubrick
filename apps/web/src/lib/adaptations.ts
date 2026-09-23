@@ -57,6 +57,7 @@ export {
  */
 export const DELIVERY_BADGE_STATUS: Record<DeliveryOutcome, StatusBadgeStatus> = {
   pending: "draft",
+  manual_ready: "review",
   scheduled: "scheduled",
   queued: "scheduled",
   publishing: "scheduled",

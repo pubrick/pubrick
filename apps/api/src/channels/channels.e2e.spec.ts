@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { PLATFORM_FIELDS, PLATFORM_IDS, PUBLISHABLE_PLATFORM_IDS } from "@pubrick/shared";
+import {
+  isAvailablePlatform,
+  PLATFORM_FIELDS,
+  PLATFORM_IDS,
+  PUBLISHABLE_PLATFORM_IDS,
+} from "@pubrick/shared";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -127,9 +132,7 @@ describe.skipIf(!url)("channels e2e", () => {
    * give the money back.
    */
   describe("platforms with no adapter", () => {
-    const unsupported = PLATFORM_IDS.filter(
-      (id) => !(PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(id),
-    );
+    const unsupported = PLATFORM_IDS.filter((id) => !isAvailablePlatform(id));
 
     it("has something to refuse (the picker disables these very ids)", () => {
       expect(unsupported.length).toBeGreaterThan(0);
@@ -186,6 +189,31 @@ describe.skipIf(!url)("channels e2e", () => {
         expect(created.body.platform).toBe(platform);
       });
     }
+
+    it("creates a VC.ru channel without a token and rejects credential injection", async () => {
+      const agent = await orgAgent();
+      const brand = await agent.post("/api/brands").send({ name: "Manual VC" }).expect(201);
+      const created = await agent
+        .post("/api/channels")
+        .send({ brandId: brand.body.id, platform: "vc_ru", name: "VC blog" })
+        .expect(201);
+      expect(created.body.credentialsEncrypted).toBeUndefined();
+      await agent
+        .patch(`/api/channels/${created.body.id}`)
+        .send({ credentials: { token: "unexpected" } })
+        .expect(400);
+      const tested = await agent.post(`/api/channels/${created.body.id}/test`).expect(200);
+      expect(tested.body).toMatchObject({ ok: false });
+      await agent
+        .post("/api/channels")
+        .send({
+          brandId: brand.body.id,
+          platform: "vc_ru",
+          name: "Bad",
+          credentials: { token: "unexpected" },
+        })
+        .expect(400);
+    });
   });
 
   it("rejects a channel for another org's brand", async () => {

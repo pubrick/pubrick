@@ -267,6 +267,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [refineBusy, setRefineBusy] = useState<RefineAction | null>(null);
   /** The adaptation whose verdict is in flight, if any — see `assertDelivery`. */
   const [deliveryBusy, setDeliveryBusy] = useState<string | null>(null);
+  const [manualUrlDrafts, setManualUrlDrafts] = useState<Record<string, string>>({});
+  const [manualBusy, setManualBusy] = useState<string | null>(null);
+  const [copiedManualField, setCopiedManualField] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -680,6 +683,32 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function copyManualField(key: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedManualField(key);
+    } catch {
+      setActionError(t("copyFailed"));
+    }
+  }
+
+  async function confirmManualPublication(adaptationId: string) {
+    const url = (manualUrlDrafts[adaptationId] ?? "").trim();
+    setActionError(null);
+    setManualBusy(adaptationId);
+    try {
+      await api(`/api/content/${id}/adaptations/${adaptationId}/manual-publication`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      await reload();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setManualBusy(null);
+    }
+  }
+
   /**
    * The one thing every refine action does with a refusal: show it, and then
    * ASK THE API WHAT IS STILL THERE.
@@ -905,7 +934,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * deliveries from keeps one reading of "this channel has the post".
    */
   const liveChannels = item.adaptations.filter((a) => a.deliveryOutcome === "published");
-  const hasOutstanding = item.adaptations.some((a) => isOutstandingAdaptation(a.status));
+  const hasOutstanding = item.adaptations.some(
+    (a) => isOutstandingAdaptation(a.status) || a.status === "manual_ready",
+  );
+  const manualAdaptations = item.adaptations.filter(
+    (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
+  );
+  const hasManualApprovalTarget = manualAdaptations.some(
+    (a) => a.status === "pending" || a.status === "failed",
+  );
+  const manualReadyWithoutApprovalTargets =
+    manualAdaptations.some((a) => a.status === "manual_ready") &&
+    item.adaptations.every((a) => !["pending", "failed", "scheduled"].includes(a.status));
   /** Live somewhere, but not a published ITEM — the state reject decides on. */
   const partlyLive = !isPublished && liveChannels.length > 0;
   /**
@@ -973,7 +1013,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        * card, next to the other approval path.
        */
       primaryAction={
-        <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
+        <Button
+          variant="primary"
+          onClick={() => approve(false)}
+          disabled={isPublished || manualReadyWithoutApprovalTargets}
+        >
           {/*
             The same button, saying what it will do to THIS post. "Publish now"
             on a post that is already live in one channel reads as "publish it
@@ -985,9 +1029,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             send to no channels: an item whose only remaining half ended
             `unknown` has nothing approve will target, and the api refuses it.
           */}
-          {partialSendCount > 0
-            ? t("approveNowPartial", { count: partialSendCount })
-            : t("approveNow")}
+          {manualReadyWithoutApprovalTargets
+            ? t("manualReadyAction")
+            : hasManualApprovalTarget
+              ? t("approveManual")
+              : partialSendCount > 0
+                ? t("approveNowPartial", { count: partialSendCount })
+                : t("approveNow")}
         </Button>
       }
     >
@@ -1394,10 +1442,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <Button
             variant="secondary"
             onClick={() => approve(true)}
-            disabled={isPublished || !scheduledAt || scheduledAtIsPast}
+            disabled={
+              isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+            }
           >
             {t("approveScheduled")}
           </Button>
+          {manualAdaptations.length > 0 && (
+            <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+          )}
           <Button
             variant="danger"
             onClick={reject}
@@ -1421,6 +1474,57 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
+            {a.status === "manual_ready" &&
+              channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru" && (
+                <div className="flex flex-col gap-3 rounded-card border border-border bg-panel p-4">
+                  <p className="text-sm text-fg-secondary">{t("vcManualInstructions")}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => copyManualField(`${a.id}:title`, item.title ?? "")}
+                      disabled={!item.title}
+                    >
+                      {copiedManualField === `${a.id}:title` ? t("copied") : t("copyTitle")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => copyManualField(`${a.id}:body`, a.body ?? item.body)}
+                    >
+                      {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
+                    </Button>
+                    <a
+                      href="https://vc.ru/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className={buttonClasses("secondary", "sm")}
+                    >
+                      {t("openVc")}
+                    </a>
+                  </div>
+                  <Input
+                    type="url"
+                    label={t("vcUrlLabel")}
+                    placeholder="https://vc.ru/..."
+                    value={manualUrlDrafts[a.id] ?? ""}
+                    onChange={(event) =>
+                      setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
+                    }
+                  />
+                  <div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={!manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
+                      onClick={() => confirmManualPublication(a.id)}
+                    >
+                      {t("recordManualPublication")}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-fg-tertiary">{t("manualAssertionHint")}</p>
+                </div>
+              )}
             {a.status === "published" &&
               (isLinkableUrl(a.externalUrl) ? (
                 <a
@@ -1468,6 +1572,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       : t("linkUnavailable")}
                 </span>
               ))}
+            {a.status === "published" && a.assertedAt && a.externalUrl && (
+              <span className="text-sm text-fg-tertiary">
+                {a.assertedByName
+                  ? t("manualPublicationAsserted", {
+                      name: a.assertedByName,
+                      date: new Date(a.assertedAt).toLocaleString(locale),
+                    })
+                  : t("manualPublicationAssertedRemoved", {
+                      date: new Date(a.assertedAt).toLocaleString(locale),
+                    })}
+              </span>
+            )}
             {/*
               An outcome nobody knows, in the reader's language and in our own
               words — not the worker's English sentence, which is a log line

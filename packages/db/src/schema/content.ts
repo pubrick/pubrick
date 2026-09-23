@@ -1,5 +1,6 @@
 import { PLATFORM_IDS } from "@pubrick/shared";
-import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { enumCheck } from "./enum-check.js";
 
@@ -37,7 +38,7 @@ export const channels = pgTable(
     platform: text("platform", { enum: PLATFORM_IDS }).notNull(),
     name: text("name").notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
-    credentialsEncrypted: text("credentials_encrypted").notNull(),
+    credentialsEncrypted: text("credentials_encrypted"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
@@ -54,5 +55,9 @@ export const channels = pgTable(
      * no limit — see `enumCheck`.
      */
     enumCheck("channels_platform_check", t.platform, PLATFORM_IDS),
+    check(
+      "channels_credentials_mode_check",
+      sql`(${t.platform} = 'vc_ru') = (${t.credentialsEncrypted} is null)`,
+    ),
   ],
 );

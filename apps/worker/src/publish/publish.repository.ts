@@ -493,6 +493,10 @@ export class ChannelNotFoundError extends Error {
   readonly name = "ChannelNotFoundError";
 }
 
+export class NoAutomaticCredentialsError extends Error {
+  readonly name = "NoAutomaticCredentialsError";
+}
+
 @Injectable()
 export class PublishRepository {
   /**
@@ -561,6 +565,9 @@ export class PublishRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw new ChannelNotFoundError(`Channel ${channelId} not found for org ${orgId}`);
+    if (row.credentialsEncrypted === null) {
+      throw new NoAutomaticCredentialsError("This channel requires manual publication");
+    }
     return decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
   }
 
