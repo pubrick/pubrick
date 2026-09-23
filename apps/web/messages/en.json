@@ -386,6 +386,7 @@
     "contentType": {
       "social_post": "Social post",
       "news_digest": "News digest",
+      "repost": "Source retelling",
       "product_update": "Product update",
       "expert_article": "Expert article",
       "educational": "How-to guide"
@@ -399,6 +400,7 @@
     "generate": "Generate",
     "noBrandSelected": "Select a brand first.",
     "briefOrMaterialRequired": "Write a brief, paste some material, or both.",
+    "repostNeedsMaterial": "Add source text under Source before generating a retelling.",
     "sourceUrlNeedsMaterial": "A link needs the text it came from: paste the article, or clear the link.",
     "sourceUrlNotHttp": "A source link must be a full http:// or https:// address.",
     "sourceBlocksCreate": "The Source section holds something a post cannot carry: use Generate, or clear it.",
@@ -634,6 +636,7 @@
     "contentType": {
       "social_post": "Social post",
       "news_digest": "News digest",
+      "repost": "Source retelling",
       "product_update": "Product update",
       "expert_article": "Expert article",
       "educational": "How-to guide"
@@ -806,6 +809,7 @@
     "formats": "Suggested formats",
     "type_social_post": "Social post",
     "type_news_digest": "News digest",
+    "type_repost": "Source retelling",
     "type_product_update": "Product update",
     "type_expert_article": "Expert article",
     "type_educational": "How-to",

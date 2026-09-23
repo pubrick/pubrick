@@ -642,14 +642,17 @@ describe("a run drafted from pasted material", () => {
     });
   }
 
-  it("shows the selected editorial format on the run receipt", async () => {
-    installHandlers({ current: sourceRun({ contentType: "product_update" }) });
+  it.each(["product_update", "repost"] as const)(
+    "shows the selected %s format on the run receipt",
+    async (contentType) => {
+      installHandlers({ current: sourceRun({ contentType }) });
 
-    await renderRun();
+      await renderRun();
 
-    expect(await screen.findByText(en.Runs.contentTypeLabel)).toBeInTheDocument();
-    expect(screen.getByText(en.Runs.contentType.product_update)).toBeInTheDocument();
-  });
+      expect(await screen.findByText(en.Runs.contentTypeLabel)).toBeInTheDocument();
+      expect(screen.getByText(en.Runs.contentType[contentType])).toBeInTheDocument();
+    },
+  );
 
   it("shows the material it was drafted from, under its own label", async () => {
     installHandlers({ current: sourceRun() });

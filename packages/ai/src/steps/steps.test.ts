@@ -128,6 +128,7 @@ const channel = {
 describe("editorial content types", () => {
   it.each([
     ["news_digest", "news digest"],
+    ["repost", "source-based retelling"],
     ["product_update", "product update"],
     ["expert_article", "expert article"],
     ["educational", "how-to"],

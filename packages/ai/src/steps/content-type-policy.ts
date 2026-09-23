@@ -26,6 +26,22 @@ const POLICIES = {
       "Preserve the news, its source context, and the practical takeaway within this channel's limit.",
     ],
   },
+  repost: {
+    researcher: [
+      "Plan a source-based retelling of the supplied text. Identify its supported main point and useful context for the brand's audience; mark uncertain or missing facts for omission.",
+      "The URL is attribution on the run receipt, not evidence that you fetched or verified a page. Do not imply access to anything beyond the supplied text.",
+    ],
+    writer: [
+      "Write a concise source-based retelling in fresh wording from the supplied text, with a useful explanation for this audience. Do not present it as a native platform share or as the brand's firsthand reporting.",
+      "Avoid copying long passages or quotations. Do not invent facts, quotations, source verification, or events more recent than the supplied material.",
+    ],
+    editor: [
+      "Keep the retelling faithful to the supplied text while removing copied passages, unsupported claims, invented quotations, and claims that the source was independently verified.",
+    ],
+    adapter: [
+      "Preserve the source-based framing and supported main point within this channel's limit. Do not turn the adaptation into a native share or imply the source was checked.",
+    ],
+  },
   product_update: {
     researcher: [
       "Plan a factual product update from the supplied brief or material: identify the specific release change, who benefits, and when or where it is available. Mark missing details as unknown instead of filling them in.",

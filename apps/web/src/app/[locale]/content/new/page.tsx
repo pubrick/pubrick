@@ -265,6 +265,11 @@ export default function NewContentPage() {
       setSourceOpen(true);
       return;
     }
+    if (contentType === "repost" && !hasMaterial) {
+      setError(t("repostNeedsMaterial"));
+      setSourceOpen(true);
+      return;
+    }
     // The refine's own rule, in the refine's own words: a run needs something
     // to work from, and either of the two will do (`runCreateSchema`).
     if (!hasBrief && !hasMaterial) {
@@ -413,7 +418,11 @@ export default function NewContentPage() {
                 id="contentType"
                 label={t("contentTypeLabel")}
                 value={contentType}
-                onChange={(event) => setContentType(event.target.value as ContentType)}
+                onChange={(event) => {
+                  const selected = event.target.value as ContentType;
+                  setContentType(selected);
+                  if (selected === "repost") setSourceOpen(true);
+                }}
                 className="min-h-11"
               >
                 {CONTENT_TYPES.map((type) => (

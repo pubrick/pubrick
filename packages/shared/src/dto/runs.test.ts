@@ -83,6 +83,12 @@ describe("what a run was asked to produce", () => {
     expect(briefRunInputSchema.parse(valid)).toEqual(valid);
   });
 
+  it("refuses a source retelling stored as a brief run", () => {
+    const denied = briefRunInputSchema.safeParse({ ...valid, contentType: "repost" });
+    expect(denied.success).toBe(false);
+    expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["contentType"]]);
+  });
+
   it("refuses a run with no channels, which would produce an item nothing ships", () => {
     expect(briefRunInputSchema.safeParse({ ...valid, channelIds: [] }).success).toBe(false);
   });
@@ -155,6 +161,16 @@ describe("a run asked for from material a person pasted", () => {
     const denied = sourceRunInputSchema.safeParse({ ...pasted, material: "" });
     expect(denied.success).toBe(false);
     expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["material"]]);
+    expect(sourceRunInputSchema.safeParse({ ...pasted, material: " \n " }).success).toBe(false);
+  });
+
+  it("stores a source retelling with optional attribution URL", () => {
+    const retelling = { ...pasted, contentType: "repost" };
+    expect(sourceRunInputSchema.parse(retelling)).toEqual(retelling);
+    expect(sourceRunInputSchema.parse({ ...retelling, sourceUrl: null })).toEqual({
+      ...retelling,
+      sourceUrl: null,
+    });
   });
 
   /**
@@ -217,11 +233,17 @@ describe("what a run may be asked for", () => {
     for (const contentType of [
       "social_post",
       "news_digest",
+      "repost",
       "product_update",
       "expert_article",
       "educational",
     ]) {
-      const body = { ...base, brief: "Supported facts", contentType };
+      const body = {
+        ...base,
+        brief: "Supported facts",
+        contentType,
+        ...(contentType === "repost" && { material: "The source text." }),
+      };
       expect(runCreateSchema.parse(body)).toEqual(body);
     }
     expect(
@@ -236,6 +258,22 @@ describe("what a run may be asked for", () => {
 
   it("accepts material alone: a paste-only run has no brief to send", () => {
     const body = { ...base, material: "The article, pasted in full." };
+    expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  it("requires nonblank stored source text for a retelling even with a brief or URL", () => {
+    for (const material of [undefined, "", " \n "]) {
+      const denied = runCreateSchema.safeParse({
+        ...base,
+        contentType: "repost",
+        brief: "Retell this for our readers",
+        sourceUrl: "https://example.com/article",
+        ...(material !== undefined && { material }),
+      });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toContainEqual(["material"]);
+    }
+    const body = { ...base, contentType: "repost", material: "Actual article text." };
     expect(runCreateSchema.parse(body)).toEqual(body);
   });
 
