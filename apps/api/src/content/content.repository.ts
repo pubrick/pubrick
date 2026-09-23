@@ -3666,19 +3666,34 @@ export class ContentRepository {
         .limit(1);
       const coveredItem = cover[0];
       if (coveredItem?.id) {
-        if (platforms.some((channel) => channel.platform !== "telegram") || manualReady.length) {
+        if (
+          platforms.some(
+            (channel) => channel.platform !== "telegram" && channel.platform !== "vk",
+          ) ||
+          manualReady.length
+        ) {
           throw conflict(
             "content_media_unsupported",
-            "Covers currently publish only to Telegram channels",
+            "Covers currently publish only to Telegram and VK channels",
           );
         }
         const overrideBodies = await tx
-          .select({ body: schema.adaptations.body })
+          .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
           .from(schema.adaptations)
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
           );
-        if (overrideBodies.some((row) => (row.body ?? coveredItem.body).length > 1024)) {
+        const telegramChannelIds = new Set(
+          platforms
+            .filter((channel) => channel.platform === "telegram")
+            .map((channel) => channel.id),
+        );
+        if (
+          overrideBodies.some(
+            (row) =>
+              telegramChannelIds.has(row.channelId) && (row.body ?? coveredItem.body).length > 1024,
+          )
+        ) {
           throw conflict(
             "content_media_caption_too_long",
             "Telegram photo captions must be 1024 characters or fewer",

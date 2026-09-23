@@ -12,6 +12,158 @@ const options = (fetchImpl: typeof fetch) => ({ fetchImpl, baseUrl: "https://vk.
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe("VK publishing", () => {
+  it("uploads one JPEG to the community wall and attaches the saved photo to the post", async () => {
+    const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith("account.getAppPermissions")) return answer({ response: 8196 });
+      if (target.endsWith("photos.getWallUploadServer")) {
+        expect(new URLSearchParams(String(init?.body)).get("group_id")).toBe("12345");
+        return answer({ response: { upload_url: "https://pu.vk.com/upload.php?key=capability" } });
+      }
+      if (target.startsWith("https://pu.vk.com/")) {
+        expect(init?.method).toBe("POST");
+        expect(init?.redirect).toBe("error");
+        expect(init?.body).toBeInstanceOf(FormData);
+        if (!(init?.body instanceof FormData)) throw new Error("Expected multipart upload");
+        const file = init.body.get("photo") as File;
+        expect(file.type).toBe("image/jpeg");
+        expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
+        return answer({ server: 42, photo: "photo-token", hash: "hash-token" });
+      }
+      if (target.endsWith("photos.saveWallPhoto")) {
+        const body = new URLSearchParams(String(init?.body));
+        expect(Object.fromEntries(body)).toMatchObject({
+          group_id: "12345",
+          server: "42",
+          photo: "photo-token",
+          hash: "hash-token",
+        });
+        return answer({ response: [{ owner_id: -12345, id: 17 }] });
+      }
+      expect(target).toBe("https://vk.test/method/wall.post");
+      expect(new URLSearchParams(String(init?.body)).get("attachments")).toBe("photo-12345_17");
+      return answer({ response: { post_id: 89 } });
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes, mimeType: "image/jpeg" } },
+        options(fetchImpl),
+      ),
+    ).resolves.toEqual({ externalId: "89", externalUrl: "https://vk.com/wall-12345_89" });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("refuses an untrusted upload URL before sending the cover anywhere", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("account.getAppPermissions")
+        ? answer({ response: 8196 })
+        : answer({ response: { upload_url: "http://127.0.0.1/internal" } }),
+    ) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(fetchImpl),
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries an uncertain photo preparation, but never an uncertain wall post", async () => {
+    const uploadLost = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith("account.getAppPermissions")) return answer({ response: 8196 });
+      if (String(url).endsWith("photos.getWallUploadServer")) {
+        return answer({ response: { upload_url: "https://pu.vk.com/upload.php" } });
+      }
+      throw new Error("upload socket lost");
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(uploadLost),
+      ),
+    ).rejects.toBeInstanceOf(TransientPublishError);
+    expect(uploadLost).toHaveBeenCalledTimes(3);
+
+    const postLost = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("account.getAppPermissions")) return answer({ response: 8196 });
+      if (target.endsWith("photos.getWallUploadServer")) {
+        return answer({ response: { upload_url: "https://pu.vk.com/upload.php" } });
+      }
+      if (target.startsWith("https://pu.vk.com/")) {
+        return answer({ server: 42, photo: "photo", hash: "hash" });
+      }
+      if (target.endsWith("photos.saveWallPhoto")) {
+        return answer({ response: [{ owner_id: -12345, id: 17 }] });
+      }
+      throw new Error("wall response lost");
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(postLost),
+      ),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+    expect(postLost).toHaveBeenCalledTimes(5);
+  });
+
+  it("never posts when VK saves the photo outside the selected community", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("account.getAppPermissions")) return answer({ response: 8196 });
+      if (target.endsWith("photos.getWallUploadServer")) {
+        return answer({ response: { upload_url: "https://pu.vk.com/upload.php" } });
+      }
+      if (target.startsWith("https://pu.vk.com/")) {
+        return answer({ server: 42, photo: "photo", hash: "hash" });
+      }
+      return answer({ response: [{ owner_id: -999, id: 17 }] });
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(fetchImpl),
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("treats a plain HTTP 413 upload refusal as permanent before wall.post", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith("account.getAppPermissions")) return answer({ response: 8196 });
+      if (String(url).endsWith("photos.getWallUploadServer")) {
+        return answer({ response: { upload_url: "https://pu.vk.com/upload.php" } });
+      }
+      return new Response("too large", { status: 413 });
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(fetchImpl),
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a cover before upload when the user token lacks photos permission", async () => {
+    const fetchImpl = vi.fn(async () => answer({ response: 8192 })) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Hello", image: { bytes: Uint8Array.of(1), mimeType: "image/jpeg" } },
+        options(fetchImpl),
+      ),
+    ).rejects.toThrow("wall and photos permissions for covers");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("posts exact text as the community and returns its wall URL", async () => {
     const fetchImpl = vi.fn(async () =>
       answer({ response: { post_id: 89 } }),
@@ -124,7 +276,7 @@ describe("VK connection test", () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const method = String(url).split("/").at(-1);
       if (method === "users.get") return answer({ response: [{ id: 7 }] });
-      if (method === "account.getAppPermissions") return answer({ response: 8192 });
+      if (method === "account.getAppPermissions") return answer({ response: 8196 });
       return answer({ response: { groups: [{ id: 12345, name: "The bakery", is_admin: 1 }] } });
     }) as unknown as typeof fetch;
     await expect(vkPublisher.verify(credentials, options(fetchImpl))).resolves.toEqual({
@@ -146,11 +298,26 @@ describe("VK connection test", () => {
     });
   });
 
-  it("refuses a user who does not administer the requested community", async () => {
+  it("keeps text-only channels connected when the user token lacks photos permission", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const method = String(url).split("/").at(-1);
       if (method === "users.get") return answer({ response: [{ id: 7 }] });
       if (method === "account.getAppPermissions") return answer({ response: 8192 });
+      return answer({ response: { groups: [{ id: 12345, name: "The bakery", is_admin: 1 }] } });
+    }) as unknown as typeof fetch;
+    await expect(vkPublisher.verify(credentials, options(fetchImpl))).resolves.toEqual({
+      ok: true,
+      account: "id7",
+      target: "The bakery",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses a user who does not administer the requested community", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const method = String(url).split("/").at(-1);
+      if (method === "users.get") return answer({ response: [{ id: 7 }] });
+      if (method === "account.getAppPermissions") return answer({ response: 8196 });
       return answer({ response: { groups: [{ id: 12345, name: "Another team", is_admin: 0 }] } });
     }) as unknown as typeof fetch;
     await expect(vkPublisher.verify(credentials, options(fetchImpl))).resolves.toEqual({

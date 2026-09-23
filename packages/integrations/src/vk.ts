@@ -30,7 +30,17 @@ const vkEnvelope = z.union([
 const postResponse = z.object({ post_id: z.number().int().positive() });
 const userResponse = z.array(z.object({ id: z.number().int().positive() })).min(1);
 const permissionsResponse = z.number().int().nonnegative();
+const PHOTOS_PERMISSION = 4;
 const WALL_PERMISSION = 8192;
+const wallUploadServerResponse = z.object({ upload_url: z.string().url() });
+const wallUploadResponse = z.object({
+  server: z.union([z.number().int().positive(), z.string().regex(/^[1-9]\d*$/)]),
+  photo: z.string().min(1),
+  hash: z.string().min(1),
+});
+const savedWallPhotoResponse = z
+  .array(z.object({ owner_id: z.number().int(), id: z.number().int().positive() }))
+  .min(1);
 const groupResponse = z.object({
   groups: z.array(
     z.object({
@@ -120,6 +130,129 @@ async function call(
   throw new PlatformRejectionError(message, code);
 }
 
+/** Until wall.post starts, retrying cannot create a duplicate wall post. */
+async function preparePhotoCall(
+  method: string,
+  credentials: VkCredentials,
+  params: Record<string, string>,
+  options?: PublisherOptions,
+): Promise<unknown> {
+  try {
+    return await call(method, credentials, params, options);
+  } catch (error) {
+    if (error instanceof UnknownOutcomePublishError) {
+      throw new TransientPublishError(`VK photo preparation did not complete: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+function trustedUploadUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new PermanentPublishError("VK returned an invalid photo upload URL");
+  }
+  // VK supplies this URL, but it is still an external address used by our
+  // worker. Never let a malformed/proxied API answer reach local services.
+  if (
+    url.protocol !== "https:" ||
+    (url.hostname !== "vk.com" && !url.hostname.endsWith(".vk.com")) ||
+    url.username ||
+    url.password ||
+    url.port
+  ) {
+    throw new PermanentPublishError("VK returned an untrusted photo upload URL");
+  }
+  return url.href;
+}
+
+async function uploadWallPhoto(
+  uploadUrl: string,
+  bytes: Uint8Array,
+  options?: PublisherOptions,
+): Promise<z.infer<typeof wallUploadResponse>> {
+  const form = new FormData();
+  form.append("photo", new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }), "cover.jpg");
+  let response: Response;
+  try {
+    response = await (options?.fetchImpl ?? fetch)(uploadUrl, {
+      method: "POST",
+      body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(VK_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    // The wall post has not started. An ambiguous upload can be retried safely.
+    throw new TransientPublishError("VK photo upload did not complete");
+  }
+  if (!response.ok) {
+    const message = `VK photo upload returned HTTP ${response.status}`;
+    if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+      throw new PermanentPublishError(message, response.status);
+    }
+    throw new TransientPublishError(message, response.status);
+  }
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new TransientPublishError("VK photo upload returned an unreadable response");
+  }
+  const parsed = wallUploadResponse.safeParse(raw);
+  if (!parsed.success) throw new PermanentPublishError("VK photo upload returned invalid details");
+  return parsed.data;
+}
+
+async function photoAttachment(
+  credentials: VkCredentials,
+  bytes: Uint8Array,
+  options?: PublisherOptions,
+): Promise<string> {
+  if (bytes.length === 0) throw new PermanentPublishError("Cover image is empty");
+  const permissions = permissionsResponse.safeParse(
+    await preparePhotoCall("account.getAppPermissions", credentials, {}, options),
+  );
+  if (
+    !permissions.success ||
+    (permissions.data & (WALL_PERMISSION | PHOTOS_PERMISSION)) !==
+      (WALL_PERMISSION | PHOTOS_PERMISSION)
+  ) {
+    throw new PermanentPublishError(
+      "The VK user token needs wall and photos permissions for covers",
+    );
+  }
+  const server = wallUploadServerResponse.safeParse(
+    await preparePhotoCall(
+      "photos.getWallUploadServer",
+      credentials,
+      { group_id: credentials.groupId },
+      options,
+    ),
+  );
+  if (!server.success) throw new PermanentPublishError("VK did not return a photo upload server");
+  const upload = await uploadWallPhoto(trustedUploadUrl(server.data.upload_url), bytes, options);
+  const saved = savedWallPhotoResponse.safeParse(
+    await preparePhotoCall(
+      "photos.saveWallPhoto",
+      credentials,
+      {
+        group_id: credentials.groupId,
+        server: String(upload.server),
+        photo: upload.photo,
+        hash: upload.hash,
+      },
+      options,
+    ),
+  );
+  const photo = saved.success
+    ? saved.data.find((item) => item.owner_id === -Number(credentials.groupId))
+    : undefined;
+  if (!photo) throw new PermanentPublishError("VK did not save the cover to this community");
+  return `photo${photo.owner_id}_${photo.id}`;
+}
+
 export const vkPublisher: Publisher<VkCredentials> = {
   platform: "vk",
   maxTextLength: PLATFORM_MAX_TEXT_LENGTH.vk,
@@ -131,10 +264,18 @@ export const vkPublisher: Publisher<VkCredentials> = {
         `Text must be 1..${this.maxTextLength} characters, got ${input.text.length}`,
       );
     }
+    const attachment = input.image
+      ? await photoAttachment(credentials, input.image.bytes, options)
+      : undefined;
     const raw = await call(
       "wall.post",
       credentials,
-      { owner_id: `-${credentials.groupId}`, from_group: "1", message: input.text },
+      {
+        owner_id: `-${credentials.groupId}`,
+        from_group: "1",
+        message: input.text,
+        ...(attachment ? { attachments: attachment } : {}),
+      },
       options,
     );
     // VK has accepted the post. A malformed success payload cannot cause a
