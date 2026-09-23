@@ -43,6 +43,8 @@ type Seeded = {
  */
 const NOT_A_TENANT_LIST: Record<string, string> = {
   health: "anonymous liveness probe; returns a status and a version, never a row",
+  "brands/:brandId/feed":
+    "one brand-scoped feed resource, not an array collection; feeds.e2e.spec.ts proves another org cannot read its URL or entries",
 };
 
 async function orgAgent(app: INestApplication): Promise<request.Agent> {

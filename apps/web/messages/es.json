@@ -186,6 +186,29 @@
     "discardConfirm": "Descartar y generar",
     "discardCancel": "Cancelar"
   },
+  "Feed": {
+    "title": "Feed RSS público",
+    "description": "Comparte publicaciones seleccionadas mediante un feed RSS público. Activarlo no comparte ninguna publicación por sí solo.",
+    "dzenNotice": "Para intentar importar en Dzen, configura esta URL allí manualmente si tu cuenta lo permite. Pubrick no puede verificar la importación.",
+    "entryCount": "{count, plural, one {# publicación en el feed} other {# publicaciones en el feed}}",
+    "enable": "Activar",
+    "disable": "Desactivar",
+    "disableTitle": "¿Desactivar el feed público?",
+    "disableHint": "La URL y los enlaces a los artículos dejarán de funcionar. Si lo activas de nuevo, tendrá una URL nueva y estará vacío.",
+    "disabledHint": "Activa el feed público en la",
+    "brandSettings": "configuración de marca",
+    "available": "Disponible en el feed RSS. Esto no confirma la importación por ninguna plataforma.",
+    "notIncluded": "Esta publicación no está en el feed público.",
+    "add": "Añadir",
+    "remove": "Quitar",
+    "addTitle": "¿Compartir esta publicación públicamente?",
+    "addHint": "Cualquiera que tenga la URL del feed o del artículo podrá leer una copia. Esto no la publica en Dzen.",
+    "removeTitle": "¿Quitar esta publicación del feed?",
+    "removeHint": "Su enlace público dejará de funcionar. Una plataforma que ya la haya importado puede conservar su copia.",
+    "cancel": "Cancelar",
+    "loadError": "No se pudo cargar el feed.",
+    "saveError": "No se pudo actualizar el feed."
+  },
   "Publish": {
     "backToQueue": "Volver a la cola",
     "bodyLabel": "Texto",
@@ -396,6 +419,8 @@
   },
   "Errors": {
     "content_not_found": "Esta publicación ya no existe: es posible que se haya eliminado.",
+    "feed_not_found": "Este feed público no está disponible. Actívalo de nuevo para compartir publicaciones.",
+    "feed_item_not_ready": "Añade un título y publica esta entrada antes de compartirla en un feed público.",
     "adaptation_not_found": "El texto propio de este canal ya no existe: es posible que el canal se haya eliminado.",
     "version_not_found": "Esta versión guardada ya no está disponible. Actualiza el historial.",
     "version_changed": "El texto guardado cambió desde que abriste el historial. Actualiza la página antes de restaurarlo.",

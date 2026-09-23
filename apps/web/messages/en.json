@@ -186,6 +186,29 @@
     "discardConfirm": "Discard and generate",
     "discardCancel": "Cancel"
   },
+  "Feed": {
+    "title": "Public RSS feed",
+    "description": "Share selected published posts through a public RSS feed. Enabling the feed alone does not share any posts.",
+    "dzenNotice": "To try importing into Dzen, configure this URL there manually if your account supports it. Pubrick cannot tell whether Dzen imported a post.",
+    "entryCount": "{count, plural, one {# post in feed} other {# posts in feed}}",
+    "enable": "Enable",
+    "disable": "Disable",
+    "disableTitle": "Disable the public feed?",
+    "disableHint": "The URL and article links will stop working. Enabling the feed again creates a new URL and starts with an empty feed.",
+    "disabledHint": "Enable the public feed in",
+    "brandSettings": "brand settings",
+    "available": "Available in RSS feed. This does not confirm import by any platform.",
+    "notIncluded": "This post is not in the public feed.",
+    "add": "Add",
+    "remove": "Remove",
+    "addTitle": "Share this post publicly?",
+    "addHint": "Anyone with the feed or article URL can read a snapshot of this post. This does not publish it to Dzen.",
+    "removeTitle": "Remove this post from the feed?",
+    "removeHint": "Its public article link will stop working. A platform that already imported it may keep its own copy.",
+    "cancel": "Cancel",
+    "loadError": "The feed could not be loaded.",
+    "saveError": "The feed could not be updated."
+  },
   "Publish": {
     "backToQueue": "Back to queue",
     "bodyLabel": "Body",
@@ -396,6 +419,8 @@
   },
   "Errors": {
     "content_not_found": "This post no longer exists — it may have been deleted.",
+    "feed_not_found": "This public feed is unavailable. Enable it again if you want to share posts.",
+    "feed_item_not_ready": "Add a title and publish this post before sharing it in a public feed.",
     "adaptation_not_found": "This channel's own text no longer exists — the channel may have been deleted.",
     "version_not_found": "This saved version is no longer available. Reload the history.",
     "version_changed": "The saved text changed since you opened its history. Reload before restoring.",

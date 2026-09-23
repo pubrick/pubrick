@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { FeedEntryAction } from "@/components/feed-controls";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -1895,6 +1896,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </li>
         ))}
       </ul>
+      <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
     </AppShell>
   );
 }
