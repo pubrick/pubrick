@@ -17,7 +17,7 @@ documents when they disagree.
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
 | Calendar | Scheduled publishing, brand calendar, slots and planned draft generation | Memorable dates and richer planning |
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
-| Analytics | Usage and cost ledger present | Channel metrics, content performance and feedback |
+| Analytics | Usage and cost ledger; brand results and on-demand VK post metrics | Automatic collection, other-channel metrics, performance feedback |
 | Comment analysis | Not ported | Collection, analysis and feedback signals |
 | Knowledge base / RAG | Brand notes, CSV import, optional Gemini indexing and hybrid retrieval in generation | Migration of old notes, automatic indexing and source citations |
 | Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |

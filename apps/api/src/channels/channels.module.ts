@@ -2,5 +2,9 @@ import { Module } from "@nestjs/common";
 import { ChannelsController } from "./channels.controller";
 import { ChannelsRepository } from "./channels.repository";
 
-@Module({ controllers: [ChannelsController], providers: [ChannelsRepository] })
+@Module({
+  controllers: [ChannelsController],
+  providers: [ChannelsRepository],
+  exports: [ChannelsRepository],
+})
 export class ChannelsModule {}

@@ -1,0 +1,11 @@
+# Publication results
+
+Pubrick shows a brand's last 100 published posts for a selected 7, 30 or 90 day window at **Brands → Results**. The count and totals on this screen describe only those displayed posts. Unknown counters are excluded; a measured zero is shown as `0`. Deleted channels and their detached receipts cannot be attributed to a current brand, so they remain in the delivery history but are absent from brand results.
+
+VK posts with a valid stored post ID and a connected channel can be checked with **Check metrics**. Pubrick calls VK `wall.getById` using the existing encrypted channel credentials, validates the returned community and post ID, then records available view, like, comment and repost counters. A post can be checked once per 15 minutes. The latest observation is marked as potentially outdated after 24 hours. Provider errors, missing posts and absent counters remain explicit unavailable or error states. No metric read is made during a normal page load. There is no background polling in this increment.
+
+Telegram's legacy `cf_collect_metrics` task did not collect metrics; it only updated a timestamp. Pubrick does not repeat that behavior. Telegram, MAX, VC.ru and Dzen display **Not measured yet** with unknown values until a real platform-specific collector is implemented. The Results screen is read-only except for the VK check action. A successful check changes no publication status and does not trigger AI calls.
+
+The API is org-scoped with `ActiveOrgGuard`: `GET /api/analytics/brands/:brandId?days=7|30|90` and `POST /api/analytics/brands/:brandId/publications/:publicationId/refresh`. The latter requires a published receipt linked to that brand and a VK channel; both the read and update select only explicit columns. The metric table stores one latest observation per receipt and carries `org_id` with a cascade to the organization. A conditional upsert claims the 15-minute window before any provider request, including across API replicas.
+
+VK method and object shape follow VK's published [API schema](https://github.com/VKCOM/vk-api-schema/tree/master/wall) and [official SDK method contract](https://github.com/VKCOM/vk-php-sdk/blob/master/src/VK/Actions/Wall.php). Local tests use a fake HTTP server and make no provider requests.

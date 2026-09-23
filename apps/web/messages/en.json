@@ -73,7 +73,8 @@
     "knowledgeTitle": "Brand knowledge",
     "knowledgeHint": "Store product details, examples and brand notes for future drafts.",
     "knowledgeOpen": "Open knowledge",
-    "mediaLink": "Media library"
+    "mediaLink": "Media library",
+    "analyticsLink": "Results"
   },
   "Sources": {
     "kind": "Source type",
@@ -665,7 +666,10 @@
     "media_in_use": "Remove this image from its post before deleting it.",
     "media_cover_pinned": "This post is already approved or published. Reject it before changing the cover.",
     "media_generation_limit": "The hourly image generation limit is reached. Try again later.",
-    "media_generation_failed": "Gemini did not return a usable image. Try another prompt."
+    "media_generation_failed": "Gemini did not return a usable image. Try another prompt.",
+    "publication_not_found": "Publication not found.",
+    "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
+    "metrics_unavailable": "Automatic metrics are unavailable for this publication."
   },
   "Calendar": {
     "title": "Content calendar",
@@ -759,5 +763,34 @@
     "image": "image",
     "reviewImage": "New image — review before choosing it",
     "generateFailed": "Could not generate an image. Try again."
+  },
+  "Analytics": {
+    "title": "Results for {brand}",
+    "intro": "Publication history and channel-reported metrics. Missing values are shown as unknown.",
+    "period": "{days} days",
+    "loadError": "Results could not be loaded.",
+    "retry": "Retry",
+    "published": "Published posts",
+    "measured": "Measured posts",
+    "views": "Views",
+    "likes": "Likes",
+    "comments": "Comments",
+    "shares": "Shares",
+    "scopeNote": "Totals include only available measurements from the posts shown. Unknown values are excluded.",
+    "limited": "Showing the latest 100 posts.",
+    "empty": "No posts have been published in this period. Create a post to start measuring results.",
+    "compose": "Create a post",
+    "untitled": "Untitled post",
+    "openPost": "Open post",
+    "openPublication": "View on channel",
+    "not_collected": "Not measured yet",
+    "refreshing": "Checking",
+    "available": "Measured",
+    "unavailable": "Metrics unavailable",
+    "error": "Could not check metrics",
+    "stale": "May be outdated",
+    "checked": "Checked {date}",
+    "checking": "Checking…",
+    "refresh": "Check metrics"
   }
 }

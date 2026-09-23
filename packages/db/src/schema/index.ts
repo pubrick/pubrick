@@ -9,6 +9,7 @@ export * from "./generation.js";
 export * from "./knowledge.js";
 export * from "./media.js";
 export * from "./prompts.js";
+export * from "./publication-metrics.js";
 export * from "./readapt.js";
 export * from "./refine.js";
 export * from "./sources.js";
