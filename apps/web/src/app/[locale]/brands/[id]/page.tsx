@@ -30,7 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 
-type Channel = { id: string; platform: string; name: string };
+type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
 /**
  * The brand as this screen edits it. `voice`, `audience` and `contentLanguage`
  * are not decoration: every generation step interpolates all three into the
@@ -127,6 +127,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, VerifyResult | "loading">>({});
+  const [metricsBusy, setMetricsBusy] = useState<string | null>(null);
+  const [metricsError, setMetricsError] = useState<Record<string, string>>({});
   // POST /api/channels is not idempotent: the same credentials submitted twice
   // make two channels, and every future post goes out twice. A click is a
   // discrete React event, so `disabled` is on the button in the DOM before an
@@ -394,6 +396,25 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
+  async function toggleMetrics(channel: Channel) {
+    setMetricsBusy(channel.id);
+    setMetricsError((previous) => ({ ...previous, [channel.id]: "" }));
+    try {
+      const updated = await api<Channel>(`/api/channels/${channel.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ metricsAutoRefresh: !channel.metricsAutoRefresh }),
+      });
+      setChannels(
+        (previous) => previous?.map((item) => (item.id === channel.id ? updated : item)) ?? null,
+      );
+    } catch (err) {
+      const message = describeError(err);
+      if (message) setMetricsError((previous) => ({ ...previous, [channel.id]: message }));
+    } finally {
+      setMetricsBusy(null);
+    }
+  }
+
   const fields = PLATFORM_FIELDS[platform];
 
   return (
@@ -564,7 +585,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                   // The failure case needs a real element for role="alert", so
                   // it stays an element — that test matches by role, not text,
                   // so the double wrapper there is harmless.
-                  isManualPlatform(c.platform) ? (
+                  metricsError[c.id] ? (
+                    <span role="alert" className="text-danger">
+                      {metricsError[c.id]}
+                    </span>
+                  ) : isManualPlatform(c.platform) ? (
                     t("vcManualMeta")
                   ) : result === "loading" ? (
                     "…"
@@ -578,6 +603,20 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 }
                 trailing={
                   <>
+                    {c.platform === "vk" && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={metricsBusy === c.id}
+                        onClick={() => toggleMetrics(c)}
+                        aria-label={
+                          c.metricsAutoRefresh ? t("autoMetricsDisable") : t("autoMetricsEnable")
+                        }
+                        title={t("autoMetricsHint")}
+                      >
+                        {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
+                      </Button>
+                    )}
                     {!isManualPlatform(c.platform) && (
                       <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
                         {t("test")}

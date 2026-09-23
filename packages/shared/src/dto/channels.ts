@@ -166,8 +166,13 @@ export const channelUpdateSchema = z
   .object({
     name: channelName.optional(),
     credentials: credentialsBag.optional(),
+    metricsAutoRefresh: z.boolean().optional(),
   })
-  .refine((o) => o.name !== undefined || o.credentials !== undefined, {
-    message: "provide name, credentials, or both",
-  });
+  .refine(
+    (o) =>
+      o.name !== undefined || o.credentials !== undefined || o.metricsAutoRefresh !== undefined,
+    {
+      message: "provide a channel setting",
+    },
+  );
 export type ChannelUpdate = z.infer<typeof channelUpdateSchema>;

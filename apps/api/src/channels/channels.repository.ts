@@ -26,6 +26,7 @@ const PUBLIC_COLUMNS = {
   brandId: schema.channels.brandId,
   platform: schema.channels.platform,
   name: schema.channels.name,
+  metricsAutoRefresh: schema.channels.metricsAutoRefresh,
   createdAt: schema.channels.createdAt,
   /**
    * Returned because it is the only thing that answers "when was this
@@ -150,20 +151,27 @@ export class ChannelsRepository {
    * and `updated_at` always moves.
    */
   async update(orgId: string, id: string, data: ChannelUpdate) {
-    if (data.credentials !== undefined) {
+    if (data.credentials !== undefined || data.metricsAutoRefresh === true) {
       const channel = await db
         .select({ platform: schema.channels.platform })
         .from(schema.channels)
         .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
         .limit(1);
       if (channel[0] && isManualPlatform(channel[0].platform)) {
-        throw new BadRequestException("Manual channels do not use credentials");
+        if (data.credentials !== undefined)
+          throw new BadRequestException("Manual channels do not use credentials");
+      }
+      if (channel[0] && data.metricsAutoRefresh === true && channel[0].platform !== "vk") {
+        throw new BadRequestException("Automatic metric checks are only available for VK channels");
       }
     }
     const rows = await db
       .update(schema.channels)
       .set({
         ...(data.name === undefined ? {} : { name: data.name }),
+        ...(data.metricsAutoRefresh === undefined
+          ? {}
+          : { metricsAutoRefresh: data.metricsAutoRefresh }),
         ...(data.credentials === undefined
           ? {}
           : { credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY) }),

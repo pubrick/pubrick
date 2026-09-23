@@ -25,12 +25,17 @@ import {
   TOPIC_SUGGESTIONS_QUEUE,
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
+  VK_METRICS_OPTIONS,
+  VK_METRICS_QUEUE,
+  VK_METRICS_SCAN_QUEUE,
+  type VkMetricsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
+import { MetricsService } from "./metrics/metrics.service";
 import { NotificationsService } from "./notifications/notifications.service";
 import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
@@ -127,6 +132,7 @@ export class QueueService {
     @Optional() private readonly suggestions?: SuggestionsService,
     @Optional() private readonly autopilot?: AutopilotService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly metrics?: MetricsService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -151,6 +157,23 @@ export class QueueService {
       await boss.work("notification-scan", { batchSize: 1 }, async () =>
         this.notifications?.scan(),
       );
+    }
+
+    if (this.metrics && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(VK_METRICS_QUEUE, { ...VK_METRICS_OPTIONS });
+      await boss.updateQueue(VK_METRICS_QUEUE, { ...VK_METRICS_OPTIONS });
+      await boss.work<VkMetricsJob>(
+        VK_METRICS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.metrics?.handle(job.data);
+        },
+      );
+      await boss.createQueue(VK_METRICS_SCAN_QUEUE);
+      await boss.schedule(VK_METRICS_SCAN_QUEUE, "0 * * * *");
+      await boss.work(VK_METRICS_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.metrics?.scan(boss);
+      });
     }
 
     if (this.rss && names === DEFAULT_QUEUE_NAMES) {

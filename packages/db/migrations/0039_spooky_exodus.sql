@@ -1,0 +1,2 @@
+ALTER TABLE "channels" ADD COLUMN "metrics_auto_refresh" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_metrics_auto_refresh_vk_check" CHECK (not "channels"."metrics_auto_refresh" or "channels"."platform" = 'vk');

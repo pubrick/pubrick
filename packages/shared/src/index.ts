@@ -102,6 +102,11 @@ export {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
   telegramCommentsJobOptions,
+  VK_METRICS_OPTIONS,
+  VK_METRICS_QUEUE,
+  VK_METRICS_SCAN_QUEUE,
+  type VkMetricsJob,
+  vkMetricsJobOptions,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 export * from "./link-policy-defaults.js";

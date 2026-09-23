@@ -38,6 +38,49 @@ beforeEach(() => {
   signedInSession();
 });
 
+describe("VK automatic metrics setting", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("is off by default and sends an explicit opt-in through the channel patch schema", async () => {
+    const channel = { id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false };
+    const patches: unknown[] = [];
+    installHandlers([channel], (url, init) => {
+      if (url.endsWith("/api/channels/c1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        patches.push(body);
+        return jsonResponse(200, { ...channel, ...body });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Channels.autoMetricsEnable }));
+    expect(patches).toEqual([{ metricsAutoRefresh: true }]);
+    expect(channelUpdateSchema.parse(patches[0])).toEqual(patches[0]);
+    expect(
+      screen.getByRole("button", { name: en.Channels.autoMetricsDisable }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the setting off and shows a translated refusal when the patch fails", async () => {
+    installHandlers(
+      [{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }],
+      (url, init) =>
+        url.endsWith("/api/channels/c1") && init?.method === "PATCH"
+          ? jsonResponse(500, { message: "secret internal failure" })
+          : undefined,
+    );
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />, { locale: "es" });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /Activar métricas automáticas de VK/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Algo salió mal/i);
+    expect(
+      screen.getByRole("button", { name: /Activar métricas automáticas de VK/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 /**
  * Serves GET /api/brands/:id and GET /api/channels?brandId=:id out of fixed
  * data; `extra` answers anything else (POST channel test, etc). Mirrors the
