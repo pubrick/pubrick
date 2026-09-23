@@ -1,3 +1,4 @@
+import { brandCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -97,10 +98,57 @@ describe("creating a brand (Step 4)", () => {
       expect(calls.some((c) => c.method === "POST" && c.path === "/api/brands")).toBe(true);
     });
     const postCall = calls.find((c) => c.method === "POST" && c.path === "/api/brands");
-    expect(parsedBody(postCall)).toEqual({ name: "New Co" });
+    expect(parsedBody(postCall)).toEqual({ name: "New Co", contentLanguage: "en" });
+    expect(brandCreateSchema.parse(parsedBody(postCall))).toEqual({
+      name: "New Co",
+      contentLanguage: "en",
+    });
 
     await screen.findByRole("link", { name: "New Co" });
+    expect(screen.getByRole("link", { name: en.Brands.addChannelNext })).toHaveAttribute(
+      "href",
+      "/en/brands/b2#channels",
+    );
+    expect(screen.getByRole("link", { name: en.Brands.addKnowledgeNext })).toHaveAttribute(
+      "href",
+      "/en/brands/b2/knowledge",
+    );
     expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("creates a brand with optional targeting and generation fields in one request", async () => {
+    const served = { current: [] as Brand[] };
+    const calls: Call[] = [];
+    installHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/brands") {
+        const created = { id: "b2", name: "Cafe Atlas" };
+        served.current = [created];
+        return created;
+      }
+      return undefined;
+    });
+
+    render(<BrandsPage />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.Brands.namePlaceholder), "Cafe Atlas");
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.type(screen.getByLabelText(en.Brands.descriptionLabel), "Coffee for commuters");
+    await user.type(screen.getByLabelText(en.Brands.voiceLabel), "Warm and concise");
+    await user.type(screen.getByLabelText(en.Brands.audienceLabel), "Morning travelers");
+    await user.clear(screen.getByLabelText(en.Brands.languageLabel));
+    await user.type(screen.getByLabelText(en.Brands.languageLabel), "es");
+    await user.click(screen.getByRole("button", { name: en.Brands.create }));
+
+    await screen.findByRole("link", { name: "Cafe Atlas" });
+    const body = parsedBody(calls.find((c) => c.method === "POST"));
+    expect(body).toEqual({
+      name: "Cafe Atlas",
+      description: "Coffee for commuters",
+      voice: "Warm and concise",
+      audience: "Morning travelers",
+      contentLanguage: "es",
+    });
+    expect(brandCreateSchema.parse(body)).toEqual(body);
   });
 
   it("shows the server's error and does not clear the field when creation fails", async () => {

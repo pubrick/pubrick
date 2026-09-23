@@ -15,6 +15,7 @@ import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
+import ru from "../../../../../messages/ru.json";
 import BrandPage from "./page";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -845,6 +846,90 @@ describe("BrandPage edit() — rotating credentials", () => {
  * `z.object()` strips unknown keys, so a renamed field would parse happily and
  * silently yield `{}`.
  */
+describe("BrandPage — brand profile", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows a translated refusal inside the profile editor", async () => {
+    const initial = {
+      id: "b1",
+      name: "Acme",
+      description: null,
+      voice: null,
+      audience: null,
+      contentLanguage: "en",
+    };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/") && init?.method === "PATCH") {
+        return jsonResponse(404, refusalBody(404, "brand_not_found", "Brand not found"));
+      }
+      if (url.includes("/api/brands/")) return jsonResponse(200, initial);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />, { locale: "ru" });
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: ru.Brands.profileEdit })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole("button", { name: ru.Brands.profileEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: ru.Brands.profileTitle }));
+    await user.click(dialog.getByRole("button", { name: ru.Brands.voiceSave }));
+
+    expect(await dialog.findByRole("alert")).toHaveTextContent(ru.Errors.brand_not_found);
+  });
+
+  it("edits the name and targeting description, then displays the stored response", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    const initial = {
+      id: "b1",
+      name: "Acme",
+      description: "Old targeting context",
+      voice: null,
+      audience: null,
+      contentLanguage: "en",
+    };
+    const stored = { ...initial, name: "Acme Studio", description: "Coffee for commuters" };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method, body: init?.body as string | undefined });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/") && method === "PATCH") return jsonResponse(200, stored);
+      if (url.includes("/api/brands/")) return jsonResponse(200, initial);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Brands.profileEdit })).toBeEnabled(),
+    );
+    expect(screen.getByText("Old targeting context")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Brands.profileEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.profileTitle }));
+    expect(dialog.getByLabelText(en.Brands.nameLabel)).toHaveValue("Acme");
+    expect(dialog.getByLabelText(en.Brands.descriptionLabel)).toHaveValue("Old targeting context");
+    await user.clear(dialog.getByLabelText(en.Brands.nameLabel));
+    await user.type(dialog.getByLabelText(en.Brands.nameLabel), "Acme Studio");
+    await user.clear(dialog.getByLabelText(en.Brands.descriptionLabel));
+    await user.type(dialog.getByLabelText(en.Brands.descriptionLabel), "Coffee for commuters");
+    await user.click(dialog.getByRole("button", { name: en.Brands.voiceSave }));
+
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    const patch = calls.find((call) => call.method === "PATCH");
+    expect(patch?.url).toBe("/api/brands/b1");
+    const body = JSON.parse(patch?.body ?? "{}");
+    expect(body).toEqual({ name: "Acme Studio", description: "Coffee for commuters" });
+    // The create schema's language default also applies to its partial PATCH
+    // schema; keep that known addition while still detecting stripped fields.
+    expect(brandUpdateSchema.parse(body)).toEqual({ ...body, contentLanguage: "en" });
+    expect(await screen.findByText("Coffee for commuters")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Acme Studio" })).toBeInTheDocument();
+  });
+});
+
 describe("BrandPage — the brand's voice", () => {
   const VOICE = "Dry and concrete, never an exclamation mark";
   const AUDIENCE = "Independent cafe owners who roast their own beans";
