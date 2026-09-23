@@ -10,6 +10,7 @@ import { HealthModule } from "./health/health.module";
 import { OrgModule } from "./org/org.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
+import { SourcesModule } from "./sources/sources.module";
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RunsModule } from "./runs/runs.module";
     OrgModule,
     AiCredentialsModule,
     RunsModule,
+    SourcesModule,
   ],
 })
 export class AppModule {}

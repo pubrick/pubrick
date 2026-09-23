@@ -16,6 +16,9 @@
     "@pubrick/integrations": "workspace:*",
     "@pubrick/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
+    "feedsmith": "^3.0.0",
+    "guarded-fetch": "^0.1.4",
+    "html-to-text": "^10.0.1",
     "pg-boss": "^12.28.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
@@ -24,6 +27,7 @@
   "devDependencies": {
     "@nestjs/testing": "^11.2.1",
     "@swc/core": "^1.16.1",
+    "@types/html-to-text": "^9.0.4",
     "@types/node": "^22.20.1",
     "ai": "^7.0.83",
     "tsup": "^8.5.1",

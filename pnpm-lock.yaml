@@ -187,6 +187,15 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.23.1)(kysely@0.29.5)(pg@8.23.0)
+      feedsmith:
+        specifier: ^3.0.0
+        version: 3.0.0
+      guarded-fetch:
+        specifier: ^0.1.4
+        version: 0.1.4
+      html-to-text:
+        specifier: ^10.0.1
+        version: 10.0.1
       pg-boss:
         specifier: ^12.28.0
         version: 12.28.0
@@ -206,6 +215,9 @@ importers:
       '@swc/core':
         specifier: ^1.16.1
         version: 1.16.1(@swc/helpers@0.5.23)
+      '@types/html-to-text':
+        specifier: ^9.0.4
+        version: 9.0.4
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
@@ -217,10 +229,10 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       unplugin-swc:
         specifier: ^1.5.11
-        version: 1.5.11(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26))
+        version: 1.5.11(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26))
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
   packages/ai:
     dependencies:
@@ -311,7 +323,7 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
 packages:
 
@@ -2041,6 +2053,11 @@ packages:
   '@schummar/icu-type-parser@1.21.5':
     resolution: {integrity: sha512-bXHSaW5jRTmke9Vd0h5P7BtWZG9Znqb8gSDxZnxaGSJnGwPLDPfS+3g0BKzeWqzgZPsIVZkM7m2tbo18cm5HBw==}
 
+  '@selderee/plugin-htmlparser2@0.12.0':
+    resolution: {integrity: sha512-oELmoyA6ML9jDRMV3kgcMQFKxUfBU0yFVn6yTctVaLT5ygXnxH52I3TZEgV9EhXJC68/uFvE5Daj1/25c0Xa/A==}
+    peerDependencies:
+      selderee: ~0.12.0
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -2439,6 +2456,9 @@ packages:
 
   '@types/html-escaper@3.0.4':
     resolution: {integrity: sha512-UKSaMPMXXKnq1jDj74seVikfdq5pWvoXcIgOUbwYzHuAEGiv8/juom1i/MsWBF8boFSI0uHQCSZauzr5OYnnJA==}
+
+  '@types/html-to-text@9.0.4':
+    resolution: {integrity: sha512-pUY3cKH/Nm2yYrEmDlPR1mR7yszjGx4DrwPjQ702C4/D5CwHuZTgZdIdwPkRbcuhs7BAh2L5rg3CL5cbRiGTCQ==}
 
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
@@ -2976,6 +2996,10 @@ packages:
   decimal.js@10.6.0:
     resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
 
+  deepmerge-ts@8.0.2:
+    resolution: {integrity: sha512-uqbvqLUMrc6p0MO+WBRtTxY55hmyh94WRwI5a++PZe54X+bfVh59FSN7uWCBCW1CCVjzjnrwzfI8zidE2obMMw==}
+    engines: {node: '>=16.9.0'}
+
   deepmerge@4.3.1:
     resolution: {integrity: sha512-3sUqbMEc77XqpdNO7FRyRog+eW3ph+GYCbj+rK+uYyRMuwsVy0rMiVtPn+QJlKFvWP/1PYpapqYn0Me2knFn+A==}
     engines: {node: '>=0.10.0'}
@@ -3010,6 +3034,19 @@ packages:
 
   dom-accessibility-api@0.6.3:
     resolution: {integrity: sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w==}
+
+  dom-serializer@2.0.0:
+    resolution: {integrity: sha512-wIkAryiqt/nV5EQKqQpo3SToSOV9J0DnbJqwK7Wv/Trc92zIAYZ4FlMu+JPFW1DfGFt81ZTCGgDEabffXeLyJg==}
+
+  domelementtype@2.3.0:
+    resolution: {integrity: sha512-OLETBj6w0OsagBwdXnPdN0cnMfF9opN69co+7ZrbfPGrdpPVNBUj02spi6B1N7wChLQiPn4CSH/zJvXw56gmHw==}
+
+  domhandler@5.0.3:
+    resolution: {integrity: sha512-cgwlv/1iFQiFnU96XXgROh8xTeetsnJiDsTc7TYCLFd9+/WNkIqPTxiM/8pSd8VIrhXGTf1Ny1q1hquVqDJB5w==}
+    engines: {node: '>= 4'}
+
+  domutils@3.2.2:
+    resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
 
   drizzle-kit@0.31.10:
     resolution: {integrity: sha512-7OZcmQUrdGI+DUNNsKBn1aW8qSoKuTH7d0mYgSP8bAzdFzKoovxEFnoGQp2dVs82EOJeYycqRtciopszwUf8bw==}
@@ -3127,6 +3164,14 @@ packages:
   enhanced-resolve@5.24.5:
     resolution: {integrity: sha512-L1l8TNvomm6UVW5B253AGxQagSQr+vGwhMlrrfRS2qmhx46AMpMVJKQYLvWYbysTMY8VoicOvzHzoHMbyzB+4A==}
     engines: {node: '>=10.13.0'}
+
+  entities@4.5.0:
+    resolution: {integrity: sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==}
+    engines: {node: '>=0.12'}
+
+  entities@7.0.1:
+    resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
+    engines: {node: '>=0.12'}
 
   entities@8.0.0:
     resolution: {integrity: sha512-zwfzJecQ/Uej6tusMqwAqU/6KL2XaB2VZ2Jg54Je6ahNBGNH6Ek6g3jjNCF0fG9EWQKGZNddNjU5F1ZQn/sBnA==}
@@ -3260,6 +3305,9 @@ packages:
     resolution: {integrity: sha512-jTynzYPWs9ALjro0GW8j7sv9y7cJBeOdD4Y88kVqYy/eyusIX3g+499JiTDIlD9Ge/unebx57T4Uzo6vpYvMtA==}
     engines: {node: '>=20', pnpm: '>=10'}
 
+  feedsmith@3.0.0:
+    resolution: {integrity: sha512-ePtwtkyWHAN0nkzSdOUJ6pTHdj5Zwh78vL3tmbEJOCXl5ixrdd3J+uve21rZstpn3odjS3Dh3j6hOFN4PTg9ag==}
+
   file-type@21.3.4:
     resolution: {integrity: sha512-Ievi/yy8DS3ygGvT47PjSfdFoX+2isQueoYP1cntFW1JLYAuS4GD7NUPGg4zv2iZfV52uDyk5w5Z0TdpRS6Q1g==}
     engines: {node: '>=20'}
@@ -3337,6 +3385,10 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
+  guarded-fetch@0.1.4:
+    resolution: {integrity: sha512-QSd8MHls7AFgSsC0Gk3nuFnLf7uNBpDmje4j/VEU8wqG2bKZeGJgMbClqlV73/YFtGp/HDIWlA37Q4pmifAR/Q==}
+    engines: {node: '>=20.19'}
+
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
     engines: {node: '>=8'}
@@ -3359,6 +3411,13 @@ packages:
 
   html-escaper@3.0.3:
     resolution: {integrity: sha512-RuMffC89BOWQoY0WKGpIhn5gX3iI54O6nRA0yC124NYVtzjmFWBIiFd8M0x+ZdX0P9R4lADg1mgP8C7PxGOWuQ==}
+
+  html-to-text@10.0.1:
+    resolution: {integrity: sha512-GiVhRI1BatGARSCmlXWNCjDT0cWrwBWoeduLoV0WSKAgaV/wa+hUWy5LiQLUs4UwiUrE52ZCMfBGiKD87TDPrg==}
+    engines: {node: '>=20.19.0'}
+
+  htmlparser2@10.1.0:
+    resolution: {integrity: sha512-VTZkM9GWRAtEpveh7MSF6SjjrpNVNNVJfFup7xTY3UpFtm67foy9HDVXneLtFVt4pMz5kZtgNcvCniNFb1hlEQ==}
 
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
@@ -3391,6 +3450,10 @@ packages:
   ipaddr.js@1.9.1:
     resolution: {integrity: sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==}
     engines: {node: '>= 0.10'}
+
+  ipaddr.js@2.2.0:
+    resolution: {integrity: sha512-Ag3wB2o37wslZS19hZqorUnrnzSkpOVy+IiiDEiTqNubEYpYuHWIf6K4psgN2ZWKExS4xhVCrRVfb/wfW8fWJA==}
+    engines: {node: '>= 10'}
 
   is-arrayish@0.2.1:
     resolution: {integrity: sha512-zz06S8t0ozoDXMG+ube26zeCTNXcKIPJZJi8hBrF4idCLms4CG9QtK7qBl1boi5ODzFpjswb5JPmHCbMpjaYzg==}
@@ -3485,6 +3548,9 @@ packages:
   kysely@0.29.5:
     resolution: {integrity: sha512-ooa+eSbBNPTo3MycPEuW5jdrxQdQwdtB3LC3h43FiXQbIry5tR0C5lDG7eealK0E4D7XjrnOP5DIUg/LyjRMYQ==}
     engines: {node: '>=22.0.0'}
+
+  leac@0.7.0:
+    resolution: {integrity: sha512-qMrZeyEekgdRQ9o6a4NAB2EQZrv827GJdn1vnapwSJ90hWRB4TzUSunvacPkxQ2TnNqHNI1/zSt0hlo0crG8Jw==}
 
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
@@ -3873,6 +3939,9 @@ packages:
   parse5@8.0.1:
     resolution: {integrity: sha512-z1e/HMG90obSGeidlli3hj7cbocou0/wa5HacvI3ASx34PecNjNQeaHNo5WIZpWofN9kgkqV1q5YvXe3F0FoPw==}
 
+  parseley@0.13.1:
+    resolution: {integrity: sha512-uNBJZzmb60l6p6VWLTmevizNAGnE0xoSf1n0B4q3ntegDNzcS68NRCcBDZTcyXHxt2XhBChsCuqj4M+nChvE/A==}
+
   parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
@@ -3894,6 +3963,9 @@ packages:
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
+
+  peberminta@0.10.0:
+    resolution: {integrity: sha512-80B2AsU+I4Qdb0ZAPSfe9UwvGzwkM37IKIFEvdS3D/3Ndgv2bsuJ0bfG1+iEYO+l7Gfd4EUJmuRyq7efLgRMzQ==}
 
   pg-boss@12.28.0:
     resolution: {integrity: sha512-7OaS/sYcQ8jcA9fSSlcdJc3Z9GD+/7GtQD3TlfweKpJQ/UnSbZYQHs1TECXMRY2sZo8ah4khQu9+6Z9v86z1dg==}
@@ -4118,6 +4190,9 @@ packages:
   schema-utils@4.3.3:
     resolution: {integrity: sha512-eflK8wEtyOE6+hsaRVPxvUKYCpRgzLqDTb8krvAsRIwOGlHoSgYLgBXoubGgLd2fT41/OUYdb48v4k4WWHQurA==}
     engines: {node: '>= 10.13.0'}
+
+  selderee@0.12.0:
+    resolution: {integrity: sha512-b1YMh3+DHZp59DLna3qVwQ5iOla/nrI6mLBNW02XxU77M3046Df6VLkoaJyFz20VsGIG5kkp+FK0kg4K4HnUFw==}
 
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
@@ -5919,6 +5994,12 @@ snapshots:
 
   '@schummar/icu-type-parser@1.21.5': {}
 
+  '@selderee/plugin-htmlparser2@0.12.0(selderee@0.12.0)':
+    dependencies:
+      domelementtype: 2.3.0
+      domhandler: 5.0.3
+      selderee: 0.12.0
+
   '@standard-schema/spec@1.1.0': {}
 
   '@swc/core-darwin-arm64@1.15.47':
@@ -6208,6 +6289,8 @@ snapshots:
   '@types/estree@1.0.9': {}
 
   '@types/html-escaper@3.0.4': {}
+
+  '@types/html-to-text@9.0.4': {}
 
   '@types/json-schema@7.0.15': {}
 
@@ -6759,6 +6842,8 @@ snapshots:
 
   decimal.js@10.6.0: {}
 
+  deepmerge-ts@8.0.2: {}
+
   deepmerge@4.3.1: {}
 
   defaults@1.0.4:
@@ -6783,6 +6868,24 @@ snapshots:
   dom-accessibility-api@0.5.16: {}
 
   dom-accessibility-api@0.6.3: {}
+
+  dom-serializer@2.0.0:
+    dependencies:
+      domelementtype: 2.3.0
+      domhandler: 5.0.3
+      entities: 4.5.0
+
+  domelementtype@2.3.0: {}
+
+  domhandler@5.0.3:
+    dependencies:
+      domelementtype: 2.3.0
+
+  domutils@3.2.2:
+    dependencies:
+      dom-serializer: 2.0.0
+      domelementtype: 2.3.0
+      domhandler: 5.0.3
 
   drizzle-kit@0.31.10:
     dependencies:
@@ -6815,6 +6918,10 @@ snapshots:
     dependencies:
       graceful-fs: 4.2.11
       tapable: 2.3.3
+
+  entities@4.5.0: {}
+
+  entities@7.0.1: {}
 
   entities@8.0.0: {}
 
@@ -7047,6 +7154,11 @@ snapshots:
     dependencies:
       xml-js: 1.6.11
 
+  feedsmith@3.0.0:
+    dependencies:
+      entities: 7.0.1
+      fast-xml-parser: 5.11.1
+
   file-type@21.3.4:
     dependencies:
       '@tokenizer/inflate': 0.4.1
@@ -7157,6 +7269,11 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
+  guarded-fetch@0.1.4:
+    dependencies:
+      ipaddr.js: 2.2.0
+      undici: 7.29.0
+
   has-flag@4.0.0: {}
 
   has-symbols@1.1.0: {}
@@ -7176,6 +7293,21 @@ snapshots:
       - '@noble/hashes'
 
   html-escaper@3.0.3: {}
+
+  html-to-text@10.0.1:
+    dependencies:
+      '@selderee/plugin-htmlparser2': 0.12.0(selderee@0.12.0)
+      deepmerge-ts: 8.0.2
+      dom-serializer: 2.0.0
+      htmlparser2: 10.1.0
+      selderee: 0.12.0
+
+  htmlparser2@10.1.0:
+    dependencies:
+      domelementtype: 2.3.0
+      domhandler: 5.0.3
+      domutils: 3.2.2
+      entities: 7.0.1
 
   http-errors@2.0.1:
     dependencies:
@@ -7210,6 +7342,8 @@ snapshots:
       '@formatjs/icu-messageformat-parser': 3.5.17
 
   ipaddr.js@1.9.1: {}
+
+  ipaddr.js@2.2.0: {}
 
   is-arrayish@0.2.1: {}
 
@@ -7296,6 +7430,8 @@ snapshots:
       graceful-fs: 4.2.11
 
   kysely@0.29.5: {}
+
+  leac@0.7.0: {}
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -7635,6 +7771,11 @@ snapshots:
     dependencies:
       entities: 8.0.0
 
+  parseley@0.13.1:
+    dependencies:
+      leac: 0.7.0
+      peberminta: 0.10.0
+
   parseurl@1.3.3: {}
 
   path-expression-matcher@1.6.2: {}
@@ -7649,6 +7790,8 @@ snapshots:
   path-type@4.0.0: {}
 
   pathe@2.0.3: {}
+
+  peberminta@0.10.0: {}
 
   pg-boss@12.28.0:
     dependencies:
@@ -7903,6 +8046,10 @@ snapshots:
       ajv-formats: 2.1.1(ajv@8.20.0)
       ajv-keywords: 5.1.0(ajv@8.20.0)
 
+  selderee@0.12.0:
+    dependencies:
+      parseley: 0.13.1
+
   semver@7.8.5: {}
 
   send@1.2.1:
@@ -8147,16 +8294,16 @@ snapshots:
 
   tapable@2.3.3: {}
 
-  terser-webpack-plugin@5.6.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)):
+  terser-webpack-plugin@5.6.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.3
       terser: 5.50.0
-      webpack: 5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)
+      webpack: 5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)
     optionalDependencies:
       '@swc/core': 1.16.1(@swc/helpers@0.5.23)
-      esbuild: 0.28.2
+      esbuild: 0.27.7
       postcss: 8.5.26
     optional: true
 
@@ -8330,12 +8477,12 @@ snapshots:
 
   unpipe@1.0.0: {}
 
-  unplugin-swc@1.5.11(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)):
+  unplugin-swc@1.5.11(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)):
     dependencies:
       '@rollup/pluginutils': 5.4.0(rollup@4.62.5)
       '@swc/core': 1.16.1(@swc/helpers@0.5.23)
       load-tsconfig: 0.2.5
-      unplugin: 3.3.0(esbuild@0.28.2)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26))
+      unplugin: 3.3.0(esbuild@0.27.7)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26))
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@rspack/core'
@@ -8364,17 +8511,17 @@ snapshots:
       - vite
       - webpack
 
-  unplugin@3.3.0(esbuild@0.28.2)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)):
+  unplugin@3.3.0(esbuild@0.27.7)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.7
       webpack-virtual-modules: 0.6.2
     optionalDependencies:
-      esbuild: 0.28.2
+      esbuild: 0.27.7
       rolldown: 1.2.5
       rollup: 4.62.5
-      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)
-      webpack: 5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)
+      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)
+      webpack: 5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)
 
   unplugin@3.3.0(esbuild@0.28.2)(rolldown@1.2.5)(rollup@4.62.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)):
     dependencies:
@@ -8571,6 +8718,47 @@ snapshots:
 
   webpack-virtual-modules@0.6.2: {}
 
+  webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26):
+    dependencies:
+      '@types/eslint-scope': 3.7.7
+      '@types/estree': 1.0.9
+      '@types/json-schema': 7.0.15
+      '@webassemblyjs/ast': 1.14.1
+      '@webassemblyjs/wasm-edit': 1.14.1
+      '@webassemblyjs/wasm-parser': 1.14.1
+      acorn: 8.18.0
+      acorn-import-phases: 1.0.4(acorn@8.18.0)
+      browserslist: 4.28.8
+      chrome-trace-event: 1.0.4
+      enhanced-resolve: 5.24.5
+      es-module-lexer: 2.3.2
+      eslint-scope: 5.1.1
+      events: 3.3.0
+      glob-to-regexp: 0.4.1
+      graceful-fs: 4.2.11
+      loader-runner: 4.3.2
+      mime-db: 1.54.0
+      neo-async: 2.6.2
+      schema-utils: 4.3.3
+      tapable: 2.3.3
+      terser-webpack-plugin: 5.6.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26)(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.27.7)(postcss@8.5.26))
+      watchpack: 2.5.2
+      webpack-sources: 3.5.1
+    transitivePeerDependencies:
+      - '@minify-html/node'
+      - '@swc/core'
+      - '@swc/css'
+      - '@swc/html'
+      - clean-css
+      - cssnano
+      - csso
+      - esbuild
+      - html-minifier-terser
+      - lightningcss
+      - postcss
+      - uglify-js
+    optional: true
+
   webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2):
     dependencies:
       '@types/eslint-scope': 3.7.7
@@ -8610,47 +8798,6 @@ snapshots:
       - lightningcss
       - postcss
       - uglify-js
-
-  webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26):
-    dependencies:
-      '@types/eslint-scope': 3.7.7
-      '@types/estree': 1.0.9
-      '@types/json-schema': 7.0.15
-      '@webassemblyjs/ast': 1.14.1
-      '@webassemblyjs/wasm-edit': 1.14.1
-      '@webassemblyjs/wasm-parser': 1.14.1
-      acorn: 8.18.0
-      acorn-import-phases: 1.0.4(acorn@8.18.0)
-      browserslist: 4.28.8
-      chrome-trace-event: 1.0.4
-      enhanced-resolve: 5.24.5
-      es-module-lexer: 2.3.2
-      eslint-scope: 5.1.1
-      events: 3.3.0
-      glob-to-regexp: 0.4.1
-      graceful-fs: 4.2.11
-      loader-runner: 4.3.2
-      mime-db: 1.54.0
-      neo-async: 2.6.2
-      schema-utils: 4.3.3
-      tapable: 2.3.3
-      terser-webpack-plugin: 5.6.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26)(webpack@5.106.2(@swc/core@1.16.1(@swc/helpers@0.5.23))(esbuild@0.28.2)(postcss@8.5.26))
-      watchpack: 2.5.2
-      webpack-sources: 3.5.1
-    transitivePeerDependencies:
-      - '@minify-html/node'
-      - '@swc/core'
-      - '@swc/css'
-      - '@swc/html'
-      - clean-css
-      - cssnano
-      - csso
-      - esbuild
-      - html-minifier-terser
-      - lightningcss
-      - postcss
-      - uglify-js
-    optional: true
 
   whatwg-mimetype@5.0.0: {}
 

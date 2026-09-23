@@ -27,6 +27,8 @@ type ListEndpoint = {
   /** Pulls the identifying value out of one row of the response. */
   identify: (row: Record<string, unknown>) => string;
   seed: (agent: request.Agent) => Promise<Seeded>;
+  /** A foreign brand id is rejected before listing, rather than returning an empty list. */
+  foreignBrandNotFound?: boolean;
 };
 
 type Seeded = {
@@ -112,6 +114,26 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
       // Both branches. The brand-filtered one is the URL the channels screen
       // actually loads, and it carries an id the OTHER org can guess at.
       return { id: channelId, paths: ["/api/channels", `/api/channels?brandId=${brandId}`] };
+    },
+  },
+  {
+    controller: "sources",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Newsroom" }).expect(201);
+      const source = await agent
+        .post("/api/sources")
+        .send({
+          brandId: brand.body.id,
+          name: "Journal",
+          url: "https://example.com/feed.xml",
+        })
+        .expect(201);
+      return {
+        id: source.body.id as string,
+        paths: [`/api/sources?brandId=${brand.body.id}`],
+      };
     },
   },
   {
@@ -220,8 +242,12 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // stranger asking with its OWN parameters would be filtered correctly by
       // the parameter alone and prove nothing.
       for (const path of theirs.paths) {
-        const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
-        expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
+        if (endpoint.foreignBrandNotFound) {
+          await stranger.get(path).expect(404);
+        } else {
+          const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
+          expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
+        }
       }
     });
   }

@@ -9,14 +9,14 @@ documents when they disagree.
 | Reference area | Pubrick today | Next meaningful gap |
 |---|---|---|
 | Brands | Present | Brand onboarding wizard |
-| Channels | Present as configuration | Publishing adapters beyond Telegram |
-| News monitoring | Not ported | RSS ingestion and source management, then Telegram sources and comments |
+| Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
+| News monitoring | Brand-scoped RSS, Atom, RDF and JSON Feed sources, polling, article list and draft start | Telegram sources, relevance ranking and topic review |
 | Topics bank | Not ported | Reviewed topic queue from monitored sources |
 | Multi-agent generation | Five-step engine and run receipts present | Content-type pipelines, repurposing, date context and link policy |
 | Image generation | Not ported | Media storage, generation and per-image regeneration |
-| Review queue | Manual edits, approval, refine and provenance present; version history is in PR #18 and channel re-adaptation follows it | Comments, per-platform previews, undo and richer revisions |
+| Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
 | Calendar | Scheduled publishing present | Calendar view, slots and planned generation |
-| Publishing | Telegram delivery, retry and outcome reconciliation present | VK, MAX, Dzen and VC.ru adapters |
+| Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
 | Analytics | Usage and cost ledger present | Channel metrics, content performance and feedback |
 | Comment analysis | Not ported | Collection, analysis and feedback signals |
 | Knowledge base / RAG | Not ported | Brand documents, retrieval and citation in generation |
@@ -28,9 +28,10 @@ documents when they disagree.
 | Additional reference utilities | Partial | Uploads, link sanitization and cross-channel media propagation |
 
 The nearest dependency chain follows the generation design's shipping order:
-finish the editor workflow, then watched sources (RSS first, Telegram next),
-deduplication, relevance and the topics bank. A topic should become another
-input to the existing generation engine, not a second generation path.
+add Telegram sources, relevance review and the topics bank on top of the RSS
+source inventory. A topic should become another input to the existing
+generation engine, not a second generation path. The public RSS output is
+available for syndication, but it does not assert that Dzen imported a post.
 
 Every ported slice should be usable on its own, tenant-scoped, metered when it
 calls a model, translated in all four locales, tested locally, and described in

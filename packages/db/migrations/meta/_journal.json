@@ -162,6 +162,13 @@
       "when": 1790161643042,
       "tag": "0023_red_stick",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790161977267,
+      "tag": "0024_youthful_santa_claus",
+      "breakpoints": true
     }
   ]
 }

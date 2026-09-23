@@ -4,8 +4,18 @@ import { GenerateService } from "./generate/generate.service";
 import { PublishRepository } from "./publish/publish.repository";
 import { PublishService } from "./publish/publish.service";
 import { QueueService } from "./queue.service";
+import { RssRepository } from "./rss/rss.repository";
+import { RssService } from "./rss/rss.service";
 
 @Module({
-  providers: [QueueService, PublishRepository, PublishService, GenerateRepository, GenerateService],
+  providers: [
+    QueueService,
+    PublishRepository,
+    PublishService,
+    GenerateRepository,
+    GenerateService,
+    RssRepository,
+    RssService,
+  ],
 })
 export class WorkerModule {}

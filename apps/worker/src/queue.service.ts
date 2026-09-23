@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   GENERATE_DLQ,
   GENERATE_QUEUE,
@@ -9,10 +9,15 @@ import {
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
   type PublishJob,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
+  type RssPollJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
+import { RssService } from "./rss/rss.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
@@ -97,6 +102,7 @@ export class QueueService {
   constructor(
     private readonly publish: PublishService,
     private readonly generate: GenerateService,
+    @Optional() private readonly rss?: RssService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -114,6 +120,21 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    if (this.rss && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+      await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+      await boss.work<RssPollJob>(
+        RSS_POLL_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.rss?.handle(job.data);
+        },
+      );
+      await boss.createQueue(RSS_SCAN_QUEUE);
+      await boss.schedule(RSS_SCAN_QUEUE, "*/15 * * * *");
+      await boss.work(RSS_SCAN_QUEUE, { batchSize: 1 }, async () => this.rss?.scan(boss));
+    }
 
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
     // Names and options come from @pubrick/shared, the single definition shared with

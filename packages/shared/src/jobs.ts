@@ -20,6 +20,24 @@
 /** Queue the api enqueues to and the worker consumes. */
 export const PUBLISH_QUEUE = "publish";
 
+/** Brand-scoped RSS/Atom source poll. */
+export const RSS_POLL_QUEUE = "rss-poll";
+export const RSS_SCAN_QUEUE = "rss-scan";
+export type RssPollJob = { orgId: string; sourceId: string };
+export const RSS_POLL_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 120,
+} as const;
+export const RSS_POLL_MIN_GAP_SECONDS = 300;
+export function rssPollJobOptions(sourceId: string) {
+  return {
+    singletonKey: sourceId,
+    singletonSeconds: RSS_POLL_MIN_GAP_SECONDS,
+    group: { id: sourceId },
+  } as const;
+}
+
 /** Dead-letter queue for publish jobs whose retries were exhausted. */
 export const PUBLISH_DLQ = "publish-dlq";
 

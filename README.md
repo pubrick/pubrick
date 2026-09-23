@@ -36,9 +36,11 @@ than checking them, and one adapter per channel — produce a draft with
 per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
-provider had counted tokens. Not yet: publishers for the other four platforms
-(the channel form names them and refuses to connect one), a per-brand knowledge
-base, refining text inside the editor, and drafting from watched sources.
+provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
+brand; an article's title and summary can start a draft. See
+[watched sources](docs/watched-sources.md) for the exact limits. Not yet: a
+per-brand knowledge base, in-editor AI refinement, and publishers for the
+remaining platforms (the channel form names them and refuses to connect one).
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 

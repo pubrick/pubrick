@@ -91,10 +91,10 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * was generated from could only ever agree with itself.
  *
  * Twelve of them are the publishing path, converted by 0014. Five more were
- * born zoned: `refine_proposals` (0016), `publications.asserted_at` (0017),
- * `adaptation_proposals` (0021), and the two public feed timestamps (0023).
- * None should inherit the "naive means UTC" convention the conversion existed
- * to end. They are deliberately NOT in `UNZONED_TABLES`.
+ * born zoned in 0016, 0017, 0021, and 0023 for proposals, a publication
+ * assertion, and public feed entries. The news source and item timestamps
+ * arrive in 0024: publication dates carry an offset, and check times are
+ * instants. None belongs in `UNZONED_TABLES`, the list deliberately left naive.
  */
 const ZONED_COLUMNS = [
   "adaptation_proposals.created_at",
@@ -111,6 +111,11 @@ const ZONED_COLUMNS = [
   "content_items.updated_at",
   "content_versions.created_at",
   "feed_entries.published_at",
+  "news_items.created_at",
+  "news_items.published_at",
+  "news_sources.created_at",
+  "news_sources.last_checked_at",
+  "news_sources.updated_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
