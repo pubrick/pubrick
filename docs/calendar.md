@@ -1,8 +1,9 @@
 # Planned generation calendar
 
 The calendar is a brand-scoped plan for **draft generation**. A slot contains a
-future local date and time (stored as an absolute timestamp), a brief, one or
-more of the brand's channels, and optional team notes. The month grid shows the
+future local date and time (stored as an absolute timestamp), a custom brief or
+an approved topic from the same brand, one or more of the brand's channels, and
+optional team notes. The month grid shows the
 plan; the selected day's list allows edits or removal until generation starts.
 On narrow screens a date picker replaces the seven-column grid so every date
 target remains large enough to tap. The brand page links to its calendar.
@@ -18,13 +19,29 @@ sets an explicit error on the slot; editing it with a valid channel clears the
 error. A database or queue outage rolls back the transaction and the next tick
 can retry.
 
+The topic bank's **Schedule** action opens the calendar with that approved
+topic selected. The calendar form can also pick any approved topic. The API
+reads and locks the topic in the slot transaction, checks its organization,
+brand, and approval, and stores its title, description, source URL, and revision
+timestamp alongside the link. It derives the brief from that snapshot; a client
+cannot override it with a second brief. Before creating a run or enqueueing a
+job, the due worker locks the topic and checks that it is still approved and
+matches the complete snapshot. An archived, edited, or missing topic sets
+`topic_changed` on the slot and spends no model tokens. An editor can reselect
+an approved topic to refresh the snapshot, or explicitly unlink it and write a
+custom brief. Editing a linked slot's brief without unlinking is refused.
+
+Deleting a topic with any linked calendar slot is refused, including after a
+slot starts. This preserves the original approval trail; remove unstarted
+slots or keep the topic as an archive. A started slot remains immutable.
+
 The generated draft follows the existing human review gate. Scheduling a slot
 does not approve or publish content. Operators can open the run receipt from
 the calendar after it starts. A slot already linked to a run is immutable; the
 run's cancellation and review controls remain on the run and content screens.
 
 The scanner processes up to 100 due slots per minute. Future work can add
-topic-bank links, richer recurring plans, and a separate explicit opt-in
+richer recurring plans and a separate explicit opt-in
 schedule for publication.
 
 ## Memorable dates
@@ -50,9 +67,12 @@ primary Add action still plans a generation slot.
 
 - `GET /api/calendar/slots?brandId=<uuid>&from=<ISO>&to=<ISO>`: up to 93 days,
   half-open interval.
-- `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `brief`, `channelIds`,
-  optional `notes`.
+- `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `channelIds`, optional
+  `notes`, and either `brief` or an approved `topicId` in that brand. The API
+  rejects a request containing both `topicId` and `brief`.
 - `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
+  `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
+  snapshots the currently approved topic again.
 - `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
 
 Every route requires an active organization. The repository scopes all reads

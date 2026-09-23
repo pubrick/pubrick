@@ -1,5 +1,6 @@
 "use client";
 
+import type { TopicDto } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -10,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -20,6 +22,8 @@ type Slot = {
   id: string;
   scheduledAt: string;
   brief: string;
+  topicId: string | null;
+  topicTitle: string | null;
   channelIds: string[];
   notes: string | null;
   runId: string | null;
@@ -50,6 +54,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [topics, setTopics] = useState<TopicDto[]>([]);
+  const [selectedTopicId, setSelectedTopicId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,6 +66,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [editing, setEditing] = useState<Slot | null>(null);
   const [removing, setRemoving] = useState<Slot | null>(null);
   const loadSequence = useRef(0);
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("topicId");
+    if (requested) setSelectedTopicId(requested);
+  }, []);
 
   const describe = useCallback(
     (err: unknown) => {
@@ -78,15 +89,21 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     const to = new Date(month.getFullYear(), month.getMonth() + 1, 1).toISOString();
     setError(null);
     try {
-      const [slotRows, channelRows] = await Promise.all([
+      const [slotRows, channelRows, topicRows] = await Promise.all([
         api<Slot[]>(
           `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
         ),
         api<Channel[]>(`/api/channels?brandId=${brandId}`),
+        api<TopicDto[]>(`/api/topics?brandId=${brandId}`).catch(() => []),
       ]);
       if (sequence !== loadSequence.current) return;
       setSlots(slotRows);
       setChannels(channelRows);
+      const approved = topicRows.filter((topic) => topic.status === "approved");
+      setTopics(approved);
+      setSelectedTopicId((current) =>
+        current && !approved.some((topic) => topic.id === current) ? "" : current,
+      );
     } catch (err) {
       if (sequence !== loadSequence.current) return;
       setSlots(null);
@@ -128,12 +145,13 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         body: JSON.stringify({
           brandId,
           scheduledAt: new Date(dateInput).toISOString(),
-          brief,
+          ...(selectedTopicId ? { topicId: selectedTopicId } : { brief }),
           channelIds: selectedChannels,
           notes: notes.trim() || null,
         }),
       });
       setBrief("");
+      setSelectedTopicId("");
       setNotes("");
       const nextDate = new Date(dateInput);
       setMonth(monthStart(nextDate));
@@ -154,6 +172,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setEditing(slot);
     setDateInput(localInput(new Date(slot.scheduledAt)));
     setBrief(slot.brief);
+    setSelectedTopicId(slot.topicId ?? "");
     setNotes(slot.notes ?? "");
     setSelectedChannels(slot.channelIds);
     setFormError(null);
@@ -172,7 +191,13 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         method: "PATCH",
         body: JSON.stringify({
           scheduledAt: new Date(dateInput).toISOString(),
-          brief,
+          ...(selectedTopicId
+            ? selectedTopicId === editing.topicId && editing.errorCode !== "topic_changed"
+              ? {}
+              : { topicId: selectedTopicId }
+            : editing.topicId
+              ? { topicId: null, brief }
+              : { brief }),
           channelIds: selectedChannels,
           notes: notes.trim() || null,
         }),
@@ -230,15 +255,34 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         onChange={(e) => setDateInput(e.target.value)}
         required
       />
-      <Textarea
-        id={isEdit ? "calendar-edit-brief" : "calendar-brief"}
-        label={t("brief")}
-        value={brief}
-        onChange={(e) => setBrief(e.target.value)}
-        maxLength={2000}
-        showCount
-        required
-      />
+      <Select
+        label={t("topic")}
+        value={selectedTopicId}
+        onChange={(e) => setSelectedTopicId(e.target.value)}
+      >
+        <option value="">{t("customBrief")}</option>
+        {isEdit && editing?.topicId && !topics.some((topic) => topic.id === editing.topicId) && (
+          <option value={editing.topicId}>{editing.topicTitle}</option>
+        )}
+        {topics.map((topic) => (
+          <option key={topic.id} value={topic.id}>
+            {topic.title}
+          </option>
+        ))}
+      </Select>
+      {selectedTopicId ? (
+        <p className="text-sm text-fg-secondary">{t("topicHint")}</p>
+      ) : (
+        <Textarea
+          id={isEdit ? "calendar-edit-brief" : "calendar-brief"}
+          label={t("brief")}
+          value={brief}
+          onChange={(e) => setBrief(e.target.value)}
+          maxLength={2000}
+          showCount
+          required
+        />
+      )}
       <fieldset className="rounded-card border border-border p-3">
         <legend className="px-1 text-sm font-medium text-fg">{t("channels")}</legend>
         <div className="flex flex-wrap gap-3">
@@ -389,6 +433,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-medium text-fg">{slot.brief}</p>
+                    {slot.topicId && (
+                      <p className="mt-1 text-xs text-fg-secondary">{t("linkedTopic")}</p>
+                    )}
                     <p className="mt-1 text-sm text-fg-secondary">
                       {new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(
                         new Date(slot.scheduledAt),
@@ -410,7 +457,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                       <p role="alert" className="mt-2 text-sm text-danger">
                         {slot.errorCode === "channels_missing"
                           ? t("channelsMissing")
-                          : t("invalidInput")}
+                          : slot.errorCode === "topic_changed"
+                            ? t("topicChanged")
+                            : t("invalidInput")}
                       </p>
                     )}
                   </div>

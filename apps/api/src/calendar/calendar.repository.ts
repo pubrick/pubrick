@@ -10,6 +10,12 @@ const SLOT_COLUMNS = {
   brandId: schema.calendarSlots.brandId,
   scheduledAt: schema.calendarSlots.scheduledAt,
   brief: schema.calendarSlots.brief,
+  topicId: schema.calendarSlots.topicId,
+  topicTitle: schema.calendarSlots.topicTitle,
+  topicDescription: schema.calendarSlots.topicDescription,
+  topicSourceUrl: schema.calendarSlots.topicSourceUrl,
+  topicUpdatedAt: schema.calendarSlots.topicUpdatedAt,
+  topicRevision: schema.calendarSlots.topicRevision,
   channelIds: schema.calendarSlots.channelIds,
   notes: schema.calendarSlots.notes,
   runId: schema.calendarSlots.runId,
@@ -61,18 +67,53 @@ export class CalendarRepository {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
     await this.requireChannels(orgId, data.brandId, data.channelIds);
-    const rows = await db
-      .insert(schema.calendarSlots)
-      .values({
-        orgId,
-        brandId: data.brandId,
-        scheduledAt: new Date(data.scheduledAt),
-        brief: data.brief,
-        channelIds: data.channelIds,
-        notes: data.notes ?? null,
-      })
-      .returning(SLOT_COLUMNS);
-    return rows[0];
+    if (data.topicId && data.brief !== undefined)
+      throw badRequest("invalid_request", "A linked topic supplies its own brief");
+    return db.transaction(async (tx) => {
+      const [topic] = data.topicId
+        ? await tx
+            .select({
+              title: schema.topics.title,
+              description: schema.topics.description,
+              sourceUrl: schema.topics.sourceUrl,
+              status: schema.topics.status,
+              updatedAt: schema.topics.updatedAt,
+              revision: schema.topics.revision,
+            })
+            .from(schema.topics)
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, data.brandId),
+                eq(schema.topics.id, data.topicId),
+              ),
+            )
+            .for("share")
+        : [];
+      if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
+      if (topic && topic.status !== "approved")
+        throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      const brief = topic ? `${topic.title}\n\n${topic.description}`.trim() : data.brief;
+      if (!brief) throw badRequest("invalid_request", "A brief is required");
+      const [slot] = await tx
+        .insert(schema.calendarSlots)
+        .values({
+          orgId,
+          brandId: data.brandId,
+          scheduledAt: new Date(data.scheduledAt),
+          brief,
+          topicId: data.topicId ?? null,
+          topicTitle: topic?.title ?? null,
+          topicDescription: topic?.description ?? null,
+          topicSourceUrl: topic?.sourceUrl ?? null,
+          topicUpdatedAt: topic?.updatedAt ?? null,
+          topicRevision: topic?.revision ?? null,
+          channelIds: data.channelIds,
+          notes: data.notes ?? null,
+        })
+        .returning(SLOT_COLUMNS);
+      return slot;
+    });
   }
 
   async update(orgId: string, brandId: string, id: string, data: CalendarSlotUpdate) {
@@ -80,38 +121,68 @@ export class CalendarRepository {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
     if (data.channelIds) await this.requireChannels(orgId, brandId, data.channelIds);
-    // The run, once created, is an immutable spend record; editing the slot cannot move it.
-    const rows = await db
-      .update(schema.calendarSlots)
-      .set({
-        ...data,
-        scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined,
-        errorCode: null,
-        retryAfter: null,
-      })
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-          isNull(schema.calendarSlots.runId),
-        ),
-      )
-      .returning(SLOT_COLUMNS);
-    if (rows[0]) return rows[0];
-    const existing = await db
-      .select({ id: schema.calendarSlots.id })
-      .from(schema.calendarSlots)
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-        ),
-      )
-      .limit(1);
-    if (!existing[0]) throw notFound("calendar_slot_not_found", "Slot not found");
-    throw conflict("calendar_slot_started", "Generation has already started for this slot");
+    return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ topicId: schema.calendarSlots.topicId, runId: schema.calendarSlots.runId })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            eq(schema.calendarSlots.id, id),
+          ),
+        )
+        .for("update");
+      if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
+      if (existing.runId)
+        throw conflict("calendar_slot_started", "Generation has already started for this slot");
+      if (data.brief !== undefined && existing.topicId && data.topicId === undefined)
+        throw conflict("calendar_topic_linked", "Unlink the topic to write a custom brief");
+      if (data.topicId && data.brief !== undefined)
+        throw badRequest("invalid_request", "A linked topic supplies its own brief");
+      const [topic] = data.topicId
+        ? await tx
+            .select({
+              title: schema.topics.title,
+              description: schema.topics.description,
+              sourceUrl: schema.topics.sourceUrl,
+              status: schema.topics.status,
+              updatedAt: schema.topics.updatedAt,
+              revision: schema.topics.revision,
+            })
+            .from(schema.topics)
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.id, data.topicId),
+              ),
+            )
+            .for("share")
+        : [];
+      if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
+      if (topic && topic.status !== "approved")
+        throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      const [updated] = await tx
+        .update(schema.calendarSlots)
+        .set({
+          scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined,
+          brief: topic ? `${topic.title}\n\n${topic.description}`.trim() : data.brief,
+          topicId: data.topicId,
+          topicTitle: data.topicId === null ? null : topic?.title,
+          topicDescription: data.topicId === null ? null : topic?.description,
+          topicSourceUrl: data.topicId === null ? null : topic?.sourceUrl,
+          topicUpdatedAt: data.topicId === null ? null : topic?.updatedAt,
+          topicRevision: data.topicId === null ? null : topic?.revision,
+          channelIds: data.channelIds,
+          notes: data.notes,
+          errorCode: null,
+          retryAfter: null,
+        })
+        .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, id)))
+        .returning(SLOT_COLUMNS);
+      return updated;
+    });
   }
 
   async delete(orgId: string, brandId: string, id: string) {

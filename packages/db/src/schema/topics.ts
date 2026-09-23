@@ -22,6 +22,7 @@ export const topics = pgTable(
     status: text("status", { enum: TOPIC_STATUSES }).notNull().default("idea"),
     origin: text("origin", { enum: TOPIC_ORIGINS }).notNull().default("manual"),
     suggestionKey: text("suggestion_key"),
+    revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -7,7 +7,7 @@ import {
   type TopicRun,
   type TopicUpdate,
 } from "@pubrick/shared";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
@@ -220,6 +220,7 @@ export class TopicsRepository {
         ...data,
         status: resetsApproval ? "idea" : data.status,
         updatedAt: new Date(),
+        revision: sql`${schema.topics.revision} + 1`,
       })
       .where(
         and(
@@ -234,18 +235,38 @@ export class TopicsRepository {
   }
 
   async delete(orgId: string, brandId: string, id: string) {
-    const rows = await db
-      .delete(schema.topics)
-      .where(
-        and(
-          eq(schema.topics.orgId, orgId),
-          eq(schema.topics.brandId, brandId),
-          eq(schema.topics.id, id),
-        ),
-      )
-      .returning({ id: schema.topics.id });
-    if (!rows[0]) throw notFound("topic_not_found", "Topic not found");
-    return { ok: true };
+    return db.transaction(async (tx) => {
+      const [topic] = await tx
+        .select({ id: schema.topics.id })
+        .from(schema.topics)
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.id, id),
+          ),
+        )
+        .for("update");
+      if (!topic) throw notFound("topic_not_found", "Topic not found");
+      const [linked] = await tx
+        .select({ id: schema.calendarSlots.id })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            eq(schema.calendarSlots.topicId, id),
+          ),
+        )
+        .limit(1);
+      if (linked)
+        throw conflict(
+          "topic_has_calendar_slots",
+          "Remove planned slots before deleting this topic",
+        );
+      await tx.delete(schema.topics).where(eq(schema.topics.id, id));
+      return { ok: true };
+    });
   }
 
   async feedback(orgId: string, brandId: string, newsItemId: string, data: NewsFeedback) {
