@@ -99,6 +99,28 @@ function justAfter(createdAt: string): string {
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
   {
+    controller: "calendar/slots",
+    identify: id,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const slot = await agent
+        .post("/api/calendar/slots")
+        .send({
+          brandId,
+          scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+          brief: "Our launch",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      const from = encodeURIComponent(new Date().toISOString());
+      const to = encodeURIComponent(new Date(Date.now() + 3 * 86_400_000).toISOString());
+      return {
+        id: slot.body.id as string,
+        paths: [`/api/calendar/slots?brandId=${brandId}&from=${from}&to=${to}`],
+      };
+    },
+  },
+  {
     controller: "brands",
     identify: id,
     seed: async (agent) => {

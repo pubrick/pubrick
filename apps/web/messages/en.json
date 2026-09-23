@@ -102,7 +102,8 @@
     "invalidArticle": "This article cannot be used as a source. Open it and paste its text in the compose screen.",
     "selectChannels": "Choose the channels for this draft.",
     "noChannels": "Add a channel to this brand before generating.",
-    "generate": "Generate"
+    "generate": "Generate",
+    "calendarLink": "Open content calendar"
   },
   "Channels": {
     "title": "Channels",
@@ -537,6 +538,41 @@
     "adaptation_pinned_manual_ready": "This post is ready for manual publishing. Reject it before editing.",
     "manual_schedule_unsupported": "VC.ru posts cannot be scheduled from Pubrick. Approve them for manual publishing instead.",
     "manual_publication_pending": "This post is ready for you to publish manually on VC.ru.",
-    "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL."
+    "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL.",
+    "calendar_slot_not_found": "This planned slot no longer exists.",
+    "calendar_slot_started": "Generation already started for this slot. Open its run to see progress.",
+    "calendar_time_in_past": "Choose a future time for draft generation."
+  },
+  "Calendar": {
+    "title": "Content calendar",
+    "genericError": "The calendar could not be updated. Try again.",
+    "chooseChannel": "Choose at least one channel.",
+    "dateTime": "Date and time",
+    "chooseDay": "Choose a day",
+    "brief": "Topic or brief",
+    "channels": "Channels",
+    "noChannels": "Add a channel to this brand before planning generation.",
+    "notes": "Notes for your team",
+    "reviewHint": "At the planned time Pubrick creates a draft for review. Nothing is published automatically.",
+    "timezone": "Times use your local zone: {zone}.",
+    "add": "Add",
+    "backToBrand": "Back to brand",
+    "previousMonth": "Previous month",
+    "nextMonth": "Next month",
+    "dayLabel": "{day}, {count} planned slots",
+    "emptyDay": "No planned slots on this day. Use Add to plan one.",
+    "missingChannel": "Removed channel",
+    "channelsMissing": "A channel was removed. Edit this slot to choose another.",
+    "invalidInput": "This slot is invalid. Edit and save it again before generating.",
+    "waitingCapacity": "Waiting for an available generation slot. Pubrick will retry automatically.",
+    "viewRun": "View generation",
+    "edit": "Edit",
+    "remove": "Remove",
+    "addTitle": "Plan a generation",
+    "editTitle": "Edit planned generation",
+    "cancel": "Cancel",
+    "save": "Save",
+    "removeTitle": "Remove planned generation?",
+    "removeBody": "This removes the slot before generation starts."
   }
 }

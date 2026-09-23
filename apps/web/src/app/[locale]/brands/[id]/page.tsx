@@ -358,12 +358,14 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </Button>
       }
     >
-      <Link
-        href={`/${locale}/brands/${id}/sources`}
-        className="mb-5 inline-block text-sm text-fg-secondary underline"
-      >
-        {tb("sourcesLink")}
-      </Link>
+      <div className="mb-5 flex flex-wrap gap-4 text-sm font-medium">
+        <Link href={`/${locale}/brands/${id}/sources`} className="text-accent underline">
+          {tb("sourcesLink")}
+        </Link>
+        <Link href={`/${locale}/brands/${id}/calendar`} className="text-accent underline">
+          {tb("calendarLink")}
+        </Link>
+      </div>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}

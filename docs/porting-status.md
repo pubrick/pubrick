@@ -15,7 +15,7 @@ documents when they disagree.
 | Multi-agent generation | Five-step engine and run receipts present | Content-type pipelines, repurposing, date context and link policy |
 | Image generation | Not ported | Media storage, generation and per-image regeneration |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
-| Calendar | Scheduled publishing present | Calendar view, slots and planned generation |
+| Calendar | Scheduled publishing, brand calendar, slots and planned draft generation | Memorable dates and richer planning |
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
 | Analytics | Usage and cost ledger present | Channel metrics, content performance and feedback |
 | Comment analysis | Not ported | Collection, analysis and feedback signals |

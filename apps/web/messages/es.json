@@ -102,7 +102,8 @@
     "invalidArticle": "Este artículo no se puede usar como fuente. Ábrelo y pega su texto en el editor.",
     "selectChannels": "Elige los canales para este borrador.",
     "noChannels": "Añade un canal a esta marca antes de generar.",
-    "generate": "Generar"
+    "generate": "Generar",
+    "calendarLink": "Abrir calendario de contenido"
   },
   "Channels": {
     "title": "Canales",
@@ -537,6 +538,41 @@
     "adaptation_pinned_manual_ready": "Esta publicación está lista para publicación manual. Recházala antes de editarla.",
     "manual_schedule_unsupported": "Pubrick no puede programar publicaciones en VC.ru. Apruébalas para publicación manual.",
     "manual_publication_pending": "Esta publicación está lista para que la publiques manualmente en VC.ru.",
-    "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública."
+    "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública.",
+    "calendar_slot_not_found": "Este espacio planificado ya no existe.",
+    "calendar_slot_started": "La generación de este espacio ya comenzó. Abre su ejecución para ver el progreso.",
+    "calendar_time_in_past": "Elige una fecha futura para generar el borrador."
+  },
+  "Calendar": {
+    "title": "Calendario de contenido",
+    "genericError": "No se pudo actualizar el calendario. Inténtalo de nuevo.",
+    "chooseChannel": "Elige al menos un canal.",
+    "dateTime": "Fecha y hora",
+    "chooseDay": "Elegir un día",
+    "brief": "Tema o instrucciones",
+    "channels": "Canales",
+    "noChannels": "Añade un canal a esta marca antes de planificar.",
+    "notes": "Notas para el equipo",
+    "reviewHint": "A la hora prevista, Pubrick crea un borrador para revisar. No se publica automáticamente.",
+    "timezone": "La hora usa tu zona local: {zone}.",
+    "add": "Añadir",
+    "backToBrand": "Volver a la marca",
+    "previousMonth": "Mes anterior",
+    "nextMonth": "Mes siguiente",
+    "dayLabel": "{day}, {count} espacios planificados",
+    "emptyDay": "No hay espacios planificados este día. Usa Añadir para crear uno.",
+    "missingChannel": "Canal eliminado",
+    "channelsMissing": "Se eliminó un canal. Edita este espacio y elige otro.",
+    "invalidInput": "Este espacio no es válido. Edítalo y guárdalo antes de generar.",
+    "waitingCapacity": "Esperando capacidad para generar. Pubrick lo intentará de nuevo automáticamente.",
+    "viewRun": "Ver generación",
+    "edit": "Editar",
+    "remove": "Eliminar",
+    "addTitle": "Planificar generación",
+    "editTitle": "Editar generación planificada",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "removeTitle": "¿Eliminar generación planificada?",
+    "removeBody": "Esto elimina el espacio antes de que empiece la generación."
   }
 }

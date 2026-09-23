@@ -63,6 +63,26 @@ describe("QueueService.registerAll", () => {
     expect(rss.scan).toHaveBeenCalledWith(boss);
   });
 
+  it("registers a single calendar tick on the default queues", async () => {
+    const boss = bossStub();
+    const calendar = { scan: vi.fn().mockResolvedValue(undefined) };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      calendar as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith("calendar-scan");
+    expect(boss.schedule).toHaveBeenCalledWith("calendar-scan", "* * * * *");
+    const tick = boss.work.mock.calls.find(
+      (call) => call[0] === "calendar-scan",
+    )?.[2] as () => Promise<void>;
+    await tick();
+    expect(calendar.scan).toHaveBeenCalledWith(boss);
+  });
+
   it("consumes the shared publish queue with the shared options", async () => {
     const boss = bossStub();
     const { service } = serviceStub();

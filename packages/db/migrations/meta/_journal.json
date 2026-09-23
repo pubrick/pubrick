@@ -176,6 +176,13 @@
       "when": 1790163517630,
       "tag": "0025_melodic_mandarin",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790163726808,
+      "tag": "0026_clumsy_thunderbolts",
+      "breakpoints": true
     }
   ]
 }

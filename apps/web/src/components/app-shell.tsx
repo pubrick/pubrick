@@ -44,9 +44,8 @@ const NAV_ICONS: Record<NavKey, (props: IconProps) => ReactNode> = {
  * "rightmost" — so Settings lands on the right there for free, with no
  * separate mobile-only ordering logic to keep in sync.
  *
- * No Calendar, no Compose: those existed in the design canvas artboards but
- * are dead per the task brief — Compose is each page's own primary-action
- * button, not a nav destination.
+ * Calendar lives under each brand because every slot belongs to a brand.
+ * Compose is each page's own primary-action button, not a nav destination.
  *
  * The shell is also the auth guard for everything it wraps. No route under it
  * has one of its own, so a signed-out visitor used to get the whole screen —

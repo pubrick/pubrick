@@ -90,11 +90,10 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * somebody wrote down, and a list computed from the same types the migration
  * was generated from could only ever agree with itself.
  *
- * Twelve of them are the publishing path, converted by 0014. Five more were
- * born zoned in 0016, 0017, 0021, and 0023 for proposals, a publication
- * assertion, and public feed entries. The news source and item timestamps
- * arrive in 0024: publication dates carry an offset, and check times are
- * instants. None belongs in `UNZONED_TABLES`, the list deliberately left naive.
+ * Twelve of them are the publishing path, converted by 0014. Proposals,
+ * publication assertions, public feeds, monitored news, guidance revisions,
+ * and calendar slots were born zoned in later migrations. They are deliberately
+ * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
   "adaptation_proposals.created_at",
@@ -104,6 +103,10 @@ const ZONED_COLUMNS = [
   "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
+  "calendar_slots.created_at",
+  "calendar_slots.retry_after",
+  "calendar_slots.scheduled_at",
+  "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
   "content_items.created_at",
@@ -213,12 +216,17 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
-  // 0021's table does not exist when the pre-0009 seed is written, so the
+  // The guidance table does not exist when the pre-0009 seed is written, so the
   // generic UPDATE loop cannot exercise its role pin. The schema invariant
   // test checks the enum expression; the repository e2e checks version writes.
   "prompt_revisions_role_check",
   "prompt_revisions_version_positive_check",
   "prompt_revisions_guidance_limit_check",
+  // The nullable calendar error enum is on a table that did not exist when
+  // seedEveryTable wrote its pre-0009 rows, so the UPDATE loop cannot test it.
+  // schema-invariants.test.ts verifies the schema declaration; this count
+  // verifies that the generated migration installed the database guard.
+  "calendar_slots_error_code_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

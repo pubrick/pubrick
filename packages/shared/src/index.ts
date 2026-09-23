@@ -41,6 +41,7 @@ export {
 } from "./deploy-origin.js";
 export * from "./dto/ai-credentials.js";
 export * from "./dto/brands.js";
+export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
@@ -78,6 +79,7 @@ export {
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
   type RssPollJob,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   rssPollJobOptions,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
   worstCaseSelfInflictedSeconds,
