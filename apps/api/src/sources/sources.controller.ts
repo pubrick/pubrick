@@ -26,6 +26,11 @@ import { SourcesRepository } from "./sources.repository";
 export class SourcesController {
   constructor(private readonly sources: SourcesRepository) {}
 
+  @Get("telegram-connection")
+  telegramConnection(@OrgId() orgId: string) {
+    return this.sources.telegramConnection(orgId);
+  }
+
   @Get()
   list(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
     return this.sources.list(orgId, brandId);

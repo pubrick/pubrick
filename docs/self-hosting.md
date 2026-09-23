@@ -128,6 +128,12 @@ connection** on a channel re-encrypts it, and saving credentials through
 until nothing is left on it; there is no harm in leaving it there, and removing
 it early makes whatever is still on it unreadable.
 
+Telegram source sessions are different: polling reads them but does not re-encrypt
+them. If you connected a workspace before rotation, run the terminal command in
+[Telegram channel sources](telegram-sources.md) again for that workspace before
+removing the old key. The source row reports a connection error if its session
+cannot be opened.
+
 Nothing moves while the ring has one key. Rows written before the ring existed
 carry no version and no key id; under a single key **Test connection** leaves
 them exactly as they are, because there is no other key to move them off — and
@@ -314,6 +320,7 @@ each one in full.
 | 2026-09-04 | `WEB_PORT` | no | host port for the web app (default `3000`) — **set it and `PUBLIC_ORIGIN` must match** |
 | 2026-09-04 | `API_HOST_PORT` | no | localhost-only debug mapping for the api (default `3001`) |
 | 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
+| 2026-09-23 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | no | required together when reading Telegram channel sources ([setup](telegram-sources.md)) |
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot

@@ -7,6 +7,7 @@ import { PublishService } from "./publish/publish.service";
 import { QueueService } from "./queue.service";
 import { RssRepository } from "./rss/rss.repository";
 import { RssService } from "./rss/rss.service";
+import { TelegramReader } from "./rss/telegram.reader";
 
 @Module({
   providers: [
@@ -18,6 +19,7 @@ import { RssService } from "./rss/rss.service";
     RssRepository,
     RssService,
     CalendarService,
+    TelegramReader,
   ],
 })
 export class WorkerModule {}

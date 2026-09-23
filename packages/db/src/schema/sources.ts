@@ -1,4 +1,4 @@
-import { NEWS_FEEDBACK_SIGNALS } from "@pubrick/shared";
+import { NEWS_FEEDBACK_SIGNALS, NEWS_SOURCE_KINDS } from "@pubrick/shared";
 import {
   boolean,
   index,
@@ -24,6 +24,7 @@ export const newsSources = pgTable(
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    kind: text("kind", { enum: NEWS_SOURCE_KINDS }).notNull().default("rss"),
     url: text("url").notNull(),
     isActive: boolean("is_active").notNull().default(true),
     checkIntervalMinutes: integer("check_interval_minutes").notNull().default(60),
@@ -35,8 +36,18 @@ export const newsSources = pgTable(
   (t) => [
     index("news_sources_org_brand_idx").on(t.orgId, t.brandId),
     uniqueIndex("news_sources_org_brand_url_idx").on(t.orgId, t.brandId, t.url),
+    enumCheck("news_sources_kind_check", t.kind, NEWS_SOURCE_KINDS),
   ],
 );
+
+/** An MTProto user session belongs to one workspace and is never sent to clients. */
+export const telegramSourceAccounts = pgTable("telegram_source_accounts", {
+  orgId: text("org_id")
+    .primaryKey()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  sessionEncrypted: text("session_encrypted").notNull(),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const newsItems = pgTable(
   "news_items",

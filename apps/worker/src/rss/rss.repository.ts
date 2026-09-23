@@ -6,12 +6,29 @@ import type { FeedItem } from "./rss.fetcher";
 
 @Injectable()
 export class RssRepository {
+  async connectTelegram(orgId: string, sessionEncrypted: string): Promise<void> {
+    const org = await db
+      .select({ id: schema.organization.id })
+      .from(schema.organization)
+      .where(eq(schema.organization.id, orgId))
+      .limit(1);
+    if (!org.length) throw new Error("Workspace not found");
+    await db
+      .insert(schema.telegramSourceAccounts)
+      .values({ orgId, sessionEncrypted })
+      .onConflictDoUpdate({
+        target: schema.telegramSourceAccounts.orgId,
+        set: { sessionEncrypted, connectedAt: new Date() },
+      });
+  }
+
   async get(orgId: string, sourceId: string) {
     const rows = await db
       .select({
         id: schema.newsSources.id,
         orgId: schema.newsSources.orgId,
         brandId: schema.newsSources.brandId,
+        kind: schema.newsSources.kind,
         url: schema.newsSources.url,
         isActive: schema.newsSources.isActive,
       })
@@ -19,6 +36,15 @@ export class RssRepository {
       .where(and(eq(schema.newsSources.orgId, orgId), eq(schema.newsSources.id, sourceId)))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  async telegramSession(orgId: string): Promise<string | null> {
+    const rows = await db
+      .select({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted })
+      .from(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+      .limit(1);
+    return rows[0]?.sessionEncrypted ?? null;
   }
 
   /** Privileged scheduler scan across tenants; job handling is scoped by orgId. */

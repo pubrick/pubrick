@@ -3,21 +3,29 @@ import { RSS_POLL_QUEUE, type RssPollJob, rssPollJobOptions } from "@pubrick/sha
 import type { PgBoss } from "pg-boss";
 import { FeedFetchError, type FeedItem, fetchFeed } from "./rss.fetcher";
 import { RssRepository } from "./rss.repository";
+import { TelegramReader, TelegramSourceError } from "./telegram.reader";
 
 @Injectable()
 export class RssService {
   private readonly logger = new Logger(RssService.name);
-  constructor(private readonly sources: RssRepository) {}
+  constructor(
+    private readonly sources: RssRepository,
+    private readonly telegram: TelegramReader,
+  ) {}
 
   async handle(job: RssPollJob): Promise<void> {
     const source = await this.sources.get(job.orgId, job.sourceId);
     if (!source?.isActive) return;
     let items: FeedItem[];
     try {
-      items = await fetchFeed(source.url);
+      items =
+        source.kind === "telegram"
+          ? await this.telegram.read(source.url, await this.sources.telegramSession(job.orgId))
+          : await fetchFeed(source.url);
     } catch (error) {
-      if (!(error instanceof FeedFetchError)) throw error;
-      this.logger.warn(`RSS poll failed for source ${source.id}: ${error.code}`);
+      if (!(error instanceof FeedFetchError) && !(error instanceof TelegramSourceError))
+        throw error;
+      this.logger.warn(`Source poll failed for source ${source.id}: ${error.code}`);
       await this.sources.fail(job.orgId, source.id, source.url, error.code);
       return;
     }
@@ -33,7 +41,7 @@ export class RssService {
         await boss.send(
           RSS_POLL_QUEUE,
           { orgId: source.orgId, sourceId: source.sourceId },
-          rssPollJobOptions(source.sourceId),
+          rssPollJobOptions(source.sourceId, source.orgId),
         );
       }
       if (batch.length < 100) return;

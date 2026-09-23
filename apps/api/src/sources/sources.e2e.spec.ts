@@ -1,5 +1,6 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { schema } from "@pubrick/db";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -24,7 +25,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await app.close();
   });
 
-  async function orgAgent(): Promise<request.Agent> {
+  async function orgAgent(): Promise<{ agent: request.Agent; orgId: string }> {
     const agent = request.agent(app.getHttpServer());
     const uniq = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
     await agent
@@ -39,12 +40,12 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .post("/api/auth/organization/set-active")
       .send({ organizationId: org.body.id })
       .expect(200);
-    return agent;
+    return { agent, orgId: org.body.id };
   }
 
   it("scopes feed CRUD and news reads by both organization and brand", async () => {
-    const owner = await orgAgent();
-    const other = await orgAgent();
+    const { agent: owner, orgId: ownerOrgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
     const a = await owner.post("/api/brands").send({ name: "Brand A" }).expect(201);
     const b = await owner.post("/api/brands").send({ name: "Brand B" }).expect(201);
     const source = await owner
@@ -56,6 +57,60 @@ describe.skipIf(!url)("watched sources e2e", () => {
       })
       .expect(201);
     expect(source.body).toMatchObject({ brandId: a.body.id, name: "Journal", isActive: true });
+    expect(source.body.kind).toBe("rss");
+
+    const telegram = await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Public channel",
+        kind: "telegram",
+        url: "https://t.me/example_channel",
+      })
+      .expect(201);
+    expect(telegram.body).toMatchObject({ kind: "telegram", url: "https://t.me/example_channel" });
+    await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Duplicate",
+        kind: "telegram",
+        url: "https://t.me/EXAMPLE_CHANNEL/",
+      })
+      .expect(409);
+    await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Invalid",
+        kind: "telegram",
+        url: "https://evil.example.com/channel",
+      })
+      .expect(400);
+    expect((await owner.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: false,
+    });
+    expect((await other.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: false,
+    });
+    const { db } = await import("../db");
+    await db
+      .insert(schema.telegramSourceAccounts)
+      .values({ orgId: ownerOrgId, sessionEncrypted: "never-expose-this-session" });
+    expect((await owner.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: true,
+    });
+    expect((await other.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: false,
+    });
+    await owner
+      .patch(`/api/sources/${source.body.id}?brandId=${a.body.id}`)
+      .send({ url: "https://example.com/updated.xml" })
+      .expect(200);
+    await owner
+      .patch(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`)
+      .send({ url: "https://example.com/feed.xml" })
+      .expect(400);
 
     const list = await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200);
     expect(list.body.map((row: { id: string }) => row.id)).toContain(source.body.id);
@@ -86,6 +141,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .expect(200);
     await owner.post(`/api/sources/${source.body.id}/refresh?brandId=${a.body.id}`).expect(409);
     await owner.delete(`/api/sources/${source.body.id}?brandId=${a.body.id}`).expect(200);
+    await owner.delete(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`).expect(200);
     expect((await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200)).body).toEqual([]);
   });
 });
