@@ -23,6 +23,8 @@ also applies. Usage continues through the normal Google BYOK ledger and run
 receipt. The settings screen states these limits and links to each automatic
 run's outcome.
 
-The old Content Factory additionally planned a calendar, sent digests and
-could auto-publish. Those paths have not been enabled here. Pubrick's promise
-is that publication needs human review and explicit approval.
+The daily digest is a separate, per-brand Telegram notification configured in
+Settings → Notifications. Its local hour and timezone do not alter autopilot's
+generation window or budget. The digest reports generation-run outcomes and
+spend; it does not create content or publish anything. Publication still needs
+human review and explicit approval.

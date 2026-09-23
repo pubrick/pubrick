@@ -295,6 +295,13 @@
       "when": 1790173302255,
       "tag": "0042_chemical_phantom_reporter",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790174631251,
+      "tag": "0043_rainy_firebrand",
+      "breakpoints": true
     }
   ]
 }

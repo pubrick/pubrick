@@ -157,6 +157,11 @@ export class QueueService {
       await boss.work("notification-scan", { batchSize: 1 }, async () =>
         this.notifications?.scan(),
       );
+      await boss.createQueue("notification-digest-scan");
+      await boss.schedule("notification-digest-scan", "*/5 * * * *");
+      await boss.work("notification-digest-scan", { batchSize: 1 }, async () =>
+        this.notifications?.scanDigests(),
+      );
     }
 
     if (this.metrics && names === DEFAULT_QUEUE_NAMES) {
