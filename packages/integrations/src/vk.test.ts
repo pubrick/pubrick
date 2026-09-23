@@ -5,7 +5,7 @@ import {
   TransientPublishError,
   UnknownOutcomePublishError,
 } from "./types.js";
-import { vkPublisher } from "./vk.js";
+import { readVkPostMetrics, vkPublisher } from "./vk.js";
 
 const credentials = { accessToken: "vk-secret-token", groupId: "12345" };
 const options = (fetchImpl: typeof fetch) => ({ fetchImpl, baseUrl: "https://vk.test/method" });
@@ -82,6 +82,40 @@ describe("VK publishing", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(PlatformRejectionError);
     expect((error as Error).message).not.toContain(credentials.accessToken);
+  });
+});
+
+describe("VK post metrics", () => {
+  it("reads only the requested community post and preserves a measured zero", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(String(_url)).toBe("https://vk.test/method/wall.getById");
+      expect(String(init?.body)).toContain("posts=-12345_89");
+      return answer({
+        response: {
+          items: [
+            { owner_id: -9, id: 89, views: { count: 900 } },
+            { owner_id: -12345, id: 89, views: { count: 0 }, likes: { count: 3 } },
+          ],
+        },
+      });
+    }) as unknown as typeof fetch;
+    await expect(readVkPostMetrics(credentials, "89", options(fetchImpl))).resolves.toEqual({
+      views: 0,
+      likes: 3,
+      comments: null,
+      shares: null,
+    });
+  });
+
+  it("leaves absent or mismatched posts unknown", async () => {
+    const fetchImpl = vi.fn(async () =>
+      answer({ response: { items: [] } }),
+    ) as unknown as typeof fetch;
+    await expect(readVkPostMetrics(credentials, "89", options(fetchImpl))).resolves.toBeNull();
+    await expect(
+      readVkPostMetrics(credentials, "not-an-id", options(fetchImpl)),
+    ).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

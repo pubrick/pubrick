@@ -73,7 +73,8 @@
     "knowledgeTitle": "Conocimiento de marca",
     "knowledgeHint": "Guarda detalles de productos, ejemplos y notas para futuros borradores.",
     "knowledgeOpen": "Abrir conocimiento",
-    "mediaLink": "Biblioteca multimedia"
+    "mediaLink": "Biblioteca multimedia",
+    "analyticsLink": "Resultados"
   },
   "Sources": {
     "kind": "Tipo de fuente",
@@ -697,7 +698,10 @@
     "media_cover_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar la portada.",
     "media_generation_limit": "Se alcanzó el límite de generación de imágenes por hora. Inténtalo más tarde.",
     "media_generation_failed": "Gemini no devolvió una imagen válida. Prueba otra descripción.",
-    "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos."
+    "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos.",
+    "publication_not_found": "Publicación no encontrada.",
+    "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",
+    "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación."
   },
   "Calendar": {
     "title": "Calendario de contenido",
@@ -798,5 +802,34 @@
     "image": "imagen",
     "reviewImage": "Imagen nueva: revísala antes de elegirla",
     "generateFailed": "No se pudo generar la imagen. Vuelve a intentarlo."
+  },
+  "Analytics": {
+    "title": "Resultados de {brand}",
+    "intro": "Historial de publicaciones y métricas de los canales. Los valores ausentes se muestran como desconocidos.",
+    "period": "{days} días",
+    "loadError": "No se pudieron cargar los resultados.",
+    "retry": "Reintentar",
+    "published": "Publicaciones",
+    "measured": "Con métricas",
+    "views": "Visualizaciones",
+    "likes": "Me gusta",
+    "comments": "Comentarios",
+    "shares": "Compartidos",
+    "scopeNote": "Los totales incluyen solo mediciones disponibles de las publicaciones mostradas.",
+    "limited": "Se muestran las últimas 100 publicaciones.",
+    "empty": "No hay publicaciones en este período. Crea una para empezar a medir.",
+    "compose": "Crear publicación",
+    "untitled": "Sin título",
+    "openPost": "Abrir publicación",
+    "openPublication": "Ver en el canal",
+    "not_collected": "Aún sin medir",
+    "refreshing": "Comprobando",
+    "available": "Medido",
+    "unavailable": "Métricas no disponibles",
+    "error": "No se pudieron comprobar las métricas",
+    "stale": "Puede estar desactualizado",
+    "checked": "Datos del {date}",
+    "checking": "Comprobando…",
+    "refresh": "Comprobar métricas"
   }
 }

@@ -180,3 +180,50 @@ export const vkPublisher: Publisher<VkCredentials> = {
     }
   },
 };
+
+/** Read public counters for a post this integration previously published. */
+export async function readVkPostMetrics(
+  credentials: Record<string, string>,
+  externalId: string,
+  options?: PublisherOptions,
+): Promise<{
+  views: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+} | null> {
+  const parsedCredentials = credentialsSchema.safeParse(credentials);
+  if (!parsedCredentials.success || !/^[1-9]\d*$/.test(externalId)) return null;
+  const raw = await call(
+    "wall.getById",
+    parsedCredentials.data,
+    { posts: `-${parsedCredentials.data.groupId}_${externalId}` },
+    options,
+  );
+  const response = z
+    .object({
+      items: z.array(
+        z.object({
+          owner_id: z.number().int(),
+          id: z.number().int(),
+          views: z.object({ count: z.number().int().nonnegative() }).optional(),
+          likes: z.object({ count: z.number().int().nonnegative() }).optional(),
+          comments: z.object({ count: z.number().int().nonnegative() }).optional(),
+          reposts: z.object({ count: z.number().int().nonnegative() }).optional(),
+        }),
+      ),
+    })
+    .safeParse(raw);
+  if (!response.success) return null;
+  const post = response.data.items.find(
+    (item) =>
+      item.owner_id === -Number(parsedCredentials.data.groupId) && item.id === Number(externalId),
+  );
+  if (!post) return null;
+  return {
+    views: post.views?.count ?? null,
+    likes: post.likes?.count ?? null,
+    comments: post.comments?.count ?? null,
+    shares: post.reposts?.count ?? null,
+  };
+}

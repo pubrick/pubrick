@@ -667,8 +667,10 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       }
       const run = await runRow(victim.runId);
       expect(run?.steps.knowledge?.status).toBe("succeeded");
+      const [ownEntry] = inserted;
+      if (!ownEntry) throw new Error("Knowledge fixture was not inserted");
       expect(run?.steps.knowledge?.output).toMatchObject({
-        entries: [{ id: inserted[0].id, title: "Autumn menu" }],
+        entries: [{ id: ownEntry.id, title: "Autumn menu" }],
       });
       expect((await ledgerOf(victim.orgId)).filter((row) => row.step === "knowledge")).toHaveLength(
         0,

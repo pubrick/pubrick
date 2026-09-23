@@ -12,4 +12,4 @@ export {
   UnknownOutcomePublishError,
   type VerifyResult,
 } from "./types.js";
-export { VK_REQUEST_TIMEOUT_MS, vkPublisher } from "./vk.js";
+export { readVkPostMetrics, VK_REQUEST_TIMEOUT_MS, vkPublisher } from "./vk.js";

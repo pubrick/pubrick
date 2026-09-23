@@ -232,6 +232,13 @@
       "when": 1790167554508,
       "tag": "0033_minor_lionheart",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790168797286,
+      "tag": "0034_silly_madame_masque",
+      "breakpoints": true
     }
   ]
 }

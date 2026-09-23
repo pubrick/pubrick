@@ -127,6 +127,7 @@ const ZONED_COLUMNS = [
   "news_sources.last_checked_at",
   "news_sources.updated_at",
   "prompt_revisions.created_at",
+  "publication_metrics.checked_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
@@ -264,6 +265,10 @@ const NON_ENUM_CHECKS = [
   "news_items_relevance_score_check",
   "news_items_relevance_consistency_check",
   "news_items_relevance_attempts_check",
+  // The metric table is created after the pre-0009 seed. Analytics e2e proves
+  // measured zero and missing values; these checks pin the stored shape.
+  "publication_metrics_status_check",
+  "publication_metrics_counts_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
