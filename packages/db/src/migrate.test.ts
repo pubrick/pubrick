@@ -119,6 +119,8 @@ const ZONED_COLUMNS = [
   "knowledge_entries.created_at",
   "knowledge_entries.updated_at",
   "media_assets.created_at",
+  "memorable_dates.created_at",
+  "memorable_dates.updated_at",
   "news_comment_analyses.created_at",
   "news_comment_analyses.sample_checked_at",
   "news_comments.created_at",
@@ -256,6 +258,9 @@ const NON_ENUM_CHECKS = [
   // schema-invariants.test.ts verifies the schema declaration; this count
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
+  // Memorable dates were born after the historical seed; the API e2e proves
+  // invalid MM-DD values are refused and this count pins the SQL guard.
+  "memorable_dates_month_day_check",
   // The knowledge category pin arrives after the pre-0009 seed, so it has no row for
   // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
   // the category constraint against a bogus update at head.

@@ -24,9 +24,27 @@ the calendar after it starts. A slot already linked to a run is immutable; the
 run's cancellation and review controls remain on the run and content screens.
 
 The scanner processes up to 100 due slots per minute. Future work can add
-topic-bank links, recurring plans, holiday suggestions, and a separate
-explicit opt-in schedule for publication. The old Content Factory's autopilot
-guardrails and AI calendar planner are not implied by this first slice.
+topic-bank links, richer recurring plans, and a separate explicit opt-in
+schedule for publication.
+
+## Memorable dates
+
+Each brand can maintain its own annual editorial dates. A date has an `MM-DD`
+month and day, a title, 0–365 lead days, optional suggested content formats,
+and an active switch. The calendar shows active dates on their occurrence day
+and during their lead window. Dates are **suggestions only**: adding or editing
+one never creates a topic, run, draft, or publication. There are no built-in
+brand-specific dates or automatic seeds.
+
+The brand's configured IANA timezone is shown with these dates; until a brand
+configures one, the zone is UTC. Calendar day arithmetic uses the date label,
+so a suggestion does not drift when an editor opens the UI from another zone.
+February 29 appears only in leap years, with no February 28 substitute. Lead
+windows cross New Year and the next actual occurrence is used. For example,
+January 1 with a 14-day lead appears from December 18 of the previous year.
+
+The secondary **Manage dates** control opens the CRUD panel. The calendar's
+primary Add action still plans a generation slot.
 
 ## API
 
@@ -39,3 +57,14 @@ guardrails and AI calendar planner are not implied by this first slice.
 
 Every route requires an active organization. The repository scopes all reads
 and writes by organization and brand and returns only explicit public columns.
+
+- `GET /api/calendar/memorable-dates?brandId=<uuid>`: returns `{ timezone, dates }`,
+  including inactive dates for management.
+- `POST /api/calendar/memorable-dates`: required `brandId`, `monthDay`, `title`,
+  `leadDays`, `suggestedContentTypes`, `isActive`.
+- `PATCH /api/calendar/memorable-dates/:id?brandId=<uuid>`: change one or more
+  fields of a date in the requested brand.
+- `DELETE /api/calendar/memorable-dates/:id?brandId=<uuid>`: remove that date.
+
+These routes also require an active organization. All four methods check both
+organization and brand; a foreign brand/date returns 404.

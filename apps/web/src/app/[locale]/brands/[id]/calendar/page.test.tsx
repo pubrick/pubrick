@@ -28,6 +28,8 @@ describe("brand calendar", () => {
       calls.push({ url, init });
       if (url.includes("/api/channels"))
         return jsonResponse([{ id: "c1", name: "Main", platform: "telegram" }]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
       if (url.includes("/api/calendar/slots") && init?.method === "POST")
         return jsonResponse({ id: "slot-1" });
       return jsonResponse([]);
@@ -56,6 +58,8 @@ describe("brand calendar", () => {
 
   it("explains a due slot delayed by the generation cap", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
       if (String(input).includes("/api/channels"))
         return jsonResponse([{ id: "c1", name: "Main", platform: "telegram" }]);
       return jsonResponse([
@@ -73,5 +77,95 @@ describe("brand calendar", () => {
     });
     await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
     await waitFor(() => expect(screen.getByText(en.Calendar.waitingCapacity)).toBeInTheDocument());
+  });
+
+  it("shows an editorial suggestion without displacing the slot action and saves a valid date", async () => {
+    const brandId = "00000000-0000-4000-8000-000000000001";
+    const today = new Date();
+    const monthDay = `${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/calendar/memorable-dates")) {
+        if (init?.method === "POST") return jsonResponse({ id: "date-2" });
+        return jsonResponse({
+          timezone: "UTC",
+          dates: [
+            {
+              id: "date-1",
+              monthDay,
+              title: "Editorial day",
+              leadDays: 14,
+              suggestedContentTypes: ["social_post"],
+              isActive: true,
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/channels")) return jsonResponse([]);
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
+    await waitFor(() => expect(screen.getByText("Editorial day")).toBeInTheDocument());
+    expect(
+      screen.getByText(en.CalendarMemorable.hint.replace("{zone}", "UTC")),
+    ).toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("button", { name: en.Calendar.add })
+        .some((button) => button.getAttribute("form") === "calendar-add-slot"),
+    ).toBe(true);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.CalendarMemorable.manage }));
+    await userEvent.setup().click(screen.getByRole("button", { name: en.CalendarMemorable.new }));
+    fireEvent.change(screen.getByLabelText(en.CalendarMemorable.monthDay), {
+      target: { value: "02-29" },
+    });
+    fireEvent.change(screen.getByLabelText(en.CalendarMemorable.name), {
+      target: { value: "Leap day" },
+    });
+    const dateSubmit = screen
+      .getAllByRole("button", { name: en.CalendarMemorable.add })
+      .find((button) => button.getAttribute("form") === "memorable-date-form");
+    expect(dateSubmit).toBeDefined();
+    await userEvent.setup().click(dateSubmit as HTMLElement);
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.init?.method === "POST" && call.url.includes("memorable-dates")),
+      ).toBe(true),
+    );
+    const posted = calls.find(
+      (call) => call.init?.method === "POST" && call.url.includes("memorable-dates"),
+    );
+    expect(JSON.parse(String(posted?.init?.body))).toEqual({
+      brandId,
+      monthDay: "02-29",
+      title: "Leap day",
+      leadDays: 14,
+      suggestedContentTypes: [],
+      isActive: true,
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.CalendarMemorable.manage }));
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.CalendarMemorable.remove }));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.CalendarMemorable.remove }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.init?.method === "DELETE" &&
+            call.url.includes("/api/calendar/memorable-dates/date-1?brandId="),
+        ),
+      ).toBe(true),
+    );
   });
 });

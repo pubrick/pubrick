@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { MemorableDates } from "./memorable-dates";
 
 type Channel = { id: string; name: string; platform: string };
 type Slot = {
@@ -438,6 +439,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           </div>
         )}
       </section>
+      <MemorableDates brandId={brandId} selectedDay={selectedDay} />
       <Card>
         <h2 className="mb-3 text-lg font-semibold text-fg">{t("addTitle")}</h2>
         <form id={FORM_ID} onSubmit={add}>
