@@ -100,6 +100,8 @@ const ZONED_COLUMNS = [
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "autopilot_configs.updated_at",
+  "autopilot_dispatches.created_at",
   "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",

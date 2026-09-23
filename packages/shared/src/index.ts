@@ -40,6 +40,7 @@ export {
   originMismatchMessage,
 } from "./deploy-origin.js";
 export * from "./dto/ai-credentials.js";
+export * from "./dto/autopilot.js";
 export * from "./dto/brands.js";
 export * from "./dto/calendar.js";
 export * from "./dto/channels.js";

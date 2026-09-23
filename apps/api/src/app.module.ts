@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { auth } from "./auth";
+import { AutopilotModule } from "./autopilot/autopilot.module";
 import { BrandsModule } from "./brands/brands.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { ChannelsModule } from "./channels/channels.module";
@@ -21,6 +22,7 @@ import { TopicsModule } from "./topics/topics.module";
 @Module({
   imports: [
     AuthModule.forRoot({ auth }),
+    AutopilotModule,
     QueueModule,
     HealthModule,
     KnowledgeModule,
