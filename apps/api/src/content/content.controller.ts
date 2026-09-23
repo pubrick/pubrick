@@ -18,9 +18,13 @@ import {
   type ContentApprove,
   type ContentCreate,
   type ContentUpdate,
+  type ContentVersionListQuery,
+  type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
   contentUpdateSchema,
+  contentVersionListQuerySchema,
+  contentVersionRestoreSchema,
   type DeliveryAssertion,
   deliveryAssertionSchema,
   NEXT_CURSOR_HEADER,
@@ -84,6 +88,30 @@ export class ContentController {
   @Get(":id")
   get(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.get(orgId, id);
+  }
+
+  @Get(":id/versions")
+  async versions(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(contentVersionListQuerySchema)) query: ContentVersionListQuery,
+    @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
+  ) {
+    const page = await this.content.versions(orgId, id, query.adaptationId, query.cursor);
+    if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
+    return page.rows;
+  }
+
+  @Post(":id/versions/:versionId/restore")
+  @HttpCode(200)
+  restoreVersion(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("versionId", ParseUUIDPipe) versionId: string,
+    @Body(new ZodValidationPipe(contentVersionRestoreSchema)) body: ContentVersionRestore,
+  ) {
+    return this.content.restoreVersion(orgId, id, versionId, body, userId);
   }
 
   /**

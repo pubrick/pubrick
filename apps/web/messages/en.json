@@ -226,7 +226,23 @@
     "viewPost": "View post",
     "scheduledFor": "Scheduled for",
     "genericError": "Something went wrong. Please try again.",
-    "overrideLabel": "Override for {channel}"
+    "overrideLabel": "Override for {channel}",
+    "versionHistory": "Version history",
+    "versionLoading": "Loading saved versions…",
+    "versionEmpty": "Save a text edit to start this history.",
+    "versionPinned": "This text is locked while delivery is in progress or complete.",
+    "versionSaveFirst": "Save your current edits before restoring a version.",
+    "versionAi": "AI draft",
+    "versionHuman": "Human edit",
+    "versionPreview": "Preview",
+    "versionPreviewTitle": "Saved version",
+    "versionLoadMore": "Load more",
+    "versionCancel": "Cancel",
+    "versionRestore": "Restore this text",
+    "versionRestoring": "Restoring…",
+    "versionRestoreConfirm": "This replaces the current saved text. The restored text will be saved as a new version.",
+    "versionRestored": "Saved version restored.",
+    "versionAlreadyCurrent": "This version already matches the saved text."
   },
   "SettingsPage": {
     "title": "Settings",
@@ -355,6 +371,8 @@
   "Errors": {
     "content_not_found": "This post no longer exists — it may have been deleted.",
     "adaptation_not_found": "This channel's own text no longer exists — the channel may have been deleted.",
+    "version_not_found": "This saved version is no longer available. Reload the history.",
+    "version_changed": "The saved text changed since you opened its history. Reload before restoring.",
     "content_pinned_approved": "An approved post cannot be edited. Reject it first.",
     "content_pinned_published": "This post has already been published and can no longer be edited.",
     "adaptation_pinned_scheduled": "A scheduled post cannot be edited. Reject the post first.",

@@ -736,6 +736,28 @@ export const contentListItemDtoSchema = z.strictObject({
 });
 export type ContentListItemDto = z.infer<typeof contentListItemDtoSchema>;
 
+/** A saved whole-body snapshot. Refine fragments are provenance evidence, not drafts to restore. */
+export const contentVersionDtoSchema = z.strictObject({
+  id: z.string().uuid(),
+  adaptationId: z.string().uuid().nullable(),
+  body: z.string(),
+  origin: z.enum(CONTENT_ORIGINS),
+  createdAt: z.string(),
+});
+export type ContentVersionDto = z.infer<typeof contentVersionDtoSchema>;
+
+export const contentVersionListQuerySchema = z.object({
+  adaptationId: z.string().uuid().optional(),
+  cursor: z.string().uuid().optional(),
+});
+export type ContentVersionListQuery = z.infer<typeof contentVersionListQuerySchema>;
+
+export const contentVersionRestoreSchema = z.object({
+  /** The text the reader saw; a newer save must not be silently overwritten. */
+  expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+});
+export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
+
 /**
  * THE SAME ITEM WITH ITS TEXT — `GET /api/content/:id`, and what every mutation
  * on the resource answers with.

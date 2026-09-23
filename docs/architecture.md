@@ -93,6 +93,28 @@ channel → opened and judged by the publish gate → approved, now or on a sche
 → claimed and sent by the worker → recorded as a publication with its id and
 link, or as a failure, or as an outcome nobody can determine from here.
 
+### Saved text history
+
+The editor reads whole-body `content_versions` only when its Version history
+disclosure opens. `GET /api/content/:id/versions` lists the master draft;
+`?adaptationId=` lists one channel's text. Both return up to 20 rows, newest
+first, with the next version ID in `X-Next-Cursor`. Refine fragments are excluded
+because they are not complete drafts.
+
+`POST /api/content/:id/versions/:versionId/restore` requires the currently saved
+body as `expectedBody`. A newer edit returns `version_changed` (409), so an old
+browser tab cannot overwrite it. The usual item and adaptation edit locks still
+apply. A successful restore records a new human version; it does not rewrite an
+earlier row or claim that the model's original text was written by a person.
+The editor also requires local unsaved text to be saved before restore.
+
+Generated drafts have an initial AI version. A manually created draft currently
+gets its first history row on its first body edit, so the creation text has no
+restorable snapshot. Clearing a channel override also creates no row because a
+version body cannot be null. Both limits follow the existing version writer;
+future history work should address them deliberately rather than synthesize a
+body that was never saved.
+
 ## The rules that cross package boundaries
 
 Each of these is enforced somewhere specific. If you change one, find every

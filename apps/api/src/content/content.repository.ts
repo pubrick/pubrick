@@ -13,6 +13,7 @@ import {
   type ContentCursor,
   type ContentStatus,
   type ContentUpdate,
+  type ContentVersionRestore,
   type DeliveryOutcome,
   decodeContentCursor,
   encodeContentCursor,
@@ -1418,6 +1419,176 @@ export class ContentRepository {
       refineProposal,
       aiVersionBodies,
     };
+  }
+
+  /**
+   * Whole-body snapshots are read on demand. Putting them on `get()` would send
+   * every earlier draft again on each item poll, while the editor only opens
+   * history when a person asks for it. A version id is the page cursor: the
+   * database supplies its full-precision timestamp, so a JavaScript Date never
+   * rounds a page boundary and repeats or skips a version.
+   */
+  async versions(orgId: string, itemId: string, adaptationId?: string, cursor?: string) {
+    const [item] = await db
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
+      .limit(1);
+    if (!item) throw notFound("content_not_found", "Content item not found");
+    if (adaptationId) {
+      const [adaptation] = await db
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, itemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1);
+      if (!adaptation) throw notFound("adaptation_not_found", "Adaptation not found");
+    }
+    const level = adaptationId
+      ? eq(schema.contentVersions.adaptationId, adaptationId)
+      : isNull(schema.contentVersions.adaptationId);
+    let before: { id: string } | undefined;
+    if (cursor) {
+      [before] = await db
+        .select({ id: schema.contentVersions.id })
+        .from(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.orgId, orgId),
+            eq(schema.contentVersions.contentItemId, itemId),
+            eq(schema.contentVersions.scope, "full"),
+            level,
+            eq(schema.contentVersions.id, cursor),
+          ),
+        )
+        .limit(1);
+      if (!before) throw badRequest("invalid_request", "Unknown version cursor");
+    }
+    const page = await db
+      .select({
+        id: schema.contentVersions.id,
+        adaptationId: schema.contentVersions.adaptationId,
+        body: schema.contentVersions.body,
+        origin: schema.contentVersions.origin,
+        createdAt: schema.contentVersions.createdAt,
+      })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, itemId),
+          eq(schema.contentVersions.scope, "full"),
+          level,
+          before
+            ? sql`(${schema.contentVersions.createdAt}, ${schema.contentVersions.id}) < (
+                select created_at, id from content_versions
+                where org_id = ${orgId} and content_item_id = ${itemId}
+                  and scope = 'full'
+                  and adaptation_id is not distinct from ${adaptationId ?? null}::uuid
+                  and id = ${before.id}::uuid
+              )`
+            : undefined,
+        ),
+      )
+      .orderBy(desc(schema.contentVersions.createdAt), desc(schema.contentVersions.id))
+      .limit(21);
+    return {
+      rows: page.slice(0, 20),
+      nextCursor: page.length > 20 ? (page[19]?.id ?? null) : null,
+    };
+  }
+
+  /** Restoring is a human edit, even when its source was written by the model. */
+  async restoreVersion(
+    orgId: string,
+    itemId: string,
+    versionId: string,
+    data: ContentVersionRestore,
+    userId: string,
+  ) {
+    await db.transaction(async (tx) => {
+      const [version] = await tx
+        .select({
+          body: schema.contentVersions.body,
+          adaptationId: schema.contentVersions.adaptationId,
+        })
+        .from(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.orgId, orgId),
+            eq(schema.contentVersions.contentItemId, itemId),
+            eq(schema.contentVersions.id, versionId),
+            eq(schema.contentVersions.scope, "full"),
+          ),
+        )
+        .limit(1);
+      if (!version) throw notFound("version_not_found", "Saved version not found");
+
+      if (version.adaptationId) {
+        // An adaptation lock comes before the item lock throughout the product.
+        // It also protects this version's FK target against a concurrent delete.
+        const [adaptation] = await tx
+          .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+          .from(schema.adaptations)
+          .where(
+            and(
+              eq(schema.adaptations.orgId, orgId),
+              eq(schema.adaptations.contentItemId, itemId),
+              eq(schema.adaptations.id, version.adaptationId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!adaptation) throw notFound("adaptation_not_found", "Adaptation not found");
+        await this.requireEditableItem(tx, orgId, itemId);
+        if (!isEditableAdaptationStatus(adaptation.status)) {
+          throw conflict(
+            PINNED_ADAPTATION_CODE[adaptation.status],
+            PINNED_ADAPTATION_MESSAGE[adaptation.status],
+          );
+        }
+        if (adaptation.body !== data.expectedBody) {
+          throw conflict("version_changed", "This channel's text changed; reload before restoring");
+        }
+        if (adaptation.body !== version.body) {
+          await tx
+            .update(schema.adaptations)
+            .set({ body: version.body })
+            .where(eq(schema.adaptations.id, version.adaptationId));
+          await this.recordHumanVersion(tx, {
+            orgId,
+            contentItemId: itemId,
+            adaptationId: version.adaptationId,
+            body: version.body,
+            createdBy: userId,
+          });
+        }
+      } else {
+        const item = await this.requireEditableItem(tx, orgId, itemId);
+        if (item.body !== data.expectedBody) {
+          throw conflict("version_changed", "This post changed; reload before restoring");
+        }
+        if (item.body !== version.body) {
+          await tx
+            .update(schema.contentItems)
+            .set({ body: version.body })
+            .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)));
+          await this.recordHumanVersion(tx, {
+            orgId,
+            contentItemId: itemId,
+            adaptationId: null,
+            body: version.body,
+            createdBy: userId,
+          });
+        }
+      }
+    });
+    return this.get(orgId, itemId);
   }
 
   /**

@@ -226,7 +226,23 @@
     "viewPost": "Ver publicação",
     "scheduledFor": "Agendado para",
     "genericError": "Algo deu errado. Tente novamente.",
-    "overrideLabel": "Texto próprio para {channel}"
+    "overrideLabel": "Texto próprio para {channel}",
+    "versionHistory": "Histórico de versões",
+    "versionLoading": "Carregando versões salvas…",
+    "versionEmpty": "Salve uma edição do texto para começar este histórico.",
+    "versionPinned": "Este texto está bloqueado enquanto a publicação está em andamento ou concluída.",
+    "versionSaveFirst": "Salve suas alterações atuais antes de restaurar uma versão.",
+    "versionAi": "Rascunho de IA",
+    "versionHuman": "Edição humana",
+    "versionPreview": "Pré-visualizar",
+    "versionPreviewTitle": "Versão salva",
+    "versionLoadMore": "Carregar mais",
+    "versionCancel": "Cancelar",
+    "versionRestore": "Restaurar este texto",
+    "versionRestoring": "Restaurando…",
+    "versionRestoreConfirm": "Isso substituirá o texto salvo atual. O texto restaurado será salvo como uma nova versão.",
+    "versionRestored": "Versão salva restaurada.",
+    "versionAlreadyCurrent": "Esta versão já corresponde ao texto salvo."
   },
   "SettingsPage": {
     "title": "Configurações",
@@ -355,6 +371,8 @@
   "Errors": {
     "content_not_found": "Esta publicação não existe mais — pode ter sido excluída.",
     "adaptation_not_found": "O texto próprio deste canal não existe mais — o canal pode ter sido excluído.",
+    "version_not_found": "Esta versão salva não está mais disponível. Atualize o histórico.",
+    "version_changed": "O texto salvo mudou desde que você abriu o histórico. Atualize a página antes de restaurá-lo.",
     "content_pinned_approved": "Uma publicação aprovada não pode ser editada. Rejeite-a primeiro.",
     "content_pinned_published": "Esta publicação já foi publicada e não pode mais ser editada.",
     "adaptation_pinned_scheduled": "Uma publicação agendada não pode ser editada. Rejeite a publicação primeiro.",

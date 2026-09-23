@@ -38,6 +38,7 @@ import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/or
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
 import { SourceStrip } from "./source-strip";
+import { VersionHistory } from "./version-history";
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -1189,6 +1190,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               {t("saveBody")}
             </Button>
           </div>
+          <VersionHistory
+            itemId={id}
+            currentBody={item.body}
+            draftBody={bodyDraft}
+            editable={["draft", "partially_published", "rejected", "failed"].includes(item.status)}
+            onRestored={async (body) => {
+              setBodyDraft(body);
+              await reload();
+            }}
+          />
         </div>
       </Card>
 
@@ -1349,6 +1360,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {t("saveOverride")}
               </Button>
             </div>
+            <VersionHistory
+              itemId={id}
+              adaptationId={a.id}
+              currentBody={a.body}
+              draftBody={
+                (overrideDrafts[a.id] ?? "").trim() === "" ? null : (overrideDrafts[a.id] ?? "")
+              }
+              editable={
+                ["draft", "partially_published", "rejected", "failed"].includes(item.status) &&
+                ["pending", "failed"].includes(a.status)
+              }
+              onRestored={async (body) => {
+                setOverrideDrafts((current) => ({ ...current, [a.id]: body }));
+                await reload();
+              }}
+            />
           </Card>
         ))}
       </div>

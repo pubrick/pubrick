@@ -82,6 +82,8 @@ export class ApiError extends Error {
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_not_found: "content_not_found",
   adaptation_not_found: "adaptation_not_found",
+  version_not_found: "version_not_found",
+  version_changed: "version_changed",
   content_pinned_approved: "content_pinned_approved",
   content_pinned_published: "content_pinned_published",
   adaptation_pinned_scheduled: "adaptation_pinned_scheduled",

@@ -69,6 +69,8 @@ export const API_ERROR_CODES = [
   "content_not_found",
   /** The channel override's row is gone — usually its channel was deleted. */
   "adaptation_not_found",
+  "version_not_found",
+  "version_changed",
 
   // ── content: the text is pinned ───────────────────────────────────────────
   // One code per pinned status rather than one code plus a status argument:
