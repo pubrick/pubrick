@@ -1,6 +1,12 @@
 import { Injectable } from "@nestjs/common";
 import { decryptJson } from "@pubrick/shared";
-import { type ChannelComments, readChannel, readComments } from "@pubrick/telegram";
+import {
+  type ChannelComments,
+  type PrivateChannelPeer,
+  readChannel,
+  readComments,
+  readPrivateChannel,
+} from "@pubrick/telegram";
 import { env } from "../env";
 import type { FeedItem } from "./rss.fetcher";
 
@@ -61,6 +67,38 @@ export class TelegramReader {
           apiHash: env.TELEGRAM_API_HASH ?? "",
           session,
           url,
+        }),
+      encryptedSession,
+    );
+  }
+
+  async readPrivate(
+    encryptedPeer: string | null,
+    encryptedSession: string | null,
+  ): Promise<FeedItem[]> {
+    let peer: PrivateChannelPeer;
+    try {
+      const stored = encryptedPeer ? decryptJson(encryptedPeer, env.APP_ENCRYPTION_KEY) : null;
+      if (
+        !stored ||
+        typeof stored !== "object" ||
+        !("channelId" in stored) ||
+        !("accessHash" in stored) ||
+        !Number.isSafeInteger(stored.channelId) ||
+        typeof stored.accessHash !== "string"
+      )
+        throw new Error("invalid peer");
+      peer = stored as PrivateChannelPeer;
+    } catch {
+      throw new TelegramSourceError("telegram_access_denied");
+    }
+    return this.call(
+      (session) =>
+        readPrivateChannel({
+          apiId: Number(env.TELEGRAM_API_ID),
+          apiHash: env.TELEGRAM_API_HASH ?? "",
+          session,
+          peer,
         }),
       encryptedSession,
     );

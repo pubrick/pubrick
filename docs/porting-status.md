@@ -10,16 +10,16 @@ documents when they disagree.
 |---|---|---|
 | Brands | Present | Brand onboarding wizard |
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
-| News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed and public Telegram channel sources, polling, story list, advisory AI relevance scoring and draft start | Private invite-only Telegram channels and feedback-informed ranking |
+| News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed, public Telegram channels and joined private Telegram broadcast channels; polling, story list, advisory AI relevance scoring and draft start | In-app private-channel onboarding, feedback-informed ranking and discussion groups |
 | Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive and generation via existing runs | Editorial planning calendar |
 | Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, selected social post/news digest/expert article/how-to formats, and opt-in homepage UTM tagging | Video/newsletter repurposing and deeper SEO workflow |
 | Images and media | Brand-scoped upload library, manual Gemini image generation and per-image variation, cover selection and Telegram photo delivery | Other channel media and richer image provenance |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |
 | Calendar | Scheduled publishing, brand calendar, slots, planned draft generation and brand-scoped annual memorable-date suggestions | Richer planning and topic-bank links |
 | Publishing | Telegram, VK and MAX delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
-| Analytics | Usage and cost ledger; brand results and on-demand VK post metrics | Automatic collection, other-channel metrics and performance feedback |
+| Analytics | Usage and cost ledger; brand results, on-demand VK post metrics and opt-in background VK collection | Other-channel metrics and performance feedback |
 | Comment analysis | On-demand public Telegram reply sample and metered Google BYOK aggregate summary, sentiment and themes | Private or inaccessible discussions and feedback-informed ranking |
-| Knowledge base / RAG | Brand notes, CSV import, optional Gemini indexing, hybrid retrieval and selected-note links in run receipts | Migration of old notes, automatic indexing and claim-level source citations |
+| Knowledge base / RAG | Brand notes, CSV import, optional single or batch Gemini indexing, embedding-model provenance, hybrid retrieval and selected-note links in run receipts | Migration of old notes, automatic indexing and claim-level source citations |
 | Autopilot | Owner-controlled scheduled draft generation from approved topics, with per-brand quota and spend admission threshold | Morning digest, richer planning and review signals |
 | Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |

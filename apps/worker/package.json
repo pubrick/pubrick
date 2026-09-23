@@ -7,9 +7,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --reporter=dot",
     "start": "node dist/main.cjs",
-    "telegram:connect": "node dist/telegram-connect.cjs"
+    "telegram:connect": "node dist/telegram-connect.cjs",
+    "telegram:private-source": "node dist/telegram-private-source.cjs"
   },
   "dependencies": {
+    "@inquirer/password": "^4.0.23",
     "@nestjs/common": "^11.2.1",
     "@nestjs/core": "^11.2.1",
     "@pubrick/ai": "workspace:*",

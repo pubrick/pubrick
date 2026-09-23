@@ -51,6 +51,32 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       })
       .returning({ id: schema.newsItems.id });
     if (!item) throw new Error("Article seed failed");
+    const [privateSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        name: "Private",
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+        privatePeerEncrypted: "encrypted-peer",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!privateSource) throw new Error("Private source seed failed");
+    const [privateItem] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: privateSource.id,
+        title: "Private article",
+        url: "https://t.me/c/123456/1",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!privateItem) throw new Error("Private article seed failed");
+    expect((await repo.unscored()).some((candidate) => candidate.itemId === privateItem.id)).toBe(
+      false,
+    );
     expect(await repo.claim("wrong-org", brand.id, item.id)).toBeNull();
     expect(await repo.claim(stamp, "00000000-0000-4000-8000-000000000001", item.id)).toBeNull();
     expect(await repo.claim(stamp, brand.id, item.id)).toMatchObject({

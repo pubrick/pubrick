@@ -36,4 +36,28 @@ describe("watched source inputs", () => {
       "https://t.me/example_channel",
     );
   });
+
+  it("never accepts a private invite or private kind through the public source DTO", () => {
+    const input = {
+      brandId,
+      name: "Private",
+      kind: "telegram_private",
+      url: "https://t.me/+JoinedChannelSecret",
+    };
+    expect(newsSourceCreateSchema.safeParse(input).success).toBe(false);
+    expect(newsSourceCreateSchema.safeParse({ ...input, kind: "telegram" }).success).toBe(false);
+    expect(newsSourceCreateSchema.safeParse({ ...input, kind: "rss" }).success).toBe(false);
+    expect(newsSourceUpdateSchema.safeParse({ url: input.url }).success).toBe(false);
+    expect(
+      newsSourceCreateSchema.safeParse({
+        ...input,
+        kind: "rss",
+        url: "https://example.com/feed",
+        name: "t.me/+JoinedChannelSecret",
+      }).success,
+    ).toBe(false);
+    expect(newsSourceUpdateSchema.safeParse({ name: "t.me/+JoinedChannelSecret" }).success).toBe(
+      false,
+    );
+  });
 });

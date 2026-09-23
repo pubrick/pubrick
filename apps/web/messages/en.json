@@ -90,6 +90,8 @@
     "kind": "Source type",
     "rss": "Feed",
     "telegram": "Telegram",
+    "telegramPrivate": "Private Telegram channel",
+    "privateSetup": "For a channel already joined by this workspace's Telegram account, an admin can add it from the trusted server terminal. Never paste an invite here.",
     "telegramUrl": "Public channel URL",
     "telegramSetup": "A workspace admin must connect a Telegram account before channel checks can run.",
     "setupGuide": "Setup guide",

@@ -30,6 +30,8 @@ export const newsSources = pgTable(
     name: text("name").notNull(),
     kind: text("kind", { enum: NEWS_SOURCE_KINDS }).notNull().default("rss"),
     url: text("url").notNull(),
+    /** Channel ID and access hash; never returned through the source API. */
+    privatePeerEncrypted: text("private_peer_encrypted"),
     isActive: boolean("is_active").notNull().default(true),
     checkIntervalMinutes: integer("check_interval_minutes").notNull().default(60),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
@@ -41,6 +43,10 @@ export const newsSources = pgTable(
     index("news_sources_org_brand_idx").on(t.orgId, t.brandId),
     uniqueIndex("news_sources_org_brand_url_idx").on(t.orgId, t.brandId, t.url),
     enumCheck("news_sources_kind_check", t.kind, NEWS_SOURCE_KINDS),
+    check(
+      "news_sources_private_peer_check",
+      sql`(${t.kind} = 'telegram_private') = (${t.privatePeerEncrypted} IS NOT NULL)`,
+    ),
   ],
 );
 

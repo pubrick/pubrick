@@ -11,7 +11,7 @@ export const NEWS_SOURCE_ERROR_CODES = [
   "telegram_unavailable",
 ] as const;
 
-export const NEWS_SOURCE_KINDS = ["rss", "telegram"] as const;
+export const NEWS_SOURCE_KINDS = ["rss", "telegram", "telegram_private"] as const;
 export type NewsSourceKind = (typeof NEWS_SOURCE_KINDS)[number];
 export const NEWS_COMMENT_STATUSES = [
   "pending",
@@ -27,9 +27,16 @@ const feedUrl = z
   .refine(
     (value) => {
       const parsed = new URL(value);
-      return !parsed.username && !parsed.password;
+      return (
+        !parsed.username &&
+        !parsed.password &&
+        !(
+          ["t.me", "telegram.me", "telegram.dog"].includes(parsed.hostname.toLowerCase()) &&
+          /^\/(?:\+|joinchat\/)/i.test(parsed.pathname)
+        )
+      );
     },
-    { message: "Feed URL must not contain credentials" },
+    { message: "Feed URL must not contain credentials or a Telegram invite" },
   );
 
 const telegramUrl = z
@@ -56,9 +63,22 @@ const telegramUrl = z
     (value) => `https://t.me/${new URL(value).pathname.slice(1).replace(/\/$/, "").toLowerCase()}`,
   );
 
+export const newsSourceNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .refine(
+    (value) =>
+      !/(?:https?:\/\/)?(?:t\.me|telegram\.me|telegram\.dog)\/(?:\+|joinchat\/)[A-Za-z0-9_-]+/i.test(
+        value,
+      ),
+    "Source name must not contain a Telegram invite",
+  );
+
 const sourceBase = {
   brandId: z.string().uuid(),
-  name: z.string().trim().min(1).max(120),
+  name: newsSourceNameSchema,
   checkIntervalMinutes: z.number().int().min(15).max(1440).default(60),
 };
 export const newsSourceCreateSchema = z.preprocess(
@@ -74,7 +94,7 @@ export const newsSourceCreateSchema = z.preprocess(
 export type NewsSourceCreate = z.infer<typeof newsSourceCreateSchema>;
 
 export const newsSourceUpdateSchema = z.object({
-  name: z.string().trim().min(1).max(120).optional(),
+  name: newsSourceNameSchema.optional(),
   url: z.union([telegramUrl, feedUrl]).optional(),
   isActive: z.boolean().optional(),
   checkIntervalMinutes: z.number().int().min(15).max(1440).optional(),
