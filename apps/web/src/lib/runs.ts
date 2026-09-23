@@ -270,11 +270,38 @@ export function runFailureMessage(
  *
  * `needsCheck` is the model's judgement that a reader could reasonably ask
  * whether the claim is true — NOT a verdict about the claim, and not the
- * result of a check. Nothing was checked: this step has no sources (see
- * `@pubrick/ai`'s FACTCHECK, and `CLAIMS_TO_VERIFY_LABEL`, which is what the
- * heading over this list says).
+ * result of a check. A source excerpt only shows that matching words appeared
+ * in material supplied for this run; no independent truth check occurred.
+ * `CLAIMS_TO_VERIFY_LABEL` remains the heading over the whole list.
  */
-export type RunClaim = { text: string; needsCheck: boolean };
+export type RunClaim = {
+  text: string;
+  needsCheck: boolean;
+  sourceId?: string | null;
+  sourceQuote?: string | null;
+};
+
+const NOTE_SOURCE_ID =
+  /^note:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+
+function excerptCorpus(run: RunDetail): Map<string, string> {
+  const corpus = new Map<string, string>();
+  const output = succeededOutput(run, "knowledge");
+  if (isRecord(output) && Array.isArray(output.entries)) {
+    for (const entry of output.entries.slice(0, 5)) {
+      if (isRecord(entry) && typeof entry.id === "string" && typeof entry.content === "string") {
+        const id = `note:${entry.id}`;
+        if (NOTE_SOURCE_ID.test(id)) corpus.set(id, entry.content.slice(0, 3000));
+      }
+    }
+  }
+  if (run.input.kind === "source") corpus.set("material", run.input.material.slice(0, 6000));
+  return corpus;
+}
+
+function normalizedExcerpt(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
 
 /**
  * A step's stored output, but only from a checkpoint that SUCCEEDED.
@@ -339,11 +366,27 @@ export function runClaims(run: RunDetail): RunClaim[] | null {
   const output = succeededOutput(run, "factcheck");
   if (!isRecord(output) || !Array.isArray(output.claims)) return null;
   const claims: RunClaim[] = [];
+  const corpus = excerptCorpus(run);
   for (const claim of output.claims) {
     if (!isRecord(claim)) return null;
     const { text, needsCheck } = claim;
     if (typeof text !== "string" || text === "" || typeof needsCheck !== "boolean") return null;
-    claims.push({ text, needsCheck });
+    const { sourceId, sourceQuote } = claim;
+    if (sourceId === undefined && sourceQuote === undefined) {
+      claims.push({ text, needsCheck });
+      continue;
+    }
+    const quote = typeof sourceQuote === "string" ? normalizedExcerpt(sourceQuote) : "";
+    if (
+      typeof sourceId === "string" &&
+      quote.length > 0 &&
+      quote.length <= 320 &&
+      normalizedExcerpt(corpus.get(sourceId) ?? "").includes(quote)
+    ) {
+      claims.push({ text, needsCheck, sourceId, sourceQuote: quote });
+    } else {
+      claims.push({ text, needsCheck, sourceId: null, sourceQuote: null });
+    }
   }
   return claims;
 }

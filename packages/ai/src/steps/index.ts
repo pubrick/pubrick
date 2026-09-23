@@ -22,7 +22,10 @@ export {
   FACTCHECK,
   type FactcheckInput,
   type FactcheckOutput,
+  type FactcheckSource,
   factcheckSchema,
+  factcheckSources,
+  validateFactcheckSources,
 } from "./factcheck.js";
 /**
  * How a step is built — exported, while `callStep` is not.

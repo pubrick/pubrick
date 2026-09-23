@@ -46,7 +46,7 @@ const isRunFinished = (run: RunDetail) => isTerminalRunStatus(run.status);
  * next action to teach, and "the step listed nothing" is a finding with no next
  * action, so it would have to invent one.
  */
-function StepLines({ lines, empty, mark }: StepLinesProps) {
+function StepLines({ lines, empty, mark, source }: StepLinesProps) {
   if (lines === null) return null;
   if (lines.length === 0) {
     return <p className="mt-2 text-sm text-fg-tertiary">{empty}</p>;
@@ -63,13 +63,24 @@ function StepLines({ lines, empty, mark }: StepLinesProps) {
           {line.marked && mark !== undefined && (
             <span className="ml-2 text-[13px] text-fg-tertiary">{mark}</span>
           )}
+          {line.sourceId && line.sourceQuote && source && (
+            <div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] text-fg-tertiary">
+              <p>{source(line.sourceId)}</p>
+              <p className="whitespace-pre-wrap">“{line.sourceQuote}”</p>
+            </div>
+          )}
         </li>
       ))}
     </ul>
   );
 }
 
-type StepLine = { text: string; marked: boolean };
+type StepLine = {
+  text: string;
+  marked: boolean;
+  sourceId?: string | null;
+  sourceQuote?: string | null;
+};
 
 /**
  * The two step outputs, each in the one shape `StepLines` renders — and each
@@ -77,7 +88,14 @@ type StepLine = { text: string; marked: boolean };
  * ("nothing to say") and not an absence to be mapped over.
  */
 function claimLines(claims: RunClaim[] | null): StepLine[] | null {
-  return claims === null ? null : claims.map((c) => ({ text: c.text, marked: c.needsCheck }));
+  return claims === null
+    ? null
+    : claims.map((c) => ({
+        text: c.text,
+        marked: c.needsCheck,
+        sourceId: c.sourceId,
+        sourceQuote: c.sourceQuote,
+      }));
 }
 
 function changeLines(changes: string[] | null): StepLine[] | null {
@@ -89,6 +107,7 @@ type StepLinesProps = {
   empty: string;
   /** Suffix for a marked line. Only the claims have one. */
   mark?: string;
+  source?: (id: string) => ReactNode;
 };
 
 /** One labelled thing the run was asked for. Every block in the card is one. */
@@ -217,6 +236,21 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             lines={claimLines(runClaims(run))}
             empty={t("claimsEmpty")}
             mark={t("claimNeedsCheck")}
+            source={(id) =>
+              id === "material" ? (
+                t("foundInMaterial")
+              ) : (
+                <>
+                  {t("foundInBrandNote")}{" "}
+                  <Link
+                    href={`/${locale}/brands/${run.brandId}/knowledge#knowledge-${id.slice(5)}`}
+                    className="text-accent hover:underline"
+                  >
+                    {t("currentNote")}
+                  </Link>
+                </>
+              )
+            }
           />
         );
       case "editor":

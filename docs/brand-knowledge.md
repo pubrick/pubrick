@@ -20,6 +20,18 @@ system instructions. This adds context; Pubrick does not check whether a note
 is accurate, or whether the resulting post is original. The usual human review
 and approval gate still applies.
 
+The claims step may attach a short excerpt from a selected note or the pasted
+text to an individual claim. The worker accepts that pair only when the source
+ID belongs to this run and the normalized excerpt occurs exactly in the saved
+snapshot. Invented excerpts and IDs are discarded; the claim stays on the
+**Claims to verify** list. The receipt labels an accepted excerpt "Found in
+brand note" or "Found in supplied material" and shows the actual words.
+The link beside a brand excerpt opens the *current* library note, which may
+have changed since the run; the excerpt itself remains from the run snapshot.
+These excerpts show where supplied material said something, not that Pubrick
+checked whether it was true. A recorded source URL is never fetched as part of
+this step and cannot support an excerpt by itself.
+
 The generation receipt lists the notes selected for that run and links to each
 note in the brand library. It retains the selection in the run checkpoint, so
 later edits to a note do not rewrite the receipt. Older checkpoints without

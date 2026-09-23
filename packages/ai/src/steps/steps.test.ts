@@ -19,6 +19,7 @@ import {
   FACTCHECK,
   type FactcheckInput,
   type FactcheckOutput,
+  factcheckSources,
   type Platform,
   RESEARCHER,
   type ResearchOutput,
@@ -338,6 +339,73 @@ describe("the editor", () => {
 });
 
 describe("the fact-checker", () => {
+  const noteId = "11111111-1111-4111-8111-111111111111";
+
+  it("accepts only short exact excerpts from this run's bounded source snapshots", async () => {
+    const sources = factcheckSources(
+      [{ id: noteId, content: "The Lisbon office opened in 2024.\nIt has 30 desks." }],
+      "The launch date is June 3.",
+    );
+    const model = jsonModel(
+      JSON.stringify({
+        claims: [
+          {
+            text: "The office has 30 desks.",
+            needsCheck: true,
+            sourceId: `note:${noteId}`,
+            sourceQuote: "It has 30 desks.",
+          },
+          {
+            text: "The launch date is June 3.",
+            needsCheck: true,
+            sourceId: "material",
+            sourceQuote: "The launch date is June 3.",
+          },
+          {
+            text: "An unsupported number.",
+            needsCheck: true,
+            sourceId: `note:${noteId}`,
+            sourceQuote: "It has 300 desks.",
+          },
+          {
+            text: "Another run's note.",
+            needsCheck: true,
+            sourceId: "note:22222222-2222-4222-8222-222222222222",
+            sourceQuote: "The Lisbon office opened in 2024.",
+          },
+          { text: "No excerpt.", needsCheck: true },
+        ],
+      }),
+    );
+    const output = await FACTCHECK.run(contextFor(model), { body: DRAFT_MARKER, sources });
+    expect(output.claims[0]).toMatchObject({
+      sourceId: `note:${noteId}`,
+      sourceQuote: "It has 30 desks.",
+    });
+    expect(output.claims[1]).toMatchObject({
+      sourceId: "material",
+      sourceQuote: "The launch date is June 3.",
+    });
+    expect(output.claims[2]).toMatchObject({ needsCheck: true, sourceId: null, sourceQuote: null });
+    expect(output.claims[3]).toMatchObject({ needsCheck: true, sourceId: null, sourceQuote: null });
+    expect(output.claims[4]).toEqual({ text: "No excerpt.", needsCheck: true });
+    const prompt = JSON.stringify(halvesOf(model));
+    expect(prompt).toContain(`SOURCE note:${noteId}`);
+    expect(prompt).toContain("SOURCE material");
+  });
+
+  it("excludes missing-ID notes and text beyond the prompt's source bounds", async () => {
+    const sources = factcheckSources([{ content: "Old note" }], `${"x".repeat(6000)}END`);
+    expect(sources).toEqual([{ id: "material", text: "x".repeat(6000) }]);
+    const model = jsonModel(
+      JSON.stringify({
+        claims: [{ text: "End", needsCheck: true, sourceId: "material", sourceQuote: "END" }],
+      }),
+    );
+    const output = await FACTCHECK.run(contextFor(model), { body: DRAFT_MARKER, sources });
+    expect(output.claims[0]).toMatchObject({ needsCheck: true, sourceId: null, sourceQuote: null });
+  });
+
   it("extracts claims and flags the ones a human would need to check", async () => {
     const model = jsonModel(
       JSON.stringify({

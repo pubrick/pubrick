@@ -259,6 +259,7 @@ describe("runKnowledgeNotes", () => {
 });
 
 describe("runClaims", () => {
+  const noteId = "11111111-1111-4111-8111-111111111111";
   const claims = [
     { text: "Revenue tripled in Q2.", needsCheck: true },
     { text: "Water is wet.", needsCheck: false },
@@ -267,6 +268,70 @@ describe("runClaims", () => {
   it("reads the claims out of a succeeded factcheck checkpoint", () => {
     const run = makeRun({ steps: { factcheck: { status: "succeeded", output: { claims } } } });
     expect(runClaims(run)).toEqual(claims);
+  });
+
+  it("renders only excerpts backed by this run's frozen note or pasted text", () => {
+    const claim = (sourceId: string, sourceQuote: string) => ({
+      text: "The office opened in 2024.",
+      needsCheck: true,
+      sourceId,
+      sourceQuote,
+    });
+    const sourceInput = {
+      kind: "source" as const,
+      text: null,
+      material: "The office opened in 2024.",
+      sourceUrl: "https://example.com/unfetched",
+      channelIds: [CH_A],
+    };
+    const run = makeRun({
+      input: sourceInput,
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [
+              { id: noteId, title: "Office", content: "The Lisbon office opened in 2024." },
+            ],
+          },
+        },
+        factcheck: {
+          status: "succeeded",
+          output: {
+            claims: [
+              claim(`note:${noteId}`, "Lisbon office opened in 2024."),
+              claim("material", "The office opened in 2024."),
+              claim(
+                "note:22222222-2222-4222-8222-222222222222",
+                "The Lisbon office opened in 2024.",
+              ),
+              claim("material", "https://example.com/unfetched"),
+            ],
+          },
+        },
+      },
+    });
+    expect(runClaims(run)?.map(({ sourceId, sourceQuote }) => ({ sourceId, sourceQuote }))).toEqual(
+      [
+        { sourceId: `note:${noteId}`, sourceQuote: "Lisbon office opened in 2024." },
+        { sourceId: "material", sourceQuote: "The office opened in 2024." },
+        { sourceId: null, sourceQuote: null },
+        { sourceId: null, sourceQuote: null },
+      ],
+    );
+    expect(
+      runClaims(
+        makeRun({
+          ...run,
+          steps: {
+            factcheck: {
+              status: "succeeded",
+              output: { claims: [claim(`note:${noteId}`, "Lisbon office opened in 2024.")] },
+            },
+          },
+        }),
+      )?.[0],
+    ).toMatchObject({ sourceId: null, sourceQuote: null });
   });
 
   it("says [] — ran, listed nothing — for an empty list, and null for no checkpoint", () => {

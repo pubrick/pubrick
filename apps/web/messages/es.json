@@ -657,6 +657,9 @@
     "stepProgress": "{done} de {total} canales",
     "claimsEmpty": "No se listó ninguna afirmación factual para este borrador.",
     "claimNeedsCheck": "Conviene verificar",
+    "foundInMaterial": "Encontrado en el material proporcionado",
+    "foundInBrandNote": "Encontrado en una nota de marca ·",
+    "currentNote": "Nota actual de la biblioteca",
     "changesEmpty": "La edición no cambió nada.",
     "status": {
       "queued": "En cola",
