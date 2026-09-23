@@ -28,7 +28,7 @@ describe("watched sources page", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  function install(items: unknown[] = [], sources: unknown[] = []) {
+  function install(items: unknown[] = [], sources: unknown[] = [], analysis?: unknown) {
     const calls: { url: string; method: string; body: unknown }[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
@@ -37,6 +37,23 @@ describe("watched sources page", () => {
       calls.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/sources/items?")) return response(200, items);
+      if (url.includes("/comment-analysis?"))
+        return response(
+          method === "POST" ? 201 : 200,
+          method === "POST"
+            ? {
+                status: "ready",
+                sampleSize: 1,
+                analyzedAt: "2026-09-23T12:00:00.000Z",
+                result: {
+                  summary: "Readers ask about pricing.",
+                  sentiment: { positive: 0, neutral: 1, negative: 0 },
+                  themes: [{ label: "Pricing", mentions: 1 }],
+                  feedback: ["Clarify the pricing."],
+                },
+              }
+            : (analysis ?? { status: "unavailable" }),
+        );
       if (url.includes("/comments/refresh")) return response(201, { queued: true });
       if (url.includes("/comments?")) return response(200, []);
       if (url.endsWith("/api/sources/telegram-connection"))
@@ -182,7 +199,7 @@ describe("watched sources page", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
     const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
-    expect(dialog.getByRole("status")).toHaveTextContent(en.Sources.commentsUnavailable);
+    expect(dialog.getByText(en.Sources.commentsUnavailable)).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: en.Sources.collectComments }));
     await waitFor(() =>
       expect(
@@ -193,5 +210,69 @@ describe("watched sources page", () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it("shows an explicit no-key state and runs analysis only on a manual request", async () => {
+    const item = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Channel story",
+      summary: "A story from the channel.",
+      url: "https://t.me/example_channel/42",
+      publishedAt: null,
+      commentsStatus: "available",
+      commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+      commentsErrorCode: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const source = { id: SOURCE_ID, kind: "telegram", isActive: true, name: "Channel" };
+    const calls = install([item], [source], { status: "no_key" });
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(await dialog.findByText(en.Sources.analysis_no_key)).toBeInTheDocument();
+    expect(dialog.queryByRole("button", { name: en.Sources.analyzeComments })).toBeNull();
+    expect(dialog.getByRole("link", { name: en.Sources.analysisSetupKey })).toHaveAttribute(
+      "href",
+      "/en/settings",
+    );
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
+  });
+
+  it("renders aggregate analysis after a deliberate click", async () => {
+    const item = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Story",
+      summary: "Summary",
+      url: "https://t.me/example_channel/42",
+      publishedAt: null,
+      commentsStatus: "available",
+      commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+      commentsErrorCode: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const source = { id: SOURCE_ID, kind: "telegram", isActive: true, name: "Channel" };
+    const calls = install([item], [source], { status: "not_analyzed" });
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(await dialog.findByText(en.Sources.analysis_not_analyzed)).toBeInTheDocument();
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
+    await user.click(dialog.getByRole("button", { name: en.Sources.analyzeComments }));
+    expect(await dialog.findByText("Readers ask about pricing.")).toBeInTheDocument();
+    expect(dialog.getByText("Pricing (1)")).toBeInTheDocument();
+    expect(dialog.getByText("Clarify the pricing.")).toBeInTheDocument();
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(true);
   });
 });

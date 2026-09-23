@@ -94,4 +94,22 @@ export class SourcesController {
   ) {
     return this.sources.refreshComments(orgId, brandId, itemId);
   }
+
+  @Get("items/:itemId/comment-analysis")
+  commentAnalysis(
+    @OrgId() orgId: string,
+    @Param("itemId", ParseUUIDPipe) itemId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.commentAnalysis(orgId, brandId, itemId);
+  }
+
+  @Post("items/:itemId/comment-analysis")
+  analyzeComments(
+    @OrgId() orgId: string,
+    @Param("itemId", ParseUUIDPipe) itemId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.analyzeComments(orgId, brandId, itemId);
+  }
 }
