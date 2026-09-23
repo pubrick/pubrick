@@ -1,6 +1,9 @@
 import { NEWS_FEEDBACK_SIGNALS, NEWS_SOURCE_KINDS } from "@pubrick/shared";
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
+  doublePrecision,
   index,
   integer,
   pgTable,
@@ -67,6 +70,17 @@ export const newsItems = pgTable(
     url: text("url").notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
+    relevanceStatus: text("relevance_status", { enum: ["unscored", "scored", "failed"] })
+      .notNull()
+      .default("unscored"),
+    relevanceScore: doublePrecision("relevance_score"),
+    relevanceReason: text("relevance_reason"),
+    relevanceUrgency: text("relevance_urgency", { enum: ["breaking", "timely", "evergreen"] }),
+    relevanceErrorCode: text("relevance_error_code", {
+      enum: ["no_api_key", "unreadable_key", "model_failed"],
+    }),
+    relevanceScoredAt: timestamp("relevance_scored_at", { withTimezone: true }),
+    relevanceAttempts: integer("relevance_attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -74,5 +88,35 @@ export const newsItems = pgTable(
     index("news_items_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     index("news_items_source_idx").on(t.sourceId),
     enumCheck("news_items_editor_signal_check", t.editorSignal, NEWS_FEEDBACK_SIGNALS),
+    enumCheck("news_items_relevance_status_check", t.relevanceStatus, [
+      "unscored",
+      "scored",
+      "failed",
+    ]),
+    enumCheck("news_items_relevance_urgency_check", t.relevanceUrgency, [
+      "breaking",
+      "timely",
+      "evergreen",
+    ]),
+    enumCheck("news_items_relevance_error_code_check", t.relevanceErrorCode, [
+      "no_api_key",
+      "unreadable_key",
+      "model_failed",
+    ]),
+    check(
+      "news_items_relevance_score_check",
+      sql`${t.relevanceScore} IS NULL OR (${t.relevanceScore} >= 0 AND ${t.relevanceScore} <= 1)`,
+    ),
+    check(
+      "news_items_relevance_consistency_check",
+      sql`(${t.relevanceStatus} = 'scored') = (${t.relevanceScore} IS NOT NULL AND ${t.relevanceReason} IS NOT NULL AND ${t.relevanceUrgency} IS NOT NULL AND ${t.relevanceScoredAt} IS NOT NULL)`,
+    ),
+    check("news_items_relevance_attempts_check", sql`${t.relevanceAttempts} >= 0`),
+    index("news_items_org_brand_relevance_idx").on(
+      t.orgId,
+      t.brandId,
+      t.relevanceStatus,
+      t.relevanceScore,
+    ),
   ],
 );

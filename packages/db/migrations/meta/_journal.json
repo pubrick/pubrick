@@ -211,6 +211,13 @@
       "when": 1790166444307,
       "tag": "0030_left_prodigy",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790166542842,
+      "tag": "0031_tan_grey_gargoyle",
+      "breakpoints": true
     }
   ]
 }

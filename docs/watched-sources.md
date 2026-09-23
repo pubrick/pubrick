@@ -23,10 +23,19 @@ Pause prevents future checks. Remove deletes the source and its collected
 articles, while any drafts already created from those articles remain.
 
 An editor can also mark an article **Relevant** or **Irrelevant**, or choose
-**Save topic**. These are human signals recorded for the brand; they do not
-change the feed order or run an AI relevance model. Saving is idempotent for
-one article. The topic keeps a snapshot of its title, summary, and URL, so
-deleting a source does not erase an idea already saved.
+**Save topic**. These are human decisions recorded for the brand. Saving is
+idempotent for one article. The topic keeps a snapshot of its title, summary,
+and URL, so deleting a source does not erase an idea already saved.
+
+The worker scores up to 20 newly collected articles per hour against the
+brand's description, voice, and audience. **Score** queues one article sooner.
+Scoring uses the organization's Gemini or OpenRouter key and writes each
+physical model call to the usage ledger. The AI returns a 0–100% match, a short
+reason, and an urgency label. Sort by AI relevance or filter by scoring status
+in Recent articles. An unscored or failed article has no numeric score; a
+provider error is never shown as 0%. A failed score can be retried manually.
+The AI score is advisory and never changes the editor's Relevant/Irrelevant
+choice, approves a topic, generates a draft, or publishes content.
 
 ## Boundaries
 
@@ -43,8 +52,13 @@ deleting a source does not erase an idea already saved.
   bodies are never returned to the browser. Refreshing a paused source is
   refused until it is resumed.
 
-The reference Content Factory also scored relevance with embeddings. This feed
-is chronological; its human feedback is not yet a ranking algorithm.
+The model sees the feed title and at most the first 4,000 summary characters,
+plus the feed publication date when provided; it does not read the full article.
+It can make mistakes and does not verify claims. Up to three queue deliveries are attempted
+automatically; each model call has a 60-second budget and no SDK transport
+retries. A structured-output repair can make one additional call per delivery.
+The hourly scan is bounded to 20 articles globally per installation; editors
+can request scoring individually. Human feedback is not a ranking algorithm.
 
 ## Dependencies
 

@@ -6,6 +6,10 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  RELEVANCE_SCAN_QUEUE,
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
@@ -40,6 +44,39 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers bounded relevance work, hourly scanning, and exhausted-job handling", async () => {
+    const boss = bossStub();
+    const relevance = { handle: vi.fn(), scan: vi.fn(), exhausted: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      relevance as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    expect(boss.updateQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    expect(boss.schedule).toHaveBeenCalledWith(RELEVANCE_SCAN_QUEUE, "0 * * * *");
+    const handle = boss.work.mock.calls.find((call) => call[0] === RELEVANCE_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const scan = boss.work.mock.calls.find(
+      (call) => call[0] === RELEVANCE_SCAN_QUEUE,
+    )?.[2] as () => Promise<void>;
+    const exhausted = boss.work.mock.calls.find((call) => call[0] === RELEVANCE_DLQ)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const payload = { orgId: "org", brandId: "brand", itemId: "item" };
+    await handle([{ data: payload }]);
+    await scan();
+    await exhausted([{ data: payload }]);
+    expect(relevance.handle).toHaveBeenCalledWith(payload);
+    expect(relevance.scan).toHaveBeenCalledWith(boss);
+    expect(relevance.exhausted).toHaveBeenCalledWith(payload);
+  });
   it("registers the RSS poll and scan queues when the RSS service is installed", async () => {
     const boss = bossStub();
     const rss = { handle: vi.fn(), scan: vi.fn() };

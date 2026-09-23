@@ -1,4 +1,4 @@
-import { newsSourceCreateSchema, runCreateSchema } from "@pubrick/shared";
+import { newsItemListQuerySchema, newsSourceCreateSchema, runCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -184,5 +184,49 @@ describe("watched sources page", () => {
         body: { signal: "relevant" },
       }),
     );
+  });
+
+  it("requests ranked articles and queues an unscored item without changing editor feedback", async () => {
+    const calls = install([
+      {
+        id: ITEM_ID,
+        brandId: BRAND_ID,
+        sourceId: SOURCE_ID,
+        title: "New market hall",
+        summary: "The council approved the project.",
+        url: "https://example.com/articles/hall",
+        editorSignal: "irrelevant",
+        publishedAt: null,
+        createdAt: "2026-09-23T12:00:00.000Z",
+        relevanceStatus: "unscored",
+        relevanceScore: null,
+        relevanceReason: null,
+        relevanceUrgency: null,
+        relevanceErrorCode: null,
+        relevanceScoredAt: null,
+      },
+    ]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await waitFor(() => expect(document.body.textContent).toContain(en.Sources.statusUnscored));
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.sortLabel), "relevance");
+    await user.selectOptions(screen.getByLabelText(en.Sources.statusLabel), "unscored");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("sort=relevance&status=unscored"))).toBe(true),
+    );
+    const request = calls.find((call) => call.url.includes("sort=relevance&status=unscored"));
+    const query = Object.fromEntries(new URL(request?.url ?? "", "http://localhost").searchParams);
+    expect(query).toEqual({ brandId: BRAND_ID, sort: "relevance", status: "unscored" });
+    expect(newsItemListQuerySchema.parse(query)).toEqual(query);
+    await user.click(screen.getByRole("button", { name: en.Sources.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Sources.score }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        url: expect.stringContaining(`/api/sources/items/${ITEM_ID}/score?brandId=${BRAND_ID}`),
+        method: "POST",
+        body: null,
+      }),
+    );
+    expect(document.body.textContent).toContain(en.Sources.irrelevant);
   });
 });

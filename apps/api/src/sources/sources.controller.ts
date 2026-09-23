@@ -11,8 +11,10 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type NewsItemListQuery,
   type NewsSourceCreate,
   type NewsSourceUpdate,
+  newsItemListQuerySchema,
   newsSourceCreateSchema,
   newsSourceUpdateSchema,
 } from "@pubrick/shared";
@@ -73,7 +75,19 @@ export class SourcesController {
   }
 
   @Get("items")
-  items(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
-    return this.sources.items(orgId, brandId);
+  items(
+    @OrgId() orgId: string,
+    @Query(new ZodValidationPipe(newsItemListQuerySchema)) query: NewsItemListQuery,
+  ) {
+    return this.sources.items(orgId, query);
+  }
+
+  @Post("items/:id/score")
+  score(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.score(orgId, brandId, id);
   }
 }

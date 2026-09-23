@@ -12,6 +12,10 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  type RelevanceJob,
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
   type RssPollJob,
@@ -88,6 +92,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     // Names/options come from @pubrick/shared so the worker cannot drift from them.
     await boss.createQueue(PUBLISH_DLQ);
     await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    await boss.createQueue(RELEVANCE_DLQ);
+    await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
     // createQueue is an ON CONFLICT DO NOTHING insert: on a database where the
@@ -113,6 +120,17 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(RSS_POLL_QUEUE, payload, {
       ...rssPollJobOptions(payload.sourceId, payload.orgId),
+      db: fromDrizzle(tx, sql),
+    });
+    return id !== null;
+  }
+
+  async enqueueRelevance(tx: Tx, payload: RelevanceJob): Promise<boolean> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(RELEVANCE_QUEUE, payload, {
+      singletonKey: payload.itemId,
+      singletonSeconds: 300,
+      group: { id: payload.orgId },
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
