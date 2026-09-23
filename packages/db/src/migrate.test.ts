@@ -231,6 +231,8 @@ const NON_ENUM_CHECKS = [
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",
+  // Automatic reads must remain a per-VK opt-in even for direct SQL writers.
+  "channels_metrics_auto_refresh_vk_check",
   // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
   // — it pins a value into a RELATIONSHIP with another column, so there is no
   // single `bogus` scalar the loop could try. Proved directly by "adds the
@@ -374,8 +376,8 @@ async function snapshotRows(pool: pg.Pool): Promise<Record<string, pg.QueryResul
 
 /**
  * Every value a row held before the migrations is still exactly that value
- * after them, and any column the migrations ADDED is null on every pre-existing
- * row.
+ * after them. New columns are null on pre-existing rows unless an explicit,
+ * safe default is part of their contract (VK background reads are opt-in).
  *
  * A plain `toEqual` of the two snapshots said the same thing while 0009 was the
  * only migration under test — it adds no columns, which is what let one seed
@@ -408,7 +410,11 @@ function expectNoRowRewritten(
       ).toEqual(beforeRow);
       const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
       expect(
-        added.filter((key) => afterRow[key] !== null),
+        added.filter((key) =>
+          table === "channels" && key === "metrics_auto_refresh"
+            ? afterRow[key] !== false
+            : afterRow[key] !== null,
+        ),
         `${table}: a column added after the seed was backfilled over an existing row`,
       ).toEqual([]);
     });

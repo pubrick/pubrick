@@ -226,4 +226,54 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         .body.code,
     ).toBe("metrics_unavailable");
   });
+
+  it("keeps background checks opt-in and scoped to VK channels and their organization", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Metrics settings" })
+      .expect(201);
+    const vk = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK",
+        credentials: { accessToken: "fake-test-token", groupId: "123" },
+      })
+      .expect(201);
+    expect(vk.body.metricsAutoRefresh).toBe(false);
+    await other.agent
+      .patch(`/api/channels/${vk.body.id}`)
+      .send({ metricsAutoRefresh: true })
+      .expect(404);
+    const enabled = await owner.agent
+      .patch(`/api/channels/${vk.body.id}`)
+      .send({ metricsAutoRefresh: true })
+      .expect(200);
+    expect(enabled.body.metricsAutoRefresh).toBe(true);
+    expect(
+      (await owner.agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200)).body[0]
+        .metricsAutoRefresh,
+    ).toBe(true);
+    const telegram = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Telegram",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    await owner.agent
+      .patch(`/api/channels/${telegram.body.id}`)
+      .send({ metricsAutoRefresh: true })
+      .expect(400);
+    const disabled = await owner.agent
+      .patch(`/api/channels/${vk.body.id}`)
+      .send({ metricsAutoRefresh: false })
+      .expect(200);
+    expect(disabled.body.metricsAutoRefresh).toBe(false);
+  });
 });

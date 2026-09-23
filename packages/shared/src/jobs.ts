@@ -47,6 +47,24 @@ export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
+/** Opt-in, bounded VK publication metric refresh. No credentials in job data. */
+export const VK_METRICS_QUEUE = "vk-metrics";
+export const VK_METRICS_SCAN_QUEUE = "vk-metrics-scan";
+export type VkMetricsJob = {
+  orgId: string;
+  brandId: string;
+  channelId: string;
+  publicationId: string;
+};
+export const VK_METRICS_OPTIONS = {
+  retryLimit: 1,
+  retryDelay: 60,
+  retryBackoff: true,
+  expireInSeconds: 90,
+} as const;
+export function vkMetricsJobOptions(publicationId: string, channelId: string) {
+  return { singletonKey: publicationId, singletonSeconds: 3600, group: { id: channelId } } as const;
+}
 export type TelegramCommentsJob = { orgId: string; itemId: string };
 export const TELEGRAM_COMMENTS_OPTIONS = {
   retryLimit: 1,
