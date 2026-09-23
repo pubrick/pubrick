@@ -38,9 +38,9 @@ spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
 provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
 brand; an article's title and summary can start a draft. See
-[watched sources](docs/watched-sources.md) for the exact limits. Not yet: a
-per-brand knowledge base, in-editor AI refinement, and publishers for the
-remaining platforms (the channel form names them and refuses to connect one).
+[watched sources](docs/watched-sources.md) for the exact limits. The per-brand
+knowledge base uses text search and optional Gemini vector indexing. Other
+platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
@@ -53,8 +53,8 @@ Public RSS syndication is available for selected published posts; see
   unless you explicitly enable autopilot. Anti-slop is the point.
 - **Brand voice** — voice, audience and content language are set per brand and
   go into every generation's instructions, so drafts sound like you rather than
-  like a model. (A per-brand knowledge base with retrieval is planned, not
-  built.)
+  like a model. Brand knowledge notes can be selected as material for a draft;
+  see [brand knowledge](docs/brand-knowledge.md).
 - **Bring your own keys** — Gemini and OpenRouter (hundreds of models);
   self-hosted generation at your own API cost.
 - **Own it** — AGPL-3.0, docker compose, Postgres as the only stateful service.

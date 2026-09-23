@@ -10,6 +10,12 @@ export {
   generateStructured,
   type ModelCallOptions,
 } from "./generate.js";
+export {
+  embedKnowledgeText,
+  KNOWLEDGE_EMBEDDING_DIMENSIONS,
+  KNOWLEDGE_EMBEDDING_MODEL,
+  type KnowledgeEmbeddingTask,
+} from "./knowledge-embedding.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,
@@ -53,6 +59,7 @@ export {
 } from "./steps/index.js";
 export {
   type CostSource,
+  callOutcomeOf,
   type MeteredCall,
   type ProviderCallResult,
   providerReportedCostUsd,

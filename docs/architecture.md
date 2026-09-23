@@ -46,16 +46,17 @@ adding a Node import.
 applied programmatically under an advisory lock at api boot. The schema
 *imports* its enums from `shared` rather than restating them; a CHECK constraint
 on every enum-bounded column is asserted in both directions by
-`schema-invariants.test.ts`. Sixteen tables in four files: `auth.ts` (better-auth:
+`schema-invariants.test.ts`. Eighteen tables in six files: `auth.ts` (better-auth:
 user, session, account, verification, organization, member, invitation),
-`content.ts` (brands, channels), `content-items.ts` (content_items,
+`content.ts` (brands, channels), `knowledge.ts` (brand notes), `content-items.ts` (content_items,
 adaptations, publications), `generation.ts` (ai_credentials, pipeline_runs,
-usage_ledger, content_versions).
+usage_ledger, content_versions), `refine.ts` (refine_proposals).
 
 **`packages/ai`** — every model call in the product. `defineStep` is the only
-way to make one and is what keeps the untrusted-text boundary, the schema sent
+way to make a structured text step and is what keeps the untrusted-text boundary, the schema sent
 to the model, and the ledger attribution from drifting apart. Five pipeline
-steps live in `steps/`; the metering (`usage.ts`), the call budget
+steps live in `steps/`; knowledge embeddings use the AI SDK's `embed` with a
+fixed model and dimension. The metering (`usage.ts`), the call budget
 (`budget.ts`), the failure classifier (`classify.ts`) and the price table
 (`pricing.ts`) are shared by every caller.
 
@@ -66,7 +67,7 @@ publisher's errors are one of three kinds — permanent, transient, or unknown
 outcome — and that distinction is the whole delivery story (below).
 
 **`apps/api`** — NestJS, one module per domain (`brands`, `channels`, `content`,
-`runs`, `ai-credentials`, `org`, `queue`, `health`). Controllers never touch the
+`runs`, `knowledge`, `ai-credentials`, `org`, `queue`, `health`). Controllers never touch the
 database; repositories take `orgId` first and select explicit column lists.
 Runs migrations on boot. Enqueues jobs in the same transaction as the write
 that justifies them.

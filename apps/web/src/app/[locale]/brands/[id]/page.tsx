@@ -421,6 +421,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         )}
       </Card>
 
+      <Card className="mb-6">
+        <h2 className="text-lg font-semibold text-fg">{tb("knowledgeTitle")}</h2>
+        <p className="mt-2 text-sm text-fg-secondary">{tb("knowledgeHint")}</p>
+        <Link
+          href={`/${locale}/brands/${id}/knowledge`}
+          className="mt-3 inline-block text-sm font-semibold text-accent underline-offset-2 hover:underline"
+        >
+          {tb("knowledgeOpen")}
+        </Link>
+      </Card>
+
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
 
       {/* Failed / not answered yet / genuinely none — three different things

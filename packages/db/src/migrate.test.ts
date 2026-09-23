@@ -114,6 +114,8 @@ const ZONED_COLUMNS = [
   "content_items.updated_at",
   "content_versions.created_at",
   "feed_entries.published_at",
+  "knowledge_entries.created_at",
+  "knowledge_entries.updated_at",
   "news_items.created_at",
   "news_items.published_at",
   "news_sources.created_at",
@@ -227,6 +229,10 @@ const NON_ENUM_CHECKS = [
   // schema-invariants.test.ts verifies the schema declaration; this count
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
+  // The knowledge category pin arrives after the pre-0009 seed, so it has no row for
+  // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
+  // the category constraint against a bogus update at head.
+  "knowledge_entries_category_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

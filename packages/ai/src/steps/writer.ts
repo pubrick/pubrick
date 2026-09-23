@@ -98,6 +98,14 @@ export const WRITER: Step<WriterInput, DraftOutput, RunStepContext> = defineStep
     if (ctx.material != null && ctx.material.trim() !== "") {
       blocks.push({ label: "SOURCE", text: ctx.material });
     }
+    if (ctx.knowledge?.length) {
+      blocks.push({
+        label: "BRAND KNOWLEDGE",
+        text: ctx.knowledge
+          .map((entry) => `[${entry.category}] ${entry.title}\n${entry.content}`)
+          .join("\n\n"),
+      });
+    }
     // Not re-parsed here: a resumed run reads this from a jsonb checkpoint, and
     // the place to validate that is the run, which can classify the failure. A
     // ZodError thrown from inside a step would reach pg-boss unclassified and be

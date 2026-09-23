@@ -71,6 +71,14 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
     if (ctx.material != null && ctx.material.trim() !== "") {
       blocks.push({ label: "SOURCE", text: ctx.material });
     }
+    if (ctx.knowledge?.length) {
+      blocks.push({
+        label: "BRAND KNOWLEDGE",
+        text: ctx.knowledge
+          .map((entry) => `[${entry.category}] ${entry.title}\n${entry.content}`)
+          .join("\n\n"),
+      });
+    }
     // `ctx.sourceUrl` is deliberately absent: attribution, not material.
     return blocks;
   },

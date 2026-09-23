@@ -45,6 +45,7 @@ export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
+export * from "./dto/knowledge.js";
 export {
   PROMPT_ROLES,
   type PromptRevisionCreate,
