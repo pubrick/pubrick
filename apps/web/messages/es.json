@@ -226,7 +226,23 @@
     "viewPost": "Ver publicación",
     "scheduledFor": "Programado para",
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
-    "overrideLabel": "Texto propio para {channel}"
+    "overrideLabel": "Texto propio para {channel}",
+    "versionHistory": "Historial de versiones",
+    "versionLoading": "Cargando versiones guardadas…",
+    "versionEmpty": "Guarda una edición del texto para empezar este historial.",
+    "versionPinned": "Este texto está bloqueado mientras la publicación está en curso o finalizada.",
+    "versionSaveFirst": "Guarda tus cambios actuales antes de restaurar una versión.",
+    "versionAi": "Borrador de IA",
+    "versionHuman": "Edición humana",
+    "versionPreview": "Vista previa",
+    "versionPreviewTitle": "Versión guardada",
+    "versionLoadMore": "Cargar más",
+    "versionCancel": "Cancelar",
+    "versionRestore": "Restaurar este texto",
+    "versionRestoring": "Restaurando…",
+    "versionRestoreConfirm": "Esto reemplazará el texto guardado actual. El texto restaurado se guardará como una nueva versión.",
+    "versionRestored": "Versión guardada restaurada.",
+    "versionAlreadyCurrent": "Esta versión ya coincide con el texto guardado."
   },
   "SettingsPage": {
     "title": "Ajustes",
@@ -355,6 +371,8 @@
   "Errors": {
     "content_not_found": "Esta publicación ya no existe: es posible que se haya eliminado.",
     "adaptation_not_found": "El texto propio de este canal ya no existe: es posible que el canal se haya eliminado.",
+    "version_not_found": "Esta versión guardada ya no está disponible. Actualiza el historial.",
+    "version_changed": "El texto guardado cambió desde que abriste el historial. Actualiza la página antes de restaurarlo.",
     "content_pinned_approved": "Una publicación aprobada no se puede editar. Recházala primero.",
     "content_pinned_published": "Esta publicación ya se ha publicado y no se puede editar.",
     "adaptation_pinned_scheduled": "Una publicación programada no se puede editar. Rechaza la publicación primero.",

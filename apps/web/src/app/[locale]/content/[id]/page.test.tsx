@@ -26,13 +26,14 @@ import ContentItemPage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: vi.fn(), apiVoid: vi.fn() };
+  return { ...actual, api: vi.fn(), apiPage: vi.fn(), apiVoid: vi.fn() };
 });
 
 // Imported after the mock so this binding is the mocked export.
-import { ApiError, api, apiVoid } from "@/lib/api";
+import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
+const mockApiPage = vi.mocked(apiPage);
 const mockApiVoid = vi.mocked(apiVoid);
 
 type Adaptation = {
@@ -225,6 +226,7 @@ function resultsList(): HTMLElement {
 
 beforeEach(() => {
   mockApi.mockReset();
+  mockApiPage.mockReset();
   mockApiVoid.mockReset();
   mockApiVoid.mockResolvedValue(undefined);
   // AppShell (now wrapping this page) reads a session for its sidebar user
@@ -825,6 +827,51 @@ describe("buttons disabled when published (Step 5)", () => {
     // Disabled buttons don't dispatch click at all — this is the same
     // guarantee real users get, not just an attribute check.
     expect(calls.length).toBe(callsBeforeClicks);
+  });
+});
+
+describe("restoring saved text", () => {
+  it("updates the editor draft and re-reads the saved item after restore", async () => {
+    const served = { current: makeItem({ body: "Current text." }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/restore")) {
+        served.current = { ...served.current, body: "Earlier text." };
+        return served.current;
+      }
+      return undefined;
+    });
+    mockApiPage.mockResolvedValue({
+      rows: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          adaptationId: null,
+          body: "Earlier text.",
+          origin: "human",
+          createdAt: "2026-09-01T10:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    expect(mockApiPage).not.toHaveBeenCalled();
+    await user.click(screen.getByText(en.Publish.versionHistory));
+    await user.click(await screen.findByRole("button", { name: en.Publish.versionPreview }));
+    await user.click(screen.getByRole("button", { name: en.Publish.versionRestore }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toHaveValue(
+        "Earlier text.",
+      );
+    });
+    expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/restore"))).toBe(
+      true,
+    );
+    expect(
+      calls.filter((call) => call.method === "GET" && call.path === "/api/content/c1"),
+    ).toHaveLength(2);
   });
 });
 
