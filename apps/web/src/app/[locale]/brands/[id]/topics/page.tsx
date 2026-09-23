@@ -249,6 +249,12 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
         </form>
       </Card>
       <p className="mb-4 text-sm text-fg-secondary">{t("hint")}</p>
+      <Link
+        href={`/${locale}/brands/${id}/autopilot`}
+        className="mb-4 inline-block text-sm text-accent underline"
+      >
+        {t("autopilotLink")}
+      </Link>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Button
           variant="secondary"

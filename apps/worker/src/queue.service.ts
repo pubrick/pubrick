@@ -27,6 +27,7 @@ import {
   type TopicSuggestionsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
+import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
@@ -123,6 +124,7 @@ export class QueueService {
     @Optional() private readonly relevance?: RelevanceService,
     @Optional() private readonly comments?: CommentsService,
     @Optional() private readonly suggestions?: SuggestionsService,
+    @Optional() private readonly autopilot?: AutopilotService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -294,6 +296,13 @@ export class QueueService {
       await boss.schedule("calendar-scan", "* * * * *");
       await boss.work("calendar-scan", { batchSize: 1 }, async () => {
         await this.calendar?.scan(boss);
+      });
+    }
+    if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("autopilot-scan");
+      await boss.schedule("autopilot-scan", "*/5 * * * *");
+      await boss.work("autopilot-scan", { batchSize: 1 }, async () => {
+        await this.autopilot?.scan(boss);
       });
     }
   }

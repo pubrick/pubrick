@@ -20,7 +20,7 @@ documents when they disagree.
 | Analytics | Usage and cost ledger; brand results and on-demand VK post metrics | Automatic collection, other-channel metrics and performance feedback |
 | Comment analysis | On-demand public Telegram reply sample and metered Google BYOK aggregate summary, sentiment and themes | Private or inaccessible discussions and feedback-informed ranking |
 | Knowledge base / RAG | Brand notes, CSV import, optional Gemini indexing, hybrid retrieval and selected-note links in run receipts | Migration of old notes, automatic indexing and claim-level source citations |
-| Autopilot | Not ported | Guardrails, digest and explicit owner-controlled automation |
+| Autopilot | Owner-controlled scheduled draft generation from approved topics, with per-brand quota and spend admission threshold | Morning digest, richer planning and review signals |
 | Prompt management | Built-in role prompts plus versioned, organization-scoped guidance | Version pinning on retries and experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
 | Notifications | Not ported | Actionable admin notifications |
