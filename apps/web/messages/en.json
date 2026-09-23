@@ -544,9 +544,17 @@
     "manual_publication_not_ready": "Approve this VC.ru post before recording its public URL.",
     "topic_not_found": "This topic is no longer available. Reload the topic bank.",
     "news_item_not_found": "This article is no longer available. Reload the source list.",
-    "topic_not_approved": "Approve this topic before generating."
+    "topic_not_approved": "Approve this topic before generating.",
+    "topic_suggestions_cooldown": "You can request more ideas in 30 minutes."
   },
   "Topics": {
+    "suggest": "Suggest topics with AI",
+    "suggestionWorking": "Finding ideas from your brand, topics, and scored articles…",
+    "suggestionComplete": "New ideas added: {count}. Review and approve before generating.",
+    "suggestionError_no_api_key": "Add an AI key in Settings, then try again.",
+    "suggestionError_unreadable_key": "Your AI key could not be read. Replace it in Settings, then try again.",
+    "suggestionError_model_failed": "Ideas could not be suggested. Try again later.",
+    "aiSuggestion": "AI suggestion",
     "title": "Topics for {brand}",
     "back": "Back to articles",
     "add": "Add topic",

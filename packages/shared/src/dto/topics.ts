@@ -2,6 +2,13 @@ import { z } from "zod";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 export const TOPIC_STATUSES = ["idea", "approved", "archived"] as const;
+export const TOPIC_ORIGINS = ["manual", "ai"] as const;
+export const TOPIC_SUGGESTION_REQUEST_STATUSES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+] as const;
 export type TopicStatus = (typeof TOPIC_STATUSES)[number];
 export const NEWS_FEEDBACK_SIGNALS = ["relevant", "irrelevant"] as const;
 
@@ -70,10 +77,22 @@ export const topicDtoSchema = z.object({
   description: z.string(),
   sourceUrl: z.string().nullable(),
   status: z.enum(TOPIC_STATUSES),
+  origin: z.enum(TOPIC_ORIGINS),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type TopicDto = z.infer<typeof topicDtoSchema>;
+
+export const topicSuggestionRequestDtoSchema = z.object({
+  id: z.string().uuid(),
+  brandId: z.string().uuid(),
+  status: z.enum(TOPIC_SUGGESTION_REQUEST_STATUSES),
+  errorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
+  suggestionCount: z.number().int().min(0).max(3),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type TopicSuggestionRequestDto = z.infer<typeof topicSuggestionRequestDtoSchema>;
 
 export const newsFeedbackSchema = z.object({
   signal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),

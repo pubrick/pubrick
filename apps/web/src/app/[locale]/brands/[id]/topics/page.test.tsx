@@ -37,6 +37,7 @@ describe("topic bank page", () => {
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
           {
@@ -47,6 +48,7 @@ describe("topic bank page", () => {
             description: "The council approved it.",
             sourceUrl: "https://example.com/hall",
             status,
+            origin: "manual",
             createdAt: "2026-09-23T12:00:00Z",
             updatedAt: "2026-09-23T12:00:00Z",
           },
@@ -83,5 +85,43 @@ describe("topic bank page", () => {
       method: "POST",
       body: { channelIds: [CHANNEL_ID] },
     });
+  });
+
+  it("requests suggestions, shows queued feedback, and does not generate automatically", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const queued = {
+      id: "749d9a5e-06f8-4b40-9b83-a33a6e69482a",
+      brandId: BRAND_ID,
+      status: "queued",
+      errorCode: null,
+      suggestionCount: 0,
+      createdAt: "2026-09-23T12:00:00Z",
+      updatedAt: "2026-09-23T12:00:00Z",
+    };
+    let request: typeof queued | null = null;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions?")) {
+        if (method === "POST") request = queued;
+        return response(200, method === "POST" ? request : { request });
+      }
+      if (url.includes("/api/topics?")) return response(200, []);
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Topics.suggest }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(en.Topics.suggestionWorking),
+    );
+    expect(calls).toContainEqual({
+      url: expect.stringContaining(`/api/topics/suggestions?brandId=${BRAND_ID}`),
+      method: "POST",
+    });
+    expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
   });
 });

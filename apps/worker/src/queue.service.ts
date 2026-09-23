@@ -18,12 +18,17 @@ import {
   RSS_POLL_QUEUE,
   RSS_SCAN_QUEUE,
   type RssPollJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { GenerateService } from "./generate/generate.service";
 import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
+import { SuggestionsService } from "./suggestions/suggestions.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
@@ -110,6 +115,7 @@ export class QueueService {
     private readonly generate: GenerateService,
     @Optional() private readonly rss?: RssService,
     @Optional() private readonly relevance?: RelevanceService,
+    @Optional() private readonly suggestions?: SuggestionsService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -161,6 +167,26 @@ export class QueueService {
       await boss.schedule(RELEVANCE_SCAN_QUEUE, "0 * * * *");
       await boss.work(RELEVANCE_SCAN_QUEUE, { batchSize: 1 }, async () =>
         this.relevance?.scan(boss),
+      );
+    }
+
+    if (this.suggestions && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
+      await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.handle(job.data);
+        },
+      );
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_DLQ,
+        { batchSize: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.exhausted(job.data);
+        },
       );
     }
 

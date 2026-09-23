@@ -77,6 +77,10 @@ export {
   type RssPollJob,
   rssPollJobOptions,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";

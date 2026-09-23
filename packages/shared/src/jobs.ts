@@ -34,6 +34,16 @@ export const RELEVANCE_QUEUE_OPTIONS = {
   heartbeatSeconds: 30,
   deadLetter: RELEVANCE_DLQ,
 } as const;
+export const TOPIC_SUGGESTIONS_QUEUE = "topic-suggestions";
+export const TOPIC_SUGGESTIONS_DLQ = "topic-suggestions-dlq";
+export type TopicSuggestionsJob = { orgId: string; brandId: string; requestId: string };
+export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 180,
+  heartbeatSeconds: 30,
+  deadLetter: TOPIC_SUGGESTIONS_DLQ,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const RSS_POLL_OPTIONS = {

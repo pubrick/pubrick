@@ -8,6 +8,8 @@ import { RelevanceRepository } from "./relevance/relevance.repository";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssRepository } from "./rss/rss.repository";
 import { RssService } from "./rss/rss.service";
+import { SuggestionsRepository } from "./suggestions/suggestions.repository";
+import { SuggestionsService } from "./suggestions/suggestions.service";
 
 @Module({
   providers: [
@@ -20,6 +22,8 @@ import { RssService } from "./rss/rss.service";
     RssService,
     RelevanceRepository,
     RelevanceService,
+    SuggestionsRepository,
+    SuggestionsService,
   ],
 })
 export class WorkerModule {}

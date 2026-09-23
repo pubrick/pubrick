@@ -11,7 +11,7 @@ documents when they disagree.
 | Brands | Present | Brand onboarding wizard |
 | Channels | Telegram, VK and MAX delivery; VC.ru manual publication workflow | Other platform adapters and per-platform media |
 | News monitoring | Brand-scoped RSS, Atom, RDF and JSON Feed sources, polling, article list, advisory AI relevance scoring and draft start | Telegram sources and feedback-informed ranking |
-| Topics bank | Brand-scoped human-reviewed ideas, import from watched articles, approval, edit/archive and generation via existing runs | AI topic suggestions and planning |
+| Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive and generation via existing runs | Editorial planning calendar |
 | Multi-agent generation | Five-step engine and run receipts present | Content-type pipelines, repurposing, date context and link policy |
 | Image generation | Not ported | Media storage, generation and per-image regeneration |
 | Review queue | Manual edits, approval, refine, provenance, saved version history and channel re-adaptation | Comments, per-platform previews and richer revisions |

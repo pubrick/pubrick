@@ -43,6 +43,19 @@ export class TopicsController {
     return this.topics.create(orgId, body);
   }
 
+  @Get("suggestions")
+  latestSuggestionRequest(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.topics.latestSuggestionRequest(orgId, brandId);
+  }
+
+  @Post("suggestions")
+  requestSuggestions(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.topics.requestSuggestions(orgId, brandId);
+  }
+
   @Post("from-news/:newsItemId")
   fromNews(
     @OrgId() orgId: string,

@@ -20,6 +20,10 @@ import {
   RSS_POLL_QUEUE,
   type RssPollJob,
   rssPollJobOptions,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
@@ -95,6 +99,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(RELEVANCE_DLQ);
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
+    await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(PUBLISH_QUEUE, { ...PUBLISH_QUEUE_OPTIONS });
     // createQueue is an ON CONFLICT DO NOTHING insert: on a database where the
@@ -134,6 +141,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
+  }
+
+  async enqueueTopicSuggestions(tx: Tx, payload: TopicSuggestionsJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(TOPIC_SUGGESTIONS_QUEUE, payload, {
+      id: payload.requestId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Topic suggestions are already queued");
   }
 
   /**

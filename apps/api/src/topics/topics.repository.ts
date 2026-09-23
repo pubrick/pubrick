@@ -7,9 +7,10 @@ import {
   type TopicRun,
   type TopicUpdate,
 } from "@pubrick/shared";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { QueueService } from "../queue/queue.service";
 import { RunsRepository } from "../runs/runs.repository";
 
 const COLUMNS = {
@@ -20,13 +21,17 @@ const COLUMNS = {
   description: schema.topics.description,
   sourceUrl: schema.topics.sourceUrl,
   status: schema.topics.status,
+  origin: schema.topics.origin,
   createdAt: schema.topics.createdAt,
   updatedAt: schema.topics.updatedAt,
 };
 
 @Injectable()
 export class TopicsRepository {
-  constructor(private readonly runs: RunsRepository) {}
+  constructor(
+    private readonly runs: RunsRepository,
+    private readonly queue: QueueService,
+  ) {}
 
   private async requireBrand(orgId: string, brandId: string) {
     const rows = await db
@@ -45,6 +50,87 @@ export class TopicsRepository {
       .where(and(eq(schema.topics.orgId, orgId), eq(schema.topics.brandId, brandId)))
       .orderBy(desc(schema.topics.createdAt), desc(schema.topics.id))
       .limit(200);
+  }
+
+  async latestSuggestionRequest(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const rows = await db
+      .select({
+        id: schema.topicSuggestionRequests.id,
+        brandId: schema.topicSuggestionRequests.brandId,
+        status: schema.topicSuggestionRequests.status,
+        errorCode: schema.topicSuggestionRequests.errorCode,
+        suggestionCount: schema.topicSuggestionRequests.suggestionCount,
+        createdAt: schema.topicSuggestionRequests.createdAt,
+        updatedAt: schema.topicSuggestionRequests.updatedAt,
+      })
+      .from(schema.topicSuggestionRequests)
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brandId),
+        ),
+      )
+      .orderBy(
+        desc(schema.topicSuggestionRequests.createdAt),
+        desc(schema.topicSuggestionRequests.id),
+      )
+      .limit(1);
+    return { request: rows[0] ?? null };
+  }
+
+  async requestSuggestions(orgId: string, brandId: string) {
+    return db.transaction(async (tx) => {
+      const brand = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("update");
+      if (!brand[0]) throw notFound("brand_not_found", "Brand not found");
+      const recent = await tx
+        .select({
+          id: schema.topicSuggestionRequests.id,
+          brandId: schema.topicSuggestionRequests.brandId,
+          status: schema.topicSuggestionRequests.status,
+          errorCode: schema.topicSuggestionRequests.errorCode,
+          suggestionCount: schema.topicSuggestionRequests.suggestionCount,
+          createdAt: schema.topicSuggestionRequests.createdAt,
+          updatedAt: schema.topicSuggestionRequests.updatedAt,
+        })
+        .from(schema.topicSuggestionRequests)
+        .where(
+          and(
+            eq(schema.topicSuggestionRequests.orgId, orgId),
+            eq(schema.topicSuggestionRequests.brandId, brandId),
+            gte(schema.topicSuggestionRequests.createdAt, new Date(Date.now() - 30 * 60_000)),
+          ),
+        )
+        .orderBy(
+          desc(schema.topicSuggestionRequests.createdAt),
+          desc(schema.topicSuggestionRequests.id),
+        )
+        .limit(1);
+      if (recent[0] && !["no_api_key", "unreadable_key"].includes(recent[0].errorCode ?? "")) {
+        if (recent[0].status === "queued" || recent[0].status === "running") return recent[0];
+        throw conflict("topic_suggestions_cooldown", "Try suggesting topics again in 30 minutes");
+      }
+      const rows = await tx
+        .insert(schema.topicSuggestionRequests)
+        .values({ orgId, brandId })
+        .returning({
+          id: schema.topicSuggestionRequests.id,
+          brandId: schema.topicSuggestionRequests.brandId,
+          status: schema.topicSuggestionRequests.status,
+          errorCode: schema.topicSuggestionRequests.errorCode,
+          suggestionCount: schema.topicSuggestionRequests.suggestionCount,
+          createdAt: schema.topicSuggestionRequests.createdAt,
+          updatedAt: schema.topicSuggestionRequests.updatedAt,
+        });
+      const request = rows[0];
+      if (!request) throw new Error("Suggestion request insert returned no row");
+      await this.queue.enqueueTopicSuggestions(tx, { orgId, brandId, requestId: request.id });
+      return request;
+    });
   }
 
   async get(orgId: string, brandId: string, id: string) {

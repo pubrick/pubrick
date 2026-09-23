@@ -544,9 +544,17 @@
     "manual_publication_not_ready": "Aprueba esta publicación de VC.ru antes de registrar su URL pública.",
     "topic_not_found": "Este tema ya no está disponible. Vuelve a cargar el banco de temas.",
     "news_item_not_found": "Este artículo ya no está disponible. Vuelve a cargar la lista de fuentes.",
-    "topic_not_approved": "Aprueba este tema antes de generar."
+    "topic_not_approved": "Aprueba este tema antes de generar.",
+    "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos."
   },
   "Topics": {
+    "suggest": "Sugerir temas con IA",
+    "suggestionWorking": "Buscando ideas a partir de la marca, los temas y los artículos evaluados…",
+    "suggestionComplete": "Se añadieron {count} ideas nuevas. Revísalas y apruébalas antes de generar.",
+    "suggestionError_no_api_key": "Añade una clave de IA en Ajustes y vuelve a intentarlo.",
+    "suggestionError_unreadable_key": "No se pudo leer la clave de IA. Sustitúyela en Ajustes.",
+    "suggestionError_model_failed": "No se pudieron sugerir temas. Inténtalo más tarde.",
+    "aiSuggestion": "Sugerencia de IA",
     "title": "Temas de {brand}",
     "back": "Volver a los artículos",
     "add": "Añadir tema",

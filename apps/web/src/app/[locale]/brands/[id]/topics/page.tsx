@@ -1,6 +1,11 @@
 "use client";
 
-import { type TopicDto, topicCreateSchema, topicUpdateSchema } from "@pubrick/shared";
+import {
+  type TopicDto,
+  type TopicSuggestionRequestDto,
+  topicCreateSchema,
+  topicUpdateSchema,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -32,6 +37,9 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
   const [topics, setTopics] = useState<TopicDto[] | null>(null);
+  const [suggestionRequest, setSuggestionRequest] = useState<TopicSuggestionRequestDto | null>(
+    null,
+  );
   const [channels, setChannels] = useState<Channel[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -61,11 +69,13 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
       api<Brand>(`/api/brands/${id}`),
       api<TopicDto[]>(`/api/topics?brandId=${id}`),
       api<Channel[]>(`/api/channels?brandId=${id}`),
+      api<{ request: TopicSuggestionRequestDto | null }>(`/api/topics/suggestions?brandId=${id}`),
     ])
-      .then(([nextBrand, nextTopics, nextChannels]) => {
+      .then(([nextBrand, nextTopics, nextChannels, nextRequest]) => {
         setBrand(nextBrand);
         setTopics(nextTopics);
         setChannels(nextChannels);
+        setSuggestionRequest(nextRequest.request);
         setError(null);
       })
       .catch((err) => setError(describeError(err)));
@@ -74,6 +84,29 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (suggestionRequest?.status !== "queued" && suggestionRequest?.status !== "running") return;
+    const timer = window.setInterval(load, 5000);
+    return () => window.clearInterval(timer);
+  }, [load, suggestionRequest?.status]);
+
+  async function suggestTopics() {
+    setBusy(true);
+    setError(null);
+    try {
+      const request = await api<TopicSuggestionRequestDto>(
+        `/api/topics/suggestions?brandId=${id}`,
+        { method: "POST" },
+      );
+      setSuggestionRequest(request);
+      load();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function add(event: React.FormEvent) {
     event.preventDefault();
@@ -216,6 +249,28 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
         </form>
       </Card>
       <p className="mb-4 text-sm text-fg-secondary">{t("hint")}</p>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          onClick={() => void suggestTopics()}
+          disabled={
+            busy ||
+            suggestionRequest?.status === "queued" ||
+            suggestionRequest?.status === "running"
+          }
+        >
+          {t("suggest")}
+        </Button>
+        {suggestionRequest && (
+          <span role="status" className="text-sm text-fg-secondary">
+            {suggestionRequest.status === "failed"
+              ? t(`suggestionError_${suggestionRequest.errorCode ?? "model_failed"}`)
+              : suggestionRequest.status === "succeeded"
+                ? t("suggestionComplete", { count: suggestionRequest.suggestionCount })
+                : t("suggestionWorking")}
+          </span>
+        )}
+      </div>
       <Card padded={false}>
         {topics === null && error ? (
           <EmptyState
@@ -254,6 +309,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                   <StatusBadge status={topic.status === "approved" ? "published" : "draft"}>
                     {t(`status_${topic.status}`)}
                   </StatusBadge>
+                  {topic.origin === "ai" && <> · {t("aiSuggestion")}</>}
                   {topic.sourceUrl && (
                     <>
                       {" "}
