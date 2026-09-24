@@ -40,6 +40,7 @@ import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
+import { ClientReviewLink } from "./client-review-link";
 import { SourceStrip } from "./source-strip";
 import { VersionHistory } from "./version-history";
 
@@ -1651,6 +1652,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </Card>
         ))}
       </div>
+
+      <ClientReviewLink
+        itemId={id}
+        canCreate={["draft", "rejected", "failed"].includes(item.status)}
+        revision={JSON.stringify([
+          item.updatedAt,
+          item.coverMediaId,
+          item.adaptations.map((adaptation) => [adaptation.id, adaptation.body]),
+        ])}
+      />
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
