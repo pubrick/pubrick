@@ -291,6 +291,10 @@ const NON_ENUM_CHECKS = [
   // the source login API owns allowed transitions and exhaustion.
   "telegram_login_attempts_stage_check",
   "telegram_login_attempts_attempts_check",
+  // 0061: scheduling limits and channel admission remain enforced for direct SQL writers.
+  "topics_priority_check",
+  "autopilot_configs_planning_daily_limit_check",
+  "autopilot_configs_auto_plan_channels_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",
@@ -2426,6 +2430,98 @@ describe.skipIf(!url)("runMigrations", () => {
         await after.query(
           "UPDATE news_items SET embedding = $1::vector, embedding_model = 'gemini-embedding-001', embedding_dimensions = 768 WHERE id = $2",
           [vector, itemId],
+        );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds opt-in dated topic planning without changing existing plans or configs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0061_dated_topic_planning");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      let brandId!: string;
+      let channelId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_plan_org', 'Test', 'topic-plan-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_plan_org', 'Brand') RETURNING id",
+        );
+        brandId = brand.rows[0]?.id as string;
+        const channel = await pool.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('topic_plan_org', $1, 'telegram', 'Main', 'blob') RETURNING id",
+          [brandId],
+        );
+        channelId = channel.rows[0]?.id as string;
+        const topic = await pool.query<{ id: string }>(
+          "INSERT INTO topics (org_id, brand_id, title) VALUES ('topic_plan_org', $1, 'Existing idea') RETURNING id",
+          [brandId],
+        );
+        topicId = topic.rows[0]?.id as string;
+        await pool.query(
+          "INSERT INTO autopilot_configs (org_id, brand_id, channel_ids, auto_suggest_topics) VALUES ('topic_plan_org', $1, '[]', true)",
+          [brandId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        expect(
+          (
+            await after.query("SELECT title, planned_date, priority FROM topics WHERE id = $1", [
+              topicId,
+            ])
+          ).rows,
+        ).toEqual([{ title: "Existing idea", planned_date: null, priority: 5 }]);
+        expect(
+          (
+            await after.query(
+              "SELECT auto_suggest_topics, auto_plan_topics, planning_daily_limit FROM autopilot_configs WHERE brand_id = $1",
+              [brandId],
+            )
+          ).rows,
+        ).toEqual([
+          { auto_suggest_topics: true, auto_plan_topics: false, planning_daily_limit: 1 },
+        ]);
+        expect(
+          await refusal(after, "UPDATE topics SET priority = 0 WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, "UPDATE topics SET priority = 11 WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE autopilot_configs SET planning_daily_limit = 6 WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE autopilot_configs SET auto_plan_topics = true WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await after.query(
+          "UPDATE autopilot_configs SET channel_ids = $1::jsonb, auto_plan_topics = true, planning_daily_limit = 3 WHERE brand_id = $2",
+          [JSON.stringify([channelId]), brandId],
+        );
+        await after.query(
+          "UPDATE topics SET planned_date = '2026-10-11', priority = 1 WHERE id = $1",
+          [topicId],
         );
       } finally {
         await after.end();

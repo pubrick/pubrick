@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -43,9 +44,13 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const [channels, setChannels] = useState<Channel[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [plannedDate, setPlannedDate] = useState("");
+  const [priority, setPriority] = useState(5);
   const [editing, setEditing] = useState<TopicDto | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editPlannedDate, setEditPlannedDate] = useState("");
+  const [editPriority, setEditPriority] = useState(5);
   const [toDelete, setToDelete] = useState<TopicDto | null>(null);
   const [toRun, setToRun] = useState<TopicDto | null>(null);
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
@@ -110,7 +115,13 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
 
   async function add(event: React.FormEvent) {
     event.preventDefault();
-    const parsed = topicCreateSchema.safeParse({ brandId: id, title, description });
+    const parsed = topicCreateSchema.safeParse({
+      brandId: id,
+      title,
+      description,
+      ...(plannedDate ? { plannedDate } : {}),
+      priority,
+    });
     if (!parsed.success) {
       setError(t("invalid"));
       return;
@@ -121,6 +132,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
       await api("/api/topics", { method: "POST", body: JSON.stringify(parsed.data) });
       setTitle("");
       setDescription("");
+      setPlannedDate("");
+      setPriority(5);
       load();
     } catch (err) {
       setError(describeError(err));
@@ -133,6 +146,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
     setEditing(topic);
     setEditTitle(topic.title);
     setEditDescription(topic.description);
+    setEditPlannedDate(topic.plannedDate ?? "");
+    setEditPriority(topic.priority);
     setDialogError(null);
   }
 
@@ -143,7 +158,14 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   async function saveEdit(event: React.FormEvent) {
     event.preventDefault();
     if (!editing) return;
-    const parsed = topicUpdateSchema.safeParse({ title: editTitle, description: editDescription });
+    const parsed = topicUpdateSchema.safeParse({
+      ...(editTitle !== editing.title ? { title: editTitle } : {}),
+      ...(editDescription !== editing.description ? { description: editDescription } : {}),
+      ...(editPlannedDate !== (editing.plannedDate ?? "")
+        ? { plannedDate: editPlannedDate || null }
+        : {}),
+      ...(editPriority !== editing.priority ? { priority: editPriority } : {}),
+    });
     if (!parsed.success) {
       setDialogError(t("invalid"));
       return;
@@ -246,6 +268,25 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             maxLength={2000}
             showCount
           />
+          <Advanced dirty={Boolean(plannedDate) || priority !== 5}>
+            <div className="flex flex-col gap-3">
+              <Input
+                label={t("plannedDate")}
+                type="date"
+                value={plannedDate}
+                onChange={(event) => setPlannedDate(event.target.value)}
+              />
+              <Input
+                label={t("priority")}
+                type="number"
+                min={1}
+                max={10}
+                value={priority}
+                onChange={(event) => setPriority(Number(event.target.value))}
+              />
+              <p className="text-xs text-fg-secondary">{t("plannedDateHint")}</p>
+            </div>
+          </Advanced>
         </form>
       </Card>
       <p className="mb-4 text-sm text-fg-secondary">{t("hint")}</p>
@@ -316,6 +357,20 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                     {t(`status_${topic.status}`)}
                   </StatusBadge>
                   {topic.origin === "ai" && <> · {t("aiSuggestion")}</>}
+                  {topic.plannedDate && (
+                    <>
+                      {" · "}
+                      {t("plannedFor", {
+                        date: new Date(`${topic.plannedDate}T12:00:00Z`).toLocaleDateString(
+                          locale,
+                          {
+                            timeZone: "UTC",
+                          },
+                        ),
+                      })}
+                    </>
+                  )}
+                  {topic.priority !== 5 && <> · {t("priorityValue", { value: topic.priority })}</>}
                   {topic.sourceUrl && (
                     <>
                       {" "}
@@ -421,6 +476,25 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             maxLength={2000}
             showCount
           />
+          <Advanced dirty={Boolean(editPlannedDate) || editPriority !== 5}>
+            <div className="flex flex-col gap-3">
+              <Input
+                label={t("plannedDate")}
+                type="date"
+                value={editPlannedDate}
+                onChange={(event) => setEditPlannedDate(event.target.value)}
+              />
+              <Input
+                label={t("priority")}
+                type="number"
+                min={1}
+                max={10}
+                value={editPriority}
+                onChange={(event) => setEditPriority(Number(event.target.value))}
+              />
+              <p className="text-xs text-fg-secondary">{t("plannedDateHint")}</p>
+            </div>
+          </Advanced>
         </form>
       </Modal>
       <Modal

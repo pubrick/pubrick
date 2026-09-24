@@ -11,6 +11,8 @@ export const autopilotConfigSchema = z
     enabled: z.boolean(),
     /** Optional on writes so older clients do not reset an existing opt-in. */
     autoSuggestTopics: z.boolean().optional(),
+    /** Optional on writes so older clients do not reset an existing opt-in. */
+    autoPlanTopics: z.boolean().optional(),
     channelIds,
     timezone: z
       .string()
@@ -28,10 +30,12 @@ export const autopilotConfigSchema = z
     quietStartHour: z.number().int().min(0).max(23),
     quietEndHour: z.number().int().min(0).max(23),
     dailyRunLimit: z.number().int().min(1).max(5),
+    /** Optional on writes so older clients retain the configured planning cap. */
+    planningDailyLimit: z.number().int().min(1).max(5).optional(),
     dailySpendLimitUsd: z.number().min(0.01).max(1000),
   })
-  .refine((value) => !value.enabled || value.channelIds.length > 0, {
-    message: "Select at least one channel before enabling autopilot",
+  .refine((value) => (!value.enabled && !value.autoPlanTopics) || value.channelIds.length > 0, {
+    message: "Select at least one channel before enabling autopilot or topic planning",
     path: ["channelIds"],
   });
 export type AutopilotConfig = z.infer<typeof autopilotConfigSchema>;
@@ -39,12 +43,14 @@ export type AutopilotConfig = z.infer<typeof autopilotConfigSchema>;
 export const autopilotDefaults: AutopilotConfig = {
   enabled: false,
   autoSuggestTopics: false,
+  autoPlanTopics: false,
   channelIds: [],
   timezone: "UTC",
   startHour: 9,
   quietStartHour: 22,
   quietEndHour: 8,
   dailyRunLimit: 1,
+  planningDailyLimit: 1,
   dailySpendLimitUsd: 1,
 };
 

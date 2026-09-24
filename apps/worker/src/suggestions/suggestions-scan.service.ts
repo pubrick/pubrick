@@ -69,7 +69,7 @@ export class SuggestionsScanService {
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-        .for("update")
+        .for("no key update")
         .limit(1);
       if (!brand) return "disabled";
       // Serializes scanner replicas and protects the day check and enqueue.

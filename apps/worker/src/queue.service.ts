@@ -33,6 +33,7 @@ import {
 import type { PgBoss } from "pg-boss";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { TopicPlannerService } from "./calendar/topic-planner.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
@@ -139,6 +140,7 @@ export class QueueService {
     @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
     @Optional() private readonly webhooks?: WebhooksService,
     @Optional() private readonly suggestionsScan?: SuggestionsScanService,
+    @Optional() private readonly topicPlanner?: TopicPlannerService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -362,6 +364,13 @@ export class QueueService {
       await boss.schedule("calendar-scan", "* * * * *");
       await boss.work("calendar-scan", { batchSize: 1 }, async () => {
         await this.calendar?.scan(boss);
+      });
+    }
+    if (this.topicPlanner && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("topic-planning-scan");
+      await boss.schedule("topic-planning-scan", "0 * * * *");
+      await boss.work("topic-planning-scan", { batchSize: 1 }, async () => {
+        await this.topicPlanner?.scan();
       });
     }
     if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {

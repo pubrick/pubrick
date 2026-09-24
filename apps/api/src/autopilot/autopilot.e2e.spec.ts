@@ -2,7 +2,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
 import { autopilotConfigSchema } from "@pubrick/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -62,6 +62,8 @@ describe.skipIf(!url)("autopilot API", () => {
     const initial = await owner.agent.get(configUrl).expect(200);
     expect(initial.body.enabled).toBe(false);
     expect(initial.body.autoSuggestTopics).toBe(false);
+    expect(initial.body.autoPlanTopics).toBe(false);
+    expect(initial.body.planningDailyLimit).toBe(1);
     await other.agent.get(configUrl).expect(404);
     await other.agent.get(`${configUrl}/history`).expect(404);
     const payload = {
@@ -106,6 +108,60 @@ describe.skipIf(!url)("autopilot API", () => {
       .send({ ...payload, autoSuggestTopics: true })
       .expect(200);
     expect((await owner.agent.get(configUrl).expect(200)).body.autoSuggestTopics).toBe(true);
+    await owner.agent
+      .put(configUrl)
+      .send({
+        ...payload,
+        enabled: false,
+        autoSuggestTopics: undefined,
+        autoPlanTopics: true,
+        planningDailyLimit: 3,
+      })
+      .expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body).toMatchObject({
+      enabled: false,
+      autoPlanTopics: true,
+      planningDailyLimit: 3,
+    });
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, enabled: false, autoPlanTopics: true, channelIds: [] })
+      .expect(400);
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, enabled: false, autoPlanTopics: true, planningDailyLimit: 0 })
+      .expect(400);
+    // A previous client version omits the new keys. Both values survive its PUT.
+    await owner.agent
+      .put(configUrl)
+      .send({
+        ...payload,
+        enabled: false,
+        autoSuggestTopics: undefined,
+        autoPlanTopics: undefined,
+        planningDailyLimit: undefined,
+      })
+      .expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body).toMatchObject({
+      enabled: false,
+      autoPlanTopics: true,
+      planningDailyLimit: 3,
+    });
+    await owner.agent
+      .put(configUrl)
+      .send({
+        ...payload,
+        enabled: false,
+        autoSuggestTopics: undefined,
+        channelIds: [],
+        autoPlanTopics: undefined,
+      })
+      .expect(400);
+    await expect(
+      db.execute(
+        sql`update autopilot_configs set planning_daily_limit = 6 where brand_id = ${brand.body.id}`,
+      ),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
     await db
       .update(schema.member)
       .set({ role: "member" })
@@ -117,7 +173,8 @@ describe.skipIf(!url)("autopilot API", () => {
       .send({ ...payload, enabled: false, autoSuggestTopics: false })
       .expect(403);
     const afterDenied = (await owner.agent.get(configUrl).expect(200)).body;
-    expect(afterDenied.enabled).toBe(true);
+    expect(afterDenied.enabled).toBe(false);
     expect(afterDenied.autoSuggestTopics).toBe(true);
+    expect(afterDenied.autoPlanTopics).toBe(true);
   });
 });

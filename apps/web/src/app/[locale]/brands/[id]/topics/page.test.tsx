@@ -2,7 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { renderAsync, screen, waitFor, within } from "@/test/render";
+import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import TopicsPage from "./page";
 
@@ -49,6 +49,9 @@ describe("topic bank page", () => {
             sourceUrl: "https://example.com/hall",
             status,
             origin: "manual",
+            plannedDate: null,
+            priority: 5,
+            revision: 1,
             createdAt: "2026-09-23T12:00:00Z",
             updatedAt: "2026-09-23T12:00:00Z",
           },
@@ -127,5 +130,89 @@ describe("topic bank page", () => {
       method: "POST",
     });
     expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
+  });
+
+  it("saves an optional target date and priority without generating or approving", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ url, method, body });
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics?") || url.endsWith("/api/topics"))
+        return response(method === "POST" ? 201 : 200, method === "POST" ? body : []);
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: en.Topics.name }), "Product launch");
+    await user.click(screen.getByText(en.Ui.advanced));
+    fireEvent.change(screen.getByLabelText(en.Topics.plannedDate), {
+      target: { value: "2026-10-10" },
+    });
+    await user.clear(screen.getByLabelText(en.Topics.priority));
+    await user.type(screen.getByLabelText(en.Topics.priority), "8");
+    await user.click(screen.getByRole("button", { name: en.Topics.add }));
+    await waitFor(() =>
+      expect(
+        requests.find((entry) => entry.method === "POST" && entry.url.endsWith("/api/topics"))
+          ?.body,
+      ).toMatchObject({
+        brandId: BRAND_ID,
+        title: "Product launch",
+        plannedDate: "2026-10-10",
+        priority: 8,
+      }),
+    );
+    expect(requests.some((entry) => entry.url.includes("/run"))).toBe(false);
+  });
+
+  it("changes an approved topic's date without resubmitting its reviewed brief", async () => {
+    const requests: Array<{ method: string; body: unknown }> = [];
+    const topic = {
+      id: TOPIC_ID,
+      brandId: BRAND_ID,
+      newsItemId: null,
+      title: "Reviewed launch",
+      description: "Approved details",
+      sourceUrl: null,
+      status: "approved",
+      origin: "manual",
+      plannedDate: null,
+      priority: 5,
+      revision: 2,
+      createdAt: "2026-09-23T12:00:00Z",
+      updatedAt: "2026-09-23T12:00:00Z",
+    };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ method, body });
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes(`/api/topics/${TOPIC_ID}`)) return response(200, { ...topic, ...body });
+      if (url.includes("/api/topics?")) return response(200, [topic]);
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Topics.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Topics.edit }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Topics.editTitle }));
+    await user.click(dialog.getByText(en.Ui.advanced));
+    fireEvent.change(dialog.getByLabelText(en.Topics.plannedDate), {
+      target: { value: "2026-10-11" },
+    });
+    await user.click(dialog.getByRole("button", { name: en.Topics.save }));
+    await waitFor(() =>
+      expect(requests.find((entry) => entry.method === "PATCH")?.body).toEqual({
+        plannedDate: "2026-10-11",
+      }),
+    );
   });
 });

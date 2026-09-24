@@ -102,6 +102,62 @@ describe.skipIf(!url)("calendar API", () => {
     expect(listed.body).toHaveLength(2);
   });
 
+  it("keeps one linked slot per topic and clears its target date when removed", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const topicId = await approvedTopic(owner, brandId, "Dated launch");
+    const plannedDate = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    const dated = await owner
+      .patch(`/api/topics/${topicId}?brandId=${brandId}`)
+      .send({ plannedDate, priority: 8 })
+      .expect(200);
+    expect(dated.body).toMatchObject({ status: "approved", plannedDate, priority: 8 });
+    const scheduledAt = new Date(Date.now() + 5 * 86_400_000).toISOString();
+    const created = await owner
+      .post("/api/calendar/slots")
+      .send({ brandId, topicId, scheduledAt, channelIds: [channelId] })
+      .expect(201);
+    expect(created.body.topicRevision).toBe(dated.body.revision);
+    const duplicate = await owner
+      .post("/api/calendar/slots")
+      .send({ brandId, topicId, scheduledAt, channelIds: [channelId] })
+      .expect(409);
+    expect(duplicate.body.code).toBe("calendar_topic_already_planned");
+    const changeDate = await owner
+      .patch(`/api/topics/${topicId}?brandId=${brandId}`)
+      .send({ plannedDate: new Date(Date.now() + 6 * 86_400_000).toISOString().slice(0, 10) })
+      .expect(409);
+    expect(changeDate.body.code).toBe("calendar_topic_already_planned");
+    const changePriority = await owner
+      .patch(`/api/topics/${topicId}?brandId=${brandId}`)
+      .send({ priority: 9 })
+      .expect(409);
+    expect(changePriority.body.code).toBe("calendar_topic_already_planned");
+    await owner.delete(`/api/calendar/slots/${created.body.id}?brandId=${brandId}`).expect(200);
+    const listed = await owner.get(`/api/topics?brandId=${brandId}`).expect(200);
+    const after = listed.body.find((topic: { id: string }) => topic.id === topicId);
+    expect(after).toMatchObject({ status: "approved", plannedDate: null, priority: 8 });
+    expect(after.revision).toBe(dated.body.revision + 1);
+
+    await owner
+      .patch(`/api/topics/${topicId}?brandId=${brandId}`)
+      .send({ plannedDate })
+      .expect(200);
+    const second = await owner
+      .post("/api/calendar/slots")
+      .send({ brandId, topicId, scheduledAt, channelIds: [channelId] })
+      .expect(201);
+    await owner
+      .patch(`/api/calendar/slots/${second.body.id}?brandId=${brandId}`)
+      .send({ topicId: null, brief: "Editorial override" })
+      .expect(200);
+    const unlinked = await owner.get(`/api/topics?brandId=${brandId}`).expect(200);
+    expect(unlinked.body.find((topic: { id: string }) => topic.id === topicId)).toMatchObject({
+      plannedDate: null,
+      status: "approved",
+    });
+  });
+
   it("validates every bulk row before inserting any slot", async () => {
     const owner = await agent();
     const { brandId, channelId } = await brandChannel(owner);

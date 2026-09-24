@@ -121,6 +121,23 @@ Published posts stay in the archive because their publication receipts must
 remain attributable; broader deletion needs a durable receipt provenance or
 tombstone design. The UI confirms the irreversible action before calling it.
 
+### Dated topic planning
+
+An editor can give a topic a target date and priority without approving its
+brief. The separate `autoPlanTopics` brand setting is off by default and can be
+enabled without direct autopilot generation. On its hourly scan, the worker
+considers only approved topics dated within the next 14 days, in the brand's
+time zone. It places a snapshot of the reviewed topic and selected channels in
+a 10:00 local calendar slot, highest priority first, while counting both manual
+and automatic slots against the configured daily planning limit. A past 10:00
+instant is skipped. Manual and automatic planners serialize on the brand, then
+the topic, and refuse to place an already linked topic again. An editor must
+remove an unstarted slot before changing that topic's target date or priority;
+removing or unlinking the slot clears the target date so the worker does not
+recreate it. Calendar generation still checks the topic revision and approval
+before spending the organization's key. Drafts remain in human review and are
+never published by this planner. Direct autopilot generation skips dated topics.
+
 ### Saved text history
 
 The editor reads whole-body `content_versions` only when its Version history

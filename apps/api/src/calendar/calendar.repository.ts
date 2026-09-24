@@ -6,7 +6,7 @@ import {
   type CalendarSlotUpdate,
   COVER_SUPPORTED_PLATFORMS,
 } from "@pubrick/shared";
-import { and, asc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 
@@ -99,6 +99,12 @@ export class CalendarRepository {
     if (data.topicId && data.brief !== undefined)
       throw badRequest("invalid_request", "A linked topic supplies its own brief");
     return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [topic] = data.topicId
         ? await tx
             .select({
@@ -117,11 +123,26 @@ export class CalendarRepository {
                 eq(schema.topics.id, data.topicId),
               ),
             )
-            .for("share")
+            .for("update")
         : [];
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (data.topicId) {
+        const [planned] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, data.brandId),
+              eq(schema.calendarSlots.topicId, data.topicId),
+            ),
+          )
+          .limit(1);
+        if (planned)
+          throw conflict("calendar_topic_already_planned", "This topic is already planned");
+      }
       const brief = topic ? `${topic.title}\n\n${topic.description}`.trim() : data.brief;
       if (!brief) throw badRequest("invalid_request", "A brief is required");
       const [slot] = await tx
@@ -153,6 +174,7 @@ export class CalendarRepository {
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+        .for("no key update")
         .limit(1);
       if (!brand) throw notFound("brand_not_found", "Brand not found");
 
@@ -262,6 +284,12 @@ export class CalendarRepository {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
     return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [existing] = await tx
         .select({
           topicId: schema.calendarSlots.topicId,
@@ -311,11 +339,27 @@ export class CalendarRepository {
                 eq(schema.topics.id, data.topicId),
               ),
             )
-            .for("share")
+            .for("update")
         : [];
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (data.topicId) {
+        const [planned] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, data.topicId),
+              ne(schema.calendarSlots.id, id),
+            ),
+          )
+          .limit(1);
+        if (planned)
+          throw conflict("calendar_topic_already_planned", "This topic is already planned");
+      }
       const [updated] = await tx
         .update(schema.calendarSlots)
         .set({
@@ -335,35 +379,102 @@ export class CalendarRepository {
         })
         .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, id)))
         .returning(SLOT_COLUMNS);
+      if (existing.topicId && data.topicId !== undefined && data.topicId !== existing.topicId) {
+        const [otherSlot] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, existing.topicId),
+            ),
+          )
+          .limit(1);
+        if (!otherSlot) {
+          await tx
+            .update(schema.topics)
+            .set({
+              plannedDate: null,
+              revision: sql`${schema.topics.revision} + 1`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.id, existing.topicId),
+                sql`${schema.topics.plannedDate} is not null`,
+              ),
+            );
+        }
+      }
       return updated;
     });
   }
 
   async delete(orgId: string, brandId: string, id: string) {
-    const rows = await db
-      .delete(schema.calendarSlots)
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-          isNull(schema.calendarSlots.runId),
-        ),
-      )
-      .returning({ id: schema.calendarSlots.id });
-    if (rows[0]) return { deleted: true };
-    const existing = await db
-      .select({ id: schema.calendarSlots.id })
-      .from(schema.calendarSlots)
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-        ),
-      )
-      .limit(1);
-    if (!existing[0]) throw notFound("calendar_slot_not_found", "Slot not found");
-    throw conflict("calendar_slot_started", "Generation has already started for this slot");
+    return db.transaction(async (tx) => {
+      // Serialize an editor's removal with the per-brand automatic planner.
+      // Clearing the topic's target date below keeps an intentionally removed
+      // slot from being recreated on the next hourly scan.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [existing] = await tx
+        .select({ topicId: schema.calendarSlots.topicId, runId: schema.calendarSlots.runId })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            eq(schema.calendarSlots.id, id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
+      if (existing.runId)
+        throw conflict("calendar_slot_started", "Generation has already started for this slot");
+      if (existing.topicId) {
+        const [otherSlot] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, existing.topicId),
+              ne(schema.calendarSlots.id, id),
+            ),
+          )
+          .limit(1);
+        if (!otherSlot) {
+          await tx
+            .update(schema.topics)
+            .set({
+              plannedDate: null,
+              revision: sql`${schema.topics.revision} + 1`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.id, existing.topicId),
+                // Do not perturb revisions of topics that were never dated.
+                sql`${schema.topics.plannedDate} is not null`,
+              ),
+            );
+        }
+      }
+      await tx
+        .delete(schema.calendarSlots)
+        .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, id)));
+      return { deleted: true };
+    });
   }
 }

@@ -11,6 +11,16 @@ Every transaction that takes row locks on more than one of these tables takes
 them in that order. A transaction that needs only some of them skips the rest;
 it never goes backwards.
 
+The dated-topic planner, topic edits, and manual calendar writers serialize on
+the brand row with `FOR NO KEY UPDATE` before touching topics or calendar slots.
+This is compatible with the `FOR KEY SHARE` lock taken by generation's brand
+foreign key after it has locked a slot or topic. The worker then locks
+its config and topic rows in stable ID order before checking the day's slots.
+This makes the daily cap and linked-topic check atomic across worker replicas
+and manual placement. Removing a linked slot holds the brand lock while
+clearing the topic's target date, so the next scan does not undo the editor's
+removal.
+
 Content archive and restore lock all of an item's adaptations by ID before
 locking `content_items`, then change only the parent status. Archive refuses
 active delivery rows. The publish worker's `markPublishing` locks its adaptation
@@ -28,7 +38,7 @@ cannot be matched back to a post.
 
 Daily topic suggestions also serialize admission on `brands`. Both the manual
 `TopicsRepository.requestSuggestions` path and the automatic
-`SuggestionsScanService.trigger` path take that brand row `FOR UPDATE` before
+`SuggestionsScanService.trigger` path take that brand row `FOR NO KEY UPDATE` before
 checking the 30-minute request cooldown. The automatic path then locks its
 `autopilot_configs` row and inserts the request and queue job in the same
 transaction. This order prevents simultaneous manual and automatic admissions

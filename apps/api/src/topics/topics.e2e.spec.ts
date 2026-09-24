@@ -211,4 +211,57 @@ describe.skipIf(!url)("topic bank e2e", () => {
       (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body,
     ).toEqual([]);
   });
+
+  it("scopes dated topic plans and keeps approval when only date or priority changes", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Planning" }).expect(201);
+    const created = await owner.agent
+      .post("/api/topics")
+      .send({
+        brandId: brand.body.id,
+        title: "Autumn collection",
+        plannedDate: "2026-10-11",
+        priority: 9,
+      })
+      .expect(201);
+    expect(topicDtoSchema.parse(created.body)).toMatchObject({
+      plannedDate: "2026-10-11",
+      priority: 9,
+      revision: 1,
+    });
+    const path = `/api/topics/${created.body.id}?brandId=${brand.body.id}`;
+    await other.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(404);
+    await other.agent.patch(path).send({ plannedDate: "2026-10-12" }).expect(404);
+    await owner.agent.patch(path).send({ plannedDate: "2026-02-30" }).expect(400);
+    await owner.agent.patch(path).send({ priority: 11 }).expect(400);
+    const approved = await owner.agent.patch(path).send({ status: "approved" }).expect(200);
+    expect(approved.body.revision).toBe(2);
+    const rescheduled = await owner.agent
+      .patch(path)
+      .send({ plannedDate: "2026-10-12", priority: 1 })
+      .expect(200);
+    expect(topicDtoSchema.parse(rescheduled.body)).toMatchObject({
+      status: "approved",
+      plannedDate: "2026-10-12",
+      priority: 1,
+      revision: 3,
+    });
+    expect(
+      (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body[0],
+    ).toMatchObject({
+      plannedDate: "2026-10-12",
+      priority: 1,
+    });
+    const cleared = await owner.agent.patch(path).send({ plannedDate: null }).expect(200);
+    expect(cleared.body).toMatchObject({ plannedDate: null, status: "approved", revision: 4 });
+    const changedBrief = await owner.agent
+      .patch(path)
+      .send({ title: "Winter collection" })
+      .expect(200);
+    expect(changedBrief.body).toMatchObject({ status: "idea", priority: 1, revision: 5 });
+    await expect(
+      db.execute(sql`update topics set priority = 0 where id = ${created.body.id}`),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
+  });
 });

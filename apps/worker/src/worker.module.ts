@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { TopicPlannerService } from "./calendar/topic-planner.service";
 import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateRepository } from "./generate/generate.repository";
@@ -37,6 +38,7 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     RssRepository,
     RssService,
     CalendarService,
+    TopicPlannerService,
     TelegramReader,
     RelevanceRepository,
     RelevanceService,

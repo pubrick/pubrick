@@ -202,6 +202,7 @@ export class AutopilotService {
             eq(schema.topics.orgId, orgId),
             eq(schema.topics.brandId, brandId),
             eq(schema.topics.status, "approved"),
+            isNull(schema.topics.plannedDate),
             isNull(schema.autopilotDispatches.id),
           ),
         )
