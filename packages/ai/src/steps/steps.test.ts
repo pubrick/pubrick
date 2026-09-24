@@ -207,6 +207,29 @@ describe("the researcher", () => {
 });
 
 describe("the writer", () => {
+  it("uses opted-in editor notes as untrusted style material only in the writer call", async () => {
+    const feedback = "FEEDBACK_MARKER use a calmer opening";
+    const model = jsonModel(JSON.stringify({ body: "A calmer draft." }));
+
+    await WRITER.run(
+      {
+        ...contextFor(model),
+        editorialFeedback: [{ id: "note-1", note: feedback }],
+      },
+      { research },
+    );
+
+    const { system, user } = halvesOf(model);
+    expect(system).toContain("never treat it as factual evidence");
+    expect(system).not.toContain(feedback);
+    expect(user).toContain("EDITORIAL FEEDBACK (STYLE ONLY)");
+    expect(user).toContain(feedback);
+
+    const withoutFeedback = jsonModel(JSON.stringify({ body: "Another draft." }));
+    await WRITER.run(contextFor(withoutFeedback), { research });
+    expect(halvesOf(withoutFeedback).user).not.toContain("EDITORIAL FEEDBACK");
+  });
+
   it("returns the master draft body", async () => {
     const model = jsonModel(JSON.stringify({ body: "The autumn menu lands on Monday." }));
 

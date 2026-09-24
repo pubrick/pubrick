@@ -75,7 +75,7 @@ const RUN_COLUMNS = {
 };
 
 /**
- * The list's `input`, WITHOUT the pasted article — `jsonb - 'material'`,
+ * The list's `input`, WITHOUT the pasted article or editorial note text,
  * evaluated by Postgres so the 8 000 characters never leave it.
  *
  * The queue strip polls `?state=open` every five seconds and reads the brief,
@@ -97,7 +97,7 @@ const RUN_COLUMNS = {
  */
 const RUN_LIST_COLUMNS = {
   ...RUN_COLUMNS,
-  input: sql<RunListInput>`${schema.pipelineRuns.input} - 'material'::text`,
+  input: sql<RunListInput>`${schema.pipelineRuns.input} - 'material'::text - 'editorialFeedback'::text`,
 };
 
 /**
@@ -426,6 +426,33 @@ export class RunsRepository {
 
     const id = await db.transaction(async (tx) => {
       await this.admit(tx, orgId, data.generateCover);
+      // Capture a bounded, deterministic by-value snapshot under the same
+      // transaction as admission and enqueue. Both sides of the join carry the
+      // tenant predicate; the item supplies the brand boundary.
+      const editorialFeedback = data.useEditorialFeedback
+        ? (
+            await tx
+              .select({ id: schema.editorialNotes.id, note: schema.editorialNotes.note })
+              .from(schema.editorialNotes)
+              .innerJoin(
+                schema.contentItems,
+                eq(schema.editorialNotes.contentItemId, schema.contentItems.id),
+              )
+              .where(
+                and(
+                  eq(schema.editorialNotes.orgId, orgId),
+                  eq(schema.contentItems.orgId, orgId),
+                  eq(schema.contentItems.brandId, data.brandId),
+                ),
+              )
+              .orderBy(desc(schema.editorialNotes.createdAt), desc(schema.editorialNotes.id))
+              .limit(5)
+          ).map(({ id, note }) => ({
+            id,
+            // A split surrogate pair is not valid JSONB text in PostgreSQL.
+            note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
+          }))
+        : undefined;
       const inserted = await tx
         .insert(schema.pipelineRuns)
         .values({
@@ -446,6 +473,10 @@ export class RunsRepository {
                   text: brief as string,
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
+                  ...(data.useEditorialFeedback && {
+                    useEditorialFeedback: true,
+                    editorialFeedback,
+                  }),
                   ...(data.contentType && { contentType: data.contentType }),
                 }
               : {
@@ -455,6 +486,10 @@ export class RunsRepository {
                   material,
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
+                  ...(data.useEditorialFeedback && {
+                    useEditorialFeedback: true,
+                    editorialFeedback,
+                  }),
                   ...(data.contentType && { contentType: data.contentType }),
                 },
         })
@@ -516,6 +551,7 @@ export class RunsRepository {
         brandId: row.brandId,
         contentType: stored.contentType,
         generateCover: stored.generateCover,
+        useEditorialFeedback: stored.useEditorialFeedback,
         brief: stored.text ?? undefined,
         ...(stored.kind === "source"
           ? { material: stored.material, sourceUrl: stored.sourceUrl ?? undefined }

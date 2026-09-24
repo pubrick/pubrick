@@ -383,6 +383,10 @@ describe("Generate (Task 10)", () => {
     await pickBrandAndChannel(user);
     await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
 
+    expect(
+      screen.getByRole("checkbox", { name: en.ContentNew.useEditorialFeedback }),
+    ).not.toBeChecked();
+
     await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
 
     await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/run-1"));
@@ -394,6 +398,40 @@ describe("Generate (Task 10)", () => {
     });
     // Pinned twice: the literal above, and the schema the API validates with.
     expect(runCreateSchema.parse(parsedBody(post))).toEqual(parsedBody(post));
+  });
+
+  it("uses recent editorial notes only after an explicit choice", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        method === "POST" && path === "/api/runs" ? { id: "feedback-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "A new product launch");
+
+    const checkbox = screen.getByRole("checkbox", { name: en.ContentNew.useEditorialFeedback });
+    expect(checkbox).toHaveAccessibleDescription(en.ContentNew.useEditorialFeedbackHint);
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/feedback-run"),
+    );
+    const posted = parsedBody(
+      calls.find((call) => call.path === "/api/runs" && call.method === "POST"),
+    );
+    expect(posted).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      brief: "A new product launch",
+      useEditorialFeedback: true,
+    });
+    expect(runCreateSchema.parse(posted)).toEqual(posted);
   });
 
   it("adds a paid cover only after an explicit choice with a Google key", async () => {

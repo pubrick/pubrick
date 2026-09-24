@@ -389,6 +389,7 @@ export class GenerateService {
         brand: context.brand,
         contentType: input.contentType ?? "social_post",
         promptGuidance: context.promptGuidance,
+        editorialFeedback: input.editorialFeedback,
         // THE THREE TEXT FIELDS COME FROM THE ARM THE RUN WAS STORED AS, and
         // each arm names all three: `RunStepContext` makes them
         // required-and-nullable so that an absence is STATED by the builder

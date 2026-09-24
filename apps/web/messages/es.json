@@ -505,6 +505,8 @@
     "sourceUrlLabel": "URL de la fuente",
     "sourceUrlPlaceholder": "https://example.com/articulo (opcional)",
     "sourceHelp": "Pega el texto o carga un artículo público y confirma la vista previa. La generación usa el texto guardado y no vuelve a abrir el enlace.",
+    "useEditorialFeedback": "Usar notas editoriales recientes para orientar el estilo",
+    "useEditorialFeedbackHint": "Usa hasta cinco notas recientes de esta marca para orientar el tono y el estilo, nunca como fuentes de datos. Si no hay notas, la generación continúa normalmente.",
     "generateCover": "Generar una imagen de portada para este borrador",
     "generateCoverHint": "Normalmente usa una llamada adicional a Gemini facturada a tu clave de Google; una interrupción o reintento puede generar otra llamada facturable. La portada se adjunta al borrador para revisión. El coste puede ser desconocido.",
     "generateCoverNeedsGoogle": "Añade una clave de Google AI en Ajustes para activar esta opción.",

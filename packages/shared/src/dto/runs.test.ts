@@ -9,6 +9,7 @@ import {
   RUN_STATUSES,
   runCreateSchema,
   runInputSchema,
+  runListInputSchema,
   runStepCheckpointSchema,
   runStepsSchema,
   sourceRunInputSchema,
@@ -82,6 +83,36 @@ describe("what a run was asked to produce", () => {
 
   it("accepts the shape the api writes", () => {
     expect(briefRunInputSchema.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts bounded editorial snapshots on both stored arms but omits them from list input", () => {
+    const entry = { id: "22222222-2222-4222-8222-222222222222", note: "Be specific" };
+    const brief = {
+      ...valid,
+      useEditorialFeedback: true,
+      editorialFeedback: [entry],
+    };
+    const source = {
+      ...brief,
+      kind: "source",
+      text: null,
+      material: "The source",
+      sourceUrl: null,
+    };
+    expect(runInputSchema.parse(brief).editorialFeedback).toEqual([entry]);
+    expect(runInputSchema.parse(source).editorialFeedback).toEqual([entry]);
+    for (const input of [brief, source]) {
+      expect(runListInputSchema.parse(input)).not.toHaveProperty("editorialFeedback");
+      expect(
+        runInputSchema.safeParse({
+          ...input,
+          editorialFeedback: [{ ...entry, note: "x".repeat(501) }],
+        }).success,
+      ).toBe(false);
+      expect(
+        runInputSchema.safeParse({ ...input, editorialFeedback: Array(6).fill(entry) }).success,
+      ).toBe(false);
+    }
   });
 
   it("refuses source retellings and case studies stored as brief runs", () => {
@@ -261,6 +292,14 @@ describe("what a run may be asked for", () => {
   it("accepts a brief alone, exactly as it did before material existed", () => {
     const body = { ...base, brief: "Announce the autumn menu" };
     expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  it("accepts editorial feedback only as an explicit boolean choice", () => {
+    const body = { ...base, brief: "Announce the menu", useEditorialFeedback: true };
+    expect(runCreateSchema.parse(body)).toEqual(body);
+    expect(runCreateSchema.safeParse({ ...body, useEditorialFeedback: "true" }).success).toBe(
+      false,
+    );
   });
 
   it("accepts material alone: a paste-only run has no brief to send", () => {
