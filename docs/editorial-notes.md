@@ -17,9 +17,28 @@ field is evidence for the authorship lens and the publication gate. The API
 requires an active workspace organization for both `GET` and `POST
 /api/content/:id/editorial-notes`; every query is scoped to that organization.
 
-The old Content Factory could send freeform reviewer feedback to a writer for a
-new whole-draft revision. Pubrick currently has metered selection refinement
-and per-channel re-adaptation with explicit Accept/Discard. A freeform
-whole-draft AI proposal remains to be ported. It needs its own metered model
-call, server-staged proposal, snapshot check and explicit acceptance, without
-turning a note into an instruction that silently changes approved text.
+## Whole-draft AI revision
+
+For an editable AI draft, **Revise draft with AI** accepts either a freeform
+instruction or one of the team notes attached to the current saved master
+body. Save local text edits first. The request uses the organization's own AI
+provider key and shares the editor's rolling hourly model-call allowance with
+selection refinement and channel re-adaptation. Every physical model call is
+recorded in `usage_ledger`, including billed failures.
+
+The model returns a complete master-body suggestion and a short reason. The API
+stores one pending proposal against the exact saved source body; the editor
+shows the source and suggestion side by side. Reloading keeps the proposal.
+Accept checks the saved body again under a row lock, while Discard only removes
+the proposal. A changed draft blocks Accept without losing the paid suggestion.
+An approved or published post cannot be revised; a partly published post cannot
+be reset to a draft while a channel is already live.
+
+Accept updates only the master body. It returns a rejected or failed item to
+draft and requires the normal approval flow again. Any client approval link for
+the earlier text becomes stale because its snapshot no longer matches. Existing
+per-channel overrides remain visible and must be reviewed or adapted separately
+before approval; accepting a master rewrite does not claim to have rewritten
+channel copy. The accepted AI text is recorded as a provenance `fragment` with
+the measured sentence-count delta, preserving the single original AI full
+anchor and the human publication gate.

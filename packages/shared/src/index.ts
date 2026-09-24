@@ -47,6 +47,7 @@ export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
 export * from "./dto/client-review.js";
 export * from "./dto/content.js";
+export * from "./dto/draft-revision.js";
 export * from "./dto/editorial-notes.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";

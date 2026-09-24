@@ -26,7 +26,9 @@ import {
   contentVersionListQuerySchema,
   contentVersionRestoreSchema,
   type DeliveryAssertion,
+  type DraftRevisionRequest,
   deliveryAssertionSchema,
+  draftRevisionRequestSchema,
   type EditorialNoteCreate,
   type EditorialNoteListQuery,
   editorialNoteCreateSchema,
@@ -132,6 +134,36 @@ export class ContentController {
     @Body(new ZodValidationPipe(editorialNoteCreateSchema)) body: EditorialNoteCreate,
   ) {
     return this.editorialNotes.create(orgId, id, userId, body);
+  }
+
+  @Post(":id/draft-revision")
+  reviseDraft(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(draftRevisionRequestSchema)) body: DraftRevisionRequest,
+  ) {
+    return this.content.reviseDraft(orgId, id, userId, body);
+  }
+
+  @Post(":id/draft-revision/:proposalId/accept")
+  @HttpCode(200)
+  acceptDraftRevision(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptDraftRevision(orgId, id, proposalId);
+  }
+
+  @Delete(":id/draft-revision/:proposalId")
+  @HttpCode(204)
+  async discardDraftRevision(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardDraftRevision(orgId, id, proposalId);
   }
 
   @Post(":id/versions/:versionId/restore")

@@ -78,6 +78,7 @@ type ContentItem = {
   linkPolicyWebsite: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
+  draftRevisionProposal: import("@pubrick/shared").DraftRevisionProposal | null;
   adaptationProposals: AdaptationProposal[];
   /** What that run was asked for — the source strip's input. */
   runInput: RunInput | null;
@@ -137,6 +138,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
     refineProposal: null as RefineProposal | null,
+    draftRevisionProposal: null as import("@pubrick/shared").DraftRevisionProposal | null,
     adaptationProposals: [] as AdaptationProposal[],
     // ...and this one. The api returns the key on every item, `null` for the
     // hand-written draft that no run made.
@@ -241,6 +243,7 @@ function resultsList(): HTMLElement {
 beforeEach(() => {
   mockApi.mockReset();
   mockApiPage.mockReset();
+  mockApiPage.mockResolvedValue({ rows: [], nextCursor: null });
   mockApiVoid.mockReset();
   mockApiVoid.mockResolvedValue(undefined);
   // AppShell (now wrapping this page) reads a session for its sidebar user
@@ -870,7 +873,7 @@ describe("restoring saved text", () => {
 
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     const user = userEvent.setup();
-    expect(mockApiPage).not.toHaveBeenCalled();
+    expect(mockApiPage.mock.calls.some(([path]) => String(path).includes("/versions"))).toBe(false);
     await user.click(screen.getByText(en.Publish.versionHistory));
     await user.click(await screen.findByRole("button", { name: en.Publish.versionPreview }));
     await user.click(screen.getByRole("button", { name: en.Publish.versionRestore }));

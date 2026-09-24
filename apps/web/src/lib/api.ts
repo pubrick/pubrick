@@ -133,6 +133,14 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   schedule_already_queued: "schedule_already_queued",
   schedule_already_publishing: "schedule_already_publishing",
   refine_limit_reached: "refine_limit_reached",
+  draft_revision_stale: "draft_revision_stale",
+  draft_revision_note_not_found: "draft_revision_note_not_found",
+  draft_revision_needs_ai_draft: "draft_revision_needs_ai_draft",
+  draft_revision_limit_reached: "draft_revision_limit_reached",
+  draft_revision_no_credential: "draft_revision_no_credential",
+  draft_revision_timed_out: "draft_revision_timed_out",
+  draft_revision_failed: "draft_revision_failed",
+  draft_revision_proposal_not_found: "draft_revision_proposal_not_found",
   readapt_limit_reached: "readapt_limit_reached",
   readapt_no_credential: "readapt_no_credential",
   readapt_timed_out: "readapt_timed_out",
@@ -192,6 +200,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
 const ERROR_MESSAGE_VALUES: Partial<Record<ErrorCode, Record<string, string | number>>> = {
   run_limit_reached: { limit: MAX_CONCURRENT_RUNS },
   refine_limit_reached: { limit: MAX_REFINE_CALLS_PER_HOUR },
+  draft_revision_limit_reached: { limit: MAX_REFINE_CALLS_PER_HOUR },
   readapt_limit_reached: { limit: MAX_REFINE_CALLS_PER_HOUR },
 };
 

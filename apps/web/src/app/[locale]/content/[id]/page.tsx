@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdaptationProposal } from "@pubrick/shared";
+import type { AdaptationProposal, DraftRevisionProposal } from "@pubrick/shared";
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -41,6 +41,7 @@ import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/or
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
 import { ClientReviewLink } from "./client-review-link";
+import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { SourceStrip } from "./source-strip";
 import { VersionHistory } from "./version-history";
@@ -145,6 +146,7 @@ type ContentItem = {
    * after any of those — there is no separate GET.
    */
   refineProposal: RefineProposal | null;
+  draftRevisionProposal: DraftRevisionProposal | null;
   adaptationProposals: AdaptationProposal[];
   /**
    * What that run was asked for — the source strip's whole input, or `null`
@@ -1665,6 +1667,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       />
 
       <EditorialNotes itemId={id} currentBody={item.body} draftBody={bodyDraft} />
+
+      <DraftRevision
+        itemId={id}
+        currentBody={item.body}
+        draftBody={bodyDraft}
+        eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
+        staged={item.draftRevisionProposal}
+        onAccepted={async (updatedBody) => {
+          setBodyDraft(updatedBody);
+          await reload();
+        }}
+      />
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
