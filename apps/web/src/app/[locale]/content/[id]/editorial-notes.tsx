@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { api, apiPage, errorMessage } from "@/lib/api";
 
 export function EditorialNotes({
@@ -86,16 +87,15 @@ export function EditorialNotes({
     <Card className="mb-6" aria-label={t("title")}>
       <h2 className="text-lg font-semibold text-fg">{t("title")}</h2>
       <p className="mt-1 text-sm text-fg-secondary">{t("hint")}</p>
-      <label htmlFor="editorial-note" className="mt-4 block text-sm font-medium text-fg-secondary">
-        {t("label")}
-      </label>
-      <textarea
+      <Textarea
         id="editorial-note"
+        label={t("label")}
         value={note}
         onChange={(event) => setNote(event.target.value)}
         rows={3}
         maxLength={2000}
-        className="mt-1.5 w-full rounded-control border border-border-strong bg-panel px-3 py-2 text-sm text-fg"
+        showCount
+        className="mt-4"
       />
       <div className="mt-2 flex items-center gap-3">
         <Button

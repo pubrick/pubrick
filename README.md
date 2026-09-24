@@ -29,7 +29,10 @@ instructed with — and channels with credentials encrypted at rest, plus conten
 drafts, a review queue with approval/rejection/overrides, and publishing to
 Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon instances — through a restyled,
 installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
-uses a manual copy and confirmation workflow. AI generation works too, with
+uses a manual copy and confirmation workflow. External clients can review a
+draft through an [expiring approval link](docs/client-review.md), while the team
+keeps [editorial notes](docs/editorial-notes.md) on saved versions. AI
+generation works too, with
 **your own** Gemini or OpenRouter key (there is no hosted key): start from a
 brief or schedule a draft in the [brand calendar](docs/calendar.md). Five roles —
 researcher, writer, editor, a fact-checker that lists claims to verify rather
