@@ -74,6 +74,86 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       })
       .returning({ id: schema.newsItems.id });
     if (!privateItem) throw new Error("Private article seed failed");
+    await db.insert(schema.newsItems).values([
+      {
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: source.id,
+        title: "Matching editorial choice",
+        url: "https://example.com/marked-positive",
+        editorSignal: "relevant",
+      },
+      {
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: source.id,
+        title: "Rejected editorial choice",
+        url: "https://example.com/marked-negative",
+        editorSignal: "irrelevant",
+      },
+    ]);
+    const [siblingBrand] = await db
+      .insert(schema.brands)
+      .values({ orgId: stamp, name: "Sibling brand" })
+      .returning({ id: schema.brands.id });
+    if (!siblingBrand) throw new Error("Sibling brand seed failed");
+    const [siblingSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: stamp,
+        brandId: siblingBrand.id,
+        name: "Sibling journal",
+        url: "https://sibling.example/feed",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!siblingSource) throw new Error("Sibling source seed failed");
+    await db.insert(schema.newsItems).values({
+      orgId: stamp,
+      brandId: siblingBrand.id,
+      sourceId: siblingSource.id,
+      title: "Sibling brand feedback",
+      url: "https://sibling.example/marked",
+      editorSignal: "relevant",
+    });
+    const otherOrg = `${stamp}-other`;
+    await db
+      .insert(schema.organization)
+      .values({ id: otherOrg, name: "Other org", slug: otherOrg, createdAt: new Date() });
+    const [otherBrand] = await db
+      .insert(schema.brands)
+      .values({ orgId: otherOrg, name: "Other brand" })
+      .returning({ id: schema.brands.id });
+    if (!otherBrand) throw new Error("Other brand seed failed");
+    const [otherSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: otherOrg,
+        brandId: otherBrand.id,
+        name: "Other journal",
+        url: "https://other.example/feed",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!otherSource) throw new Error("Other source seed failed");
+    await db.insert(schema.newsItems).values({
+      orgId: otherOrg,
+      brandId: otherBrand.id,
+      sourceId: otherSource.id,
+      title: "Other organization's feedback",
+      url: "https://other.example/marked",
+      editorSignal: "relevant",
+    });
+    expect(await repo.recentFeedback(stamp, brand.id, item.id)).toEqual({
+      relevant: [{ title: "Matching editorial choice", summary: "" }],
+      irrelevant: [{ title: "Rejected editorial choice", summary: "" }],
+    });
+    expect(await repo.recentFeedback(otherOrg, otherBrand.id, item.id)).toEqual({
+      relevant: [{ title: "Other organization's feedback", summary: "" }],
+      irrelevant: [],
+    });
+    expect(await repo.recentFeedback(stamp, siblingBrand.id, item.id)).toEqual({
+      relevant: [{ title: "Sibling brand feedback", summary: "" }],
+      irrelevant: [],
+    });
     expect((await repo.unscored()).some((candidate) => candidate.itemId === privateItem.id)).toBe(
       false,
     );
@@ -100,21 +180,32 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
     });
     await repo.scored(job.orgId, job.brandId, job.itemId, {
       score: 0,
+      feedbackDelta: 0.12,
       reason: "No fit",
       urgency: "evergreen",
     });
     expect(await repo.claim(stamp, brand.id, item.id)).toBeNull();
-    const { eq } = await import("drizzle-orm");
+    const { eq, sql } = await import("drizzle-orm");
     const [stored] = await db
       .select({
         status: schema.newsItems.relevanceStatus,
         score: schema.newsItems.relevanceScore,
+        feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
         reason: schema.newsItems.relevanceReason,
         attempts: schema.newsItems.relevanceAttempts,
       })
       .from(schema.newsItems)
       .where(eq(schema.newsItems.id, item.id));
-    expect(stored).toEqual({ status: "scored", score: 0, reason: "No fit", attempts: 1 });
+    expect(stored).toEqual({
+      status: "scored",
+      score: 0,
+      feedbackDelta: 0.12,
+      reason: "No fit",
+      attempts: 1,
+    });
+    await expect(
+      db.execute(sql`UPDATE news_items SET relevance_feedback_delta = 0.21 WHERE id = ${item.id}`),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
     const spend = await db
       .select({
         step: schema.usageLedger.step,

@@ -15,6 +15,7 @@ import {
 import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
+import { feedbackAdjustment } from "./feedback-adjustment";
 import { RelevanceRepository } from "./relevance.repository";
 
 const verdictSchema = z.object({
@@ -52,6 +53,9 @@ export class RelevanceService {
       await this.repo.failed(job.orgId, job.brandId, job.itemId, "no_api_key");
       return;
     }
+    // Read feedback before the paid call: an unavailable database must not
+    // create model spend for a result we cannot safely score.
+    const feedback = await this.repo.recentFeedback(job.orgId, job.brandId, job.itemId);
     let verdict: z.infer<typeof verdictSchema>;
     try {
       verdict = await generateStructured({
@@ -89,7 +93,10 @@ export class RelevanceService {
     }
     // A database error after a paid call is infrastructure failure, not a bad
     // model verdict. Let pg-boss retry rather than marking the article failed.
-    await this.repo.scored(job.orgId, job.brandId, job.itemId, verdict);
+    await this.repo.scored(job.orgId, job.brandId, job.itemId, {
+      ...verdict,
+      feedbackDelta: feedbackAdjustment(input, feedback),
+    });
   }
 
   async scan(boss: PgBoss): Promise<void> {

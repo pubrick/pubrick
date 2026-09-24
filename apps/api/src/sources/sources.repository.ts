@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import type { AiCredential } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import { newsRankScore, schema } from "@pubrick/db";
 import {
   commentAnalysisResultSchema,
   decryptJson,
@@ -56,6 +56,8 @@ const ITEM_COLUMNS = {
   editorSignal: schema.newsItems.editorSignal,
   relevanceStatus: schema.newsItems.relevanceStatus,
   relevanceScore: schema.newsItems.relevanceScore,
+  rankScore: newsRankScore,
+  feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
   relevanceReason: schema.newsItems.relevanceReason,
   relevanceUrgency: schema.newsItems.relevanceUrgency,
   relevanceErrorCode: schema.newsItems.relevanceErrorCode,
@@ -311,7 +313,7 @@ export class SourcesRepository {
       )
       .orderBy(
         ...(query.sort === "relevance"
-          ? [sql`${schema.newsItems.relevanceScore} DESC NULLS LAST`]
+          ? [sql`${newsRankScore} DESC NULLS LAST`]
           : [desc(schema.newsItems.publishedAt)]),
         desc(schema.newsItems.createdAt),
         desc(schema.newsItems.id),

@@ -139,6 +139,9 @@ export const newsItemDtoSchema = z.object({
   editorSignal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),
   relevanceStatus: z.enum(["unscored", "scored", "failed"]),
   relevanceScore: z.number().min(0).max(1).nullable(),
+  /** Advisory ranking score after the bounded editor-feedback adjustment. */
+  rankScore: z.number().min(0).max(1).nullable(),
+  feedbackDelta: z.number().min(-0.2).max(0.2),
   relevanceReason: z.string().nullable(),
   relevanceUrgency: z.enum(["breaking", "timely", "evergreen"]).nullable(),
   relevanceErrorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),

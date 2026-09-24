@@ -344,6 +344,13 @@
       "when": 1790252369240,
       "tag": "0049_light_zarek",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790253564316,
+      "tag": "0050_narrow_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }

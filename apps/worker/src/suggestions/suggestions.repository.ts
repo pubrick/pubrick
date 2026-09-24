@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import { newsRankScore, schema } from "@pubrick/db";
 import { toLedgerCostUsd } from "@pubrick/shared";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -70,7 +70,7 @@ export class SuggestionsRepository {
         title: schema.newsItems.title,
         summary: schema.newsItems.summary,
         url: schema.newsItems.url,
-        score: schema.newsItems.relevanceScore,
+        score: newsRankScore,
         reason: schema.newsItems.relevanceReason,
         editorSignal: schema.newsItems.editorSignal,
       })
@@ -91,7 +91,7 @@ export class SuggestionsRepository {
           sql`${schema.newsSources.kind} <> 'telegram_private'`,
         ),
       )
-      .orderBy(desc(schema.newsItems.relevanceScore), desc(schema.newsItems.createdAt))
+      .orderBy(desc(newsRankScore), desc(schema.newsItems.createdAt))
       .limit(40);
     return {
       brand: brands[0],

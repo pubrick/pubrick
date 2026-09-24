@@ -8,8 +8,10 @@ the existing topic.
 
 **Suggest topics with AI** requests up to three brand-specific ideas. The worker
 uses the brand profile, up to 30 approved bank entries, and up to 10 scored news
-articles as context. Human feedback excluding an article takes precedence over
-its AI score. Feed summaries are untrusted source material; Pubrick does not
+articles as context. Explicit Irrelevant feedback excludes an article; Relevant
+feedback can admit it even if its score is low. Otherwise, a bounded headline
+feedback adjustment influences which scored articles reach the context list.
+Feed summaries are untrusted source material; Pubrick does not
 read linked pages or treat a score as a fact check. Generated ideas appear in
 the bank as **Idea · AI suggestion**. A request is limited to one every 30
 minutes per brand (unless its key is missing or unreadable), runs through a

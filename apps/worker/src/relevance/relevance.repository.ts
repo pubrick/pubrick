@@ -2,8 +2,9 @@ import { Injectable } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { toLedgerCostUsd } from "@pubrick/shared";
-import { and, asc, eq, gt, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
+import type { FeedbackSignals } from "./feedback-adjustment";
 
 @Injectable()
 export class RelevanceRepository {
@@ -70,17 +71,43 @@ export class RelevanceRepository {
     return brands[0] ? { ...rows[0], brand: brands[0] } : null;
   }
 
+  /** Latest marked articles of each kind, restricted to this workspace and brand. */
+  async recentFeedback(orgId: string, brandId: string, itemId: string): Promise<FeedbackSignals> {
+    const fetch = (signal: "relevant" | "irrelevant") =>
+      db
+        .select({ title: schema.newsItems.title, summary: schema.newsItems.summary })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            ne(schema.newsItems.id, itemId),
+            eq(schema.newsItems.editorSignal, signal),
+          ),
+        )
+        .orderBy(desc(schema.newsItems.createdAt), desc(schema.newsItems.id))
+        .limit(50);
+    const [relevant, irrelevant] = await Promise.all([fetch("relevant"), fetch("irrelevant")]);
+    return { relevant, irrelevant };
+  }
+
   async scored(
     orgId: string,
     brandId: string,
     itemId: string,
-    result: { score: number; reason: string; urgency: "breaking" | "timely" | "evergreen" },
+    result: {
+      score: number;
+      feedbackDelta: number;
+      reason: string;
+      urgency: "breaking" | "timely" | "evergreen";
+    },
   ) {
     await db
       .update(schema.newsItems)
       .set({
         relevanceStatus: "scored",
         relevanceScore: result.score,
+        relevanceFeedbackDelta: result.feedbackDelta,
         relevanceReason: result.reason,
         relevanceUrgency: result.urgency,
         relevanceErrorCode: null,
