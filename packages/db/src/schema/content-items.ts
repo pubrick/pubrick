@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   pgTable,
@@ -44,6 +45,7 @@ export const contentItems = pgTable(
       .references(() => brands.id, { onDelete: "cascade" }),
     title: text("title"),
     coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
+    videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Defaults to `human`, which is what every row written before AI existed is. */
@@ -114,6 +116,10 @@ export const contentItems = pgTable(
      */
     enumCheck("content_items_status_check", t.status, CONTENT_STATUSES),
     enumCheck("content_items_origin_check", t.origin, CONTENT_ORIGINS),
+    check(
+      "content_items_one_media_check",
+      sql`${t.coverMediaId} IS NULL OR ${t.videoMediaId} IS NULL`,
+    ),
   ],
 );
 

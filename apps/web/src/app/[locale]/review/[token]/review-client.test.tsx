@@ -11,6 +11,7 @@ const preview = {
     body: "Private draft body",
     channels: [{ name: "News", platform: "telegram", body: "Telegram version" }],
     coverUrl: null,
+    videoUrl: null,
   },
   comment: null,
   reviewedAt: null,
@@ -24,6 +25,19 @@ beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("guest client review", () => {
+  it("shows an attached video with explicit playback controls", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(200, {
+        ...preview,
+        preview: { ...preview.preview, videoUrl: "/api/client-review/capability-token/video" },
+      }),
+    );
+    render(<ClientReviewPage token="capability-token" />);
+    const video = await screen.findByLabelText("Selected video for this draft");
+    expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("preload", "none");
+    expect(video).toHaveAttribute("src", "/api/client-review/capability-token/video");
+  });
   it("renders only the private saved preview and records a guest decision without credentials", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (input) => {

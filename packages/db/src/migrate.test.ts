@@ -232,6 +232,11 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Video media carries a distinct shape and content items may attach one medium.
+  "media_assets_kind_check",
+  "media_assets_shape_check",
+  "media_assets_byte_size_check",
+  "content_items_one_media_check",
   // Guest approval capabilities are new after the historical seed. Their
   // format and verdict relationship are exercised by client-review e2e tests.
   "client_review_links_token_hash_check",

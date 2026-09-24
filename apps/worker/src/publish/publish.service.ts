@@ -531,9 +531,65 @@ export class PublishService {
           throw error;
         }
       }
-      result = await publisher.publish(parsed.data, image ? { text, image } : { text }, {
-        baseUrl,
-      });
+      let video: { bytes: Uint8Array; mimeType: "video/mp4" } | undefined;
+      if (adaptation.videoMediaId) {
+        if (adaptation.platform !== "telegram" || image) {
+          throw new ClassifiedPermanentError(
+            "This channel cannot publish the attached video",
+            "rejected_before_send",
+          );
+        }
+        if (
+          adaptation.itemBrandId !== adaptation.channelBrandId ||
+          adaptation.videoAuthorizedId !== adaptation.videoMediaId
+        ) {
+          throw new ClassifiedPermanentError(
+            "Video does not belong to this post's organization and brand",
+            "rejected_before_send",
+          );
+        }
+        if (
+          !adaptation.videoByteSize ||
+          adaptation.videoByteSize < 1024 ||
+          adaptation.videoByteSize > 20 * 1024 * 1024 ||
+          text.length > 1024
+        ) {
+          throw new ClassifiedPermanentError(
+            "Telegram video must be under 20 MB with a caption of at most 1024 characters",
+            "rejected_before_send",
+          );
+        }
+        const file = path.join(
+          process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media"),
+          `${adaptation.videoMediaId}.mp4`,
+        );
+        let bytes: Buffer;
+        try {
+          bytes = await readFile(file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ClassifiedPermanentError(
+              "Video is missing from media storage",
+              "rejected_before_send",
+            );
+          }
+          throw error;
+        }
+        if (bytes.length !== adaptation.videoByteSize) {
+          throw new ClassifiedPermanentError(
+            "Video bytes no longer match the reviewed upload",
+            "rejected_before_send",
+          );
+        }
+        video = { bytes, mimeType: "video/mp4" };
+      }
+      result = await publisher.publish(
+        parsed.data,
+        { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
+        {
+          baseUrl,
+        },
+      );
     } catch (error) {
       const message = (error as Error).message;
       if (error instanceof UnknownOutcomePublishError) {

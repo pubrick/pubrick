@@ -75,4 +75,24 @@ export class GuestClientReviewController {
     response.setHeader("Content-Disposition", "inline");
     response.send(bytes);
   }
+
+  @Get("video")
+  async video(@Param("token") token: string, @Req() request: Request, @Res() response: Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader("X-Robots-Tag", "noindex, nofollow");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    await limitGuest(token, request);
+    const filePath = await this.reviews.video(token);
+    response.setHeader("Content-Type", "video/mp4");
+    response.setHeader("Content-Disposition", "inline");
+    await new Promise<void>((resolve) => {
+      // Express handles byte ranges for video controls. Every range request revalidates
+      // the capability before streaming; the path is derived from a scoped asset id.
+      response.sendFile(filePath, (error) => {
+        if (error && !response.headersSent) response.status(404).end();
+        resolve();
+      });
+    });
+  }
 }

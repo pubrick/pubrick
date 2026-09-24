@@ -59,6 +59,9 @@ importers:
       feed:
         specifier: ^5.2.1
         version: 5.2.1
+      file-type:
+        specifier: 21.3.4
+        version: 21.3.4
       guarded-fetch:
         specifier: ^0.1.4
         version: 0.1.4

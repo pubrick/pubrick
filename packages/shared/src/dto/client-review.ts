@@ -57,6 +57,7 @@ export const clientReviewGuestSchema = z.object({
     body: z.string(),
     channels: z.array(z.object({ name: z.string(), platform: z.string(), body: z.string() })),
     coverUrl: z.string().nullable(),
+    videoUrl: z.string().nullable(),
   }),
   comment: z.string().nullable(),
   reviewedAt: z.iso.datetime().nullable(),
