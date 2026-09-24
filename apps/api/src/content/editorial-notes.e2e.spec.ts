@@ -111,4 +111,49 @@ describe.skipIf(!url)("editorial notes e2e", () => {
     await owner.post(path).send({ note: "Bad\u0000note", expectedBody: "Draft" }).expect(400);
     expect((await owner.get(path).expect(200)).body).toEqual([]);
   });
+
+  it("pages notes whose timestamps differ only below JavaScript millisecond precision", async () => {
+    const owner = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Editorial" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const item = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, channelIds: [channel.body.id], body: "Draft" })
+      .expect(201);
+    const { pool } = await import("../db");
+    const org = await pool.query<{ org_id: string }>(
+      "SELECT org_id FROM content_items WHERE id = $1",
+      [item.body.id],
+    );
+    const orgId = org.rows[0]?.org_id;
+    expect(orgId).toBeTruthy();
+    await pool.query(
+      `INSERT INTO editorial_notes (org_id, content_item_id, body_hash, note, created_at)
+       SELECT $1, $2, repeat('a', 64), 'Page ' || n,
+         TIMESTAMPTZ '2026-09-24 12:00:00Z' + n * INTERVAL '1 microsecond'
+       FROM generate_series(1, 23) AS n`,
+      [orgId, item.body.id],
+    );
+    const path = `/api/content/${item.body.id}/editorial-notes`;
+    const first = await owner.get(path).expect(200);
+    expect(first.body.map((row: { note: string }) => row.note)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `Page ${23 - index}`),
+    );
+    expect(first.headers["x-next-cursor"]).toBeTruthy();
+    const second = await owner.get(`${path}?cursor=${first.headers["x-next-cursor"]}`).expect(200);
+    expect(second.body.map((row: { note: string }) => row.note)).toEqual([
+      "Page 3",
+      "Page 2",
+      "Page 1",
+    ]);
+    expect(second.headers["x-next-cursor"]).toBeUndefined();
+  });
 });

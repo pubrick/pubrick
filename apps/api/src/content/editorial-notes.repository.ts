@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type { EditorialNoteCreate } from "@pubrick/shared";
-import { and, desc, eq, lt, or } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 
@@ -69,7 +69,7 @@ export class EditorialNotesRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const [before] = cursor
       ? await db
-          .select({ id: schema.editorialNotes.id, createdAt: schema.editorialNotes.createdAt })
+          .select({ id: schema.editorialNotes.id })
           .from(schema.editorialNotes)
           .where(
             and(
@@ -90,13 +90,13 @@ export class EditorialNotesRepository {
           eq(schema.editorialNotes.orgId, orgId),
           eq(schema.editorialNotes.contentItemId, itemId),
           before
-            ? or(
-                lt(schema.editorialNotes.createdAt, before.createdAt),
-                and(
-                  eq(schema.editorialNotes.createdAt, before.createdAt),
-                  lt(schema.editorialNotes.id, before.id),
-                ),
-              )
+            ? sql<boolean>`(${schema.editorialNotes.createdAt}, ${schema.editorialNotes.id}) < (
+                SELECT cursor_note.created_at, cursor_note.id
+                FROM editorial_notes AS cursor_note
+                WHERE cursor_note.id = ${before.id}
+                  AND cursor_note.org_id = ${orgId}
+                  AND cursor_note.content_item_id = ${itemId}
+              )`
             : undefined,
         ),
       )
