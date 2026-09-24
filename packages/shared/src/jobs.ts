@@ -44,6 +44,14 @@ export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
   heartbeatSeconds: 30,
   deadLetter: TOPIC_SUGGESTIONS_DLQ,
 } as const;
+/** Operator-requested, brand-scoped pass over approved dated topics. */
+export const MANUAL_TOPIC_PLAN_QUEUE = "topic-plan-manual";
+export type ManualTopicPlanJob = { orgId: string; brandId: string };
+export const MANUAL_TOPIC_PLAN_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 30,
+  expireInSeconds: 120,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";

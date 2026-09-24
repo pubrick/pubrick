@@ -84,15 +84,17 @@ describe("autopilot settings page", () => {
   });
 
   it("can plan approved dated topics without enabling direct generation", async () => {
-    const requests: Array<{ method: string; body: unknown }> = [];
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
       const method = init?.method ?? "GET";
       const body = init?.body ? JSON.parse(String(init.body)) : null;
-      requests.push({ method, body });
-      if (String(input).endsWith("/autopilot/history")) return response(200, []);
-      if (String(input).includes("/api/channels?"))
+      requests.push({ url, method, body });
+      if (url.endsWith("/autopilot/history")) return response(200, []);
+      if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Main", platform: "telegram" }]);
       if (method === "PUT") return response(200, body);
+      if (method === "POST") return response(202, { queued: true });
       return response(200, autopilotDefaults);
     });
     await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
@@ -100,6 +102,7 @@ describe("autopilot settings page", () => {
     await user.click(
       await screen.findByRole("checkbox", { name: /Plan approved dated topics automatically/ }),
     );
+    expect(screen.getByRole("button", { name: en.Autopilot.planNow })).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: /Main/ }));
     await user.clear(screen.getByRole("spinbutton", { name: en.Autopilot.planningDailyLimit }));
     await user.type(screen.getByRole("spinbutton", { name: en.Autopilot.planningDailyLimit }), "2");
@@ -111,5 +114,45 @@ describe("autopilot settings page", () => {
       channelIds: [CHANNEL_ID],
       planningDailyLimit: 2,
     });
+    await user.click(screen.getByRole("button", { name: en.Autopilot.planNow }));
+    expect(screen.getByRole("dialog", { name: en.Autopilot.planNowTitle })).toBeInTheDocument();
+    expect(requests.filter((entry) => entry.method === "POST")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: en.Autopilot.planNowConfirm }));
+    await waitFor(() => expect(screen.getByText(en.Autopilot.planQueued)).toBeInTheDocument());
+    expect(requests.find((entry) => entry.method === "POST")).toEqual({
+      url: `/api/brands/${BRAND_ID}/autopilot/plan-topics`,
+      method: "POST",
+      body: null,
+    });
+    expect(screen.getByRole("link", { name: en.Autopilot.openCalendar })).toHaveAttribute(
+      "href",
+      `/en/brands/${BRAND_ID}/calendar`,
+    );
+  });
+
+  it("explains a manual planning cooldown in the reader's language", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/autopilot/history")) return response(200, []);
+      if (url.includes("/api/channels?"))
+        return response(200, [{ id: CHANNEL_ID, name: "Main", platform: "telegram" }]);
+      if (init?.method === "POST")
+        return response(409, {
+          code: "topic_planning_cooldown",
+          message: "Wait one minute before planning again",
+        });
+      return response(200, {
+        ...autopilotDefaults,
+        autoPlanTopics: true,
+        channelIds: [CHANNEL_ID],
+      });
+    });
+    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Autopilot.planNow }));
+    await user.click(screen.getByRole("button", { name: en.Autopilot.planNowConfirm }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(en.Errors.topic_planning_cooldown),
+    );
   });
 });

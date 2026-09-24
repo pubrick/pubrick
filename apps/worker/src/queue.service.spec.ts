@@ -3,6 +3,8 @@ import {
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -196,6 +198,55 @@ describe("QueueService.registerAll", () => {
     )?.[2] as () => Promise<void>;
     await tick();
     expect(calendar.scan).toHaveBeenCalledWith(boss);
+  });
+
+  it("consumes manual topic planning only on production queues", async () => {
+    const boss = bossStub();
+    const planner = { scan: vi.fn(), planBrand: vi.fn().mockResolvedValue(1) };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, {
+      ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, {
+      ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+    });
+    const handler = boss.work.mock.calls.find(
+      (call) => call[0] === MANUAL_TOPIC_PLAN_QUEUE,
+    )?.[2] as (jobs: { data: { orgId: string; brandId: string } }[]) => Promise<void>;
+    await handler([{ data: { orgId: "org", brandId: "brand" } }]);
+    expect(planner.planBrand).toHaveBeenCalledWith("org", "brand");
+
+    boss.createQueue.mockClear();
+    boss.work.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.createQueue).not.toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, expect.anything());
+    expect(boss.work).not.toHaveBeenCalledWith(
+      MANUAL_TOPIC_PLAN_QUEUE,
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("consumes the shared publish queue with the shared options", async () => {

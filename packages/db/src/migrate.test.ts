@@ -101,6 +101,7 @@ const ZONED_COLUMNS = [
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "autopilot_configs.last_manual_plan_at",
   "autopilot_configs.updated_at",
   "autopilot_dispatches.created_at",
   "brand_feeds.created_at",
@@ -2523,6 +2524,63 @@ describe.skipIf(!url)("runMigrations", () => {
           "UPDATE topics SET planned_date = '2026-10-11', priority = 1 WHERE id = $1",
           [topicId],
         );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds a nullable first-party manual planning clock to existing configs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0062_manual_topic_plan_cooldown");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      let priorUpdatedAt!: Date;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('manual_plan_org', 'Test', 'manual-plan-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('manual_plan_org', 'Brand') RETURNING id",
+        );
+        brandId = brand.rows[0]?.id as string;
+        const config = await pool.query<{ updated_at: Date }>(
+          "INSERT INTO autopilot_configs (org_id, brand_id, channel_ids, auto_suggest_topics) VALUES ('manual_plan_org', $1, '[]', true) RETURNING updated_at",
+          [brandId],
+        );
+        priorUpdatedAt = config.rows[0]?.updated_at as Date;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const config = await after.query<{
+          auto_suggest_topics: boolean;
+          last_manual_plan_at: Date | null;
+          updated_at: Date;
+        }>(
+          "SELECT auto_suggest_topics, last_manual_plan_at, updated_at FROM autopilot_configs WHERE brand_id = $1",
+          [brandId],
+        );
+        expect(config.rows).toEqual([
+          {
+            auto_suggest_topics: true,
+            last_manual_plan_at: null,
+            updated_at: priorUpdatedAt,
+          },
+        ]);
+        const stamped = await after.query<{ last_manual_plan_at: Date }>(
+          "UPDATE autopilot_configs SET last_manual_plan_at = clock_timestamp() WHERE brand_id = $1 RETURNING last_manual_plan_at",
+          [brandId],
+        );
+        expect(stamped.rows[0]?.last_manual_plan_at).toBeInstanceOf(Date);
       } finally {
         await after.end();
       }

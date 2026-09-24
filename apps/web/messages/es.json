@@ -1077,6 +1077,8 @@
     "media_generation_failed": "Gemini no devolvió una imagen válida. Prueba otra descripción.",
     "cover_requires_google_key": "Añade una clave de Google AI en Ajustes antes de solicitar una portada.",
     "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos.",
+    "topic_planning_disabled": "Guarda la planificación automática de temas con al menos un canal antes de planificar ahora.",
+    "topic_planning_cooldown": "La planificación se solicitó hace poco. Inténtalo de nuevo en 60 segundos.",
     "publication_not_found": "Publicación no encontrada.",
     "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",
     "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación."
@@ -1232,6 +1234,15 @@
     "autoPlanTopics": "Planificar automáticamente temas aprobados con fecha",
     "autoPlanTopicsHint": "Cada hora coloca en el calendario, a las 10:00 hora local, los temas aprobados con fecha prevista en los próximos 14 días. Usa los canales seleccionados y respeta el límite diario. Desactivarlo detiene nuevas entradas; elimina las ya creadas por separado. Los borradores siguen sujetos a revisión humana.",
     "planningDailyLimit": "Entradas de calendario por día",
+    "planNow": "Planificar ahora",
+    "openCalendar": "Abrir calendario",
+    "saveBeforePlanning": "Guarda estos ajustes antes de planificar ahora.",
+    "planQueued": "Planificación solicitada. Las nuevas entradas aparecerán pronto en el calendario.",
+    "planNowTitle": "¿Planificar ahora los temas aprobados?",
+    "planNowBody": "Pubrick revisará los temas aprobados con fecha prevista y añadirá las entradas elegibles. Esto no inicia la generación ni publica nada.",
+    "planNowConfirm": "Solicitar planificación",
+    "planning": "Solicitando…",
+    "cancel": "Cancelar",
     "channels": "Canales para nuevos borradores",
     "noChannels": "Añade un canal a esta marca antes de activarlo.",
     "timezone": "Zona horaria",
@@ -1247,7 +1258,8 @@
     "emptyHistory": "Aún no hay trabajos automáticos. Aprueba un tema y activa la generación programada.",
     "runLink": "Trabajo del {date}",
     "validationError": "Revisa la zona horaria, los límites y los canales seleccionados.",
-    "genericError": "No se pudo cargar o guardar la configuración. Inténtalo de nuevo."
+    "genericError": "No se pudo cargar o guardar la configuración. Inténtalo de nuevo.",
+    "planError": "No se pudo solicitar la planificación. Inténtalo de nuevo."
   },
   "Media": {
     "title": "Biblioteca multimedia",

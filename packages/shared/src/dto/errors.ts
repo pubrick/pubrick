@@ -380,6 +380,8 @@ export const API_ERROR_CODES = [
   "news_item_not_found",
   "topic_not_approved",
   "topic_suggestions_cooldown",
+  "topic_planning_disabled",
+  "topic_planning_cooldown",
   "brand_not_found",
   "knowledge_not_found",
   "knowledge_batch_owner_required",

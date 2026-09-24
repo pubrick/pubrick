@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Put, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  UseGuards,
+} from "@nestjs/common";
 import { type AutopilotConfig, autopilotConfigSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
@@ -29,5 +39,12 @@ export class AutopilotController {
   @Get("history")
   history(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.autopilot.history(orgId, brandId);
+  }
+
+  @Post("plan-topics")
+  @HttpCode(202)
+  @UseGuards(AutopilotOwnerGuard)
+  planTopics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.planTopics(orgId, brandId);
   }
 }

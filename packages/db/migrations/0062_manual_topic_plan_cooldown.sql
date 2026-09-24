@@ -1,0 +1,1 @@
+ALTER TABLE "autopilot_configs" ADD COLUMN "last_manual_plan_at" timestamp with time zone;

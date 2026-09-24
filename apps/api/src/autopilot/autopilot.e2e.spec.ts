@@ -4,7 +4,7 @@ import { schema } from "@pubrick/db";
 import { autopilotConfigSchema } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)("autopilot API", () => {
@@ -176,5 +176,151 @@ describe.skipIf(!url)("autopilot API", () => {
     expect(afterDenied.enabled).toBe(false);
     expect(afterDenied.autoSuggestTopics).toBe(true);
     expect(afterDenied.autoPlanTopics).toBe(true);
+  });
+
+  it("queues a manual planning pass once per brand per minute", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Plan Brand" }).expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const configUrl = `/api/brands/${brand.body.id}/autopilot`;
+    const planUrl = `${configUrl}/plan-topics`;
+    await owner.agent
+      .post(planUrl)
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe("topic_planning_disabled");
+      });
+    await other.agent.post(planUrl).expect(404);
+
+    const defaults = (await owner.agent.get(configUrl).expect(200)).body;
+    await owner.agent
+      .put(configUrl)
+      .send({ ...defaults, enabled: false, autoPlanTopics: true, channelIds: [channel.body.id] })
+      .expect(200);
+
+    const [first, second] = await Promise.all([
+      owner.agent.post(planUrl),
+      owner.agent.post(planUrl),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([202, 409]);
+    const accepted = first.status === 202 ? first : second;
+    const denied = first.status === 409 ? first : second;
+    expect(accepted.body).toEqual({ status: "queued" });
+    expect(denied.body.code).toBe("topic_planning_cooldown");
+
+    const jobs = await db.execute(sql`
+      SELECT id, state FROM pgboss.job
+      WHERE name = 'topic-plan-manual'
+        AND data @> ${JSON.stringify({ orgId: owner.orgId, brandId: brand.body.id })}::jsonb
+    `);
+    expect(jobs.rows).toHaveLength(1);
+    const admitted = await db
+      .select({ lastManualPlanAt: schema.autopilotConfigs.lastManualPlanAt })
+      .from(schema.autopilotConfigs)
+      .where(eq(schema.autopilotConfigs.brandId, brand.body.id));
+    expect(admitted[0]?.lastManualPlanAt).toBeInstanceOf(Date);
+
+    // Saving ordinary autopilot settings cannot clear the manual admission
+    // clock or permit another pass inside the same minute.
+    await owner.agent
+      .put(configUrl)
+      .send({ ...defaults, enabled: false, autoPlanTopics: true, channelIds: [channel.body.id] })
+      .expect(200);
+    const afterPut = await db
+      .select({ lastManualPlanAt: schema.autopilotConfigs.lastManualPlanAt })
+      .from(schema.autopilotConfigs)
+      .where(eq(schema.autopilotConfigs.brandId, brand.body.id));
+    expect(afterPut[0]?.lastManualPlanAt).toEqual(admitted[0]?.lastManualPlanAt);
+
+    // Completion cannot lift the cooldown: a fast worker must not enable
+    // repeated operator submissions within the same rolling minute.
+    await db.execute(sql`
+      UPDATE pgboss.job SET state = 'completed'
+      WHERE name = 'topic-plan-manual' AND id = ${String(jobs.rows[0]?.id)}::uuid
+    `);
+    await owner.agent
+      .post(planUrl)
+      .expect(409)
+      .expect(({ body }) => {
+        expect(body.code).toBe("topic_planning_cooldown");
+      });
+    await db.execute(sql`
+      UPDATE autopilot_configs
+      SET last_manual_plan_at = clock_timestamp() - interval '61 seconds'
+      WHERE brand_id = ${brand.body.id}::uuid
+    `);
+    await owner.agent.post(planUrl).expect(202);
+    const after = await db.execute(sql`
+      SELECT count(*)::int AS count FROM pgboss.job
+      WHERE name = 'topic-plan-manual'
+        AND data @> ${JSON.stringify({ orgId: owner.orgId, brandId: brand.body.id })}::jsonb
+    `);
+    expect((after.rows[0] as { count: number }).count).toBe(2);
+
+    // A selected channel can be deleted after the config was saved. Do not
+    // enqueue a pass that the worker would have to discard.
+    await owner.agent.delete(`/api/channels/${channel.body.id}`).expect(200);
+    await owner.agent
+      .post(planUrl)
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.code).toBe("brand_has_no_channels");
+      });
+
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(
+        and(eq(schema.member.organizationId, owner.orgId), eq(schema.member.userId, owner.userId)),
+      );
+    await owner.agent.post(planUrl).expect(403);
+  });
+
+  it("rolls back the admission clock if enqueue fails", async () => {
+    const owner = await orgAgent();
+    const brand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Rollback Brand" })
+      .expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const configUrl = `/api/brands/${brand.body.id}/autopilot`;
+    const defaults = (await owner.agent.get(configUrl).expect(200)).body;
+    await owner.agent
+      .put(configUrl)
+      .send({ ...defaults, autoPlanTopics: true, channelIds: [channel.body.id] })
+      .expect(200);
+
+    const { QueueService } = await import("../queue/queue.service");
+    const spy = vi
+      .spyOn(app.get(QueueService), "enqueueManualTopicPlan")
+      .mockRejectedValueOnce(new Error("simulated queue outage"));
+    try {
+      await owner.agent.post(`${configUrl}/plan-topics`).expect(500);
+    } finally {
+      spy.mockRestore();
+    }
+    const [config] = await db
+      .select({ lastManualPlanAt: schema.autopilotConfigs.lastManualPlanAt })
+      .from(schema.autopilotConfigs)
+      .where(eq(schema.autopilotConfigs.brandId, brand.body.id));
+    expect(config?.lastManualPlanAt).toBeNull();
+    await owner.agent.post(`${configUrl}/plan-topics`).expect(202);
   });
 });

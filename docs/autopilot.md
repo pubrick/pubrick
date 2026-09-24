@@ -5,6 +5,23 @@ admin saves the brand's channels, IANA time zone, earliest local hour, quiet
 window, daily run quota (1–5), and daily USD spend threshold. The default is off.
 The `autopilot-scan` pg-boss job checks enabled brands every five minutes.
 
+## Dated-topic calendar planning
+
+**Plan approved dated topics automatically** is an independent, default-off
+setting. It needs at least one selected channel and does not enable direct
+generation. An hourly scan checks approved topics with target dates in the next
+14 local days, then creates reviewable 10:00 calendar slots up to the brand's
+daily slot limit. A past scheduled instant is skipped. Direct autopilot
+generation uses undated topics, so the two paths do not dispatch the same
+topic. Calendar slots still check approval and topic revision at their due time;
+each generated draft waits for human review.
+
+The secondary **Plan now** action is available after saving the opt-in. An
+owner or admin confirms the request; the API queues the same planner with a
+60-second per-brand cooldown. It rechecks saved settings when the job runs and
+is safe to overlap with the hourly scan. The action does not generate or
+publish content immediately. New slots appear in the brand calendar.
+
 ## Daily topic ideas
 
 **Suggest topics daily** is a separate, default-off brand setting. It does not

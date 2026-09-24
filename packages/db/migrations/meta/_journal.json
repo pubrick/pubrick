@@ -428,6 +428,13 @@
       "when": 1790280378175,
       "tag": "0061_dated_topic_planning",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790282271004,
+      "tag": "0062_manual_topic_plan_cooldown",
+      "breakpoints": true
     }
   ]
 }

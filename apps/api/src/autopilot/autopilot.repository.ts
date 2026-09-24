@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { type AutopilotConfig, autopilotDefaults } from "@pubrick/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { notFound } from "../api-error";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { QueueService } from "../queue/queue.service";
 
 const CONFIG_COLUMNS = {
   enabled: schema.autopilotConfigs.enabled,
@@ -21,6 +22,8 @@ const CONFIG_COLUMNS = {
 
 @Injectable()
 export class AutopilotRepository {
+  constructor(private readonly queue: QueueService) {}
+
   private async requireBrand(orgId: string, brandId: string) {
     const rows = await db
       .select({ id: schema.brands.id })
@@ -129,5 +132,68 @@ export class AutopilotRepository {
       )
       .orderBy(desc(schema.autopilotDispatches.createdAt), desc(schema.autopilotDispatches.id))
       .limit(50);
+  }
+
+  async planTopics(orgId: string, brandId: string) {
+    return db.transaction(async (tx) => {
+      // Serialize manual triggers and config changes for this brand. The
+      // first-party config timestamp remains the durable cooldown marker even
+      // after a fast worker completes its pass or the API process restarts.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [config] = await tx
+        .select({
+          autoPlanTopics: schema.autopilotConfigs.autoPlanTopics,
+          channelIds: schema.autopilotConfigs.channelIds,
+          cooldownActive: sql<boolean>`
+            ${schema.autopilotConfigs.lastManualPlanAt} > clock_timestamp() - interval '60 seconds'
+          `,
+        })
+        .from(schema.autopilotConfigs)
+        .where(
+          and(
+            eq(schema.autopilotConfigs.orgId, orgId),
+            eq(schema.autopilotConfigs.brandId, brandId),
+          ),
+        );
+      if (!config?.autoPlanTopics) {
+        throw conflict("topic_planning_disabled", "Enable automatic topic planning first");
+      }
+      if (!config.channelIds.length) {
+        throw badRequest("brand_has_no_channels", "Select a channel before planning topics");
+      }
+      const selected = [...new Set(config.channelIds)];
+      const channels = await tx
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.brandId, brandId),
+            inArray(schema.channels.id, selected),
+          ),
+        );
+      if (selected.length !== config.channelIds.length || channels.length !== selected.length) {
+        throw badRequest("brand_has_no_channels", "Select a valid channel before planning topics");
+      }
+      if (config.cooldownActive) {
+        throw conflict("topic_planning_cooldown", "Wait one minute before planning again");
+      }
+      await this.queue.enqueueManualTopicPlan(tx, { orgId, brandId });
+      await tx
+        .update(schema.autopilotConfigs)
+        .set({ lastManualPlanAt: sql`clock_timestamp()` })
+        .where(
+          and(
+            eq(schema.autopilotConfigs.orgId, orgId),
+            eq(schema.autopilotConfigs.brandId, brandId),
+          ),
+        );
+      return { status: "queued" as const };
+    });
   }
 }

@@ -5,6 +5,9 @@ import {
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
   type GenerateJob,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -372,6 +375,15 @@ export class QueueService {
       await boss.work("topic-planning-scan", { batchSize: 1 }, async () => {
         await this.topicPlanner?.scan();
       });
+      await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.work<ManualTopicPlanJob>(
+        MANUAL_TOPIC_PLAN_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.topicPlanner?.planBrand(job.data.orgId, job.data.brandId);
+        },
+      );
     }
     if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue("autopilot-scan");

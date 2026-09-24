@@ -9,6 +9,9 @@ import {
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   type GenerateJob,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -106,6 +109,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
     await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+    await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
@@ -166,6 +171,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     if (id === null) throw new ConflictException("Topic suggestions are already queued");
+  }
+
+  /** Caller holds the brand row lock and enforces the rolling cooldown. */
+  async enqueueManualTopicPlan(tx: Tx, payload: ManualTopicPlanJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(MANUAL_TOPIC_PLAN_QUEUE, payload, {
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Topic planning is already queued");
   }
 
   /**

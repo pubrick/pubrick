@@ -137,6 +137,9 @@ removing or unlinking the slot clears the target date so the worker does not
 recreate it. Calendar generation still checks the topic revision and approval
 before spending the organization's key. Drafts remain in human review and are
 never published by this planner. Direct autopilot generation skips dated topics.
+An owner/admin can also enqueue the same planner from Autopilot settings. A
+60-second per-brand admission check prevents accidental repeats; the worker
+rechecks the saved opt-in and channel selection before placing anything.
 
 ### Saved text history
 

@@ -1077,6 +1077,8 @@
     "media_generation_failed": "Gemini did not return a usable image. Try another prompt.",
     "cover_requires_google_key": "Add a Google AI key in Settings before requesting a cover.",
     "topic_suggestions_cooldown": "You can request more ideas in 30 minutes.",
+    "topic_planning_disabled": "Save automatic topic planning with at least one channel before planning now.",
+    "topic_planning_cooldown": "Planning was requested recently. Try again in 60 seconds.",
     "publication_not_found": "Publication not found.",
     "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
     "metrics_unavailable": "Automatic metrics are unavailable for this publication."
@@ -1232,6 +1234,15 @@
     "autoPlanTopics": "Plan approved dated topics automatically",
     "autoPlanTopicsHint": "Each hour, place approved topics with a target date in the next 14 days onto the calendar at 10:00 local time. Uses the selected channels and respects the daily slot limit. Turning this off stops new placements; remove existing slots separately. Drafts still require human review before publication.",
     "planningDailyLimit": "Calendar slots per day",
+    "planNow": "Plan now",
+    "openCalendar": "Open calendar",
+    "saveBeforePlanning": "Save these settings before planning now.",
+    "planQueued": "Planning requested. New slots will appear in the calendar shortly.",
+    "planNowTitle": "Plan approved topics now?",
+    "planNowBody": "Pubrick will check approved topics with target dates and add eligible calendar slots. This does not start generation or publish anything.",
+    "planNowConfirm": "Request planning",
+    "planning": "Requesting…",
+    "cancel": "Cancel",
     "channels": "Channels for new drafts",
     "noChannels": "Add a channel to this brand before enabling autopilot.",
     "timezone": "Time zone",
@@ -1247,7 +1258,8 @@
     "emptyHistory": "No automatic runs yet. Approve a topic and enable scheduled generation.",
     "runLink": "Run on {date}",
     "validationError": "Check the time zone, limits and selected channels.",
-    "genericError": "Autopilot settings could not be loaded or saved. Try again."
+    "genericError": "Autopilot settings could not be loaded or saved. Try again.",
+    "planError": "Planning could not be requested. Try again."
   },
   "Media": {
     "title": "Media library",

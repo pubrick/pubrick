@@ -1077,6 +1077,8 @@
     "media_generation_failed": "O Gemini não retornou uma imagem utilizável. Tente outra descrição.",
     "cover_requires_google_key": "Adicione uma chave Google AI nas Definições antes de pedir uma capa.",
     "topic_suggestions_cooldown": "Pode pedir mais ideias daqui a 30 minutos.",
+    "topic_planning_disabled": "Guarde o planeamento automático de tópicos com pelo menos um canal antes de planear agora.",
+    "topic_planning_cooldown": "O planeamento foi pedido recentemente. Tente novamente em 60 segundos.",
     "publication_not_found": "Publicação não encontrada.",
     "metrics_refresh_cooldown": "Esta publicação foi consultada recentemente. Tente novamente em 15 minutos.",
     "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação."
@@ -1232,6 +1234,15 @@
     "autoPlanTopics": "Planear automaticamente tópicos aprovados com data",
     "autoPlanTopicsHint": "A cada hora, coloca no calendário às 10:00 locais os tópicos aprovados com data prevista nos próximos 14 dias. Usa os canais selecionados e respeita o limite diário. Desativar impede novas entradas; remova as existentes separadamente. Os rascunhos continuam sujeitos a revisão humana.",
     "planningDailyLimit": "Entradas no calendário por dia",
+    "planNow": "Planear agora",
+    "openCalendar": "Abrir calendário",
+    "saveBeforePlanning": "Guarde estas definições antes de planear agora.",
+    "planQueued": "Planeamento pedido. As novas entradas aparecerão em breve no calendário.",
+    "planNowTitle": "Planear agora os tópicos aprovados?",
+    "planNowBody": "O Pubrick irá verificar os tópicos aprovados com data prevista e adicionar as entradas elegíveis. Isto não inicia a geração nem publica nada.",
+    "planNowConfirm": "Pedir planeamento",
+    "planning": "A pedir…",
+    "cancel": "Cancelar",
     "channels": "Canais para novos rascunhos",
     "noChannels": "Adicione um canal à marca antes de ativar.",
     "timezone": "Fuso horário",
@@ -1247,7 +1258,8 @@
     "emptyHistory": "Ainda não há execuções automáticas. Aprove um tópico e ative a geração programada.",
     "runLink": "Execução em {date}",
     "validationError": "Confira o fuso horário, os limites e os canais selecionados.",
-    "genericError": "Não foi possível carregar ou salvar as configurações. Tente novamente."
+    "genericError": "Não foi possível carregar ou salvar as configurações. Tente novamente.",
+    "planError": "Não foi possível pedir o planeamento. Tente novamente."
   },
   "Media": {
     "title": "Biblioteca de mídia",
