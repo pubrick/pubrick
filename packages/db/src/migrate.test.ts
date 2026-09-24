@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -2188,6 +2189,49 @@ describe.skipIf(!url)("runMigrations", () => {
         expect([...backfilled.values()].filter((status) => status === "approved")).not.toHaveLength(
           0,
         );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds automatic knowledge indexing as opt-in to an existing database", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0051_flat_gwen_stacy");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('auto_index_org', 'Test', 'auto-index-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('auto_index_org', 'Brand') RETURNING id",
+        );
+        assert(brand.rows[0]);
+        brandId = brand.rows[0].id;
+        const absent = await pool.query<{ exists: string | null }>(
+          "SELECT to_regclass('public.knowledge_auto_index')::text AS exists",
+        );
+        assert(absent.rows[0]);
+        expect(absent.rows[0].exists).toBeNull();
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const existing = await after.query("SELECT * FROM knowledge_auto_index");
+        expect(existing.rows).toEqual([]);
+        const inserted = await after.query<{ enabled: boolean; last_attempt_at: Date | null }>(
+          "INSERT INTO knowledge_auto_index (org_id, brand_id) VALUES ('auto_index_org', $1) RETURNING enabled, last_attempt_at",
+          [brandId],
+        );
+        expect(inserted.rows).toEqual([{ enabled: false, last_attempt_at: null }]);
       } finally {
         await after.end();
       }

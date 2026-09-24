@@ -22,6 +22,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { KnowledgeCsvError, parseKnowledgeCsv, serializeKnowledgeCsv } from "@/lib/knowledge-csv";
 
 type Entry = {
@@ -34,6 +35,7 @@ type Entry = {
   hasEmbedding: boolean;
 };
 type Form = { title: string; content: string; category: Entry["category"]; tags: string };
+type AutoIndexConfig = { enabled: boolean; lastAttemptAt: string | null };
 const EMPTY_FORM: Form = { title: "", content: "", category: "product_info", tags: "" };
 const FORM_ID = "knowledge-form";
 
@@ -43,6 +45,12 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const member = organization?.members?.find(
+    (entry) => entry.userId === session?.user.id || entry.user?.id === session?.user.id,
+  );
+  const canManageIndex = member?.role === "owner" || member?.role === "admin";
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +61,9 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const [busy, setBusy] = useState(false);
   const [indexing, setIndexing] = useState<string | null>(null);
   const [batchIndexing, setBatchIndexing] = useState(false);
+  const [autoIndex, setAutoIndex] = useState<AutoIndexConfig | null>(null);
+  const [autoIndexBusy, setAutoIndexBusy] = useState(false);
+  const [autoIndexError, setAutoIndexError] = useState<string | null>(null);
   const csvInput = useRef<HTMLInputElement>(null);
   const [importPreview, setImportPreview] = useState<{
     filename: string;
@@ -84,6 +95,28 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
       });
   }, [brandId, describeError]);
   useEffect(load, [load]);
+  useEffect(() => {
+    api<AutoIndexConfig>(`/api/knowledge/auto-index?brandId=${brandId}`)
+      .then(setAutoIndex)
+      .catch((err) => setAutoIndexError(describeError(err)));
+  }, [brandId, describeError]);
+
+  async function toggleAutoIndex() {
+    if (!autoIndex || autoIndexBusy) return;
+    setAutoIndexBusy(true);
+    setAutoIndexError(null);
+    try {
+      const next = await api<AutoIndexConfig>("/api/knowledge/auto-index", {
+        method: "PATCH",
+        body: JSON.stringify({ brandId, enabled: !autoIndex.enabled }),
+      });
+      setAutoIndex(next);
+    } catch (err) {
+      setAutoIndexError(describeError(err));
+    } finally {
+      setAutoIndexBusy(false);
+    }
+  }
 
   function openAdd() {
     setForm(EMPTY_FORM);
@@ -346,6 +379,46 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           {t("back")}
         </Link>
         <p className="mt-3 text-sm text-fg-secondary">{t("intro")}</p>
+        <div className="mt-4 rounded-xl border border-border bg-surface-raised p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">{t("autoIndexTitle")}</p>
+              <p className="mt-1 text-sm text-fg-secondary">{t("autoIndexDescription")}</p>
+            </div>
+            {canManageIndex ? (
+              <Button
+                variant="secondary"
+                role="switch"
+                aria-checked={Boolean(autoIndex?.enabled)}
+                aria-label={t("autoIndexTitle")}
+                disabled={!autoIndex || autoIndexBusy}
+                onClick={() => void toggleAutoIndex()}
+              >
+                {autoIndexBusy
+                  ? t("autoIndexSaving")
+                  : autoIndex?.enabled
+                    ? t("autoIndexOn")
+                    : t("autoIndexOff")}
+              </Button>
+            ) : autoIndex ? (
+              <p className="text-sm text-fg-secondary">
+                {autoIndex.enabled ? t("autoIndexOn") : t("autoIndexOff")}
+              </p>
+            ) : null}
+          </div>
+          {autoIndex?.lastAttemptAt && (
+            <p className="mt-2 text-xs text-fg-secondary">
+              {t("autoIndexLastAttempt", {
+                date: new Date(autoIndex.lastAttemptAt).toLocaleString(locale),
+              })}
+            </p>
+          )}
+          {autoIndexError && (
+            <p role="alert" className="mt-2 text-sm text-danger">
+              {autoIndexError}
+            </p>
+          )}
+        </div>
         <input
           ref={csvInput}
           type="file"

@@ -1,6 +1,7 @@
 import { knowledgeCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
 import { renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
@@ -19,9 +20,55 @@ const mockApi = vi.mocked(api);
 beforeEach(() => {
   signedInSession();
   mockApi.mockReset();
+  vi.mocked(authClient.useActiveOrganization).mockImplementation(
+    () =>
+      ({
+        data: null,
+        isPending: false,
+      }) as never,
+  );
 });
 
 describe("brand knowledge screen", () => {
+  it("lets an owner explicitly opt in", async () => {
+    mockApi.mockImplementation(async (path, init) => {
+      if (String(path).startsWith("/api/knowledge?")) return [] as never;
+      if (String(path).startsWith("/api/knowledge/auto-index?"))
+        return { enabled: false, lastAttemptAt: null } as never;
+      if (path === "/api/knowledge/auto-index" && init?.method === "PATCH")
+        return { enabled: true, lastAttemptAt: null } as never;
+      return {} as never;
+    });
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "owner" }] },
+      isPending: false,
+    } as never);
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    const toggle = await screen.findByRole("switch", { name: en.Knowledge.autoIndexTitle });
+    await userEvent.setup().click(toggle);
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith("/api/knowledge/auto-index", {
+        method: "PATCH",
+        body: JSON.stringify({ brandId, enabled: true }),
+      }),
+    );
+  });
+
+  it("shows no paid indexing switch to members", async () => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+      isPending: false,
+    } as never);
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?")) return [] as never;
+      if (String(path).startsWith("/api/knowledge/auto-index?"))
+        return { enabled: false, lastAttemptAt: null } as never;
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText(en.Knowledge.autoIndexTitle);
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
   it("sends a bounded note through the same schema the API validates", async () => {
     mockApi.mockImplementation(async (path) => {
       if (String(path).startsWith("/api/knowledge?")) return [] as never;
