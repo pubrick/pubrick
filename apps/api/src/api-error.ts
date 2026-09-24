@@ -2,12 +2,14 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
+  HttpException,
   NotFoundException,
 } from "@nestjs/common";
 import { type ApiErrorCode, refusalBody } from "@pubrick/shared";
 
 /**
- * The four ways this api refuses a request it has authenticated, each one
+ * The coded ways this api refuses a request, each one
  * paired ONCE with the status code its body claims.
  *
  * The pairing is the entire reason these exist rather than
@@ -46,3 +48,9 @@ export const conflict = (code: ApiErrorCode, message: string) =>
  */
 export const forbidden = (code: ApiErrorCode, message: string) =>
   new ForbiddenException(refusalBody(403, code, message));
+
+export const gone = (code: ApiErrorCode, message: string) =>
+  new GoneException(refusalBody(410, code, message));
+
+export const tooManyRequests = (code: ApiErrorCode, message: string) =>
+  new HttpException(refusalBody(429, code, message), 429);

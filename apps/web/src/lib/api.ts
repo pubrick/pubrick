@@ -80,6 +80,12 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  client_review_role_required: "client_review_role_required",
+  client_review_required: "client_review_required",
+  client_review_link_invalid: "client_review_link_invalid",
+  client_review_link_closed: "client_review_link_closed",
+  client_review_rate_limited: "client_review_rate_limited",
+  client_review_invalid: "client_review_invalid",
   private_source_owner_required: "private_source_owner_required",
   private_source_not_configured: "private_source_not_configured",
   private_source_not_connected: "private_source_not_connected",

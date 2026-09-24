@@ -64,6 +64,12 @@
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
  */
 export const API_ERROR_CODES = [
+  "client_review_role_required",
+  "client_review_required",
+  "client_review_link_invalid",
+  "client_review_link_closed",
+  "client_review_rate_limited",
+  "client_review_invalid",
   "private_source_owner_required",
   "private_source_not_configured",
   "private_source_not_connected",
@@ -430,10 +436,10 @@ export function isApiErrorCode(value: unknown): value is ApiErrorCode {
 }
 
 /**
- * The four statuses a coded refusal is allowed to use, and the name Nest gives
+ * The statuses a coded refusal is allowed to use, and the name Nest gives
  * each one.
  *
- * A closed map rather than a lookup, so `refusalBody(410, …)` does not compile.
+ * A closed map rather than a lookup, so an unlisted status does not compile.
  * The pairing matters because the api's helpers wrap these in the matching Nest
  * exception class: a body whose `statusCode` disagreed with the response's real
  * status would be a lie told in the one place a client goes to find out what
@@ -444,6 +450,8 @@ const REFUSAL_STATUS_NAME = {
   403: "Forbidden",
   404: "Not Found",
   409: "Conflict",
+  410: "Gone",
+  429: "Too Many Requests",
 } as const;
 
 export type RefusalStatus = keyof typeof REFUSAL_STATUS_NAME;

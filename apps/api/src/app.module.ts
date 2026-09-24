@@ -7,6 +7,7 @@ import { AutopilotModule } from "./autopilot/autopilot.module";
 import { BrandsModule } from "./brands/brands.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { ChannelsModule } from "./channels/channels.module";
+import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
@@ -34,6 +35,7 @@ import { TopicsModule } from "./topics/topics.module";
     BrandsModule,
     CalendarModule,
     ChannelsModule,
+    ClientReviewModule,
     ContentModule,
     FeedsModule,
     OrgModule,

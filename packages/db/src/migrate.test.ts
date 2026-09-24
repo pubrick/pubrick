@@ -112,6 +112,10 @@ const ZONED_COLUMNS = [
   "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
+  "client_review_links.created_at",
+  "client_review_links.expires_at",
+  "client_review_links.reviewed_at",
+  "client_review_links.revoked_at",
   "content_items.created_at",
   "content_items.first_opened_at",
   "content_items.updated_at",
@@ -223,6 +227,13 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Guest approval capabilities are new after the historical seed. Their
+  // format and verdict relationship are exercised by client-review e2e tests.
+  "client_review_links_token_hash_check",
+  "client_review_links_snapshot_hash_check",
+  "client_review_links_verdict_check",
+  "client_review_links_comment_length_check",
+  "client_review_links_review_pair_check",
   // Vector provenance must accompany every stored embedding. The knowledge
   // E2E suite covers clearing and writing the metadata with the vector.
   "knowledge_entries_embedding_metadata_check",
