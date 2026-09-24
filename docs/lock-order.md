@@ -18,6 +18,14 @@ before reading and locking the parent, so a job fetched before archive cannot
 claim a send after archive has committed. Worker status recomputation keeps an
 archived parent unchanged.
 
+Permanent deletion of an archived unsent post takes the same ordered adaptation
+locks before the content item lock. It refuses any delivery attempt or linked
+publication record, a retained generation run, or an item whose durable safety
+marker is false before deleting it. A trigger on adaptation deletion remembers
+delivery history that would otherwise lose its item link when a channel is
+deleted. Historical posts have the marker false because prior orphaned receipts
+cannot be matched back to a post.
+
 Daily topic suggestions also serialize admission on `brands`. Both the manual
 `TopicsRepository.requestSuggestions` path and the automatic
 `SuggestionsScanService.trigger` path take that brand row `FOR UPDATE` before

@@ -68,6 +68,8 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  archivedFromStatus: ContentStatus | null;
+  isSafeToDelete: boolean;
   origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
@@ -125,6 +127,8 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     title: "Launch post",
     body: "Hello world",
     status: "draft" as ContentStatus,
+    archivedFromStatus: null as ContentStatus | null,
+    isSafeToDelete: true,
     origin: "human" as ContentOrigin,
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
@@ -828,11 +832,11 @@ describe("archive and restore", () => {
     const calls: Call[] = [];
     installBaseHandlers(served, calls, (path, method) => {
       if (method === "POST" && path === "/api/content/c1/archive") {
-        served.current = { ...served.current, status: "archived" };
+        served.current = { ...served.current, status: "archived", archivedFromStatus: "draft" };
         return served.current;
       }
       if (method === "POST" && path === "/api/content/c1/restore") {
-        served.current = { ...served.current, status: "draft" };
+        served.current = { ...served.current, status: "draft", archivedFromStatus: null };
         return served.current;
       }
       return undefined;
@@ -887,6 +891,7 @@ describe("archive and restore", () => {
     };
     const item = makeItem({
       status: "archived",
+      archivedFromStatus: "failed",
       origin: "ai",
       body,
       aiVersionBodies: { item: [body], adaptations: {} },
@@ -905,6 +910,69 @@ describe("archive and restore", () => {
     expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled();
     expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
     expect(calls.every((call) => call.method === "GET")).toBe(true);
+    expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before permanently deleting an archived draft", async () => {
+    const item = makeItem({
+      status: "archived",
+      archivedFromStatus: "draft",
+      adaptations: [makeAdaptation()],
+    });
+    installBaseHandlers({ current: item }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.deleteTitle });
+    screen.getByText(en.Publish.deleteBody);
+    expect(
+      mockApiVoid.mock.calls.some(
+        ([path, init]) => path === "/api/content/c1" && init?.method === "DELETE",
+      ),
+    ).toBe(false);
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Publish.delete }));
+
+    await waitFor(() =>
+      expect(mockApiVoid).toHaveBeenCalledWith("/api/content/c1", { method: "DELETE" }),
+    );
+    expect(routerMock.replace).toHaveBeenCalledWith("/en/content");
+  });
+
+  it("keeps deletion confirmation open until the request settles", async () => {
+    const item = makeItem({ status: "archived", archivedFromStatus: "draft" });
+    installBaseHandlers({ current: item }, []);
+    let releaseDelete: (() => void) | undefined;
+    const pendingDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    mockApiVoid.mockImplementation(async (path, init) => {
+      if (path === "/api/content/c1" && init?.method === "DELETE") await pendingDelete;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.deleteTitle });
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Publish.delete }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: en.Publish.delete })).toBeDisabled(),
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Ui.close }));
+    expect(screen.getByRole("dialog", { name: en.Publish.deleteTitle })).toBeInTheDocument();
+    releaseDelete?.();
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/content"));
+  });
+
+  it("hides permanent deletion when delivery provenance is uncertain or a run is retained", async () => {
+    for (const override of [{ isSafeToDelete: false }, { runId: "retained-run" }]) {
+      installBaseHandlers(
+        { current: makeItem({ status: "archived", archivedFromStatus: "draft", ...override }) },
+        [],
+      );
+      const view = await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByText(en.Publish.archivedHint);
+      expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 });
 

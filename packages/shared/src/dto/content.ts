@@ -804,7 +804,12 @@ export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
  * body, the list does not.
  */
 export const contentDetailDtoSchema = contentListItemDtoSchema
-  .extend({ body: z.string(), linkPolicyWebsite: z.string().url().nullable() })
+  .extend({
+    body: z.string(),
+    linkPolicyWebsite: z.string().url().nullable(),
+    archivedFromStatus: z.enum(CONTENT_STATUSES).nullable(),
+    isSafeToDelete: z.boolean(),
+  })
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;
 

@@ -479,11 +479,17 @@ function expectNoRowRewritten(
       ).toEqual(beforeRow);
       const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
       expect(
-        added.filter((key) =>
-          table === "channels" && key === "metrics_auto_refresh"
-            ? afterRow[key] !== false
-            : afterRow[key] !== null,
-        ),
+        added.filter((key) => {
+          if (table === "channels" && key === "metrics_auto_refresh") {
+            return afterRow[key] !== false;
+          }
+          // 0060 intentionally makes historical items ineligible for deletion:
+          // an orphaned receipt may already have lost its item link.
+          if (table === "content_items" && key === "is_safe_to_delete") {
+            return afterRow[key] !== false;
+          }
+          return afterRow[key] !== null;
+        }),
         `${table}: a column added after the seed was backfilled over an existing row`,
       ).toEqual([]);
     });
@@ -1429,6 +1435,7 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expectNoRowRewritten(rows, seeded);
+      expect(rows.content_items?.[0]?.is_safe_to_delete).toBe(false);
       // Every enum pin PLUS every non-enum check — see `NON_ENUM_CHECKS` for
       // why this is not simply `PINNED_COLUMNS.length` any more.
       expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length + NON_ENUM_CHECKS.length);

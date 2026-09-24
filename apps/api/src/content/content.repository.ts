@@ -1393,6 +1393,8 @@ export class ContentRepository {
           coverMediaId: schema.contentItems.coverMediaId,
           videoMediaId: schema.contentItems.videoMediaId,
           linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -1422,6 +1424,8 @@ export class ContentRepository {
       coverMediaId: cover[0]?.coverMediaId ?? null,
       videoMediaId: cover[0]?.videoMediaId ?? null,
       linkPolicyWebsite: cover[0]?.linkPolicyWebsite ?? null,
+      archivedFromStatus: cover[0]?.archivedFromStatus ?? null,
+      isSafeToDelete: cover[0]?.isSafeToDelete ?? false,
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable
@@ -3863,6 +3867,127 @@ export class ContentRepository {
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
     });
     return this.get(orgId, id);
+  }
+
+  /**
+   * Permanently remove an archived, unpublished draft or rejection. Publication
+   * receipts are evidence of a delivery and must never disappear with an item.
+   * A delivery attempt without a receipt is evidence too: attemptCount is
+   * checked even when the worker could not record the platform's answer.
+   *
+   * Lock every linked adaptation in ID order before the parent, as required by
+   * docs/lock-order.md. Publication writers hold that same adaptation lock, so
+   * the history check cannot race an in-flight receipt. The final unlocked
+   * adaptation read catches a new row inserted while we waited for the parent;
+   * once its FOR UPDATE lock is held, the item's FK blocks further inserts.
+   */
+  async delete(orgId: string, id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "archived") {
+        throw conflict(
+          "content_delete_requires_archive",
+          "Archive this content before deleting it",
+        );
+      }
+      if (item.archivedFromStatus !== "draft" && item.archivedFromStatus !== "rejected") {
+        throw conflict(
+          "content_delete_not_draft",
+          "Only archived drafts and rejected content can be permanently deleted",
+        );
+      }
+      if (!item.isSafeToDelete) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Delivery history cannot be ruled out for this content",
+        );
+      }
+
+      // A generated draft also lives in pipeline_runs.steps. Cascading the
+      // content item only nulls that run's FK; it does not erase the checkpoint
+      // text, which GET /runs/:id can still return. Refuse until run retention
+      // and redaction have an explicit design.
+      const [generationRun] = await tx
+        .select({ id: schema.pipelineRuns.id })
+        .from(schema.pipelineRuns)
+        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.contentItemId, id)))
+        .limit(1);
+      if (generationRun) {
+        throw conflict(
+          "content_delete_has_generation_history",
+          "Generated drafts cannot be permanently deleted while their run is retained",
+        );
+      }
+
+      const currentAdaptations = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)));
+      if (
+        currentAdaptations.length !== adaptations.length ||
+        currentAdaptations.some((row) => !adaptations.some((locked) => locked.id === row.id))
+      ) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Content channels changed during deletion",
+        );
+      }
+      if (
+        adaptations.some(
+          (adaptation) =>
+            adaptation.attemptCount > 0 ||
+            adaptation.status === "published" ||
+            adaptation.status === "failed" ||
+            (ACTIVE_ARCHIVE_DELIVERY_STATUSES as readonly AdaptationStatus[]).includes(
+              adaptation.status,
+            ),
+        )
+      ) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Content with active or attempted deliveries cannot be permanently deleted",
+        );
+      }
+      if (adaptations.length > 0) {
+        const [publication] = await tx
+          .select({ id: schema.publications.id })
+          .from(schema.publications)
+          .where(
+            and(
+              eq(schema.publications.orgId, orgId),
+              inArray(
+                schema.publications.adaptationId,
+                adaptations.map((adaptation) => adaptation.id),
+              ),
+            ),
+          )
+          .limit(1);
+        if (publication) {
+          throw conflict(
+            "content_delete_has_delivery_history",
+            "Content with publication history cannot be permanently deleted",
+          );
+        }
+      }
+
+      const deleted = await tx
+        .delete(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .returning({ id: schema.contentItems.id });
+      if (deleted.length === 0) throw notFound("content_not_found", "Content item not found");
+    });
   }
 
   /**

@@ -414,6 +414,13 @@
       "when": 1790277333771,
       "tag": "0059_early_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790279288047,
+      "tag": "0060_mushy_talisman",
+      "breakpoints": true
     }
   ]
 }

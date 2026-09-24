@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -50,6 +51,15 @@ export const contentItems = pgTable(
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Original status while archived; cleared when the item is restored. */
     archivedFromStatus: text("archived_from_status", { enum: CONTENT_STATUSES }),
+    /**
+     * Durable deletion gate. Rows from before migration 0060 are false because
+     * a channel delete may already have erased the only item-to-receipt link.
+     * New rows start true. Deleting a delivery adaptation turns this false
+     * permanently, even if the channel is removed. While an adaptation still
+     * exists, the API checks its attempt count, status, and receipts directly.
+     * A database trigger refuses false -> true, including for historical rows.
+     */
+    isSafeToDelete: boolean("is_safe_to_delete").notNull().default(true),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
     /** Website used by the generation-time link policy; null means none ran. */

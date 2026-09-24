@@ -390,6 +390,13 @@ export class ContentController {
     return this.content.restore(orgId, id);
   }
 
+  /** Permanently remove an archived draft with no delivery history. */
+  @Delete(":id")
+  @HttpCode(204)
+  async delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
+    await this.content.delete(orgId, id);
+  }
+
   @Post(":id/reject")
   @HttpCode(200)
   reject(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {

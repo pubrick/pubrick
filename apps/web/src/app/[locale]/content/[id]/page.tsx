@@ -22,6 +22,7 @@ import { Card } from "@/components/ui/card";
 import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
+import { Modal } from "@/components/ui/modal";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
 import {
@@ -104,6 +105,8 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  archivedFromStatus: ContentStatus | null;
+  isSafeToDelete: boolean;
   origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
@@ -245,6 +248,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const closeDelete = useCallback(() => {
+    if (!deleteBusy) setDeleteOpen(false);
+  }, [deleteBusy]);
   /**
    * The lens, off by default (provenance-lens design §5).
    *
@@ -758,6 +766,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function deleteArchivedPost() {
+    setDeleteBusy(true);
+    setActionError(null);
+    try {
+      await apiVoid(`/api/content/${id}`, { method: "DELETE" });
+      router.replace(`/${locale}/content`);
+    } catch (err) {
+      closeDelete();
+      handleError(err);
+      await reload();
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   /**
    * WHAT THE READER FOUND WHEN THEY OPENED THE CHANNEL.
    *
@@ -1099,6 +1122,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   const isPublished = item.status === "published";
   const isArchived = item.status === "archived";
+  const canDeleteArchived =
+    isArchived &&
+    item.isSafeToDelete &&
+    item.runId === null &&
+    ["draft", "rejected"].includes(item.archivedFromStatus ?? "") &&
+    item.adaptations.every(
+      (adaptation) => adaptation.attemptCount === 0 && adaptation.status === "pending",
+    );
   /**
    * THE THREE FACTS A PARTLY DELIVERED POST'S CONTROLS ARE DRAWN FROM, derived
    * from `item.adaptations` rather than from `item.status` — because the state
@@ -1760,7 +1791,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       */}
       {isArchived ? (
         <Card className="mb-6">
-          <p className="text-sm text-fg-secondary">{t("archivedHint")}</p>
+          <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
+          {canDeleteArchived ? (
+            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+              {t("delete")}
+            </Button>
+          ) : (
+            <p className="text-sm text-fg-tertiary">{t("deleteUnavailableHint")}</p>
+          )}
         </Card>
       ) : (
         <Card className="mb-6">
@@ -1810,6 +1848,24 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           )}
         </Card>
       )}
+
+      <Modal
+        open={deleteOpen}
+        onClose={closeDelete}
+        title={t("deleteTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeDelete} disabled={deleteBusy}>
+              {t("deleteCancel")}
+            </Button>
+            <Button variant="danger" onClick={deleteArchivedPost} disabled={deleteBusy}>
+              {t("delete")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
+      </Modal>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>

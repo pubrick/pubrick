@@ -4057,6 +4057,237 @@ describe.skipIf(!url)("content e2e", () => {
     });
   });
 
+  describe("permanently deleting content", () => {
+    it("deletes an archived draft and its drafts, while preserving its AI cost ledger", async () => {
+      const agent = await orgAgent();
+      const otherOrg = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      await agent.patch(`/api/content/${itemId}`).send({ body: "A revised draft." }).expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [ledger] = await db
+          .insert(schema.usageLedger)
+          .values({
+            orgId,
+            contentItemId: itemId,
+            adaptationId,
+            step: "test/delete",
+            provider: "google",
+            modelId: "gemini-test",
+            costSource: "price_table",
+            status: "ok",
+            outcome: "completed",
+          })
+          .returning({ id: schema.usageLedger.id });
+        if (!ledger) throw new Error("Expected a cost ledger row");
+
+        const unarchived = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(unarchived.body.code).toBe("content_delete_requires_archive");
+        const archived = await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        expect(archived.body.archivedFromStatus).toBe("draft");
+        await otherOrg.delete(`/api/content/${itemId}`).expect(404);
+        await agent.delete(`/api/content/${itemId}`).expect(204);
+        await agent.get(`/api/content/${itemId}`).expect(404);
+        await agent.delete(`/api/content/${itemId}`).expect(404);
+        expect(await versionRows(itemId)).toHaveLength(0);
+        expect(
+          await db
+            .select({ id: schema.adaptations.id })
+            .from(schema.adaptations)
+            .where(eq(schema.adaptations.id, adaptationId)),
+        ).toHaveLength(0);
+        const [cost] = await db
+          .select({
+            contentItemId: schema.usageLedger.contentItemId,
+            adaptationId: schema.usageLedger.adaptationId,
+          })
+          .from(schema.usageLedger)
+          .where(eq(schema.usageLedger.id, ledger.id));
+        expect(cost).toEqual({ contentItemId: null, adaptationId: null });
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("allows a rejected archive but refuses one that was previously approved", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const rejected = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const rejectedId = rejected.body.id as string;
+      await agent.post(`/api/content/${rejectedId}/reject`).expect(200);
+      expect(
+        (await agent.post(`/api/content/${rejectedId}/archive`).expect(200)).body
+          .archivedFromStatus,
+      ).toBe("rejected");
+      await agent.delete(`/api/content/${rejectedId}`).expect(204);
+
+      const approved = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const approvedId = approved.body.id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.contentItems)
+          .set({ status: "approved" })
+          .where(eq(schema.contentItems.id, approvedId));
+        await agent.post(`/api/content/${approvedId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${approvedId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_not_draft");
+        expect((await agent.get(`/api/content/${approvedId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("preserves every publication receipt, including a failed attempt on an archived draft", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({
+            orgId,
+            adaptationId,
+            channelId,
+            status: "failed",
+            error: "Rejected by platform",
+          })
+          .returning({ id: schema.publications.id });
+        if (!receipt) throw new Error("Expected a publication receipt");
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+        expect(
+          await db
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(eq(schema.publications.id, receipt.id)),
+        ).toHaveLength(1);
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("refuses an attempted delivery even without a surviving receipt", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.adaptations)
+          .set({ attemptCount: 1, status: "failed" })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("retains generated drafts while their run checkpoints remain readable", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db.insert(schema.pipelineRuns).values({
+          orgId,
+          brandId,
+          contentItemId: itemId,
+          input: { kind: "brief", text: "A private generation brief", channelIds: [channelId] },
+          status: "succeeded",
+        });
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_generation_history");
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("retains a draft when channel deletion orphaned its publication receipt", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({ orgId, adaptationId, channelId, status: "failed", error: "Rejected" })
+          .returning({ id: schema.publications.id });
+        if (!receipt) throw new Error("Expected receipt");
+        await agent.delete(`/api/channels/${channelId}`).expect(200);
+        const [orphan] = await db
+          .select({ adaptationId: schema.publications.adaptationId })
+          .from(schema.publications)
+          .where(eq(schema.publications.id, receipt.id));
+        expect(orphan?.adaptationId).toBeNull();
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
   /**
    * WHAT A QUEUE CARD IS, AND IN WHAT ORDER THE CARDS ARRIVE — the two halves
    * of design 0009's first commit that a caller can see.

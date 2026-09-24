@@ -108,7 +108,18 @@ the item lock, and a stale publish job checks the archived parent before claimin
 a send. `POST /api/content/:id/restore` reinstates the saved prior status and
 clears the archive marker. Restore does not enqueue a publication. Both calls
 are idempotent and scoped to the active organization. Permanent deletion is a
-separate future operation.
+separate operation: `DELETE /api/content/:id` accepts only archived posts whose
+previous status was Draft or Rejected and whose adaptations have no delivery
+attempts or publication records. Existing posts remain protected because past
+channel deletions may have severed their receipt links; a database marker
+tracks that risk for posts created after the deletion-safety migration. Posts
+with a retained generation run are protected because its checkpoints contain
+draft text. Eligible posts lose their saved versions, notes,
+review links, feed entries, and adaptations with their database cascades. Model
+usage retains its accounting rows with a null post link.
+Published posts stay in the archive because their publication receipts must
+remain attributable; broader deletion needs a durable receipt provenance or
+tombstone design. The UI confirms the irreversible action before calling it.
 
 ### Saved text history
 
