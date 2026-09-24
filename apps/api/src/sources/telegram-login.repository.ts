@@ -209,7 +209,10 @@ export class TelegramLoginRepository implements OnModuleInit, OnModuleDestroy {
           env.APP_ENCRYPTION_KEY,
         ),
         stage: "code",
-        nextAttemptAt: new Date(),
+        // The code can be submitted immediately. NULL is the explicit
+        // no-cooldown state; comparing a freshly written app timestamp to
+        // database now() races when those clocks differ slightly.
+        nextAttemptAt: null,
         updatedAt: new Date(),
       })
       .where(
@@ -343,7 +346,7 @@ export class TelegramLoginRepository implements OnModuleInit, OnModuleDestroy {
           attemptsUsed: 0,
           sessionEncrypted: encryptJson({ session: result.session }, env.APP_ENCRYPTION_KEY),
           phoneCodeHashEncrypted: null,
-          nextAttemptAt: new Date(),
+          nextAttemptAt: null,
           updatedAt: new Date(),
         })
         .where(

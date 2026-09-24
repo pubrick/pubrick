@@ -261,7 +261,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       await db
         .update(schema.telegramLoginAttempts)
-        .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+        .set({ nextAttemptAt: null })
         .where(eq(schema.telegramLoginAttempts.orgId, orgId));
       vi.mocked(submitTelegramCode).mockRejectedValueOnce(new Error("invalid_code"));
       const refused = await agent
@@ -382,7 +382,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     expect(cooldown.body.code).toBe("telegram_login_cooldown");
     await db
       .update(schema.telegramLoginAttempts)
-      .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+      .set({ nextAttemptAt: null })
       .where(eq(schema.telegramLoginAttempts.orgId, orgId));
     vi.mocked(submitTelegramCode).mockRejectedValueOnce(new Error("invalid_code"));
     const invalid = await agent
@@ -392,7 +392,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     expect(invalid.body.code).toBe("telegram_login_invalid");
     await db
       .update(schema.telegramLoginAttempts)
-      .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+      .set({ nextAttemptAt: null })
       .where(eq(schema.telegramLoginAttempts.orgId, orgId));
     vi.mocked(submitTelegramCode).mockResolvedValueOnce({
       status: "password_required",
@@ -421,7 +421,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     expect(JSON.stringify(wrong.body)).not.toContain(password);
     await db
       .update(schema.telegramLoginAttempts)
-      .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+      .set({ nextAttemptAt: null })
       .where(eq(schema.telegramLoginAttempts.orgId, orgId));
     vi.mocked(submitTelegramPassword).mockResolvedValueOnce({ session: "fully-verified-session" });
     expect(
@@ -445,7 +445,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     for (let attempt = 0; attempt < 4; attempt++) {
       await db
         .update(schema.telegramLoginAttempts)
-        .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+        .set({ nextAttemptAt: null })
         .where(eq(schema.telegramLoginAttempts.orgId, orgId));
       vi.mocked(submitTelegramCode).mockRejectedValueOnce(new Error("invalid_code"));
       const refused = await agent
@@ -456,7 +456,7 @@ describe.skipIf(!url)("Telegram source account login", () => {
     }
     await db
       .update(schema.telegramLoginAttempts)
-      .set({ nextAttemptAt: new Date(Date.now() - 1_000) })
+      .set({ nextAttemptAt: null })
       .where(eq(schema.telegramLoginAttempts.orgId, orgId));
     vi.mocked(submitTelegramCode).mockResolvedValueOnce({
       status: "password_required",
