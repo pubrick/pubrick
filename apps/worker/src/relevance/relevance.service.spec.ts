@@ -61,6 +61,7 @@ describe("RelevanceService", () => {
       failed: vi.fn().mockResolvedValue(undefined),
       markAttemptLimit: vi.fn().mockResolvedValue(undefined),
       recordUsage: vi.fn().mockResolvedValue(undefined),
+      recentFeedback: vi.fn().mockResolvedValue({ relevant: [], irrelevant: [] }),
       unscored: vi.fn().mockResolvedValue([]),
     };
     const credentials = {
@@ -87,6 +88,7 @@ describe("RelevanceService", () => {
     expect(repo.recordUsage.mock.calls[0]?.[0]).toBe(job.orgId);
     expect(repo.scored).toHaveBeenCalledWith(job.orgId, job.brandId, job.itemId, {
       score: 0.82,
+      feedbackDelta: 0,
       reason: "Useful to cafe owners",
       urgency: "timely",
     });
@@ -101,6 +103,27 @@ describe("RelevanceService", () => {
     expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.itemId, "no_api_key");
     expect(repo.scored).not.toHaveBeenCalled();
     expect(repo.recordUsage).not.toHaveBeenCalled();
+    expect(repo.recentFeedback).not.toHaveBeenCalled();
+  });
+
+  it("uses scoped prior editor feedback without adding a provider call", async () => {
+    const { service, repo, calls } = harness(
+      '{"score":0.82,"reason":"Useful to cafe owners","urgency":"timely"}',
+    );
+    repo.recentFeedback.mockResolvedValue({
+      relevant: [],
+      irrelevant: [{ title: article.title, summary: article.summary }],
+    });
+    await service.handle(job);
+    expect(repo.recentFeedback).toHaveBeenCalledWith(job.orgId, job.brandId, job.itemId);
+    expect(calls).toHaveLength(1);
+    expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(repo.scored).toHaveBeenCalledWith(job.orgId, job.brandId, job.itemId, {
+      score: 0.82,
+      feedbackDelta: -0.2,
+      reason: "Useful to cafe owners",
+      urgency: "timely",
+    });
   });
 
   it("meters a failed physical call and rethrows a transient provider failure for the bounded queue retry", async () => {

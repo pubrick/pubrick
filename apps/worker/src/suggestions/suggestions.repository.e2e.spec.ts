@@ -66,6 +66,32 @@ describe.skipIf(!url)("SuggestionsRepository (Postgres)", () => {
         relevanceScoredAt: new Date(),
         editorSignal: "irrelevant",
       },
+      {
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: source.id,
+        title: "Lifted",
+        url: "https://example.com/lifted",
+        relevanceStatus: "scored",
+        relevanceScore: 0.55,
+        relevanceFeedbackDelta: 0.15,
+        relevanceReason: "Possible fit",
+        relevanceUrgency: "timely",
+        relevanceScoredAt: new Date(),
+      },
+      {
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: source.id,
+        title: "Lowered",
+        url: "https://example.com/lowered",
+        relevanceStatus: "scored",
+        relevanceScore: 0.7,
+        relevanceFeedbackDelta: -0.2,
+        relevanceReason: "Possible fit",
+        relevanceUrgency: "timely",
+        relevanceScoredAt: new Date(),
+      },
     ]);
     const [privateSource] = await db
       .insert(schema.newsSources)
@@ -115,7 +141,9 @@ describe.skipIf(!url)("SuggestionsRepository (Postgres)", () => {
     expect(await repo.claim("wrong-org", brand.id, request.id)).toBeNull();
     const claimed = await repo.claim(stamp, brand.id, request.id);
     expect(claimed?.topics).toMatchObject([{ title: "Existing Topic", status: "approved" }]);
-    expect(claimed?.news.map((item) => item.title)).toEqual(["Good"]);
+    expect(claimed?.news.map((item) => item.title)).toEqual(["Good", "Lifted"]);
+    expect(claimed?.news[0]?.score).toBeCloseTo(0.8);
+    expect(claimed?.news[1]?.score).toBeCloseTo(0.7);
     const count = await repo.complete(
       stamp,
       brand.id,

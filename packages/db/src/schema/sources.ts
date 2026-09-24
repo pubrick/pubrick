@@ -86,6 +86,8 @@ export const newsItems = pgTable(
       .notNull()
       .default("unscored"),
     relevanceScore: doublePrecision("relevance_score"),
+    /** Bounded local feedback adjustment; relevanceScore remains the model verdict. */
+    relevanceFeedbackDelta: doublePrecision("relevance_feedback_delta").notNull().default(0),
     relevanceReason: text("relevance_reason"),
     relevanceUrgency: text("relevance_urgency", { enum: ["breaking", "timely", "evergreen"] }),
     relevanceErrorCode: text("relevance_error_code", {
@@ -119,6 +121,10 @@ export const newsItems = pgTable(
     check(
       "news_items_relevance_score_check",
       sql`${t.relevanceScore} IS NULL OR (${t.relevanceScore} >= 0 AND ${t.relevanceScore} <= 1)`,
+    ),
+    check(
+      "news_items_relevance_feedback_delta_check",
+      sql`${t.relevanceFeedbackDelta} >= -0.2 AND ${t.relevanceFeedbackDelta} <= 0.2`,
     ),
     check(
       "news_items_relevance_consistency_check",

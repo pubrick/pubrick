@@ -451,7 +451,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .from(schema.brands)
       .where(eq(schema.brands.id, brand.body.id));
     const orgId = orgRows[0]?.orgId as string;
-    const [high, low, pending] = await db
+    const [high, low, pending, capped] = await db
       .insert(schema.newsItems)
       .values([
         {
@@ -462,6 +462,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
           url: "https://example.com/high",
           relevanceStatus: "scored",
           relevanceScore: 0.9,
+          relevanceFeedbackDelta: -0.2,
           relevanceReason: "Highly relevant",
           relevanceUrgency: "timely",
           relevanceScoredAt: new Date(),
@@ -474,7 +475,8 @@ describe.skipIf(!url)("watched sources e2e", () => {
           title: "Low",
           url: "https://example.com/low",
           relevanceStatus: "scored",
-          relevanceScore: 0.2,
+          relevanceScore: 0.65,
+          relevanceFeedbackDelta: 0.2,
           relevanceReason: "Weak fit",
           relevanceUrgency: "evergreen",
           relevanceScoredAt: new Date(),
@@ -486,14 +488,38 @@ describe.skipIf(!url)("watched sources e2e", () => {
           title: "Pending",
           url: "https://example.com/pending",
         },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Capped",
+          url: "https://example.com/capped",
+          relevanceStatus: "scored",
+          relevanceScore: 0.95,
+          relevanceFeedbackDelta: 0.2,
+          relevanceReason: "Strong fit",
+          relevanceUrgency: "timely",
+          relevanceScoredAt: new Date(),
+        },
       ])
       .returning({ id: schema.newsItems.id });
-    if (!high || !low || !pending) throw new Error("Article seed failed");
+    if (!high || !low || !pending || !capped) throw new Error("Article seed failed");
     const ranked = await owner
       .get(`/api/sources/items?brandId=${brand.body.id}&sort=relevance&status=scored`)
       .expect(200);
-    expect(ranked.body.map((row: { id: string }) => row.id)).toEqual([high.id, low.id]);
-    expect(ranked.body[0]).toMatchObject({ relevanceScore: 0.9, editorSignal: "irrelevant" });
+    expect(ranked.body.map((row: { id: string }) => row.id)).toEqual([capped.id, low.id, high.id]);
+    expect(ranked.body[0]).toMatchObject({ relevanceScore: 0.95, rankScore: 1 });
+    expect(ranked.body[1]).toMatchObject({
+      relevanceScore: 0.65,
+      rankScore: 0.85,
+      feedbackDelta: 0.2,
+    });
+    expect(ranked.body[2]).toMatchObject({
+      relevanceScore: 0.9,
+      rankScore: 0.7,
+      feedbackDelta: -0.2,
+      editorSignal: "irrelevant",
+    });
     const unscored = await owner
       .get(`/api/sources/items?brandId=${brand.body.id}&status=unscored`)
       .expect(200);
