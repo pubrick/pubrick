@@ -4,6 +4,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -92,5 +93,32 @@ export const publicationComments = pgTable(
     index("publication_comments_org_brand_pub_idx").on(t.orgId, t.brandId, t.publicationId),
     check("publication_comments_message_id_check", sql`${t.telegramMessageId} > 0`),
     check("publication_comments_body_check", sql`length(btrim(${t.body})) BETWEEN 1 AND 4000`),
+  ],
+);
+
+/** Aggregate AI observations for one completed, bounded publication reply sample. */
+export const publicationCommentAnalyses = pgTable(
+  "publication_comment_analyses",
+  {
+    publicationId: uuid("publication_id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    sampleCheckedAt: timestamp("sample_checked_at", { withTimezone: true }).notNull(),
+    sampleSize: integer("sample_size").notNull(),
+    result: jsonb("result").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: "publication_comment_analyses_sample_scope_fk",
+      columns: [t.orgId, t.brandId, t.publicationId],
+      foreignColumns: [
+        publicationCommentSamples.orgId,
+        publicationCommentSamples.brandId,
+        publicationCommentSamples.publicationId,
+      ],
+    }).onDelete("cascade"),
+    index("publication_comment_analyses_org_brand_idx").on(t.orgId, t.brandId),
+    check("publication_comment_analyses_sample_size_check", sql`${t.sampleSize} BETWEEN 1 AND 30`),
   ],
 );

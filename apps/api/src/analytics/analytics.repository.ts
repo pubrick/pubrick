@@ -1,18 +1,23 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
+import type { AiCredential } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { readVkPostMetrics } from "@pubrick/integrations";
 import {
   type AnalyticsDto,
+  commentAnalysisResultSchema,
   isPublicTelegramPostUrl,
   type PublicationCommentsDto,
   type PublicationMetricsDto,
 } from "@pubrick/shared";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNull, lt, sql } from "drizzle-orm";
+import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
+import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, notFound } from "../api-error";
 import { ChannelsRepository } from "../channels/channels.repository";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
+import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
 
 const MAX_POSTS = 100;
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -44,6 +49,8 @@ export class AnalyticsRepository {
   constructor(
     private readonly channels: ChannelsRepository,
     private readonly queue: QueueService,
+    private readonly aiCredentials: AiCredentialsRepository,
+    private readonly commentAnalysisCaller: CommentAnalysisCaller,
   ) {}
 
   private async requireBrand(orgId: string, brandId: string) {
@@ -64,6 +71,7 @@ export class AnalyticsRepository {
         adaptationId: schema.publications.adaptationId,
         channelId: schema.publications.channelId,
         contentItemId: schema.adaptations.contentItemId,
+        title: schema.contentItems.title,
         externalId: schema.publications.externalId,
         externalUrl: schema.publications.externalUrl,
       })
@@ -241,6 +249,213 @@ export class AnalyticsRepository {
         publishedAt: comment.publishedAt.toISOString(),
       })),
     };
+  }
+
+  private async analysisSample(orgId: string, brandId: string, publicationId: string) {
+    const [sample] = await db
+      .select({
+        status: schema.publicationCommentSamples.status,
+        checkedAt: schema.publicationCommentSamples.checkedAt,
+        requestedAt: schema.publicationCommentSamples.requestedAt,
+      })
+      .from(schema.publicationCommentSamples)
+      .where(
+        and(
+          eq(schema.publicationCommentSamples.orgId, orgId),
+          eq(schema.publicationCommentSamples.brandId, brandId),
+          eq(schema.publicationCommentSamples.publicationId, publicationId),
+        ),
+      )
+      .limit(1);
+    const comments = await db
+      .select({ body: schema.publicationComments.body })
+      .from(schema.publicationComments)
+      .where(
+        and(
+          eq(schema.publicationComments.orgId, orgId),
+          eq(schema.publicationComments.brandId, brandId),
+          eq(schema.publicationComments.publicationId, publicationId),
+        ),
+      )
+      .orderBy(desc(schema.publicationComments.publishedAt), desc(schema.publicationComments.id))
+      .limit(30);
+    return { sample, comments };
+  }
+
+  async commentAnalysis(orgId: string, brandId: string, publicationId: string) {
+    const publication = await this.liveTelegramPublication(orgId, brandId, publicationId);
+    if (!isPublicTelegramPostUrl(publication.externalUrl, publication.externalId)) {
+      return { status: "unavailable" as const };
+    }
+    const { sample, comments } = await this.analysisSample(orgId, brandId, publicationId);
+    if (sample?.status === "unavailable") return { status: "unavailable" as const };
+    if (!sample?.checkedAt) return { status: "not_collected" as const };
+    if (comments.length === 0) return { status: "no_comments" as const };
+    const [analysis] = await db
+      .select({
+        result: schema.publicationCommentAnalyses.result,
+        sampleCheckedAt: schema.publicationCommentAnalyses.sampleCheckedAt,
+        sampleSize: schema.publicationCommentAnalyses.sampleSize,
+        createdAt: schema.publicationCommentAnalyses.createdAt,
+      })
+      .from(schema.publicationCommentAnalyses)
+      .where(
+        and(
+          eq(schema.publicationCommentAnalyses.orgId, orgId),
+          eq(schema.publicationCommentAnalyses.brandId, brandId),
+          eq(schema.publicationCommentAnalyses.publicationId, publicationId),
+        ),
+      )
+      .limit(1);
+    if (analysis?.sampleCheckedAt.getTime() === sample.checkedAt.getTime()) {
+      const parsed = commentAnalysisResultSchema.safeParse(analysis.result);
+      if (parsed.success) {
+        return {
+          status: "ready" as const,
+          result: parsed.data,
+          sampleSize: analysis.sampleSize,
+          analyzedAt: analysis.createdAt.toISOString(),
+        };
+      }
+    }
+    const [active] = await db
+      .select({ id: schema.analysisAdmissions.id })
+      .from(schema.analysisAdmissions)
+      .where(
+        and(
+          eq(schema.analysisAdmissions.orgId, orgId),
+          eq(schema.analysisAdmissions.targetKind, "publication_comment"),
+          eq(schema.analysisAdmissions.targetId, publicationId),
+          eq(schema.analysisAdmissions.sampleCheckedAt, sample.checkedAt),
+          isNull(schema.analysisAdmissions.completedAt),
+          gt(schema.analysisAdmissions.leaseUntil, sql`now()`),
+        ),
+      )
+      .limit(1);
+    if (active) return { status: "in_progress" as const };
+    const [key] = await db
+      .select({ orgId: schema.aiCredentials.orgId })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!key) return { status: "no_key" as const };
+    return { status: analysis ? ("stale" as const) : ("not_analyzed" as const) };
+  }
+
+  async analyzeComments(orgId: string, brandId: string, publicationId: string) {
+    const current = await this.commentAnalysis(orgId, brandId, publicationId);
+    if (current.status !== "not_analyzed" && current.status !== "stale") return current;
+    const publication = await this.liveTelegramPublication(orgId, brandId, publicationId);
+    const { sample, comments } = await this.analysisSample(orgId, brandId, publicationId);
+    if (sample?.status === "pending") return { status: "not_collected" as const };
+    if (!sample?.checkedAt) return { status: "not_collected" as const };
+    if (comments.length === 0) return { status: "no_comments" as const };
+    const checkedAt = sample.checkedAt;
+
+    let credential: AiCredential;
+    try {
+      credential = await this.aiCredentials.getDecrypted(orgId, "google");
+    } catch (error) {
+      if (error instanceof NotFoundException) return { status: "no_key" as const };
+      throw error;
+    }
+    const admission = await admitAnalysis({
+      orgId,
+      targetKind: "publication_comment",
+      targetId: publicationId,
+      sampleCheckedAt: checkedAt,
+    });
+    if (admission.status !== "admitted") return admission;
+    try {
+      const afterAdmission = await this.commentAnalysis(orgId, brandId, publicationId);
+      if (afterAdmission.status === "ready") return afterAdmission;
+      const latest = await this.analysisSample(orgId, brandId, publicationId);
+      if (
+        !latest.sample?.checkedAt ||
+        latest.sample.checkedAt.getTime() !== checkedAt.getTime() ||
+        latest.sample.requestedAt.getTime() !== sample.requestedAt.getTime()
+      ) {
+        return { status: "stale" as const };
+      }
+      const outcome = await this.commentAnalysisCaller.run({
+        credential,
+        title: publication.title ?? "Telegram post",
+        comments: comments.map((row) => row.body),
+        onUsage: (record) =>
+          recordAnalysisUsage({
+            admissionId: admission.id,
+            orgId,
+            targetKind: "publication_comment",
+            record,
+          }),
+      });
+      if (!outcome.ok) return { status: outcome.failure };
+      const saved = await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (!organization) return false;
+        const [brand] = await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+          .limit(1)
+          .for("key share");
+        if (!brand) return false;
+        await this.lockLiveTelegramPublication(tx, orgId, brandId, publication);
+        const [currentSample] = await tx
+          .select({
+            checkedAt: schema.publicationCommentSamples.checkedAt,
+            requestedAt: schema.publicationCommentSamples.requestedAt,
+          })
+          .from(schema.publicationCommentSamples)
+          .where(
+            and(
+              eq(schema.publicationCommentSamples.orgId, orgId),
+              eq(schema.publicationCommentSamples.brandId, brandId),
+              eq(schema.publicationCommentSamples.publicationId, publicationId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (
+          !currentSample?.checkedAt ||
+          currentSample.checkedAt.getTime() !== checkedAt.getTime() ||
+          currentSample.requestedAt.getTime() !== sample.requestedAt.getTime()
+        ) {
+          return false;
+        }
+        await tx
+          .insert(schema.publicationCommentAnalyses)
+          .values({
+            orgId,
+            brandId,
+            publicationId,
+            sampleCheckedAt: checkedAt,
+            sampleSize: comments.length,
+            result: outcome.result,
+          })
+          .onConflictDoUpdate({
+            target: schema.publicationCommentAnalyses.publicationId,
+            set: {
+              sampleCheckedAt: checkedAt,
+              sampleSize: comments.length,
+              result: outcome.result,
+              createdAt: new Date(),
+            },
+          });
+        return true;
+      });
+      if (!saved) return { status: "stale" as const };
+    } finally {
+      await finishAnalysisAdmission(admission.id, orgId);
+    }
+    return this.commentAnalysis(orgId, brandId, publicationId);
   }
 
   async refreshComments(orgId: string, brandId: string, publicationId: string) {

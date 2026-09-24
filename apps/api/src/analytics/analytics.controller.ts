@@ -58,4 +58,23 @@ export class AnalyticsController {
   ) {
     return this.analytics.refreshComments(orgId, brandId, publicationId);
   }
+
+  @Get("brands/:brandId/publications/:publicationId/comment-analysis")
+  commentAnalysis(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("publicationId", ParseUUIDPipe) publicationId: string,
+  ) {
+    return this.analytics.commentAnalysis(orgId, brandId, publicationId);
+  }
+
+  @Post("brands/:brandId/publications/:publicationId/comment-analysis")
+  @HttpCode(200)
+  analyzeComments(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("publicationId", ParseUUIDPipe) publicationId: string,
+  ) {
+    return this.analytics.analyzeComments(orgId, brandId, publicationId);
+  }
 }

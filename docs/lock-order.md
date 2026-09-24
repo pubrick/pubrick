@@ -108,12 +108,18 @@ channel deletion stamps that receipt in a trigger.
 Paid comment analysis admission has a short organization-scoped transaction:
 it locks `organization FOR NO KEY UPDATE`, expires any stale active admission
 for the target, counts the previous rolling hour's admissions across source
-items and publication replies, and inserts one reservation. This lock makes
+items and publication replies plus pre-admission ledger calls, and inserts one
+reservation. All cutoffs use the database clock. This lock makes
 the ten-call budget atomic across API replicas. The provider call runs only
 after commit. Usage ledger inserts and the final admission completion are
 separate single-table writes; neither holds an admission lock while asking
 for an organization or brand lock. A stale lease can be closed and replaced
 after two minutes without releasing its original hour's budget.
+Both analysis save paths recheck the original sample timestamp after the paid
+call. Publication analysis also checks the collection request timestamp and
+locks organization, brand, adaptation, channel, item, receipt, then sample.
+Source analysis locks organization, brand, source, then news item before saving;
+it discards a result if the worker replaced that item's reply sample.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,

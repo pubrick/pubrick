@@ -463,6 +463,20 @@
       "when": 1790290142153,
       "tag": "0066_flowery_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1790290490389,
+      "tag": "0067_round_karnak",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790290651328,
+      "tag": "0068_elite_namora",
+      "breakpoints": true
     }
   ]
 }

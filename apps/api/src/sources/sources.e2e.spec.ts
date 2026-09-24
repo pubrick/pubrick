@@ -766,4 +766,141 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .where(eq(schema.analysisAdmissions.id, lossMarker.id));
     expect(marked?.unrecordedCalls).toBe(1);
   });
+
+  it("keeps pre-admission ledger calls inside the rolling allowance during upgrade", async () => {
+    const { orgId } = await orgAgent();
+    const { db } = await import("../db");
+    const { admitAnalysis } = await import("../analysis-admission");
+    await db.insert(schema.usageLedger).values(
+      Array.from({ length: 9 }, () => ({
+        orgId,
+        step: "comment_analysis",
+        provider: "google" as const,
+        modelId: "gemini-test",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+      })),
+    );
+    expect(
+      (
+        await admitAnalysis({
+          orgId,
+          targetKind: "source_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: new Date(),
+        })
+      ).status,
+    ).toBe("admitted");
+    expect(
+      (
+        await admitAnalysis({
+          orgId,
+          targetKind: "publication_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: new Date(),
+        })
+      ).status,
+    ).toBe("limit_reached");
+  });
+
+  it("does not save a paid analysis after its source comment sample changes", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Moving discussion" }).expect(201);
+    const source = await agent
+      .post("/api/sources")
+      .send({
+        brandId: brand.body.id,
+        name: "Channel",
+        kind: "telegram",
+        url: "https://t.me/moving_discussion",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const [item] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.body.id,
+        title: "Original post",
+        url: "https://t.me/moving_discussion/7",
+        commentsStatus: "available",
+        commentsCheckedAt: checkedAt,
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("story fixture missing");
+    await db.insert(schema.newsComments).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      telegramMessageId: 10,
+      body: "Old question",
+      publishedAt: checkedAt,
+    });
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-never-used" })
+      .expect(200);
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        started();
+        await gate;
+        await args.onUsage({
+          provider: "google",
+          modelId: "gemini-test",
+          attempt: 1,
+          inputTokens: 20,
+          outputTokens: 10,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0.00001,
+          costSource: "price_table",
+          responseMs: 20,
+          status: "ok",
+          outcome: "completed",
+        });
+        return {
+          ok: true,
+          result: {
+            summary: "Old question.",
+            sentiment: { positive: 0, neutral: 1, negative: 0 },
+            themes: [{ label: "Old", mentions: 1 }],
+            feedback: [],
+          },
+          usage: [],
+        };
+      },
+    );
+    const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
+    const pending = agent.post(route).then((response) => response);
+    await entered;
+    await db
+      .update(schema.newsItems)
+      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .where(eq(schema.newsItems.id, item.id));
+    release();
+    expect((await pending).body).toEqual({ status: "stale" });
+    const saved = await db
+      .select({ itemId: schema.newsCommentAnalyses.itemId })
+      .from(schema.newsCommentAnalyses)
+      .where(eq(schema.newsCommentAnalyses.itemId, item.id));
+    expect(saved).toHaveLength(0);
+    const ledger = await db
+      .select({ analysisAdmissionId: schema.usageLedger.analysisAdmissionId })
+      .from(schema.usageLedger)
+      .where(
+        and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.step, "comment_analysis")),
+      );
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]?.analysisAdmissionId).toBeTruthy();
+  });
 });

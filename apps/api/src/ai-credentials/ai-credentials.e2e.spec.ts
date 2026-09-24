@@ -939,6 +939,26 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       });
     });
 
+    it("includes a lost standalone analysis call in the organization's lower-bound cost", async () => {
+      const { agent, orgId } = await orgAgent();
+      const brand = await agent.post("/api/brands").send({ name: "Temporary brand" }).expect(201);
+      await direct.db.insert(schema.analysisAdmissions).values({
+        orgId,
+        targetKind: "source_comment",
+        targetId: randomUUID(),
+        sampleCheckedAt: new Date(),
+        leaseUntil: new Date(Date.now() + 60_000),
+        completedAt: new Date(),
+        unrecordedCalls: 1,
+      });
+      await agent.delete(`/api/brands/${brand.body.id}`).expect(200);
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0,
+        unpricedCalls: 1,
+      });
+    });
+
     it("keeps counting a call whose run was deleted — it sums by org_id alone", async () => {
       const { agent, orgId } = await orgAgent();
       const brand = await agent.post("/api/brands").send({ name: "Doomed" }).expect(201);

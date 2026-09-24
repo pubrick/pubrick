@@ -101,6 +101,10 @@ const ZONED_COLUMNS = [
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "analysis_admissions.completed_at",
+  "analysis_admissions.lease_until",
+  "analysis_admissions.requested_at",
+  "analysis_admissions.sample_checked_at",
   "autopilot_configs.last_manual_plan_at",
   "autopilot_configs.updated_at",
   "autopilot_dispatches.created_at",
@@ -151,6 +155,8 @@ const ZONED_COLUMNS = [
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
   "prompt_revisions.created_at",
+  "publication_comment_analyses.created_at",
+  "publication_comment_analyses.sample_checked_at",
   "publication_comment_samples.checked_at",
   "publication_comment_samples.requested_at",
   "publication_comments.published_at",
@@ -378,6 +384,10 @@ const NON_ENUM_CHECKS = [
   "publication_comment_samples_error_check",
   "publication_comments_message_id_check",
   "publication_comments_body_check",
+  // 0066–0067: paid analysis admission and bounded publication result.
+  "analysis_admissions_target_kind_check",
+  "analysis_admissions_unrecorded_calls_check",
+  "publication_comment_analyses_sample_size_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -1531,7 +1541,9 @@ describe.skipIf(!url)("runMigrations", () => {
       );
       await after.end();
 
-      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, outcome: null })));
+      expect(rows.rows).toEqual(
+        seeded.map((row) => ({ ...row, outcome: null, analysis_admission_id: null })),
+      );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
         data_type: "text",

@@ -360,6 +360,7 @@ export class SourcesRepository {
     const rows = await db
       .select({
         id: schema.newsItems.id,
+        sourceId: schema.newsItems.sourceId,
         title: schema.newsItems.title,
         commentsCheckedAt: schema.newsItems.commentsCheckedAt,
         commentsStatus: schema.newsItems.commentsStatus,
@@ -501,6 +502,7 @@ export class SourcesRepository {
     const item = await this.requireTelegramItem(orgId, brandId, itemId);
     const sample = await this.analysisSample(orgId, brandId, itemId);
     if (!item.commentsCheckedAt || sample.length === 0) return { status: "no_comments" as const };
+    const checkedAt = item.commentsCheckedAt;
 
     // Only Google's key from this organization is used. No platform fallback.
     let credential: AiCredential;
@@ -515,10 +517,16 @@ export class SourcesRepository {
       orgId,
       targetKind: "source_comment",
       targetId: itemId,
-      sampleCheckedAt: item.commentsCheckedAt,
+      sampleCheckedAt: checkedAt,
     });
     if (admission.status !== "admitted") return { status: admission.status };
     try {
+      const afterAdmission = await this.commentAnalysis(orgId, brandId, itemId);
+      if (afterAdmission.status === "ready") return afterAdmission;
+      const latest = await this.requireTelegramItem(orgId, brandId, itemId);
+      if (latest.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
+        return { status: "stale" as const };
+      }
       const outcome = await this.commentAnalysisCaller.run({
         credential,
         title: item.title,
@@ -532,25 +540,73 @@ export class SourcesRepository {
           }),
       });
       if (!outcome.ok) return { status: outcome.failure };
-      await db
-        .insert(schema.newsCommentAnalyses)
-        .values({
-          itemId,
-          orgId,
-          brandId,
-          sampleCheckedAt: item.commentsCheckedAt,
-          sampleSize: sample.length,
-          result: outcome.result,
-        })
-        .onConflictDoUpdate({
-          target: schema.newsCommentAnalyses.itemId,
-          set: {
-            sampleCheckedAt: item.commentsCheckedAt,
+      const saved = await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (!organization) return false;
+        const [brand] = await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+          .limit(1)
+          .for("key share");
+        if (!brand) return false;
+        const [source] = await tx
+          .select({ id: schema.newsSources.id })
+          .from(schema.newsSources)
+          .where(
+            and(
+              eq(schema.newsSources.orgId, orgId),
+              eq(schema.newsSources.brandId, brandId),
+              eq(schema.newsSources.id, item.sourceId),
+              eq(schema.newsSources.kind, "telegram"),
+            ),
+          )
+          .limit(1)
+          .for("key share");
+        if (!source) return false;
+        const [currentItem] = await tx
+          .select({ commentsCheckedAt: schema.newsItems.commentsCheckedAt })
+          .from(schema.newsItems)
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.sourceId, item.sourceId),
+              eq(schema.newsItems.id, itemId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (currentItem?.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
+          return false;
+        }
+        await tx
+          .insert(schema.newsCommentAnalyses)
+          .values({
+            itemId,
+            orgId,
+            brandId,
+            sampleCheckedAt: checkedAt,
             sampleSize: sample.length,
             result: outcome.result,
-            createdAt: new Date(),
-          },
-        });
+          })
+          .onConflictDoUpdate({
+            target: schema.newsCommentAnalyses.itemId,
+            set: {
+              sampleCheckedAt: checkedAt,
+              sampleSize: sample.length,
+              result: outcome.result,
+              createdAt: new Date(),
+            },
+          });
+        return true;
+      });
+      if (!saved) return { status: "stale" as const };
       return this.commentAnalysis(orgId, brandId, itemId);
     } finally {
       await finishAnalysisAdmission(admission.id, orgId);

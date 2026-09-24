@@ -4,7 +4,9 @@ The brand Results screen offers **Reply sample** only on published Telegram
 rows. This is separate from channel-reported comment counts in publication
 metrics: a sample contains at most 50 readable text replies, may omit short or
 duplicate replies, and is never presented as the total number of comments.
-Authors are not shown.
+Authors are not shown. The optional AI summary reads the newest 30 saved
+replies and at most the first 500 characters of each reply, so it may cover
+less than the list visible in the sample modal.
 
 Opening the sample reads the saved result. **Collect replies** requests a new
 background check for the selected publication; **Check result** rereads a
@@ -21,7 +23,8 @@ it as an earlier sample.
 The same modal has a separate **AI analysis of replies** section. Opening it
 reads only the saved analysis; it never invokes a model. **Analyze sample**
 is an explicit, paid action using the workspace's Google AI key. The section
-explains that it summarizes at most 50 saved replies, never the publication's
+explains that it summarizes the newest 30 saved replies, up to 500 characters
+from each, never the publication's
 total comment count, and asks the reader to inspect the sample before acting.
 It shows sentiment, recurring themes, audience feedback, sample size, and the
 analysis time. A changed reply sample marks the previous analysis stale and

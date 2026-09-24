@@ -1423,7 +1423,7 @@
     "analysisThemes": "Temas recurrentes",
     "analysisFeedback": "Opiniones de la audiencia",
     "analysisChecked": "Analizado el {date}",
-    "analysisDisclosure": "La IA resume hasta 50 respuestas guardadas con la clave de Google AI de tu espacio de trabajo. Esta acción añade costes de uso. Revisa las respuestas antes de actuar según el resumen.",
+    "analysisDisclosure": "La IA resume las 30 respuestas guardadas más recientes, usando hasta 500 caracteres de cada una, con la clave de Google AI de tu espacio de trabajo. Esta acción añade costes de uso. Revisa las respuestas antes de actuar según el resumen.",
     "analysis_unavailable": "El análisis de este debate no está disponible.",
     "analysis_not_collected": "Recopila respuestas antes de analizarlas.",
     "analysis_no_comments": "No hay respuestas legibles para analizar.",

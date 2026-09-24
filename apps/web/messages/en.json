@@ -1423,7 +1423,7 @@
     "analysisThemes": "Recurring themes",
     "analysisFeedback": "Audience feedback",
     "analysisChecked": "Analyzed {date}",
-    "analysisDisclosure": "AI summarizes up to 50 saved replies using your workspace's Google AI key. This action adds to your usage costs. Review the replies before acting on the summary.",
+    "analysisDisclosure": "AI summarizes the newest 30 saved replies, using at most 500 characters from each, with your workspace's Google AI key. This action adds to your usage costs. Review the replies before acting on the summary.",
     "analysis_unavailable": "Analysis is unavailable for this discussion.",
     "analysis_not_collected": "Collect replies before analyzing them.",
     "analysis_no_comments": "There are no readable replies to analyze.",

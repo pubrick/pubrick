@@ -27,17 +27,16 @@ export async function admitAnalysis(args: {
       .for("no key update");
     if (!org.length) throw new Error("Analysis organization no longer exists");
 
-    const now = new Date();
     await tx
       .update(schema.analysisAdmissions)
-      .set({ completedAt: now })
+      .set({ completedAt: sql`now()` })
       .where(
         and(
           eq(schema.analysisAdmissions.orgId, args.orgId),
           eq(schema.analysisAdmissions.targetKind, args.targetKind),
           eq(schema.analysisAdmissions.targetId, args.targetId),
           isNull(schema.analysisAdmissions.completedAt),
-          lt(schema.analysisAdmissions.leaseUntil, now),
+          lt(schema.analysisAdmissions.leaseUntil, sql`now()`),
         ),
       );
     const active = await tx
@@ -60,10 +59,23 @@ export async function admitAnalysis(args: {
       .where(
         and(
           eq(schema.analysisAdmissions.orgId, args.orgId),
-          gt(schema.analysisAdmissions.requestedAt, new Date(now.getTime() - 60 * 60_000)),
+          gt(schema.analysisAdmissions.requestedAt, sql`now() - interval '1 hour'`),
         ),
       );
-    if (count >= 10) return { status: "limit_reached" as const };
+    // Rows written before admissions were introduced have no reservation. Keep
+    // them in the same rolling allowance across a live upgrade.
+    const [{ legacyCount } = { legacyCount: 0 }] = await tx
+      .select({ legacyCount: sql<number>`count(*)::int` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, args.orgId),
+          eq(schema.usageLedger.step, "comment_analysis"),
+          isNull(schema.usageLedger.analysisAdmissionId),
+          sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+        ),
+      );
+    if (count + legacyCount >= 10) return { status: "limit_reached" as const };
     const [admission] = await tx
       .insert(schema.analysisAdmissions)
       .values({
@@ -71,8 +83,8 @@ export async function admitAnalysis(args: {
         targetKind: args.targetKind,
         targetId: args.targetId,
         sampleCheckedAt: args.sampleCheckedAt,
-        requestedAt: now,
-        leaseUntil: new Date(now.getTime() + 2 * 60_000),
+        requestedAt: sql`now()`,
+        leaseUntil: sql`now() + interval '2 minutes'`,
       })
       .returning({ id: schema.analysisAdmissions.id });
     if (!admission) throw new Error("Analysis admission was not inserted");
@@ -91,6 +103,7 @@ export async function recordAnalysisUsage(args: {
   try {
     await db.insert(schema.usageLedger).values({
       orgId: args.orgId,
+      analysisAdmissionId: args.admissionId,
       step:
         args.targetKind === "source_comment" ? "comment_analysis" : "publication_comment_analysis",
       attempt: record.attempt,
@@ -126,7 +139,7 @@ export async function recordAnalysisUsage(args: {
 export async function finishAnalysisAdmission(admissionId: string, orgId: string): Promise<void> {
   await db
     .update(schema.analysisAdmissions)
-    .set({ completedAt: new Date() })
+    .set({ completedAt: sql`now()` })
     .where(
       and(
         eq(schema.analysisAdmissions.id, admissionId),
