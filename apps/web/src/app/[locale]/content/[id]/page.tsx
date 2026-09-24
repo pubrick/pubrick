@@ -41,6 +41,7 @@ import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/or
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
 import { ClientReviewLink } from "./client-review-link";
+import { EditorialNotes } from "./editorial-notes";
 import { SourceStrip } from "./source-strip";
 import { VersionHistory } from "./version-history";
 
@@ -1662,6 +1663,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           item.adaptations.map((adaptation) => [adaptation.id, adaptation.body]),
         ])}
       />
+
+      <EditorialNotes itemId={id} currentBody={item.body} draftBody={bodyDraft} />
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary

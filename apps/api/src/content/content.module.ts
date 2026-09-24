@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
+import { EditorialNotesRepository } from "./editorial-notes.repository";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller } from "./refine.caller";
 
@@ -19,6 +20,6 @@ import { RefineCaller } from "./refine.caller";
 @Module({
   imports: [AiCredentialsModule],
   controllers: [ContentController],
-  providers: [ContentRepository, RefineCaller, ReadaptCaller],
+  providers: [ContentRepository, EditorialNotesRepository, RefineCaller, ReadaptCaller],
 })
 export class ContentModule {}

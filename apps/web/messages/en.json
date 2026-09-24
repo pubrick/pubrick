@@ -279,6 +279,22 @@
     "csvReadFailed": "The CSV file could not be read.",
     "csvIndexHint": "Imported notes use text search. Index individual notes to enable similarity search."
   },
+  "EditorialNotes": {
+    "title": "Team notes",
+    "hint": "Leave feedback on the saved master draft. Notes stay with the exact text you reviewed and never change the post or its approval.",
+    "label": "Note",
+    "add": "Add note",
+    "saving": "Saving…",
+    "saved": "Note added.",
+    "saveFirst": "Save your text before adding a note.",
+    "current": "Current saved draft",
+    "earlier": "Earlier saved draft",
+    "byName": "by {name}",
+    "formerMember": "former member",
+    "empty": "No notes yet. Add one to record your feedback for the team.",
+    "loadMore": "Load more",
+    "error": "Notes could not be loaded. Try again."
+  },
   "ClientReviewLink": {
     "title": "Client approval",
     "hint": "Share a private preview before publishing. Only a workspace owner or admin can create or revoke a link.",
@@ -781,6 +797,7 @@
     "private_source_session_changed": "The Telegram account changed while checking the invite. Try again.",
     "private_source_duplicate": "This channel is already watched for this brand.",
     "content_not_found": "This post no longer exists — it may have been deleted.",
+    "editorial_note_stale": "The saved draft changed. Reload it before adding a note.",
     "feed_not_found": "This public feed is unavailable. Enable it again if you want to share posts.",
     "feed_item_not_ready": "Add a title and publish this post before sharing it in a public feed.",
     "adaptation_not_found": "This channel's own text no longer exists — the channel may have been deleted.",

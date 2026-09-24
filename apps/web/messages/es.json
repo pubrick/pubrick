@@ -279,6 +279,22 @@
     "csvReadFailed": "No se pudo leer el archivo CSV.",
     "csvIndexHint": "Las notas importadas usan búsqueda de texto. Indexa cada nota para habilitar la búsqueda por similitud."
   },
+  "EditorialNotes": {
+    "title": "Notas del equipo",
+    "hint": "Deja comentarios sobre el borrador principal guardado. Las notas quedan vinculadas al texto exacto que revisaste y no cambian la publicación ni su aprobación.",
+    "label": "Nota",
+    "add": "Añadir nota",
+    "saving": "Guardando…",
+    "saved": "Nota añadida.",
+    "saveFirst": "Guarda el texto antes de añadir una nota.",
+    "current": "Borrador guardado actual",
+    "earlier": "Borrador guardado anterior",
+    "byName": "por {name}",
+    "formerMember": "miembro anterior",
+    "empty": "Todavía no hay notas. Añade una para compartir tus comentarios con el equipo.",
+    "loadMore": "Cargar más",
+    "error": "No se pudieron cargar las notas. Inténtalo de nuevo."
+  },
   "ClientReviewLink": {
     "title": "Aprobación del cliente",
     "hint": "Comparte una vista previa privada antes de publicar. Solo un propietario o administrador puede crear o revocar el enlace.",
@@ -781,6 +797,7 @@
     "private_source_session_changed": "La cuenta Telegram cambió durante la comprobación. Inténtelo de nuevo.",
     "private_source_duplicate": "Este canal ya se supervisa para esta marca.",
     "content_not_found": "Esta publicación ya no existe: es posible que se haya eliminado.",
+    "editorial_note_stale": "El borrador guardado cambió. Vuelve a cargarlo antes de añadir una nota.",
     "feed_not_found": "Este feed público no está disponible. Actívalo de nuevo para compartir publicaciones.",
     "feed_item_not_ready": "Añade un título y publica esta entrada antes de compartirla en un feed público.",
     "adaptation_not_found": "El texto propio de este canal ya no existe: es posible que el canal se haya eliminado.",

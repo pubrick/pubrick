@@ -330,6 +330,13 @@
       "when": 1790180226995,
       "tag": "0047_melodic_doorman",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1790251330335,
+      "tag": "0048_bumpy_molten_man",
+      "breakpoints": true
     }
   ]
 }
