@@ -96,10 +96,11 @@ The result is not attached to any post. Review it and choose **Use** on an
 editable Telegram, VK, MAX, or Bluesky post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
-The compose screen also offers an unchecked **Generate a cover image** option
-for a generation run. It requires a saved Google key and checks the image-call
-budget at admission; the selected channels must all support covers (Telegram,
-VK, MAX, or Bluesky). After the text and channel adaptations finish, the worker
+The compose screen and planned generation calendar also offer an unchecked
+**Generate a cover image** option for a generation run. It requires a saved
+Google key and checks the image-call budget at admission; the selected channels
+must all support covers (Telegram, VK, MAX, or Bluesky). After the text and
+channel adaptations finish, the worker
 makes one `gemini-3.1-flash-image` request per cover step attempt using the draft
 subject. It normalizes the returned image into the brand library and attaches
 it to the newly created draft in the run's fenced terminal transaction. The

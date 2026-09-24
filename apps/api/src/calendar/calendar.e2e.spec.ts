@@ -128,6 +128,52 @@ describe.skipIf(!url)("calendar API", () => {
     expect(past.body.code).toBe("calendar_time_in_past");
   });
 
+  it("stores cover opt-in only with a Google key and lets an editor turn it off", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const payload = {
+      brandId,
+      scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+      brief: "Launch story",
+      channelIds: [channelId],
+      generateCover: true,
+    };
+    const refused = await owner.post("/api/calendar/slots").send(payload).expect(400);
+    expect(refused.body.code).toBe("cover_requires_google_key");
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-only-google-key-0123456789" })
+      .expect(200);
+    const mastodon = await owner
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "mastodon",
+        name: "Mastodon",
+        credentials: { instanceUrl: "https://mastodon.example", accessToken: "test-token" },
+      })
+      .expect(201);
+    const unsupported = await owner
+      .post("/api/calendar/slots")
+      .send({ ...payload, channelIds: [mastodon.body.id] })
+      .expect(400);
+    expect(unsupported.body.code).toBe("content_media_unsupported");
+    const created = await owner.post("/api/calendar/slots").send(payload).expect(201);
+    expect(created.body.generateCover).toBe(true);
+    const slotId = created.body.id as string;
+    await owner.delete("/api/ai-credentials/google").expect(200);
+    const unchanged = await owner
+      .patch(`/api/calendar/slots/${slotId}?brandId=${brandId}`)
+      .send({ brief: "Updated launch", generateCover: true })
+      .expect(400);
+    expect(unchanged.body.code).toBe("cover_requires_google_key");
+    const disabled = await owner
+      .patch(`/api/calendar/slots/${slotId}?brandId=${brandId}`)
+      .send({ generateCover: false })
+      .expect(200);
+    expect(disabled.body.generateCover).toBe(false);
+  });
+
   it("snapshots only an approved topic in the same organization and brand and protects its deletion", async () => {
     const owner = await agent();
     const outsider = await agent();

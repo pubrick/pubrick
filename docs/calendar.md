@@ -2,8 +2,8 @@
 
 The calendar is a brand-scoped plan for **draft generation**. A slot contains a
 future local date and time (stored as an absolute timestamp), a custom brief or
-an approved topic from the same brand, one or more of the brand's channels, and
-optional team notes. The month grid shows the
+an approved topic from the same brand, one or more of the brand's channels,
+an optional Gemini cover image, and optional team notes. The month grid shows the
 plan; the selected day's list allows edits or removal until generation starts.
 On narrow screens a date picker replaces the seven-column grid so every date
 target remains large enough to tap. The brand page links to its calendar.
@@ -18,6 +18,17 @@ the slot stays planned and is retried five minutes later. A removed channel
 sets an explicit error on the slot; editing it with a valid channel clears the
 error. A database or queue outage rolls back the transaction and the next tick
 can retry.
+
+Cover generation is unchecked by default and requires a saved Google AI key
+and channels that support image covers. The slot keeps this choice through
+edits and shows it in the calendar. At the due time, the scheduler counts
+image calls in the last hour and live runs already reserving covers under the
+same organization admission lock as manual runs. If the 12-call budget is full,
+it retries the slot five minutes later. The worker rechecks the budget before
+calling Gemini; a missing key, full budget, or image failure leaves the text
+draft available for review. A successful cover is attached to that draft, not
+published automatically. A dispatched image call is billed to the user's key;
+see [media library](media-library.md) for accounting and retry limitations.
 
 The topic bank's **Schedule** action opens the calendar with that approved
 topic selected. The calendar form can also pick any approved topic. The API
@@ -68,11 +79,13 @@ primary Add action still plans a generation slot.
 - `GET /api/calendar/slots?brandId=<uuid>&from=<ISO>&to=<ISO>`: up to 93 days,
   half-open interval.
 - `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `channelIds`, optional
-  `notes`, and either `brief` or an approved `topicId` in that brand. The API
-  rejects a request containing both `topicId` and `brief`.
+  `notes`, `generateCover` (defaults to false), and either `brief` or an approved
+  `topicId` in that brand. The API rejects a request containing both `topicId`
+  and `brief`.
 - `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
   `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
-  snapshots the currently approved topic again.
+  snapshots the currently approved topic again. `generateCover` can be changed
+  until generation starts.
 - `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
 
 Every route requires an active organization. The repository scopes all reads

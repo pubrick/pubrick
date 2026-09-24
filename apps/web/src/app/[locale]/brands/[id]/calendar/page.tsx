@@ -1,6 +1,6 @@
 "use client";
 
-import type { TopicDto } from "@pubrick/shared";
+import { type AiCredentialPublic, COVER_SUPPORTED_PLATFORMS, type TopicDto } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -25,6 +25,7 @@ type Slot = {
   topicId: string | null;
   topicTitle: string | null;
   channelIds: string[];
+  generateCover: boolean;
   notes: string | null;
   runId: string | null;
   errorCode: string | null;
@@ -47,6 +48,7 @@ function monthStart(date: Date): Date {
 export default function CalendarPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: brandId } = use(params);
   const t = useTranslations("Calendar");
+  const tc = useTranslations("ContentNew");
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
@@ -55,6 +57,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
+  const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -63,6 +66,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [brief, setBrief] = useState("");
   const [notes, setNotes] = useState("");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [generateCover, setGenerateCover] = useState(false);
   const [editing, setEditing] = useState<Slot | null>(null);
   const [removing, setRemoving] = useState<Slot | null>(null);
   const loadSequence = useRef(0);
@@ -70,6 +74,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("topicId");
     if (requested) setSelectedTopicId(requested);
+  }, []);
+  useEffect(() => {
+    api<AiCredentialPublic[]>("/api/ai-credentials")
+      .then(setCredentials)
+      .catch(() => setCredentials([]));
   }, []);
 
   const describe = useCallback(
@@ -129,6 +138,12 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       (_, index) => new Date(month.getFullYear(), month.getMonth(), index - offset + 1),
     );
   }, [month]);
+  const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
+  const coverChannelsSupported = selectedChannels.every((id) =>
+    (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
+      channels?.find((channel) => channel.id === id)?.platform ?? "",
+    ),
+  );
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -147,12 +162,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           scheduledAt: new Date(dateInput).toISOString(),
           ...(selectedTopicId ? { topicId: selectedTopicId } : { brief }),
           channelIds: selectedChannels,
+          ...(generateCover && { generateCover: true }),
           notes: notes.trim() || null,
         }),
       });
       setBrief("");
       setSelectedTopicId("");
       setNotes("");
+      setGenerateCover(false);
       const nextDate = new Date(dateInput);
       setMonth(monthStart(nextDate));
       setSelectedDay(dayKey(nextDate));
@@ -175,6 +192,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setSelectedTopicId(slot.topicId ?? "");
     setNotes(slot.notes ?? "");
     setSelectedChannels(slot.channelIds);
+    setGenerateCover(slot.generateCover);
     setFormError(null);
   }
   async function save(e: React.FormEvent) {
@@ -199,6 +217,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               ? { topicId: null, brief }
               : { brief }),
           channelIds: selectedChannels,
+          generateCover,
           notes: notes.trim() || null,
         }),
       });
@@ -291,13 +310,18 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               <input
                 type="checkbox"
                 checked={selectedChannels.includes(channel.id)}
-                onChange={(e) =>
+                onChange={(e) => {
+                  if (
+                    e.target.checked &&
+                    !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform)
+                  )
+                    setGenerateCover(false);
                   setSelectedChannels((current) =>
                     e.target.checked
                       ? [...current, channel.id]
                       : current.filter((id) => id !== channel.id),
-                  )
-                }
+                  );
+                }}
               />
               {channel.name}
             </label>
@@ -305,6 +329,25 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         </div>
         {channels?.length === 0 && <p className="text-sm text-fg-secondary">{t("noChannels")}</p>}
       </fieldset>
+      <div className="rounded-control border border-border px-3 py-3">
+        <label className="flex min-h-11 items-start gap-3 text-sm text-fg">
+          <input
+            type="checkbox"
+            checked={generateCover}
+            onChange={(event) => setGenerateCover(event.target.checked)}
+            disabled={!generateCover && (!hasGoogleKey || !coverChannelsSupported)}
+            className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+          />
+          <span>{tc("generateCover")}</span>
+        </label>
+        <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverHint")}</p>
+        {credentials !== null && !hasGoogleKey && (
+          <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverNeedsGoogle")}</p>
+        )}
+        {!coverChannelsSupported && (
+          <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverUnsupported")}</p>
+        )}
+      </div>
       <Textarea
         label={t("notes")}
         value={notes}
@@ -450,6 +493,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                         .join(", ")}
                     </p>
                     {slot.notes && <p className="mt-2 text-sm text-fg-secondary">{slot.notes}</p>}
+                    {slot.generateCover && (
+                      <p className="mt-2 text-sm text-fg-secondary">{tc("generateCover")}</p>
+                    )}
                     {slot.retryAfter && !slot.runId && (
                       <p className="mt-2 text-sm text-fg-secondary">{t("waitingCapacity")}</p>
                     )}

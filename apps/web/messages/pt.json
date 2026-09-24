@@ -1078,7 +1078,7 @@
     "channelsMissing": "Um canal foi removido. Edite este espaço e escolha outro.",
     "invalidInput": "Este espaço é inválido. Edite e salve antes de gerar.",
     "topicChanged": "O tema vinculado mudou ou perdeu a aprovação. Edite este espaço e selecione novamente um tema aprovado.",
-    "waitingCapacity": "Aguardando capacidade de geração. O Pubrick tentará novamente automaticamente.",
+    "waitingCapacity": "Aguardando para iniciar a geração. O Pubrick tentará novamente automaticamente.",
     "viewRun": "Ver geração",
     "edit": "Editar",
     "remove": "Remover",
