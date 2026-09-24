@@ -4,14 +4,17 @@ Pubrick reads public Telegram channels through [mtcute](https://mtcute.dev/guide
 
 ## Connect a workspace
 
-1. Create a Telegram application at <https://my.telegram.org/apps>. Put its `api_id` and `api_hash` in `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in the worker environment. Keep the hash private.
-2. Set the worker's `DATABASE_URL` and `APP_ENCRYPTION_KEY` to the same database and key ring used by the API. Build the worker with `pnpm --filter @pubrick/worker build`. Find the intended workspace ID in the `organization` table (`SELECT id, name FROM organization;`).
-3. On the trusted server terminal, run `pnpm --filter @pubrick/worker telegram:connect <organization-id>`. In Docker Compose, run `docker compose run --rm -it worker node dist/telegram-connect.cjs <organization-id>`. Enter the account phone, Telegram code, and optional 2FA password at the prompts. Repeat for each workspace that wants Telegram monitoring. Running the command again replaces that workspace's session.
-4. In Brand → Sources, select Telegram and add a public channel URL such as `https://t.me/example_channel`. The first check is queued. The source row displays connection, configuration and access errors without showing Telegram's raw response.
+1. Create a Telegram application at <https://my.telegram.org/apps>. Put its `api_id` and `api_hash` in `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in **both the API and worker** environments. Keep the hash private. Both services need the same `DATABASE_URL` and `APP_ENCRYPTION_KEY` key ring.
+2. As a workspace owner or admin, open **Settings → Telegram source account**. Enter the phone number in international format, the code Telegram sends, and the account's 2FA password if requested. Reconnect and disconnect from that same screen. Only the verified session is stored as the workspace's active account; the previous account continues working during a reconnect attempt.
+3. In Brand → Sources, select Telegram and add a public channel URL such as `https://t.me/example_channel`. The first check is queued. The source row displays connection, configuration and access errors without showing Telegram's raw response.
 
-Each organization has one independently encrypted session in `telegram_source_accounts`. It is never returned through the API or browser. An operator with access to the database and encryption key can still recover it; protect and back up the key. If the session is revoked in Telegram, run the connect command again. Removing the row for one organization disconnects its sources without touching another workspace.
+Each organization has one independently encrypted session in `telegram_source_accounts`. It is never returned through the API or browser. An operator with access to the database and encryption key can still recover it; protect and back up the key. The intermediate sign-in challenge is encrypted, belongs to the requesting workspace and actor, expires after ten minutes, and is never sent to the browser beyond its opaque ID and stage. Code requests have a one-minute workspace cooldown; code and password verification have a five-second cooldown and up to five attempts at each step. A different admin cannot replace an active challenge; its initiator may start over after the one-minute cooldown. Disconnect removes the account and invalidates an in-flight challenge without deleting sources or previously collected stories; polling those sources resumes after a new account is connected.
 
-After rotating `APP_ENCRYPTION_KEY`, keep the old key in the ring until this command has reconnected every workspace with a Telegram source account. Polling does not re-encrypt stored sessions.
+The phone, code and 2FA password travel only in HTTPS request bodies. Do not log request bodies in Pubrick's reverse proxy or application gateway. Expired challenges have their encrypted secret fields cleared by the API's periodic cleanup, including when nobody returns to that workspace.
+
+The trusted-terminal path remains available for operators: build the worker, find the workspace ID, then run `pnpm --filter @pubrick/worker telegram:connect <organization-id>` or `docker compose run --rm -it worker node dist/telegram-connect.cjs <organization-id>`. Enter the phone, code and optional 2FA password at the prompts. Running the command again replaces that workspace's session.
+
+After rotating `APP_ENCRYPTION_KEY`, keep the old key in the ring until every workspace with a Telegram source account has reconnected. Polling does not re-encrypt stored sessions.
 
 ## Monitor a joined private channel
 

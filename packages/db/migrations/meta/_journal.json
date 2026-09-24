@@ -400,6 +400,13 @@
       "when": 1790273740436,
       "tag": "0057_daily_topic_suggestions",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790275906688,
+      "tag": "0058_handy_katie_power",
+      "breakpoints": true
     }
   ]
 }

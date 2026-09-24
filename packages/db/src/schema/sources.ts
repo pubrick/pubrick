@@ -14,7 +14,7 @@ import {
   uuid,
   vector,
 } from "drizzle-orm/pg-core";
-import { organization } from "./auth.js";
+import { organization, user } from "./auth.js";
 import { brands } from "./content.js";
 import { enumCheck } from "./enum-check.js";
 
@@ -61,6 +61,56 @@ export const telegramSourceAccounts = pgTable("telegram_source_accounts", {
   /** Atomic organization-wide attempt gate; consumed before each MTProto lookup. */
   lastPrivateResolveAt: timestamp("last_private_resolve_at", { withTimezone: true }),
 });
+
+/** One short-lived login challenge per organization; sensitive fields are encrypted by the API. */
+export const telegramLoginAttempts = pgTable(
+  "telegram_login_attempts",
+  {
+    orgId: text("org_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    id: uuid("id").notNull().defaultRandom(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    phoneEncrypted: text("phone_encrypted").notNull(),
+    sessionEncrypted: text("session_encrypted"),
+    phoneCodeHashEncrypted: text("phone_code_hash_encrypted"),
+    stage: text("stage", {
+      enum: [
+        "begin",
+        "code",
+        "password",
+        "verifying_code",
+        "verifying_password",
+        "failed",
+        "complete",
+      ],
+    })
+      .notNull()
+      .default("begin"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attemptsUsed: integer("attempts_used").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    lastBeginAt: timestamp("last_begin_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("telegram_login_attempts_id_idx").on(t.id),
+    index("telegram_login_attempts_expires_idx").on(t.expiresAt),
+    enumCheck("telegram_login_attempts_stage_check", t.stage, [
+      "begin",
+      "code",
+      "password",
+      "verifying_code",
+      "verifying_password",
+      "failed",
+      "complete",
+    ]),
+    check("telegram_login_attempts_attempts_check", sql`${t.attemptsUsed} >= 0`),
+  ],
+);
 
 export const newsItems = pgTable(
   "news_items",

@@ -20,17 +20,68 @@ import {
   newsSourceUpdateSchema,
   type PrivateTelegramSourceCreate,
   privateTelegramSourceCreateSchema,
+  telegramLoginBeginSchema,
+  telegramLoginCodeSchema,
+  telegramLoginPasswordSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { PrivateSourceOwnerGuard } from "./private-source-owner.guard";
 import { SourcesRepository } from "./sources.repository";
+import { TelegramLoginRepository } from "./telegram-login.repository";
 
 @Controller("sources")
 @UseGuards(ActiveOrgGuard)
 export class SourcesController {
-  constructor(private readonly sources: SourcesRepository) {}
+  constructor(
+    private readonly sources: SourcesRepository,
+    private readonly telegramLogin: TelegramLoginRepository,
+  ) {}
+
+  @Get("telegram-login")
+  @UseGuards(PrivateSourceOwnerGuard)
+  loginStatus(@OrgId() orgId: string, @Req() request: { privateSourceActorId: string }) {
+    return this.telegramLogin.status(orgId, request.privateSourceActorId);
+  }
+
+  @Post("telegram-login/begin")
+  @UseGuards(PrivateSourceOwnerGuard)
+  beginLogin(
+    @OrgId() orgId: string,
+    @Req() request: { privateSourceActorId: string },
+    @Body(new ZodValidationPipe(telegramLoginBeginSchema)) body: { phone: string },
+  ) {
+    return this.telegramLogin.begin(orgId, request.privateSourceActorId, body.phone);
+  }
+
+  @Post("telegram-login/code")
+  @UseGuards(PrivateSourceOwnerGuard)
+  submitLoginCode(
+    @OrgId() orgId: string,
+    @Req() request: { privateSourceActorId: string },
+    @Body(new ZodValidationPipe(telegramLoginCodeSchema))
+    body: { challengeId: string; code: string },
+  ) {
+    return this.telegramLogin.submitCode(orgId, request.privateSourceActorId, body);
+  }
+
+  @Post("telegram-login/password")
+  @UseGuards(PrivateSourceOwnerGuard)
+  submitLoginPassword(
+    @OrgId() orgId: string,
+    @Req() request: { privateSourceActorId: string },
+    @Body(new ZodValidationPipe(telegramLoginPasswordSchema))
+    body: { challengeId: string; password: string },
+  ) {
+    return this.telegramLogin.submitPassword(orgId, request.privateSourceActorId, body);
+  }
+
+  @Delete("telegram-connection")
+  @UseGuards(PrivateSourceOwnerGuard)
+  disconnectTelegram(@OrgId() orgId: string, @Req() request: { privateSourceActorId: string }) {
+    return this.telegramLogin.disconnect(orgId, request.privateSourceActorId);
+  }
 
   @Get("telegram-connection")
   telegramConnection(@OrgId() orgId: string) {

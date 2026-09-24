@@ -419,6 +419,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <p className="mt-3 text-sm text-fg-secondary">
             {!telegramConnected && <>{t("telegramSetup")} </>}
             {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
+            <Link href={`/${locale}/settings/telegram`} className="underline">
+              {t("telegramSettings")}
+            </Link>{" "}
             <a
               href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
               target="_blank"

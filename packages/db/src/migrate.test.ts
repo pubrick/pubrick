@@ -154,6 +154,11 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "telegram_login_attempts.created_at",
+  "telegram_login_attempts.expires_at",
+  "telegram_login_attempts.last_begin_at",
+  "telegram_login_attempts.next_attempt_at",
+  "telegram_login_attempts.updated_at",
   "telegram_source_accounts.connected_at",
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
@@ -278,6 +283,10 @@ const NON_ENUM_CHECKS = [
   // A private source always carries an encrypted channel peer, while public
   // sources cannot carry one. Exercised by private source persistence e2e.
   "news_sources_private_peer_check",
+  // A login attempt stores encrypted phone/session material and bounded retries;
+  // the source login API owns allowed transitions and exhaustion.
+  "telegram_login_attempts_stage_check",
+  "telegram_login_attempts_attempts_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",

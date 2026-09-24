@@ -77,6 +77,11 @@ export const API_ERROR_CODES = [
   "private_source_access_denied",
   "private_source_session_changed",
   "private_source_duplicate",
+  "telegram_login_cooldown",
+  "telegram_login_expired",
+  "telegram_login_invalid",
+  "telegram_login_busy",
+  "telegram_login_unavailable",
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",

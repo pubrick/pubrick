@@ -101,6 +101,24 @@ export const privateTelegramSourceCreateSchema = z.object({
 });
 export type PrivateTelegramSourceCreate = z.infer<typeof privateTelegramSourceCreateSchema>;
 
+/** Transient Telegram sign-in input. Intermediate MTProto state stays server-side. */
+export const telegramLoginBeginSchema = z.strictObject({
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/),
+});
+export type TelegramLoginBegin = z.infer<typeof telegramLoginBeginSchema>;
+
+export const telegramLoginCodeSchema = z.strictObject({
+  challengeId: z.string().uuid(),
+  code: z.string().regex(/^\d{3,12}$/),
+});
+export type TelegramLoginCode = z.infer<typeof telegramLoginCodeSchema>;
+
+export const telegramLoginPasswordSchema = z.strictObject({
+  challengeId: z.string().uuid(),
+  password: z.string().min(1).max(256),
+});
+export type TelegramLoginPassword = z.infer<typeof telegramLoginPasswordSchema>;
+
 export const newsSourceUpdateSchema = z.object({
   name: newsSourceNameSchema.optional(),
   url: z.union([telegramUrl, feedUrl]).optional(),

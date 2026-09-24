@@ -2,6 +2,9 @@ import password from "@inquirer/password";
 import { Long, MemoryStorage } from "@mtcute/core";
 import { TelegramClient } from "@mtcute/node";
 
+export type { Credentials as TelegramLoginCredentials } from "./login.js";
+export { beginTelegramLogin, submitTelegramCode, submitTelegramPassword } from "./login.js";
+
 export type ChannelPost = { title: string; summary: string; url: string; publishedAt: Date };
 export type ChannelComment = { messageId: number; body: string; publishedAt: Date };
 export type ChannelComments = {

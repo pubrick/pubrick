@@ -19,6 +19,15 @@ checking the 30-minute request cooldown. The automatic path then locks its
 transaction. This order prevents simultaneous manual and automatic admissions
 from each missing the other's new request.
 
+Telegram account sign-in has a separate workspace-scoped lock chain:
+`member` → `telegram_login_attempts` → `telegram_source_accounts`.
+The final verified-session replacement and disconnect recheck the actor's
+owner/admin membership under a row lock, then lock or update the organization's
+login attempt, then write its account row. The phone and verification admission
+updates touch only the attempt row; no transaction holds a database lock during
+an MTProto network call. A disconnect invalidates a pending verification before
+deleting the account, so a late Telegram response cannot reconnect it.
+
 Channel re-adaptation stages its proposal after the model returns. The stage
 transaction locks its adaptation, then its item, then replaces the proposal.
 Accept takes the same two parent locks before reading the proposal and writing

@@ -617,6 +617,19 @@ export default function SettingsPage() {
 
         {canManageApiKeys && (
           <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("telegramSourcesTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("telegramSourcesHint")}</p>
+            <Link
+              href={`/${locale}/settings/telegram`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("telegramSourcesOpen")}
+            </Link>
+          </Card>
+        )}
+
+        {canManageApiKeys && (
+          <Card>
             <h2 className="mb-2 text-base font-semibold text-fg">{t("publicApiTitle")}</h2>
             <p className="mb-3 text-sm text-fg-secondary">{t("publicApiHint")}</p>
             <Link
