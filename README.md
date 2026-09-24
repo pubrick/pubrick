@@ -53,7 +53,8 @@ Gemini vector indexing, including [opt-in automatic backfill](docs/brand-knowled
 The [media library](docs/media-library.md) accepts reviewed MP4 uploads for
 Telegram video posts. Organization owners and admins can issue one-time
 [public read API](docs/public-api.md) keys for tenant-scoped content reads; the
-[OpenAPI contract](docs/openapi-v1.json) describes that limited surface. Other
+[OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
+[optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
 platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
