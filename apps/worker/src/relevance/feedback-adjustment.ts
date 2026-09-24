@@ -14,7 +14,7 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
 
 function words(text: string): Set<string> {
   const result = new Set<string>();
-  for (const part of segmenter.segment(text.normalize("NFKC").toLocaleLowerCase())) {
+  for (const part of segmenter.segment(text.normalize("NFKC").toLowerCase())) {
     if (!part.isWordLike) continue;
     const word = part.segment;
     // Very short words, years, and numbers mostly match unrelated headlines.

@@ -38,8 +38,9 @@ organization and brand. A strong headline overlap adjusts its **ranking score**
 by at most 20 percentage points in either direction. Opposing matches cancel;
 unrelated marks have no effect. **Sort by relevance** and AI topic suggestions
 use the ranking score. The API returns both `relevanceScore` (the raw AI score)
-and `rankScore` with `feedbackDelta` so the adjustment is inspectable. An
-editor changing a mark affects future scores only; existing scored articles
+and `rankScore` with `feedbackDelta` so the adjustment is inspectable. When
+feedback applies, the app shows the ranking score beside the raw AI badge.
+Changing a mark affects future scores only; existing scored articles
 are not silently rescored.
 
 This comparison is intentionally lexical. It recognizes sufficiently similar

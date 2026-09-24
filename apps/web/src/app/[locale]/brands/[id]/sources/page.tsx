@@ -576,6 +576,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                         ? t("aiScore", { score: Math.round(item.relevanceScore * 100) })
                         : t(item.relevanceStatus === "failed" ? "statusFailed" : "statusUnscored")}
                     </StatusBadge>
+                    {typeof item.feedbackDelta === "number" &&
+                      item.feedbackDelta !== 0 &&
+                      typeof item.rankScore === "number" && (
+                        <span>{t("rankScore", { score: Math.round(item.rankScore * 100) })}</span>
+                      )}
                     {item.relevanceUrgency && <span>{t(item.relevanceUrgency)}</span>}
                   </span>
                   {item.relevanceReason && <span className="block">{item.relevanceReason}</span>}

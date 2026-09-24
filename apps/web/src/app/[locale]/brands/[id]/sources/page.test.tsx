@@ -73,6 +73,33 @@ describe("watched sources page", () => {
     return calls;
   }
 
+  it("shows the model score separately from an editor-adjusted ranking", async () => {
+    install([
+      {
+        id: ITEM_ID,
+        brandId: BRAND_ID,
+        sourceId: SOURCE_ID,
+        title: "Battery rules",
+        summary: "Recycling guidance",
+        url: "https://example.com/batteries",
+        publishedAt: null,
+        createdAt: "2026-09-23T12:00:00.000Z",
+        relevanceStatus: "scored",
+        relevanceScore: 0.7,
+        rankScore: 0.82,
+        feedbackDelta: 0.12,
+        relevanceReason: "Relevant to manufacturers.",
+        relevanceUrgency: "timely",
+        relevanceErrorCode: null,
+        relevanceScoredAt: "2026-09-23T12:00:00.000Z",
+        editorSignal: null,
+      },
+    ]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText(en.Sources.aiScore.replace("{score}", "70"))).toBeVisible();
+    expect(screen.getByText(en.Sources.rankScore.replace("{score}", "82"))).toBeVisible();
+  });
+
   it("adds a brand-scoped feed from the header form", async () => {
     const calls = install();
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
