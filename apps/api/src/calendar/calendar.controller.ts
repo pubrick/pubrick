@@ -12,9 +12,11 @@ import {
 } from "@nestjs/common";
 import {
   type CalendarSlotCreate,
+  type CalendarSlotsBulkCreate,
   type CalendarSlotUpdate,
   calendarRangeSchema,
   calendarSlotCreateSchema,
+  calendarSlotsBulkCreateSchema,
   calendarSlotUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
@@ -42,6 +44,14 @@ export class CalendarController {
     @Body(new ZodValidationPipe(calendarSlotCreateSchema)) body: CalendarSlotCreate,
   ) {
     return this.slots.create(orgId, body);
+  }
+
+  @Post("bulk")
+  createBulk(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(calendarSlotsBulkCreateSchema)) body: CalendarSlotsBulkCreate,
+  ) {
+    return this.slots.createBulk(orgId, body);
   }
 
   @Patch(":id")

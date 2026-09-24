@@ -39,6 +39,22 @@ const slotFields = z.object({
 export const calendarSlotCreateSchema = slotFields
   .extend({ brandId: z.uuid() })
   .refine((v) => v.topicId || v.brief, { message: "Brief or approved topic is required" });
+export const calendarSlotsBulkCreateSchema = z.object({
+  brandId: z.uuid(),
+  slots: z
+    .array(
+      z.object({
+        topicId: z.uuid(),
+        scheduledAt: z.iso.datetime({ offset: true }),
+        channelIds: slotFields.shape.channelIds,
+      }),
+    )
+    .min(1)
+    .max(20)
+    .refine((slots) => new Set(slots.map((slot) => slot.topicId)).size === slots.length, {
+      message: "Each topic may be planned only once per batch",
+    }),
+});
 export const calendarSlotUpdateSchema = slotFields
   .partial()
   .refine((v) => v.topicId !== null || v.brief, {
@@ -60,4 +76,5 @@ export const calendarRangeSchema = z
   );
 
 export type CalendarSlotCreate = z.infer<typeof calendarSlotCreateSchema>;
+export type CalendarSlotsBulkCreate = z.infer<typeof calendarSlotsBulkCreateSchema>;
 export type CalendarSlotUpdate = z.infer<typeof calendarSlotUpdateSchema>;

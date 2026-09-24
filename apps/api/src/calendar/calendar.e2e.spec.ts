@@ -58,6 +58,194 @@ describe.skipIf(!url)("calendar API", () => {
     return { brandId: brand.body.id as string, channelId: channel.body.id as string };
   }
 
+  async function approvedTopic(client: request.Agent, brandId: string, title: string) {
+    const topic = await client
+      .post("/api/topics")
+      .send({ brandId, title, description: `${title} details` })
+      .expect(201);
+    await client
+      .patch(`/api/topics/${topic.body.id}?brandId=${brandId}`)
+      .send({ status: "approved" })
+      .expect(200);
+    return topic.body.id as string;
+  }
+
+  it("creates a bounded topic batch atomically with ordered revision snapshots", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const first = await approvedTopic(owner, brandId, "First launch");
+    const second = await approvedTopic(owner, brandId, "Second launch");
+    const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
+    const slots = [
+      { topicId: second, scheduledAt, channelIds: [channelId] },
+      { topicId: first, scheduledAt, channelIds: [channelId] },
+    ];
+    const created = await owner
+      .post("/api/calendar/slots/bulk")
+      .send({ brandId, slots })
+      .expect(201);
+    expect(created.body).toHaveLength(2);
+    expect(created.body.map((slot: { topicId: string }) => slot.topicId)).toEqual([second, first]);
+    expect(created.body[0]).toMatchObject({
+      brandId,
+      brief: "Second launch\n\nSecond launch details",
+      topicTitle: "Second launch",
+      topicDescription: "Second launch details",
+      topicRevision: 2,
+      channelIds: [channelId],
+    });
+    const listed = await owner
+      .get(
+        `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 2 * 86_400_000).toISOString())}`,
+      )
+      .expect(200);
+    expect(listed.body).toHaveLength(2);
+  });
+
+  it("validates every bulk row before inserting any slot", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const first = await approvedTopic(owner, brandId, "Ready");
+    const pending = await owner
+      .post("/api/topics")
+      .send({ brandId, title: "Needs approval" })
+      .expect(201);
+    const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
+    const valid = { topicId: first, scheduledAt, channelIds: [channelId] };
+    const unapproved = { topicId: pending.body.id, scheduledAt, channelIds: [channelId] };
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({ brandId, slots: [valid, unapproved] })
+          .expect(409)
+      ).body.code,
+    ).toBe("topic_not_approved");
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({ brandId, slots: [valid, { ...unapproved, topicId: first }] })
+          .expect(400)
+      ).body.code,
+    ).toBe("invalid_request");
+    expect(
+      (await owner.post("/api/calendar/slots/bulk").send({ brandId, slots: [] }).expect(400)).body
+        .code,
+    ).toBe("invalid_request");
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({
+            brandId,
+            slots: Array.from({ length: 21 }, (_, index) => ({
+              ...valid,
+              topicId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+            })),
+          })
+          .expect(400)
+      ).body.code,
+    ).toBe("invalid_request");
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({
+            brandId,
+            slots: [valid, { ...unapproved, scheduledAt: new Date(0).toISOString() }],
+          })
+          .expect(400)
+      ).body.code,
+    ).toBe("calendar_time_in_past");
+    const foreign = await agent();
+    const { brandId: foreignBrandId, channelId: foreignChannel } = await brandChannel(foreign);
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({ brandId, slots: [valid, { ...unapproved, channelIds: [foreignChannel] }] })
+          .expect(404)
+      ).body.code,
+    ).toBe("channels_not_in_brand");
+    const foreignTopicId = await approvedTopic(foreign, foreignBrandId, "Another organization");
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({ brandId, slots: [valid, { ...unapproved, topicId: foreignTopicId }] })
+          .expect(404)
+      ).body.code,
+    ).toBe("topic_not_found");
+    const listed = await owner
+      .get(
+        `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 2 * 86_400_000).toISOString())}`,
+      )
+      .expect(200);
+    expect(listed.body).toEqual([]);
+  });
+
+  it("rejects already planned topics and serializes competing bulk requests", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const topicId = await approvedTopic(owner, brandId, "One plan");
+    const otherTopicId = await approvedTopic(owner, brandId, "Second plan");
+    const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
+    const body = {
+      brandId,
+      slots: [
+        {
+          topicId,
+          scheduledAt,
+          channelIds: [channelId],
+        },
+        {
+          topicId: otherTopicId,
+          scheduledAt,
+          channelIds: [channelId],
+        },
+      ],
+    };
+    const responses = await Promise.all([
+      owner.post("/api/calendar/slots/bulk").send(body),
+      owner.post("/api/calendar/slots/bulk").send({ ...body, slots: [...body.slots].reverse() }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect(responses.find((response) => response.status === 409)?.body.code).toBe(
+      "calendar_topic_already_planned",
+    );
+    const listed = await owner
+      .get(
+        `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 2 * 86_400_000).toISOString())}`,
+      )
+      .expect(200);
+    expect(listed.body).toHaveLength(2);
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({
+            ...body,
+            slots: [
+              body.slots[0],
+              {
+                topicId: await approvedTopic(owner, brandId, "Fresh plan"),
+                scheduledAt,
+                channelIds: [channelId],
+              },
+            ],
+          })
+          .expect(409)
+      ).body.code,
+    ).toBe("calendar_topic_already_planned");
+    const afterConflict = await owner
+      .get(
+        `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 2 * 86_400_000).toISOString())}`,
+      )
+      .expect(200);
+    expect(afterConflict.body).toHaveLength(2);
+  });
+
   it("scopes create, list, update and removal to the organization and brand", async () => {
     const owner = await agent();
     const outsider = await agent();
