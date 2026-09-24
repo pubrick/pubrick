@@ -9,14 +9,14 @@ documents when they disagree.
 | Reference area | Pubrick today | Next meaningful gap |
 |---|---|---|
 | Brands | Guided manual setup with name, source-targeting description, voice, audience and content language; profile editing and next-step links | Optional website/social import with reviewed AI suggestions |
-| Channels | Telegram, VK, MAX, Bluesky and Mastodon delivery; VC.ru manual publication workflow | Other platform adapters and channel-specific publishing options |
+| Channels | Telegram, VK, MAX, Bluesky and Mastodon delivery; VC.ru manual publication workflow | Verify the legacy VC.ru API before offering opt-in native delivery; then channel-specific options |
 | News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed, public Telegram channels and joined private Telegram broadcast channels with in-app setup; polling, story list, advisory AI relevance scoring and draft start | Feedback-informed ranking and discussion groups |
 | Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive, direct generation and approved-topic calendar links | Richer editorial feedback and bulk planning |
 | Multi-agent generation | Five-step engine, run receipts, current UTC date in every model step, public article URL preview, selected social post/news digest/product update/expert article/how-to/source retelling/comparison/case study formats, and opt-in homepage UTM tagging | Video/newsletter repurposing and deeper SEO workflow |
 | Images and media | Brand-scoped upload library, manual Gemini image generation and per-image variation, cover selection and Telegram/VK/MAX/Bluesky photo delivery | Richer image provenance and additional media formats |
-| Review queue | Manual edits, approval, refine, provenance, saved version history, channel re-adaptation and literal per-channel review previews | Comments and richer revisions |
+| Review queue | Manual edits, approval, refine, provenance, saved version history, channel re-adaptation and literal per-channel review previews; expiring guest client-review links with exact-draft approval gate | Internal editorial comments and richer revisions |
 | Calendar | Scheduled publishing, brand calendar, brief or approved-topic slots with stale-topic checks, planned draft generation and brand-scoped annual memorable-date suggestions | Richer planning and bulk slot creation |
-| Publishing | Telegram, VK, MAX, Bluesky and text-only Mastodon delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Native delivery for other platforms and verified Dzen ingestion support |
+| Publishing | Telegram, VK, MAX, Bluesky and text-only Mastodon delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Verify VC.ru native delivery and Dzen ingestion before claiming either succeeded |
 | Analytics | Usage and cost ledger; brand results, on-demand VK post metrics and opt-in background VK collection | Other-channel metrics and performance feedback |
 | Comment analysis | On-demand public Telegram reply sample and metered Google BYOK aggregate summary, sentiment and themes | Private or inaccessible discussions and feedback-informed ranking |
 | Knowledge base / RAG | Brand notes, portable CSV import/export preserving paused state and literal tags, optional single or batch Gemini indexing, embedding-model provenance, hybrid retrieval, selected-note links and validated source excerpts in run receipts | Automatic indexing and independent claim verification |
@@ -30,6 +30,12 @@ documents when they disagree.
 News scores and AI topic suggestions remain advisory; an editor chooses and
 approves each topic before generation. The public RSS output is available for
 syndication, but it does not assert that Dzen imported a post.
+
+The reference's Instagram, YouTube, RuTube, TenChat and T—Ж publishers were
+manual placeholders. Its video generator and Shorts flow were design notes,
+not working code. The only substantial reference publisher still absent here
+is the VC.ru token adapter; its success path lacks a recorded integration test,
+so the manual Pubrick workflow remains the trustworthy option until verified.
 
 Every ported slice should be usable on its own, tenant-scoped, metered when it
 calls a model, translated in all four locales, tested locally, and described in
