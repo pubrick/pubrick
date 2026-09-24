@@ -27,6 +27,10 @@ import {
   contentVersionRestoreSchema,
   type DeliveryAssertion,
   deliveryAssertionSchema,
+  type EditorialNoteCreate,
+  type EditorialNoteListQuery,
+  editorialNoteCreateSchema,
+  editorialNoteListQuerySchema,
   type ManualPublication,
   manualPublicationSchema,
   NEXT_CURSOR_HEADER,
@@ -38,11 +42,15 @@ import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
+import { EditorialNotesRepository } from "./editorial-notes.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
 export class ContentController {
-  constructor(private readonly content: ContentRepository) {}
+  constructor(
+    private readonly content: ContentRepository,
+    private readonly editorialNotes: EditorialNotesRepository,
+  ) {}
 
   /**
    * ONE PAGE OF THE QUEUE. `?status=` filters it, `?limit=` sizes it (50 by
@@ -102,6 +110,28 @@ export class ContentController {
     const page = await this.content.versions(orgId, id, query.adaptationId, query.cursor);
     if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
     return page.rows;
+  }
+
+  @Get(":id/editorial-notes")
+  async notes(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(editorialNoteListQuerySchema)) query: EditorialNoteListQuery,
+    @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
+  ) {
+    const page = await this.editorialNotes.list(orgId, id, query.cursor);
+    if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
+    return page.rows;
+  }
+
+  @Post(":id/editorial-notes")
+  addNote(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(editorialNoteCreateSchema)) body: EditorialNoteCreate,
+  ) {
+    return this.editorialNotes.create(orgId, id, userId, body);
   }
 
   @Post(":id/versions/:versionId/restore")

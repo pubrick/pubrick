@@ -94,6 +94,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   private_source_session_changed: "private_source_session_changed",
   private_source_duplicate: "private_source_duplicate",
   content_not_found: "content_not_found",
+  editorial_note_stale: "editorial_note_stale",
   publication_not_found: "publication_not_found",
   metrics_refresh_cooldown: "metrics_refresh_cooldown",
   metrics_unavailable: "metrics_unavailable",

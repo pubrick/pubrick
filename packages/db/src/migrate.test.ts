@@ -120,6 +120,7 @@ const ZONED_COLUMNS = [
   "content_items.first_opened_at",
   "content_items.updated_at",
   "content_versions.created_at",
+  "editorial_notes.created_at",
   "feed_entries.published_at",
   "knowledge_entries.created_at",
   "knowledge_entries.updated_at",

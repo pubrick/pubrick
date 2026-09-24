@@ -80,6 +80,7 @@ export const API_ERROR_CODES = [
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
+  "editorial_note_stale",
   "publication_not_found",
   "metrics_refresh_cooldown",
   "metrics_unavailable",
