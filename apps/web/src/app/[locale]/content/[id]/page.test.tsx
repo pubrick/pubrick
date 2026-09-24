@@ -31,6 +31,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn(), apiPage: vi.fn(), apiVoid: vi.fn() };
 });
 
+// Editorial notes exercise their own fetch and paging in editorial-notes.test.
+// Keep these page tests focused on publishing and version actions.
+vi.mock("./editorial-notes", () => ({ EditorialNotes: () => null }));
+
 // Imported after the mock so this binding is the mocked export.
 import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
 
