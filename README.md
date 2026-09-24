@@ -20,8 +20,8 @@
 
 Pubrick watches RSS, web feeds, and Telegram sources, drafts on-brand posts
 with AI agents, queues them for **your** approval, and publishes approved posts
-on schedule. Brand knowledge, manual image generation, and VK performance
-metrics are available in the current pre-alpha.
+on schedule. Brand knowledge, manual image generation, Telegram video
+attachments, and VK performance metrics are available in the current pre-alpha.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
@@ -49,7 +49,11 @@ generate [social posts, news digests, product updates, expert articles, how-to g
 for selected channels. See [watched sources](docs/watched-sources.md)
 for the exact limits. The per-brand
 knowledge base supports portable CSV import/export, text search, and optional
-Gemini vector indexing. Other
+Gemini vector indexing, including [opt-in automatic backfill](docs/brand-knowledge.md).
+The [media library](docs/media-library.md) accepts reviewed MP4 uploads for
+Telegram video posts. Organization owners and admins can issue one-time
+[public read API](docs/public-api.md) keys for tenant-scoped content reads; the
+[OpenAPI contract](docs/openapi-v1.json) describes that limited surface. Other
 platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
@@ -62,7 +66,8 @@ for drafts awaiting review and delivery problems.
 ## Why Pubrick
 
 - **Human-in-the-loop by design** — every post needs approval before publishing.
-  Autopilot is planned as an explicit owner-controlled option.
+  Owners can opt in to scheduled draft generation from approved topics, while
+  publication still requires a person to review and approve the result.
 - **Brand voice** — voice, audience and content language are set per brand and
   go into every generation's instructions, so drafts sound like you rather than
   like a model. Brand knowledge notes can be selected as material for a draft;
