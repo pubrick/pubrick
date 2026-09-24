@@ -76,6 +76,27 @@ beforeEach(() => {
 });
 
 describe("the step checklist", () => {
+  it("shows an optional cover failure without hiding the completed text draft", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        input: { kind: "brief", text: "Brief", channelIds: [CHANNEL_A], generateCover: true },
+        steps: { cover: { status: "succeeded", output: { mediaId: null, result: "unavailable" } } },
+      }),
+    });
+    await renderRun();
+    const rows = await screen.findAllByRole("listitem");
+    const cover = rows.find((row) => row.textContent?.startsWith(en.Runs.step.cover));
+    expect(cover).toHaveTextContent(en.Runs.stepState.unavailable);
+    expect(cover).toHaveTextContent(en.Runs.coverUnavailable);
+    expect(screen.getByRole("link", { name: en.Runs.draftReady })).toHaveAttribute(
+      "href",
+      `/en/content/${ITEM_ID}`,
+    );
+  });
+
   it("derives each step's state from the run's checkpoints", async () => {
     installHandlers({
       current: makeRun({

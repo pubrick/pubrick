@@ -109,6 +109,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   media_video_pinned: "media_video_pinned",
   media_generation_limit: "media_generation_limit",
   media_generation_failed: "media_generation_failed",
+  cover_requires_google_key: "cover_requires_google_key",
   feed_not_found: "feed_not_found",
   feed_item_not_ready: "feed_item_not_ready",
   adaptation_not_found: "adaptation_not_found",

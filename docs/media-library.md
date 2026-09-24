@@ -96,12 +96,35 @@ The result is not attached to any post. Review it and choose **Use** on an
 editable Telegram, VK, MAX, or Bluesky post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
+The compose screen also offers an unchecked **Generate a cover image** option
+for a generation run. It requires a saved Google key and checks the image-call
+budget at admission; the selected channels must all support covers (Telegram,
+VK, MAX, or Bluesky). After the text and channel adaptations finish, the worker
+makes one `gemini-3.1-flash-image` request per cover step attempt using the draft
+subject. It normalizes the returned image into the brand library and attaches
+it to the newly created draft in the run's fenced terminal transaction. The
+draft does not exist until that transaction, so the image cannot overwrite a
+cover a person selected in the editor. The editor displays the cover for review;
+approval and publication still require the ordinary human gate. If the key is
+removed, the budget fills, the provider cannot return a usable image, or the
+image cannot be saved, the text draft still succeeds and the run receipt reports
+that the cover was unavailable. A dispatched request is logged in
+`usage_ledger` even when its outcome or exact cost is unknown. **Try again** on
+a run carries its cover choice forward and may make a new billed call. A worker
+interruption before the cover checkpoint is saved can also repeat the billed
+request.
+
 Every dispatched image request records a BYOK row in `usage_ledger`, including
 failed and uncertain outcomes. Where Gemini returns modality token counts,
 Pubrick estimates the standard tier cost using the published input, image
 output, text output and thinking rates. Missing details remain `unknown` rather
-than claiming a zero cost. The organization limit is 12 image calls per hour;
-one click makes one provider request with no retry. Provider error bodies and
-keys never reach the browser. The image model and rates should be reviewed as
+than claiming a zero cost. Pubrick checks a shared nominal limit of 12 image
+calls per organization per hour, including cover calls. Concurrent manual and
+background requests can exceed that limit because dispatches do not reserve a
+slot atomically; the limit is best effort until those paths share a durable
+reservation. Each cover step attempt makes at most one provider request, and one
+manual click makes one request; neither retries the provider within that
+attempt. Provider error bodies and keys never reach the browser. The image
+model and rates should be reviewed as
 Google changes its [model](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image)
 and [pricing](https://ai.google.dev/gemini-api/docs/pricing) documentation.

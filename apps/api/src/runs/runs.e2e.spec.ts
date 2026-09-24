@@ -403,6 +403,59 @@ describe.skipIf(!url)("runs e2e", () => {
     expect((jobs.rows[0] as { n: number }).n).toBe(1);
   });
 
+  it("requires a Google key for an opted-in cover and preserves the choice on retry", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const requestBody = {
+      brandId,
+      brief: "Illustrate the new release",
+      channelIds: [channelId],
+      generateCover: true,
+    };
+    const denied = await agent.post("/api/runs").send(requestBody).expect(400);
+    expect(denied.body.code).toBe("cover_requires_google_key");
+    expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const { encryptJson, runDetailDtoSchema } = await import("@pubrick/shared");
+    const { db, pool } = createDb(url as string);
+    const orgId = await orgIdOfBrand(brandId);
+    await db.insert(schema.aiCredentials).values({
+      orgId,
+      provider: "google",
+      credentialsEncrypted: encryptJson(
+        { apiKey: "test-google-key" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    await pool.end();
+
+    const first = runDetailDtoSchema.parse(
+      (await agent.post("/api/runs").send(requestBody).expect(201)).body,
+    );
+    expect(first.input.generateCover).toBe(true);
+    const retried = runDetailDtoSchema.parse(
+      (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+    );
+    expect(retried.input.generateCover).toBe(true);
+
+    const budget = createDb(url as string);
+    await budget.db.insert(schema.usageLedger).values(
+      Array.from({ length: 10 }, () => ({
+        orgId,
+        step: "image_generate",
+        provider: "google" as const,
+        modelId: "gemini-3.1-flash-image",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      })),
+    );
+    await budget.pool.end();
+    const capped = await agent.post("/api/runs").send(requestBody).expect(409);
+    expect(capped.body.code).toBe("media_generation_limit");
+  });
+
   it("refuses a brand with no channels (400): a run with no channels produces an item with zero adaptations", async () => {
     const agent = await orgAgent();
     const emptyBrand = await agent.post("/api/brands").send({ name: "No channels" }).expect(201);

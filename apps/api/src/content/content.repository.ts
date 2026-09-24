@@ -11,6 +11,7 @@ import {
   allSentencesAi,
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
+  COVER_SUPPORTED_PLATFORMS,
   type ContentCreate,
   type ContentCursor,
   type ContentStatus,
@@ -3908,7 +3909,8 @@ export class ContentRepository {
       if (coveredItem?.id) {
         if (
           platforms.some(
-            (channel) => !["telegram", "vk", "max", "bluesky"].includes(channel.platform),
+            (channel) =>
+              !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
           ) ||
           manualReady.length
         ) {

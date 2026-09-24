@@ -677,9 +677,9 @@ describe.skipIf(!url)("media library e2e", () => {
       .where(eq(schema.brands.id, brand.body.id));
     expect(brandRows).toHaveLength(1);
     await direct.db.insert(schema.usageLedger).values(
-      Array.from({ length: 12 }, () => ({
+      Array.from({ length: 12 }, (_, index) => ({
         orgId: brandRows[0]?.orgId ?? "",
-        step: "image_generate",
+        step: index === 11 ? "cover" : "image_generate",
         provider: "google" as const,
         modelId: "gemini-3.1-flash-image",
         costSource: "unknown" as const,

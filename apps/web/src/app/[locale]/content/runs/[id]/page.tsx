@@ -121,7 +121,7 @@ function RunField({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * The generation receipt: five steps as a live checklist, the error when the
+ * The generation receipt: text steps and an optional cover as a live checklist, the error when the
  * run failed, and a "Draft ready" link when it worked.
  *
  * The link is a link, and this screen NEVER navigates on its own. Auto-forwarding
@@ -255,6 +255,24 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         );
       case "editor":
         return <StepLines lines={changeLines(runEditorChanges(run))} empty={t("changesEmpty")} />;
+      case "cover": {
+        const checkpoint = run.steps.cover;
+        if (checkpoint?.status !== "succeeded") return null;
+        const output = checkpoint.output;
+        const unavailable =
+          typeof output === "object" &&
+          output !== null &&
+          "result" in output &&
+          output.result === "unavailable";
+        const message = unavailable
+          ? "coverUnavailable"
+          : run.contentItemId
+            ? "coverAttached"
+            : isTerminalRunStatus(run.status)
+              ? "coverSavedNoDraft"
+              : "coverReady";
+        return <p className="mt-2 text-sm text-fg-secondary">{t(message)}</p>;
+      }
       // The other three steps produce the draft itself (or a per-channel copy
       // of it), and the draft belongs on the item screen where it can be
       // edited. A receipt is not a second, frozen copy of the post.

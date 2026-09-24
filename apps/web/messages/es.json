@@ -505,6 +505,10 @@
     "sourceUrlLabel": "URL de la fuente",
     "sourceUrlPlaceholder": "https://example.com/articulo (opcional)",
     "sourceHelp": "Pega el texto o carga un artículo público y confirma la vista previa. La generación usa el texto guardado y no vuelve a abrir el enlace.",
+    "generateCover": "Generar una imagen de portada para este borrador",
+    "generateCoverHint": "Normalmente usa una llamada adicional a Gemini facturada a tu clave de Google; una interrupción o reintento puede generar otra llamada facturable. La portada se adjunta al borrador para revisión. El coste puede ser desconocido.",
+    "generateCoverNeedsGoogle": "Añade una clave de Google AI en Ajustes para activar esta opción.",
+    "generateCoverUnsupported": "Las portadas solo están disponibles para canales de Telegram, VK, MAX y Bluesky.",
     "generate": "Generar",
     "noBrandSelected": "Selecciona una marca primero.",
     "briefOrMaterialRequired": "Escribe un brief, pega material, o ambas cosas.",
@@ -841,14 +845,20 @@
       "writer": "Redacción",
       "editor": "Edición",
       "factcheck": "Afirmaciones por verificar",
-      "adapter": "Adaptar a cada canal"
+      "adapter": "Adaptar a cada canal",
+      "cover": "Imagen de portada"
     },
+    "coverUnavailable": "No se recibió una portada utilizable. Si se crea el borrador, podrás añadir una imagen en el editor.",
+    "coverReady": "Imagen generada. Se adjuntará cuando se cree el borrador.",
+    "coverSavedNoDraft": "La imagen se guardó en la biblioteca de la marca, pero no se creó ningún borrador.",
+    "coverAttached": "Adjuntada al borrador para que la revises.",
     "stepState": {
       "done": "Hecho",
       "active": "En curso",
       "failed": "Fallido",
       "pending": "En espera",
-      "skipped": "No ejecutado"
+      "skipped": "No ejecutado",
+      "unavailable": "No disponible"
     },
     "stepProgress": "{done} de {total} canales",
     "claimsEmpty": "No se listó ninguna afirmación factual para este borrador.",
@@ -998,6 +1008,7 @@
     "media_video_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar el vídeo.",
     "media_generation_limit": "Se alcanzó el límite de generación de imágenes por hora. Inténtalo más tarde.",
     "media_generation_failed": "Gemini no devolvió una imagen válida. Prueba otra descripción.",
+    "cover_requires_google_key": "Añade una clave de Google AI en Ajustes antes de solicitar una portada.",
     "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos.",
     "publication_not_found": "Publicación no encontrada.",
     "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",

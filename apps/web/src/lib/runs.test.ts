@@ -80,6 +80,42 @@ describe("runStepStates", () => {
     expect(states.every((s) => s.state === "pending")).toBe(true);
   });
 
+  it("shows the optional cover outcome without calling a missing image done", () => {
+    const input = {
+      kind: "brief" as const,
+      text: "Brief",
+      channelIds: [CH_A],
+      generateCover: true,
+    };
+    expect(stateOf(makeRun({ input, status: "running", currentStep: "cover" }), "cover")).toBe(
+      "active",
+    );
+    expect(
+      stateOf(
+        makeRun({
+          input,
+          status: "succeeded",
+          steps: {
+            cover: { status: "succeeded", output: { mediaId: null, result: "unavailable" } },
+          },
+        }),
+        "cover",
+      ),
+    ).toBe("unavailable");
+    expect(
+      stateOf(
+        makeRun({
+          input,
+          status: "succeeded",
+          steps: {
+            cover: { status: "succeeded", output: { mediaId: "asset", result: "generated" } },
+          },
+        }),
+        "cover",
+      ),
+    ).toBe("done");
+  });
+
   it("marks checkpointed steps done and the current one active", () => {
     const run = makeRun({
       status: "running",

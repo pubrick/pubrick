@@ -218,6 +218,8 @@ export const runCreateSchema = z
   .object({
     brandId: z.string().uuid(),
     contentType: z.enum(CONTENT_TYPES).optional(),
+    /** One additional BYOK Gemini image call, only when explicitly requested. */
+    generateCover: z.boolean().optional(),
     /**
      * No longer `.min(1)`: a run asked for from pasted material has nothing to
      * put here, and the brief keeps its own meaning beside one — what to do
@@ -422,6 +424,8 @@ export const briefRunInputSchema = z
     kind: z.literal("brief"),
     /** Optional for runs created before content types were introduced. */
     contentType: z.enum(CONTENT_TYPES).optional(),
+    /** Optional so runs created before cover generation remain executable. */
+    generateCover: z.boolean().optional(),
     text: z.string().min(1),
     channelIds: z.array(z.string().uuid()).min(1),
   })
@@ -445,6 +449,7 @@ export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
 export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
   contentType: z.enum(CONTENT_TYPES).optional(),
+  generateCover: z.boolean().optional(),
   /**
    * What the person typed, if anything — instructions about the material, not a
    * second thing to work from.

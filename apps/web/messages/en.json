@@ -505,6 +505,10 @@
     "sourceUrlLabel": "Source URL",
     "sourceUrlPlaceholder": "https://example.com/article (optional)",
     "sourceHelp": "Paste text, or fetch a public article and confirm its preview. Generation uses the saved text and does not revisit the link.",
+    "generateCover": "Generate a cover image for this draft",
+    "generateCoverHint": "Usually uses one extra Gemini image call billed to your Google key; interruption or retry can make another billable call. The image is attached to the draft for review. Cost may be unknown.",
+    "generateCoverNeedsGoogle": "Add a Google AI key in Settings to enable this option.",
+    "generateCoverUnsupported": "Covers are available only for Telegram, VK, MAX, and Bluesky channels.",
     "generate": "Generate",
     "noBrandSelected": "Select a brand first.",
     "briefOrMaterialRequired": "Write a brief, paste some material, or both.",
@@ -841,14 +845,20 @@
       "writer": "Draft",
       "editor": "Edit",
       "factcheck": "Claims to verify",
-      "adapter": "Adapt for each channel"
+      "adapter": "Adapt for each channel",
+      "cover": "Cover image"
     },
+    "coverUnavailable": "No usable cover was returned. If the draft finishes, you can add an image in the editor.",
+    "coverReady": "Image generated. It will be attached when the draft is created.",
+    "coverSavedNoDraft": "Image generated and saved in the brand media library, but no draft was created.",
+    "coverAttached": "Attached to the draft for your review.",
     "stepState": {
       "done": "Done",
       "active": "In progress",
       "failed": "Failed",
       "pending": "Waiting",
-      "skipped": "Not run"
+      "skipped": "Not run",
+      "unavailable": "Unavailable"
     },
     "stepProgress": "{done} of {total} channels",
     "claimsEmpty": "No factual claims were listed for this draft.",
@@ -998,6 +1008,7 @@
     "media_video_pinned": "This post is already approved or published. Reject it before changing the video.",
     "media_generation_limit": "The hourly image generation limit is reached. Try again later.",
     "media_generation_failed": "Gemini did not return a usable image. Try another prompt.",
+    "cover_requires_google_key": "Add a Google AI key in Settings before requesting a cover.",
     "topic_suggestions_cooldown": "You can request more ideas in 30 minutes.",
     "publication_not_found": "Publication not found.",
     "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
