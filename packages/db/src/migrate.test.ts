@@ -306,6 +306,9 @@ const NON_ENUM_CHECKS = [
   "news_items_relevance_urgency_check",
   "news_items_relevance_error_code_check",
   "news_items_relevance_score_check",
+  // 0050 keeps the editor adjustment bounded independently of the model score.
+  // The worker repository e2e covers a nonzero write and the raw/rank split.
+  "news_items_relevance_feedback_delta_check",
   "news_items_relevance_consistency_check",
   "news_items_relevance_attempts_check",
   // The metric table is created after the pre-0009 seed. Analytics e2e proves
