@@ -63,6 +63,8 @@ Public RSS syndication is available for selected published posts; see
 [docs/public-rss.md](docs/public-rss.md). It does not confirm delivery to Dzen.
 Organizations can also opt in to [Telegram notifications](docs/notifications.md)
 for drafts awaiting review and delivery problems.
+[Outgoing webhooks](docs/webhooks.md) can send signed publication outcomes to
+your own HTTPS endpoint, with delivery history and explicit unknown outcomes.
 
 ## Why Pubrick
 

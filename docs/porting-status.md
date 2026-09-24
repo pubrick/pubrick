@@ -23,14 +23,21 @@ documents when they disagree.
 | Knowledge base / RAG | Brand notes, portable CSV import/export preserving paused state and literal tags, manual Gemini indexing plus opt-in bounded hourly vector backfill, embedding-model provenance, hybrid retrieval, selected-note links and validated source excerpts in run receipts | Independent claim verification and relevance evaluation |
 | Autopilot | Owner-controlled scheduled draft generation from approved topics, with per-brand quota and spend admission threshold | Richer planning and review signals |
 | Prompt management | Built-in role prompts plus versioned organization guidance, pinned to each generation run at first claim | Controlled prompt experiments |
-| Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
+| Admin and settings | Organization and BYOK controls, plus typed per-brand autopilot, metric collection, knowledge indexing and notification settings | Operator diagnostics and safe manual task triggers |
 | Notifications | Org-scoped Telegram bot and chat, encrypted at rest, opt-in draft alerts, delivery failure/unknown alerts, per-brand daily digest, Test action, durable at-most-once outbox | Richer event preferences and delivery history UI |
-| Public API | Owner/admin-managed hashed organization keys, one-time secret reveal, documented Bearer-only read endpoints for scoped content list/detail and tenant-safe pagination, OpenAPI 3.1 contract, optional read-only MCP stdio server | Outgoing webhooks and additional read scopes |
+| Public API and events | Owner/admin-managed hashed organization keys, one-time secret reveal, documented Bearer-only read endpoints for scoped content list/detail and tenant-safe pagination, OpenAPI 3.1 contract, optional read-only MCP stdio server; signed publication outcome webhooks with transactional outbox and delivery history | Additional read scopes and event types |
 | Additional reference utilities | Uploads, safe homepage link tagging and one-cover propagation across Telegram/VK/MAX/Bluesky | Multiple media attachments and format-specific reuse |
 
 News scores and AI topic suggestions remain advisory; an editor chooses and
 approves each topic before generation. The public RSS output is available for
 syndication, but it does not assert that Dzen imported a post.
+
+The reference exposed a generic `CF_*` override endpoint. Pubrick uses typed,
+validated brand controls for the live operations it covers: scheduled draft
+generation, daily quota and spend threshold, quiet hours, background VK metrics,
+knowledge indexing, and notifications. A raw flag editor would bypass those
+contracts. The reference's automatic publication switch conflicts with
+Pubrick's human approval gate and is not a planned direct port.
 
 The reference's Instagram, YouTube, RuTube, TenChat and T—Ж publishers were
 manual placeholders. Its video generator and Shorts flow were design notes,

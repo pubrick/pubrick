@@ -32,5 +32,6 @@ The detail response adds `body` to the list fields. It deliberately omits prompt
 Invalid, missing, revoked, or wrong-scope keys receive the same `401 Invalid API key` response. A key does not authorize the editor's `/api/content` routes.
 
 The current v1 surface has no write endpoints. The [read-only MCP server](mcp.md)
-uses these same scoped Bearer endpoints. Outgoing webhooks are documented
-separately when enabled.
+uses these same scoped Bearer endpoints. [Outgoing webhooks](webhooks.md) use
+separate session-authenticated management routes and do not grant write access
+to a public API key.
