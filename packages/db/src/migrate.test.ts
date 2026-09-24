@@ -2589,4 +2589,83 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("backfills existing member-brand access and rejects cross-organization grants", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0063_brand_access_grants");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let firstBrand!: string;
+      let secondBrand!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('grant_a', 'A', 'grant-a'), ('grant_b', 'B', 'grant-b')",
+        );
+        await pool.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('grant_user_a', 'A', 'a@grant.test'), ('grant_user_b', 'B', 'b@grant.test'), ('grant_manager_a', 'Manager', 'manager@grant.test')",
+        );
+        await pool.query(
+          "INSERT INTO member (id, organization_id, user_id, role) VALUES ('grant_member_a', 'grant_a', 'grant_user_a', 'member'), ('grant_member_b', 'grant_b', 'grant_user_b', 'member'), ('grant_manager_a', 'grant_a', 'grant_manager_a', 'admin')",
+        );
+        firstBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('grant_a', 'A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        secondBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('grant_b', 'B brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const grants = await after.query<{ org_id: string; brand_id: string; member_id: string }>(
+          "SELECT org_id, brand_id, member_id FROM brand_access ORDER BY org_id",
+        );
+        expect(grants.rows).toEqual([
+          { org_id: "grant_a", brand_id: firstBrand, member_id: "grant_member_a" },
+          { org_id: "grant_b", brand_id: secondBrand, member_id: "grant_member_b" },
+        ]);
+        await after.query("UPDATE member SET role = 'admin' WHERE id = 'grant_member_a'");
+        await after.query("UPDATE member SET role = 'member' WHERE id = 'grant_member_a'");
+        expect(
+          (await after.query("SELECT 1 FROM brand_access WHERE member_id = 'grant_member_a'"))
+            .rowCount,
+        ).toBe(0);
+        await after.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('grant_new_user', 'New', 'new@grant.test')",
+        );
+        await after.query(
+          "INSERT INTO member (id, organization_id, user_id) VALUES ('grant_new_member', 'grant_a', 'grant_new_user')",
+        );
+        expect(
+          (await after.query("SELECT 1 FROM brand_access WHERE member_id = 'grant_new_member'"))
+            .rowCount,
+        ).toBe(0);
+        await expect(
+          after.query(
+            "INSERT INTO brand_access (org_id, brand_id, member_id) VALUES ('grant_a', $1, 'grant_member_b')",
+            [firstBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          after.query(
+            "INSERT INTO brand_access (org_id, brand_id, member_id) VALUES ('grant_a', $1, 'grant_new_member')",
+            [secondBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
 });

@@ -20,6 +20,7 @@ import {
   aiProviderSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { AiCredentialsRepository } from "./ai-credentials.repository";
@@ -50,6 +51,7 @@ export class ParseAiProviderPipe implements PipeTransform<string, AiProviderId> 
 
 @Controller("ai-credentials")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "org", roles: "manager" })
 export class AiCredentialsController {
   constructor(private readonly credentials: AiCredentialsRepository) {}
 
@@ -84,9 +86,9 @@ export class AiCredentialsController {
    * to read, not a server error. The same rule the channel verify endpoint
    * follows.
    *
-   * THE ONLY ROUTE IN THIS API THAT SPENDS MONEY ON DEMAND, and the only guard
-   * above it is `ActiveOrgGuard` — membership, no role. The bound on what a
-   * member can spend through it therefore lives in
+   * THE ONLY ROUTE IN THIS API THAT SPENDS MONEY ON DEMAND. Owner/admin access
+   * is required by the class scope, and the bound on what an authorized user
+   * can spend through it lives in
    * `AiCredentialsRepository.test`, which refuses with `too_many_tests` once
    * the org's `MAX_TEST_CALLS_PER_HOUR` billed test calls are gone. It is a
    * verdict in the 200 body and not a 429 for the same reason every other arm

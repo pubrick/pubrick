@@ -227,7 +227,7 @@ export class RunsRepository {
    * buried under successful chatter the failure would be invisible everywhere.
    * Newest first within that, so a fresh failure outranks a stale one.
    */
-  async list(orgId: string, state?: string) {
+  async list(orgId: string, state?: string, visibleBrandIds: string[] | null = null) {
     if (state !== undefined && !(RUN_LIST_STATES as readonly string[]).includes(state)) {
       throw new BadRequestException(
         `Unknown state: ${state}. Expected one of: ${RUN_LIST_STATES.join(", ")}`,
@@ -250,7 +250,15 @@ export class RunsRepository {
     return db
       .select(RUN_LIST_COLUMNS)
       .from(schema.pipelineRuns)
-      .where(and(eq(schema.pipelineRuns.orgId, orgId), state === "open" ? open : undefined))
+      .where(
+        and(
+          eq(schema.pipelineRuns.orgId, orgId),
+          state === "open" ? open : undefined,
+          visibleBrandIds === null
+            ? undefined
+            : inArray(schema.pipelineRuns.brandId, visibleBrandIds),
+        ),
+      )
       .orderBy(
         desc(sql`${schema.pipelineRuns.status} = 'failed'`),
         desc(schema.pipelineRuns.createdAt),

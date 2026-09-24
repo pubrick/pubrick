@@ -46,8 +46,16 @@ export class BrandsRepository {
   private readonly logger = new Logger(BrandsRepository.name);
   constructor(private readonly queue: QueueService) {}
 
-  list(orgId: string) {
-    return db.select(PUBLIC_COLUMNS).from(schema.brands).where(eq(schema.brands.orgId, orgId));
+  list(orgId: string, visibleBrandIds: string[] | null = null) {
+    return db
+      .select(PUBLIC_COLUMNS)
+      .from(schema.brands)
+      .where(
+        and(
+          eq(schema.brands.orgId, orgId),
+          visibleBrandIds === null ? undefined : inArray(schema.brands.id, visibleBrandIds),
+        ),
+      );
   }
 
   async get(orgId: string, id: string) {

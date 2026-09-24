@@ -172,6 +172,13 @@ describe.skipIf(!url)("autopilot API", () => {
       .put(configUrl)
       .send({ ...payload, enabled: false, autoSuggestTopics: false })
       .expect(403);
+    await owner.agent.get(configUrl).expect(404);
+    await db
+      .update(schema.member)
+      .set({ role: "owner" })
+      .where(
+        and(eq(schema.member.organizationId, owner.orgId), eq(schema.member.userId, owner.userId)),
+      );
     const afterDenied = (await owner.agent.get(configUrl).expect(200)).body;
     expect(afterDenied.enabled).toBe(false);
     expect(afterDenied.autoSuggestTopics).toBe(true);

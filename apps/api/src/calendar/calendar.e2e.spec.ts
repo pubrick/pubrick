@@ -387,9 +387,7 @@ describe.skipIf(!url)("calendar API", () => {
       (await owner.get(`/api/calendar/slots?brandId=${otherBrand.body.id}&${range}`).expect(200))
         .body,
     ).toEqual([]);
-    expect(
-      (await outsider.get(`/api/calendar/slots?brandId=${brandId}&${range}`).expect(200)).body,
-    ).toEqual([]);
+    await outsider.get(`/api/calendar/slots?brandId=${brandId}&${range}`).expect(404);
     await outsider
       .patch(`/api/calendar/slots/${slotId}?brandId=${brandId}`)
       .send({ brief: "Stolen" })

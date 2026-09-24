@@ -25,6 +25,7 @@ import {
   telegramLoginPasswordSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { PrivateSourceOwnerGuard } from "./private-source-owner.guard";
@@ -33,6 +34,7 @@ import { TelegramLoginRepository } from "./telegram-login.repository";
 
 @Controller("sources")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class SourcesController {
   constructor(
     private readonly sources: SourcesRepository,
@@ -40,12 +42,14 @@ export class SourcesController {
   ) {}
 
   @Get("telegram-login")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   loginStatus(@OrgId() orgId: string, @Req() request: { privateSourceActorId: string }) {
     return this.telegramLogin.status(orgId, request.privateSourceActorId);
   }
 
   @Post("telegram-login/begin")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   beginLogin(
     @OrgId() orgId: string,
@@ -56,6 +60,7 @@ export class SourcesController {
   }
 
   @Post("telegram-login/code")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   submitLoginCode(
     @OrgId() orgId: string,
@@ -67,6 +72,7 @@ export class SourcesController {
   }
 
   @Post("telegram-login/password")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   submitLoginPassword(
     @OrgId() orgId: string,
@@ -78,12 +84,14 @@ export class SourcesController {
   }
 
   @Delete("telegram-connection")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   disconnectTelegram(@OrgId() orgId: string, @Req() request: { privateSourceActorId: string }) {
     return this.telegramLogin.disconnect(orgId, request.privateSourceActorId);
   }
 
   @Get("telegram-connection")
+  @BrandScope({ kind: "org", roles: "manager" })
   telegramConnection(@OrgId() orgId: string) {
     return this.sources.telegramConnection(orgId);
   }
@@ -94,6 +102,7 @@ export class SourcesController {
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(newsSourceCreateSchema)) body: NewsSourceCreate,
@@ -102,6 +111,7 @@ export class SourcesController {
   }
 
   @Post("telegram-private")
+  @BrandScope({ kind: "org", roles: "member" })
   @UseGuards(PrivateSourceOwnerGuard)
   createPrivateTelegram(
     @OrgId() orgId: string,

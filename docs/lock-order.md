@@ -53,6 +53,16 @@ updates touch only the attempt row; no transaction holds a database lock during
 an MTProto network call. A disconnect invalidates a pending verification before
 deleting the account, so a late Telegram response cannot reconnect it.
 
+Brand access replacement has its own short chain: `brands` → `member` →
+`brand_access`. Replacing one brand's grants locks its brand row `FOR UPDATE`,
+then the selected member rows by ID `FOR KEY SHARE`, then deletes and inserts
+grant rows. A member role update holds that member row first and its trigger
+deletes the member's grants. The trigger does not ask for a brand row, so it
+cannot close a cycle with replacement waiting on that member. Brand deletion
+cascades into grants after holding the brand; it never asks for a member row.
+Keep future grant writers on this order, and do not add a brand lookup or lock
+inside the role-change trigger.
+
 Channel re-adaptation stages its proposal after the model returns. The stage
 transaction locks its adaptation, then its item, then replaces the proposal.
 Accept takes the same two parent locks before reading the proposal and writing

@@ -1,11 +1,13 @@
 import { Controller, Delete, Get, Param, ParseUUIDPipe, Post, UseGuards } from "@nestjs/common";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { FeedsRepository } from "./feeds.repository";
 
 /** These routes require an active organization and never return token secrets other than its URL. */
 @Controller("brands/:brandId/feed")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "param" })
 export class ManagedFeedsController {
   constructor(private readonly feeds: FeedsRepository) {}
 

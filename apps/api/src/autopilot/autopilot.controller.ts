@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { type AutopilotConfig, autopilotConfigSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { AutopilotRepository } from "./autopilot.repository";
@@ -18,6 +19,7 @@ import { AutopilotOwnerGuard } from "./autopilot-owner.guard";
 
 @Controller("brands/:brandId/autopilot")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "param" })
 export class AutopilotController {
   constructor(private readonly autopilot: AutopilotRepository) {}
 
@@ -27,6 +29,7 @@ export class AutopilotController {
   }
 
   @Put()
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
   @UseGuards(AutopilotOwnerGuard)
   put(
     @OrgId() orgId: string,
@@ -42,6 +45,7 @@ export class AutopilotController {
   }
 
   @Post("plan-topics")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
   @HttpCode(202)
   @UseGuards(AutopilotOwnerGuard)
   planTopics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {

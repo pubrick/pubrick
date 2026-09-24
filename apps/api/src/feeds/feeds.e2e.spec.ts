@@ -58,7 +58,7 @@ describe.skipIf(!url)("public syndication feed", () => {
     await stranger.agent.post(path).expect(404);
 
     const enabled = await owner.agent.post(path).expect(201);
-    expect((await stranger.agent.get(path).expect(200)).body).toEqual(disabled.body);
+    await stranger.agent.get(path).expect(404);
     const feedUrl = new URL(enabled.body.url as string);
     expect(feedUrl.pathname).toMatch(new RegExp(`^/api/feeds/${owner.orgId}/[^/]+/rss$`));
     const publicPath = feedUrl.pathname;

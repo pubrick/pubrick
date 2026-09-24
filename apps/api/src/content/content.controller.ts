@@ -40,14 +40,17 @@ import {
   refineRequestSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
+import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "resource", resource: "content" })
 export class ContentController {
   constructor(
     private readonly content: ContentRepository,
@@ -77,19 +80,22 @@ export class ContentController {
    * that always answers empty.
    */
   @Get()
+  @BrandScope({ kind: "org-list" })
   async list(
     @OrgId() orgId: string,
+    @VisibleBrandIds() visibleBrandIds: string[] | null,
     @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
     @Query("status") status?: string,
     @Query("limit") limit?: string,
     @Query("cursor") cursor?: string,
   ) {
-    const page = await this.content.list(orgId, { status, limit, cursor });
+    const page = await this.content.list(orgId, { status, limit, cursor }, visibleBrandIds);
     if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
     return page.rows;
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(contentCreateSchema)) body: ContentCreate,
@@ -345,6 +351,7 @@ export class ContentController {
    * platform accepted a post.
    */
   @Post(":id/adaptations/:adaptationId/delivery")
+  @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
   @HttpCode(200)
   assertDelivery(
     @OrgId() orgId: string,

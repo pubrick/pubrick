@@ -1162,7 +1162,11 @@ export class ContentRepository {
    * `contentListItemDtoSchema` (`@pubrick/shared`) is the wire shape, asserted
    * in the api's own e2e.
    */
-  async list(orgId: string, options: ContentListOptions = {}) {
+  async list(
+    orgId: string,
+    options: ContentListOptions = {},
+    visibleBrandIds: string[] | null = null,
+  ) {
     const { status, cursor: rawCursor } = options;
     // CODED, like every other refusal on this route. A bare
     // `BadRequestException` carries no `code`, and `errorMessage` on the web
@@ -1188,6 +1192,7 @@ export class ContentRepository {
     }
     const where = and(
       eq(schema.contentItems.orgId, orgId),
+      visibleBrandIds === null ? undefined : inArray(schema.contentItems.brandId, visibleBrandIds),
       // Safe: membership just verified above, so the widened `string` really is one
       // of the literal statuses drizzle's column type expects.
       status

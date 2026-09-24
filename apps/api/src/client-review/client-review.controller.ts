@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { type ClientReviewCreate, clientReviewCreateSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
@@ -18,6 +19,7 @@ import { ClientReviewRepository } from "./client-review.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "resource", resource: "content" })
 export class ClientReviewController {
   constructor(private readonly reviews: ClientReviewRepository) {}
 

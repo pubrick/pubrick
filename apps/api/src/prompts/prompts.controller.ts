@@ -6,12 +6,14 @@ import {
   promptRoleSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { PromptsRepository } from "./prompts.repository";
 
 @Controller("prompts")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "org", roles: "manager" })
 export class PromptsController {
   constructor(private readonly prompts: PromptsRepository) {}
 

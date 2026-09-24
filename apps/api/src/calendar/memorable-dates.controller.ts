@@ -17,12 +17,14 @@ import {
   memorableDateUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { MemorableDatesRepository } from "./memorable-dates.repository";
 
 @Controller("calendar/memorable-dates")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class MemorableDatesController {
   constructor(private readonly dates: MemorableDatesRepository) {}
 
@@ -32,6 +34,7 @@ export class MemorableDatesController {
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(memorableDateCreateSchema)) body: MemorableDateCreate,

@@ -4,6 +4,7 @@
 export * from "./api-keys.js";
 export * from "./auth.js";
 export * from "./autopilot.js";
+export * from "./brand-access.js";
 export * from "./calendar.js";
 export * from "./client-review.js";
 export * from "./content.js";

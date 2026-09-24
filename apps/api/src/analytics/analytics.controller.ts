@@ -10,12 +10,14 @@ import {
 } from "@nestjs/common";
 import { analyticsDaysSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { AnalyticsRepository } from "./analytics.repository";
 
 @Controller("analytics")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "param" })
 export class AnalyticsController {
   constructor(private readonly analytics: AnalyticsRepository) {}
 

@@ -9,7 +9,7 @@ documents when they disagree.
 | Reference area | Pubrick today | Next meaningful gap |
 |---|---|---|
 | Brands | Guided manual setup with name, source-targeting description, voice, audience and content language; profile editing and next-step links | Optional website/social import with reviewed AI suggestions |
-| Organization roles | Workspace owner/admin/member checks, with owner/admin control of external review links | Per-brand member access and product-specific author/editor permissions |
+| Organization roles | Workspace owner/admin/member checks; explicit per-brand access for regular members with owner/admin management and filtered brand resources; owner/admin control of external review links | Product-specific author/editor permissions |
 | Channels | Telegram, VK, MAX, Bluesky and Mastodon delivery; VC.ru manual publication workflow | Verify the legacy VC.ru API before offering opt-in native delivery; then channel-specific options |
 | News monitoring | Brand-scoped RSS, Atom, RDF, JSON Feed, public Telegram channels and joined private Telegram broadcast channels with owner/admin account sign-in in Settings; polling, story list, advisory AI relevance scoring, metered semantic editor-feedback ranking with lexical fallback, and draft start | Discussion groups and richer editorial feedback |
 | Topics bank | Brand-scoped human-reviewed ideas, article import, AI topic suggestions from bank and scored news, approval, edit/archive, target date and priority, direct generation and approved-topic calendar links with reviewed bulk planning | Richer topic performance feedback |

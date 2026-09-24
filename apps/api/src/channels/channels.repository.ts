@@ -12,7 +12,7 @@ import {
   rewrapJson,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
@@ -57,10 +57,12 @@ export class ChannelsRepository {
 
   constructor(private readonly queue: QueueService) {}
 
-  list(orgId: string, brandId?: string) {
-    const where = brandId
-      ? and(eq(schema.channels.orgId, orgId), eq(schema.channels.brandId, brandId))
-      : eq(schema.channels.orgId, orgId);
+  list(orgId: string, brandId?: string, visibleBrandIds: string[] | null = null) {
+    const where = and(
+      eq(schema.channels.orgId, orgId),
+      brandId ? eq(schema.channels.brandId, brandId) : undefined,
+      visibleBrandIds === null ? undefined : inArray(schema.channels.brandId, visibleBrandIds),
+    );
     return db.select(PUBLIC_COLUMNS).from(schema.channels).where(where);
   }
 
