@@ -263,6 +263,8 @@ const NON_ENUM_CHECKS = [
   // Vector provenance must accompany every stored embedding. The knowledge
   // E2E suite covers clearing and writing the metadata with the vector.
   "knowledge_entries_embedding_metadata_check",
+  // News feedback similarities use the same 768-dimension model provenance gate.
+  "news_items_embedding_metadata_check",
   // Notification tables arrive after the historical seed; worker outbox tests
   // exercise their values, and schema-invariants checks the enum expressions.
   "notification_events_event_check",
@@ -2255,6 +2257,90 @@ describe.skipIf(!url)("runMigrations", () => {
           [brandId],
         );
         expect(inserted.rows).toEqual([{ enabled: false, last_attempt_at: null }]);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds nullable news vectors to existing stories and enforces their provenance", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0056_free_phantom_reporter");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let itemId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('news_vector_org', 'Test', 'news-vector-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('news_vector_org', 'Brand') RETURNING id",
+        );
+        assert(brand.rows[0]);
+        const source = await pool.query<{ id: string }>(
+          "INSERT INTO news_sources (org_id, brand_id, name, url) VALUES ('news_vector_org', $1, 'Feed', 'https://example.com/feed') RETURNING id",
+          [brand.rows[0].id],
+        );
+        assert(source.rows[0]);
+        const item = await pool.query<{ id: string }>(
+          "INSERT INTO news_items (org_id, brand_id, source_id, title, url) VALUES ('news_vector_org', $1, $2, 'Existing story', 'https://example.com/story') RETURNING id",
+          [brand.rows[0].id, source.rows[0].id],
+        );
+        assert(item.rows[0]);
+        itemId = item.rows[0].id;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const existing = await after.query(
+          "SELECT title, embedding, embedding_model, embedding_dimensions FROM news_items WHERE id = $1",
+          [itemId],
+        );
+        expect(existing.rows).toEqual([
+          {
+            title: "Existing story",
+            embedding: null,
+            embedding_model: null,
+            embedding_dimensions: null,
+          },
+        ]);
+        const constraint = await after.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname = 'news_items_embedding_metadata_check'",
+        );
+        expect(constraint.rows).toEqual([{ convalidated: false }]);
+        expect(
+          await refusal(
+            after,
+            "UPDATE news_items SET embedding_model = 'gemini-embedding-001' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const vector = `[${Array(768).fill(0).join(",")}]`;
+        expect(
+          await refusal(
+            after,
+            "UPDATE news_items SET embedding = $1::vector, embedding_model = 'gemini-embedding-001', embedding_dimensions = NULL WHERE id = $2",
+            [vector, itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE news_items SET embedding = $1::vector, embedding_model = 'gemini-embedding-001', embedding_dimensions = 767 WHERE id = $2",
+            [vector, itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await after.query(
+          "UPDATE news_items SET embedding = $1::vector, embedding_model = 'gemini-embedding-001', embedding_dimensions = 768 WHERE id = $2",
+          [vector, itemId],
+        );
       } finally {
         await after.end();
       }

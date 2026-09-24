@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  vector,
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
@@ -82,6 +83,9 @@ export const newsItems = pgTable(
     commentsCheckedAt: timestamp("comments_checked_at", { withTimezone: true }),
     commentsErrorCode: text("comments_error_code"),
     editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
+    embedding: vector("embedding", { dimensions: 768 }),
+    embeddingModel: text("embedding_model"),
+    embeddingDimensions: integer("embedding_dimensions"),
     relevanceStatus: text("relevance_status", { enum: ["unscored", "scored", "failed"] })
       .notNull()
       .default("unscored"),
@@ -101,6 +105,10 @@ export const newsItems = pgTable(
     uniqueIndex("news_items_org_brand_url_idx").on(t.orgId, t.brandId, t.url),
     index("news_items_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     index("news_items_source_idx").on(t.sourceId),
+    check(
+      "news_items_embedding_metadata_check",
+      sql`(${t.embedding} is null and ${t.embeddingModel} is null and ${t.embeddingDimensions} is null) or (${t.embedding} is not null and ${t.embeddingModel} is not null and ${t.embeddingDimensions} is not null and ${t.embeddingDimensions} = 768)`,
+    ),
     enumCheck("news_items_comments_status_check", t.commentsStatus, NEWS_COMMENT_STATUSES),
     enumCheck("news_items_editor_signal_check", t.editorSignal, NEWS_FEEDBACK_SIGNALS),
     enumCheck("news_items_relevance_status_check", t.relevanceStatus, [
