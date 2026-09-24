@@ -50,7 +50,8 @@ on every enum-bounded column is asserted in both directions by
 user, session, account, verification, organization, member, invitation),
 `content.ts` (brands, channels), `knowledge.ts` (brand notes), `content-items.ts` (content_items,
 adaptations, publications), `generation.ts` (ai_credentials, pipeline_runs,
-usage_ledger, content_versions), `refine.ts` (refine_proposals).
+usage_ledger, content_versions), `refine.ts` (refine_proposals),
+`draft-revision.ts` (one staged whole-body suggestion per post).
 
 **`packages/ai`** — every model call in the product. `defineStep` is the only
 way to make a structured text step and is what keeps the untrusted-text boundary, the schema sent

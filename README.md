@@ -31,7 +31,9 @@ Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon 
 installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
 uses a manual copy and confirmation workflow. External clients can review a
 draft through an [expiring approval link](docs/client-review.md), while the team
-keeps [editorial notes](docs/editorial-notes.md) on saved versions. AI
+keeps [editorial notes](docs/editorial-notes.md) on saved versions. Editors can
+request a [metered whole-draft rewrite](docs/editorial-notes.md#whole-draft-ai-revision), compare
+it with the saved text, and explicitly accept or discard it. AI
 generation works too, with
 **your own** Gemini or OpenRouter key (there is no hosted key): start from a
 brief or schedule a draft in the [brand calendar](docs/calendar.md). Five roles —

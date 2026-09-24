@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
@@ -16,6 +17,8 @@ import {
   type ContentUpdate,
   type ContentVersionRestore,
   type DeliveryOutcome,
+  type DraftRevisionProposal,
+  type DraftRevisionRequest,
   decodeContentCursor,
   encodeContentCursor,
   isMalformedStoredAiCredential,
@@ -44,6 +47,8 @@ import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { DraftRevisionCaller } from "./draft-revision.caller";
+import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
@@ -323,6 +328,14 @@ const PROPOSAL_COLUMNS = {
   start: schema.refineProposals.startOffset,
   end: schema.refineProposals.endOffset,
   selectedText: schema.refineProposals.selectedText,
+};
+
+const DRAFT_REVISION_COLUMNS = {
+  id: schema.draftRevisionProposals.id,
+  sourceBody: schema.draftRevisionProposals.sourceBody,
+  instruction: schema.draftRevisionProposals.instruction,
+  proposal: schema.draftRevisionProposals.proposal,
+  reason: schema.draftRevisionProposals.reason,
 };
 
 const ADAPTATION_PROPOSAL_COLUMNS = {
@@ -998,6 +1011,7 @@ export class ContentRepository {
     /** Every network line of a refine, and nothing else — see `RefineCaller`. */
     private readonly refiner: RefineCaller,
     private readonly readapter: ReadaptCaller,
+    private readonly draftReviser: DraftRevisionCaller,
   ) {}
 
   /**
@@ -1345,22 +1359,30 @@ export class ContentRepository {
     // Two independent reads of the same item, issued together: this method is
     // the response of every mutation on the resource as well as of the GET, so
     // it pays for its round trips more often than any other read here.
-    const [adaptations, aiVersions, run, refineProposal, adaptationProposals, cover] =
-      await Promise.all([
-        this.adaptationsFor(orgId, item.id),
-        this.aiVersionRows(orgId, item.id),
-        this.runFor(orgId, item.id),
-        this.stagedProposal(orgId, item.id),
-        this.stagedAdaptationProposals(orgId, item.id),
-        db
-          .select({
-            coverMediaId: schema.contentItems.coverMediaId,
-            linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
-          })
-          .from(schema.contentItems)
-          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
-          .limit(1),
-      ]);
+    const [
+      adaptations,
+      aiVersions,
+      run,
+      refineProposal,
+      draftRevisionProposal,
+      adaptationProposals,
+      cover,
+    ] = await Promise.all([
+      this.adaptationsFor(orgId, item.id),
+      this.aiVersionRows(orgId, item.id),
+      this.runFor(orgId, item.id),
+      this.stagedProposal(orgId, item.id),
+      this.stagedDraftRevision(orgId, item.id),
+      this.stagedAdaptationProposals(orgId, item.id),
+      db
+        .select({
+          coverMediaId: schema.contentItems.coverMediaId,
+          linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1),
+    ]);
     /**
      * The provenance lens's reference text. Returned rather than a
      * server-computed mask because the browser would have to split the
@@ -1445,6 +1467,7 @@ export class ContentRepository {
        * the same argument that keeps `aiVersionBodies` off the list.
        */
       refineProposal,
+      draftRevisionProposal,
       adaptationProposals,
       aiVersionBodies,
     };
@@ -1654,6 +1677,23 @@ export class ContentRepository {
     return rows[0] ?? null;
   }
 
+  private async stagedDraftRevision(
+    orgId: string,
+    contentItemId: string,
+  ): Promise<DraftRevisionProposal | null> {
+    const [proposal] = await db
+      .select(DRAFT_REVISION_COLUMNS)
+      .from(schema.draftRevisionProposals)
+      .where(
+        and(
+          eq(schema.draftRevisionProposals.orgId, orgId),
+          eq(schema.draftRevisionProposals.contentItemId, contentItemId),
+        ),
+      )
+      .limit(1);
+    return proposal ?? null;
+  }
+
   private async stagedAdaptationProposals(
     orgId: string,
     contentItemId: string,
@@ -1718,7 +1758,11 @@ export class ContentRepository {
    * time the write lands — and a version row written against a body some other
    * transaction had already replaced would record an edit that never happened.
    */
-  private async requireEditableItem(tx: Tx, orgId: string, id: string): Promise<{ body: string }> {
+  private async requireEditableItem(
+    tx: Tx,
+    orgId: string,
+    id: string,
+  ): Promise<{ body: string; status: ContentStatus }> {
     const rows = await tx
       .select({ status: schema.contentItems.status, body: schema.contentItems.body })
       .from(schema.contentItems)
@@ -1729,7 +1773,7 @@ export class ContentRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const pinned = pinnedItemRefusal(item.status);
     if (pinned) throw pinned;
-    return { body: item.body };
+    return { body: item.body, status: item.status };
   }
 
   /**
@@ -1963,6 +2007,179 @@ export class ContentRepository {
     });
   }
 
+  /** Spend one bounded editor call, then stage a whole-body rewrite for explicit acceptance. */
+  async reviseDraft(orgId: string, id: string, userId: string, request: DraftRevisionRequest) {
+    const item = await this.refinableItem(orgId, id);
+    if (item.status === "partially_published") {
+      throw conflict(
+        "content_partially_published",
+        "A post already live on a channel cannot be rewritten as a draft",
+      );
+    }
+    const sourceBody = normalizeNewlines(item.body);
+    if (sourceBody !== request.expectedBody) {
+      throw conflict("draft_revision_stale", "This draft changed; reload before revising it");
+    }
+    await this.requireAiDraft(orgId, id, "draft_revision");
+    let instruction = request.instruction;
+    if (request.noteId) {
+      const [note] = await db
+        .select({ note: schema.editorialNotes.note, bodyHash: schema.editorialNotes.bodyHash })
+        .from(schema.editorialNotes)
+        .where(
+          and(
+            eq(schema.editorialNotes.orgId, orgId),
+            eq(schema.editorialNotes.contentItemId, id),
+            eq(schema.editorialNotes.id, request.noteId),
+          ),
+        )
+        .limit(1);
+      if (!note) throw notFound("draft_revision_note_not_found", "Editorial note not found");
+      if (note.bodyHash !== createHash("sha256").update(item.body).digest("hex")) {
+        throw conflict("draft_revision_stale", "That note belongs to an earlier saved draft");
+      }
+      instruction = note.note;
+    }
+    if (!instruction) throw new Error("Draft revision instruction was not resolved");
+    if (await this.overEditorAiBudget(orgId)) {
+      throw conflict(
+        "draft_revision_limit_reached",
+        "This organization's editor AI allowance is spent",
+      );
+    }
+    const credential = await this.refineCredential(orgId, "draft_revision");
+    const outcome = await this.draftReviser.run({
+      credential,
+      brand: await this.brandFor(orgId, item.brandId),
+      body: sourceBody,
+      instruction,
+    });
+    await this.recordEditorUsage(orgId, id, outcome.usage);
+    if (!outcome.ok) {
+      throw conflict(
+        outcome.failure === "timed_out" ? "draft_revision_timed_out" : "draft_revision_failed",
+        "The model could not revise this draft; nothing was changed",
+      );
+    }
+    const proposal = normalizeNewlines(outcome.text);
+    return db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!existing) throw notFound("content_not_found", "Content item not found");
+      await tx
+        .delete(schema.draftRevisionProposals)
+        .where(eq(schema.draftRevisionProposals.contentItemId, id));
+      const [staged] = await tx
+        .insert(schema.draftRevisionProposals)
+        .values({
+          orgId,
+          contentItemId: id,
+          sourceBody,
+          instruction,
+          proposal,
+          reason: outcome.reason,
+          createdBy: userId,
+        })
+        .returning(DRAFT_REVISION_COLUMNS);
+      if (!staged) throw new Error("Draft revision proposal was not staged");
+      return staged;
+    });
+  }
+
+  async acceptDraftRevision(orgId: string, id: string, proposalId: string) {
+    await db.transaction(async (tx) => {
+      const item = await this.requireEditableItem(tx, orgId, id);
+      if (item.status === "partially_published") {
+        throw conflict(
+          "content_partially_published",
+          "A post already live on a channel cannot be rewritten as a draft",
+        );
+      }
+      const [proposal] = await tx
+        .select(DRAFT_REVISION_COLUMNS)
+        .from(schema.draftRevisionProposals)
+        .where(
+          and(
+            eq(schema.draftRevisionProposals.orgId, orgId),
+            eq(schema.draftRevisionProposals.contentItemId, id),
+            eq(schema.draftRevisionProposals.id, proposalId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!proposal)
+        throw notFound("draft_revision_proposal_not_found", "That rewrite is no longer staged");
+      if (normalizeNewlines(item.body) !== proposal.sourceBody) {
+        throw conflict(
+          "draft_revision_stale",
+          "The saved draft changed; discard this rewrite and try again",
+        );
+      }
+      const aiRows = await tx
+        .select({ body: schema.contentVersions.body })
+        .from(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.orgId, orgId),
+            eq(schema.contentVersions.contentItemId, id),
+            isNull(schema.contentVersions.adaptationId),
+            eq(schema.contentVersions.origin, "ai"),
+          ),
+        );
+      const plan = planRefineAccept({
+        body: proposal.sourceBody,
+        start: 0,
+        end: proposal.sourceBody.length,
+        proposal: proposal.proposal,
+        aiRows,
+      });
+      if (!plan.ok) {
+        const refusal = REFINE_PLAN_REFUSAL[plan.reason];
+        throw conflict(refusal.code, refusal.message);
+      }
+      if (!("unchanged" in plan)) {
+        await tx
+          .update(schema.contentItems)
+          .set({ body: plan.mergedBody, status: "draft" })
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+        await tx.insert(schema.contentVersions).values({
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          body: plan.fragmentBody,
+          origin: "ai",
+          scope: "fragment",
+          unitDelta: plan.unitDelta,
+          createdBy: null,
+        });
+        await tx.delete(schema.refineProposals).where(eq(schema.refineProposals.contentItemId, id));
+      }
+      await tx
+        .delete(schema.draftRevisionProposals)
+        .where(eq(schema.draftRevisionProposals.id, proposal.id));
+    });
+    return this.get(orgId, id);
+  }
+
+  async discardDraftRevision(orgId: string, id: string, proposalId: string): Promise<void> {
+    const deleted = await db
+      .delete(schema.draftRevisionProposals)
+      .where(
+        and(
+          eq(schema.draftRevisionProposals.orgId, orgId),
+          eq(schema.draftRevisionProposals.contentItemId, id),
+          eq(schema.draftRevisionProposals.id, proposalId),
+        ),
+      )
+      .returning({ id: schema.draftRevisionProposals.id });
+    if (deleted.length === 0)
+      throw notFound("draft_revision_proposal_not_found", "That rewrite is no longer staged");
+  }
+
   /**
    * The item a refine is about — read WITHOUT a lock, and refused on exactly
    * the same predicate `requireEditableItem` refuses on.
@@ -1980,7 +2197,7 @@ export class ContentRepository {
   private async refinableItem(
     orgId: string,
     id: string,
-  ): Promise<{ body: string; brandId: string }> {
+  ): Promise<{ body: string; brandId: string; status: ContentStatus }> {
     const rows = await db
       .select({
         status: schema.contentItems.status,
@@ -1994,7 +2211,7 @@ export class ContentRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const pinned = pinnedItemRefusal(item.status);
     if (pinned) throw pinned;
-    return { body: item.body, brandId: item.brandId };
+    return { body: item.body, brandId: item.brandId, status: item.status };
   }
 
   /**
@@ -2019,7 +2236,11 @@ export class ContentRepository {
    * refine a per-channel override, and an adaptation's own `ai` row would say
    * nothing about the body being refined here.
    */
-  private async requireAiDraft(orgId: string, id: string): Promise<void> {
+  private async requireAiDraft(
+    orgId: string,
+    id: string,
+    action: "refine" | "draft_revision" = "refine",
+  ): Promise<void> {
     const rows = await db
       .select({ id: schema.contentVersions.id })
       .from(schema.contentVersions)
@@ -2035,8 +2256,8 @@ export class ContentRepository {
       .limit(1);
     if (rows.length === 0) {
       throw conflict(
-        "refine_needs_ai_draft",
-        "This post was written by hand; the refine verbs work on a draft the model wrote",
+        action === "refine" ? "refine_needs_ai_draft" : "draft_revision_needs_ai_draft",
+        "This post was written by hand; AI revision requires a generated draft",
       );
     }
   }
@@ -2078,7 +2299,7 @@ export class ContentRepository {
       .where(
         and(
           eq(schema.usageLedger.orgId, orgId),
-          inArray(schema.usageLedger.step, [REFINE_STEP, "readapt"]),
+          inArray(schema.usageLedger.step, [REFINE_STEP, "readapt", DRAFT_REVISION_STEP]),
           sql`${schema.usageLedger.createdAt} > now() - ${REFINE_BUDGET_WINDOW}`,
         ),
       );
@@ -2108,7 +2329,7 @@ export class ContentRepository {
    */
   private async refineCredential(
     orgId: string,
-    action: "refine" | "readapt" = "refine",
+    action: "refine" | "readapt" | "draft_revision" = "refine",
   ): Promise<AiCredential> {
     let credential: AiCredential | undefined;
     try {
@@ -2121,13 +2342,21 @@ export class ContentRepository {
           "Test the key in Settings for a verdict about it.",
       );
       throw conflict(
-        action === "refine" ? "refine_failed" : "readapt_failed",
+        action === "refine"
+          ? "refine_failed"
+          : action === "readapt"
+            ? "readapt_failed"
+            : "draft_revision_failed",
         REFINE_FAILURE_MESSAGE.failed,
       );
     }
     if (!credential) {
       throw conflict(
-        action === "refine" ? "refine_no_credential" : "readapt_no_credential",
+        action === "refine"
+          ? "refine_no_credential"
+          : action === "readapt"
+            ? "readapt_no_credential"
+            : "draft_revision_no_credential",
         "This organization has no AI provider key stored; add one in Settings",
       );
     }
