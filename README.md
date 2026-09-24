@@ -18,16 +18,16 @@
 
 ---
 
-Pubrick watches RSS and other web feeds, drafts on-brand posts with AI agents,
-queues them for **your** approval, and publishes approved posts on schedule.
-Telegram source monitoring, image generation, and performance feedback are in
-active development.
+Pubrick watches RSS, web feeds, and Telegram sources, drafts on-brand posts
+with AI agents, queues them for **your** approval, and publishes approved posts
+on schedule. Brand knowledge, manual image generation, and VK performance
+metrics are available in the current pre-alpha.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to
-Telegram, VK communities, and MAX chats or channels — through a restyled,
+Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon instances — through a restyled,
 installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
 uses a manual copy and confirmation workflow. AI generation works too, with
 **your own** Gemini or OpenRouter key (there is no hosted key): start from a
@@ -40,10 +40,11 @@ call is recorded, including the retries and the ones that failed after the
 provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
 brand; an article's title and summary can start a draft. You can also
 [fetch a public article into an editable preview](docs/source-extraction.md) and
-generate [social posts, news digests, expert articles, or how-to guides](docs/content-types.md)
+generate [social posts, news digests, product updates, expert articles, how-to guides, source-based retellings, comparisons, or case studies](docs/content-types.md)
 for selected channels. See [watched sources](docs/watched-sources.md)
 for the exact limits. The per-brand
-knowledge base uses text search and optional Gemini vector indexing. Other
+knowledge base supports portable CSV import/export, text search, and optional
+Gemini vector indexing. Other
 platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).

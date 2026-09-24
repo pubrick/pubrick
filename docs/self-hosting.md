@@ -306,6 +306,23 @@ uncertain create-record response is not retried automatically; inspect the
 account before trying again. See Bluesky's
 [post and image guide](https://docs.bsky.app/docs/tutorials/creating-a-post).
 
+## Connect a Mastodon account
+
+1. Create an access token with `write:statuses` permission in your Mastodon
+   account settings. Copy the public HTTPS origin of your server, such as
+   `https://mastodon.social`, without a path or port.
+2. In Pubrick, open a brand → add a channel → platform **Mastodon**. Enter the
+   server origin and token, then press **Test connection**. This verifies the
+   account without posting.
+
+Mastodon delivery currently sends text only and defaults to public visibility.
+It checks the server's own status length limit before posting. A cover is
+refused before any provider call. A confirmed status records its ID and public
+URL when available; an uncertain send requires a human to inspect the account
+before another attempt. See Mastodon's
+[statuses API](https://docs.joinmastodon.org/methods/statuses/) and
+[instance configuration](https://docs.joinmastodon.org/methods/instance/).
+
 ## Upgrade
 
 ```bash

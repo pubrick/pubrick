@@ -61,8 +61,9 @@ fixed model and dimension. The metering (`usage.ts`), the call budget
 (`pricing.ts`) are shared by every caller.
 
 **`packages/integrations`** — publishers, one per platform, behind a registry
-typed over the platforms `shared` declares as publishable. Today: Telegram and
-VK community walls, and MAX chats or channels. A
+typed over the platforms `shared` declares as publishable. Today: Telegram,
+VK community walls, MAX chats or channels, Bluesky accounts, and Mastodon
+instances. A
 publisher's errors are one of three kinds — permanent, transient, or unknown
 outcome — and that distinction is the whole delivery story (below).
 
