@@ -20,8 +20,9 @@
 
 Pubrick watches RSS, web feeds, and Telegram sources, drafts on-brand posts
 with AI agents, queues them for **your** approval, and publishes approved posts
-on schedule. Brand knowledge, manual image generation, Telegram video
-attachments, and VK performance metrics are available in the current pre-alpha.
+on schedule. Brand knowledge, manual image generation, opt-in draft cover
+generation, Telegram video attachments, and VK performance metrics are available
+in the current pre-alpha.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
@@ -51,7 +52,8 @@ for the exact limits. The per-brand
 knowledge base supports portable CSV import/export, text search, and optional
 Gemini vector indexing, including [opt-in automatic backfill](docs/brand-knowledge.md).
 The [media library](docs/media-library.md) accepts reviewed MP4 uploads for
-Telegram video posts. Organization owners and admins can issue one-time
+Telegram video posts and optional Gemini covers generated with a new draft.
+Organization owners and admins can issue one-time
 [public read API](docs/public-api.md) keys for tenant-scoped content reads; the
 [OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
 [optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
