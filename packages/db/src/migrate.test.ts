@@ -259,6 +259,15 @@ const NON_ENUM_CHECKS = [
   "media_assets_shape_check",
   "media_assets_byte_size_check",
   "content_items_one_media_check",
+  // 0064 stores article image positions and accessibility text outside the
+  // plain-text body. API and public-feed tests exercise valid slot writes.
+  "content_image_slots_paragraph_check",
+  "content_image_slots_alt_check",
+  "content_image_slots_caption_check",
+  "feed_entry_images_paragraph_check",
+  "feed_entry_images_position_check",
+  "feed_entry_images_alt_check",
+  "feed_entry_images_caption_check",
   // 0059: archive is a reversible state; its previous status must be present
   // exactly while archived. The dedicated test below proves both directions.
   "content_items_archived_from_status_check",
@@ -2660,6 +2669,55 @@ describe.skipIf(!url)("runMigrations", () => {
             [secondBrand],
           ),
         ).rejects.toMatchObject({ code: "23503" });
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("keeps historical image revisions null while defaulting new posts to zero", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0064_amusing_unus");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      let historicalId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('images_legacy', 'Images legacy', 'images-legacy')",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('images_legacy', 'Legacy brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        historicalId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, body) VALUES ('images_legacy', $1, 'Historical body') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const historical = await after.query<{ images_revision: number | null }>(
+          "SELECT images_revision FROM content_items WHERE id = $1",
+          [historicalId],
+        );
+        expect(historical.rows[0]?.images_revision).toBeNull();
+        const inserted = await after.query<{ images_revision: number }>(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('images_legacy', $1, 'New body') RETURNING images_revision",
+          [brandId],
+        );
+        expect(inserted.rows[0]?.images_revision).toBe(0);
       } finally {
         await after.end();
       }

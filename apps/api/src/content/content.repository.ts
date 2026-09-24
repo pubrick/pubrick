@@ -49,6 +49,7 @@ import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { assertImagesFitBody } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 import { ReadaptCaller } from "./readapt.caller";
@@ -1651,6 +1652,7 @@ export class ContentRepository {
           throw conflict("version_changed", "This post changed; reload before restoring");
         }
         if (item.body !== version.body) {
+          await assertImagesFitBody(tx, orgId, itemId, version.body);
           await tx
             .update(schema.contentItems)
             .set({ body: version.body })
@@ -1868,6 +1870,9 @@ export class ContentRepository {
   async update(orgId: string, id: string, data: ContentUpdate, userId: string) {
     await db.transaction(async (tx) => {
       const current = await this.requireEditableItem(tx, orgId, id);
+      if (data.body !== undefined && data.body !== current.body) {
+        await assertImagesFitBody(tx, orgId, id, data.body);
+      }
       await tx
         .update(schema.contentItems)
         .set(data)
@@ -2170,6 +2175,7 @@ export class ContentRepository {
         throw conflict(refusal.code, refusal.message);
       }
       if (!("unchanged" in plan)) {
+        await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
         await tx
           .update(schema.contentItems)
           .set({ body: plan.mergedBody, status: "draft" })
@@ -2784,6 +2790,7 @@ export class ContentRepository {
       }
 
       if (!("unchanged" in plan)) {
+        await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
         await tx
           .update(schema.contentItems)
           // The `org_id` predicate is defence in depth and CANNOT be pinned by a

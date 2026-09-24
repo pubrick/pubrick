@@ -53,6 +53,8 @@ knowledge base supports portable CSV import/export, text search, and optional
 Gemini vector indexing, including [opt-in automatic backfill](docs/brand-knowledge.md).
 The [media library](docs/media-library.md) accepts reviewed MP4 uploads for
 Telegram video posts and optional Gemini covers generated with a new draft.
+Editors can also place [images inside articles](docs/article-images.md), with
+escaped previews and immutable image snapshots in the opt-in public RSS feed.
 Organization owners and admins can issue one-time
 [public read API](docs/public-api.md) keys for tenant-scoped content reads and
 [assign per-brand access](docs/brand-access.md) to regular members. The

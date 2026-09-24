@@ -48,6 +48,8 @@ export const contentItems = pgTable(
     coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
+    /** Compare-and-swap token for whole-set inline image edits. */
+    imagesRevision: integer("images_revision").default(0),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Original status while archived; cleared when the item is restored. */
     archivedFromStatus: text("archived_from_status", { enum: CONTENT_STATUSES }),
@@ -80,6 +82,7 @@ export const contentItems = pgTable(
   (t) => [
     index("content_items_org_id_idx").on(t.orgId),
     index("content_items_brand_id_idx").on(t.brandId),
+    uniqueIndex("content_items_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     /**
      * THE ORDER THE QUEUE IS READ IN — newest first, ties broken by `id`.
      *

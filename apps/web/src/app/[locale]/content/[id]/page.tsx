@@ -44,6 +44,7 @@ import type { RunInput } from "@/lib/runs";
 import { ClientReviewLink } from "./client-review-link";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
+import { InlineImages } from "./inline-images";
 import { SourceStrip } from "./source-strip";
 import { VersionHistory } from "./version-history";
 
@@ -1480,6 +1481,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           />
         </div>
       </Card>
+
+      <InlineImages
+        itemId={item.id}
+        brandId={item.brandId}
+        savedBody={item.body}
+        bodyHasUnsavedChanges={draftMoved}
+        editable={["draft", "rejected", "failed"].includes(item.status)}
+        manualVc={manualAdaptations.length > 0}
+      />
 
       {/*
         The proposal, BESIDE the draft and never in it (dossier anti-pattern 8):

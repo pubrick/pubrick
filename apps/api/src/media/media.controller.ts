@@ -86,7 +86,7 @@ export class MediaController {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Cache-Control", "private, max-age=300");
     await new Promise<void>((resolve) => {
-      response.sendFile(asset.path, (error) => {
+      response.sendFile(asset.path, { dotfiles: "allow" }, (error) => {
         if (error && !response.headersSent) response.status(404).end();
         resolve();
       });

@@ -237,6 +237,27 @@ export class BrandsRepository {
         await this.queue.cancelGenerate(tx, run.id, orgId);
       }
 
+      // Feed snapshots and inline slots restrict deletion of their media. Hold
+      // every item after the ordered adaptation locks, so a feed publisher's
+      // item FOR SHARE and an editor's item FOR UPDATE cannot add a new slot
+      // after these deletions but before the brand cascade removes the media.
+      await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.brandId, id)))
+        .orderBy(schema.contentItems.id)
+        .for("update");
+      await tx
+        .delete(schema.feedEntryImages)
+        .where(
+          and(eq(schema.feedEntryImages.orgId, orgId), eq(schema.feedEntryImages.brandId, id)),
+        );
+      await tx
+        .delete(schema.contentImageSlots)
+        .where(
+          and(eq(schema.contentImageSlots.orgId, orgId), eq(schema.contentImageSlots.brandId, id)),
+        );
+
       await tx
         .delete(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)));

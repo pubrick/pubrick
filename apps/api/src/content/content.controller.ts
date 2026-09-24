@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   UseGuards,
@@ -17,11 +18,13 @@ import {
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
+  type ContentImagesReplace,
   type ContentUpdate,
   type ContentVersionListQuery,
   type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
+  contentImagesReplaceSchema,
   contentUpdateSchema,
   contentVersionListQuerySchema,
   contentVersionRestoreSchema,
@@ -46,6 +49,7 @@ import { UserId } from "../org/user-id.decorator";
 import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
+import { ContentImagesRepository } from "./content-images.repository";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 
 @Controller("content")
@@ -54,6 +58,7 @@ import { EditorialNotesRepository } from "./editorial-notes.repository";
 export class ContentController {
   constructor(
     private readonly content: ContentRepository,
+    private readonly contentImages: ContentImagesRepository,
     private readonly editorialNotes: EditorialNotesRepository,
   ) {}
 
@@ -106,6 +111,20 @@ export class ContentController {
   @Get(":id")
   get(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.get(orgId, id);
+  }
+
+  @Get(":id/images")
+  images(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.contentImages.list(orgId, id);
+  }
+
+  @Put(":id/images")
+  replaceImages(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(contentImagesReplaceSchema)) body: ContentImagesReplace,
+  ) {
+    return this.contentImages.replace(orgId, id, body);
   }
 
   @Get(":id/versions")

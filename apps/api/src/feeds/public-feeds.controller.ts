@@ -1,8 +1,10 @@
-import { Controller, Get, Header, Param, ParseUUIDPipe } from "@nestjs/common";
+import { Controller, Get, Header, Param, ParseUUIDPipe, Res } from "@nestjs/common";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
+import type { Response } from "express";
 import { Feed } from "feed";
 import { escape as escapeHtml } from "html-escaper";
 import { env } from "../env";
+import { MediaRepository } from "../media/media.repository";
 import { FeedsRepository } from "./feeds.repository";
 
 function articleUrl(orgId: string, token: string, id: string): string {
@@ -10,10 +12,41 @@ function articleUrl(orgId: string, token: string, id: string): string {
   return `${base}/api/feeds/${encodeURIComponent(orgId)}/${token}/articles/${id}`;
 }
 
-function paragraphs(text: string): string {
+type InlineImage = {
+  id: string;
+  afterParagraph: number;
+  alt: string;
+  caption: string | null;
+};
+
+function imageUrl(orgId: string, token: string, entryId: string, imageId: string): string {
+  return `${env.WEB_ORIGIN.replace(/\/$/, "")}/api/feeds/${encodeURIComponent(orgId)}/${token}/articles/${entryId}/images/${imageId}`;
+}
+
+function paragraphs(
+  text: string,
+  images: InlineImage[] = [],
+  orgId?: string,
+  token?: string,
+  entryId?: string,
+): string {
   return text
     .split(/\n\s*\n/)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .filter((paragraph) => paragraph.trim().length > 0)
+    .map((paragraph, index) => {
+      const copy = `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`;
+      if (!orgId || !token || !entryId) return copy;
+      const figures = images
+        .filter((image) => image.afterParagraph === index)
+        .map((image) => {
+          const caption = image.caption
+            ? `<figcaption>${escapeHtml(xmlSafe(image.caption))}</figcaption>`
+            : "";
+          return `<figure><img src="${escapeHtml(imageUrl(orgId, token, entryId, image.id))}" alt="${escapeHtml(xmlSafe(image.alt))}" loading="lazy">${caption}</figure>`;
+        })
+        .join("");
+      return copy + figures;
+    })
     .join("\n");
 }
 
@@ -38,7 +71,10 @@ function xmlSafe(text: string): string {
 @Controller("feeds/:orgId/:token")
 @AllowAnonymous()
 export class PublicFeedsController {
-  constructor(private readonly feeds: FeedsRepository) {}
+  constructor(
+    private readonly feeds: FeedsRepository,
+    private readonly media: MediaRepository,
+  ) {}
 
   @Get("rss")
   @Header("Content-Type", "application/rss+xml; charset=utf-8")
@@ -62,7 +98,7 @@ export class PublicFeedsController {
         title: xmlSafe(entry.title),
         date: entry.publishedAt,
         description: xmlSafe(entry.body.slice(0, 280)),
-        content: paragraphs(xmlSafe(entry.body)),
+        content: paragraphs(xmlSafe(entry.body), entry.images, orgId, token, entry.id),
       });
     }
     return feed.rss2();
@@ -70,7 +106,10 @@ export class PublicFeedsController {
 
   @Get("articles/:entryId")
   @Header("Content-Type", "text/html; charset=utf-8")
-  @Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+  @Header(
+    "Content-Security-Policy",
+    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+  )
   @Header("Cache-Control", "no-store")
   async article(
     @Param("orgId") orgId: string,
@@ -78,6 +117,32 @@ export class PublicFeedsController {
     @Param("entryId", ParseUUIDPipe) entryId: string,
   ) {
     const article = await this.feeds.publicArticle(orgId, token, entryId);
-    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body)}</main></body></html>`;
+    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}figure{margin:2rem 0}figure img{display:block;max-width:100%;height:auto;border-radius:.4rem}figcaption{font-size:.9rem;color:#625e5a;margin-top:.4rem}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body, article.images, orgId, token, entryId)}</main></body></html>`;
+  }
+
+  @Get("articles/:entryId/images/:imageId")
+  @Header("Cache-Control", "no-store")
+  async image(
+    @Param("orgId") orgId: string,
+    @Param("token") token: string,
+    @Param("entryId", ParseUUIDPipe) entryId: string,
+    @Param("imageId", ParseUUIDPipe) imageId: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const mediaId = await this.feeds.publicImage(orgId, token, entryId, imageId);
+    const asset = await this.media.fileForStream(orgId, mediaId);
+    if (asset.kind !== "image") {
+      response.status(404).end();
+      return;
+    }
+    response.setHeader("Content-Type", "image/jpeg");
+    response.setHeader("Content-Disposition", "inline");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    await new Promise<void>((resolve) => {
+      response.sendFile(asset.path, { dotfiles: "allow" }, (error) => {
+        if (error && !response.headersSent) response.status(404).end();
+        resolve();
+      });
+    });
   }
 }

@@ -10,7 +10,8 @@ whether Dzen accepted, imported, rejected, or removed it.
 1. Publish a titled post through one of Pubrick's connected channels.
 2. Open the brand page and enable **Public RSS feed**. The feed starts empty.
 3. Open the published post and choose **Add** in its RSS card. Confirm the
-   public sharing prompt. Pubrick stores a snapshot of the title and body;
+   public sharing prompt. Pubrick stores a snapshot of the title, body, and
+   [inline article images](article-images.md);
    later edits to the post do not change that public snapshot.
 4. Copy the feed URL from the brand page. It and each article link are public.
    Set `PUBLIC_ORIGIN` to the reachable HTTPS origin in a self-hosted deployment
@@ -49,5 +50,7 @@ Authenticated members with an active organization can use:
 | `POST /api/brands/:brandId/feed/items/:itemId` | Add a snapshot of a titled published post |
 | `DELETE /api/brands/:brandId/feed/items/:itemId` | Remove its snapshot |
 
-The returned URL and its article links are intentionally anonymous. No channel
-credentials or draft content are exposed by these endpoints.
+The returned URL, article links, and image URLs within an included article are
+intentionally anonymous. Image URLs require the feed token and entry ID and
+stop working when the entry or feed is removed. No channel credentials or draft
+content are exposed by these endpoints.

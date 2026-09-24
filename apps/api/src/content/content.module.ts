@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
+import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 import { ReadaptCaller } from "./readapt.caller";
@@ -23,6 +24,7 @@ import { RefineCaller } from "./refine.caller";
   controllers: [ContentController],
   providers: [
     ContentRepository,
+    ContentImagesRepository,
     EditorialNotesRepository,
     RefineCaller,
     ReadaptCaller,

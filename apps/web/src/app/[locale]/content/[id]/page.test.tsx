@@ -219,6 +219,8 @@ function installBaseHandlers(
     }
 
     if (method === "GET" && path === `/api/content/${served.current.id}`) return served.current;
+    if (method === "GET" && path === `/api/content/${served.current.id}/images`)
+      return { images: [], revision: 0 };
     if (method === "GET" && path === `/api/content/${served.current.id}/client-review-link`)
       return { status: "none", expiresAt: null, reviewedAt: null, comment: null };
     if (method === "GET" && path.startsWith("/api/channels")) return channels;

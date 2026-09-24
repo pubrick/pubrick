@@ -1,4 +1,13 @@
-import { index, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import {
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
 import { contentItems } from "./content-items.js";
@@ -19,6 +28,7 @@ export const brandFeeds = pgTable(
   },
   (t) => [
     unique("brand_feeds_brand_id_key").on(t.brandId),
+    uniqueIndex("brand_feeds_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     index("brand_feeds_org_id_idx").on(t.orgId),
   ],
 );
@@ -31,6 +41,7 @@ export const feedEntries = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id").notNull(),
     feedId: uuid("feed_id")
       .notNull()
       .references(() => brandFeeds.id, { onDelete: "cascade" }),
@@ -43,6 +54,12 @@ export const feedEntries = pgTable(
   },
   (t) => [
     unique("feed_entries_feed_item_key").on(t.feedId, t.contentItemId),
+    uniqueIndex("feed_entries_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
+    foreignKey({
+      name: "feed_entries_feed_brand_fk",
+      columns: [t.orgId, t.brandId, t.feedId],
+      foreignColumns: [brandFeeds.orgId, brandFeeds.brandId, brandFeeds.id],
+    }).onDelete("cascade"),
     index("feed_entries_org_id_idx").on(t.orgId),
     index("feed_entries_feed_id_published_at_idx").on(t.feedId, t.publishedAt.desc()),
   ],

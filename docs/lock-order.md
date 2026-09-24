@@ -69,6 +69,28 @@ Accept takes the same two parent locks before reading the proposal and writing
 an AI version. Discard only deletes the proposal. The proposal's composite
 foreign key also checks that its adaptation belongs to its content item.
 
+Inline image replacement locks the organization `FOR KEY SHARE` before its
+`content_items` row, matching tenant deletion's outer-to-inner cascade. It
+then checks the whole-set revision, locking selected image assets
+`FOR KEY SHARE` in ID order,
+and replacing `content_image_slots`. The revision increments in that same
+transaction, so a stale editor receives a 409 before deleting any slot. Body
+edits, version restoration, refine acceptance, and approval already serialize
+on that same item lock; the body update trigger prevents any writer from
+leaving an image beyond the last paragraph. Slot inserts also take
+`FOR KEY SHARE` on referenced `media_assets` rows.
+Media deletion checks cover, inline, and public feed references, then deletes
+the asset; its foreign-key fallback turns a concurrent attachment into a 409.
+It never takes a content-item row lock after touching media, so this path cannot
+reverse the item-to-media acquisition order. Feed snapshot insertion references
+its feed entry and media asset but never takes an item lock afterward.
+Brand deletion locks its runs and adaptations in the canonical order, then all
+brand items in ID order before clearing feed snapshots and inline slots. This
+waits for any editor or feed publisher holding an item and prevents a new
+snapshot or slot from arriving after cleanup; the subsequent brand cascade can
+delete its media while direct media deletion remains blocked by the
+slot-to-media `NO ACTION` foreign keys.
+
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
 `apps/api/src/ai-credentials/ai-credentials.repository.ts`,
