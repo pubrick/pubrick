@@ -997,7 +997,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     const unsaved =
       override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
-    const telegramVideo = channel?.platform === "telegram" && currentItem.videoMediaId !== null;
+    const supportedVideo =
+      (channel?.platform === "telegram" || channel?.platform === "vk") &&
+      currentItem.videoMediaId !== null;
     const limit = previewLimit(adaptation.channelId);
 
     return (
@@ -1025,7 +1027,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             className="mb-3 max-h-64 w-full rounded-control object-contain"
           />
         )}
-        {telegramVideo && (
+        {supportedVideo && (
           // biome-ignore lint/a11y/useMediaCaption: Uploaded clips have no caption track in this milestone; the written post remains visible below.
           <video
             src={`/api/media/${currentItem.videoMediaId}/file`}
@@ -1040,7 +1042,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
         {previewText.length > limit && (
           <p role="alert" className="mt-3 text-sm text-danger">
-            {telegramCover || telegramVideo
+            {telegramCover || (channel?.platform === "telegram" && supportedVideo)
               ? t("reviewPreviewCaptionTooLong", { limit })
               : t("reviewPreviewTooLong", { limit })}
           </p>

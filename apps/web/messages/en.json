@@ -589,7 +589,7 @@
     "reviewPreviewLocalNote": "This is a local text preview, not a published post.",
     "reviewPreviewPublishedNote": "This saved copy may differ from the post already published. Open the channel to check the published result.",
     "reviewPreviewCoverAlt": "Selected cover for this Telegram post",
-    "reviewPreviewVideoLabel": "Selected video for this Telegram post",
+    "reviewPreviewVideoLabel": "Selected video for this post",
     "reviewPreviewCaptionTooLong": "Telegram media captions are limited to {limit} characters. Shorten the text or remove the attachment.",
     "reviewPreviewTooLong": "This channel allows at most {limit} characters. Shorten the text before publishing.",
     "overridePlaceholder": "Leave empty to use the item body above",
@@ -1159,7 +1159,7 @@
   "Media": {
     "title": "Media library",
     "back": "Back to brand",
-    "hint": "JPEG, PNG, or WebP up to 10 MB; MP4 video up to 20 MB. Images become JPEG. Video currently publishes to Telegram only; Pubrick does not transcode or validate codecs.",
+    "hint": "JPEG, PNG, or WebP up to 10 MB; MP4 video up to 20 MB. Images become JPEG. Video publishes to Telegram and VK; Pubrick does not transcode or validate codecs.",
     "add": "Add image or video",
     "empty": "Add an image to use as a Telegram, VK, MAX, or Bluesky cover.",
     "selected": "Current media",

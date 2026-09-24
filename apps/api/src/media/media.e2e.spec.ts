@@ -222,7 +222,7 @@ describe.skipIf(!url)("media library e2e", () => {
     await owner.patch(`/api/media/posts/${item.body.id}/video`).send({ mediaId: null }).expect(409);
   });
 
-  it("rejects spoofed and truncated MP4 uploads and a video on non-Telegram posts", async () => {
+  it("rejects invalid MP4 uploads and videos on channels without video delivery", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Video validation" }).expect(201);
     for (const bad of [
@@ -247,9 +247,9 @@ describe.skipIf(!url)("media library e2e", () => {
       .post("/api/channels")
       .send({
         brandId: brand.body.id,
-        platform: "vk",
-        name: "VK",
-        credentials: { accessToken: "test-user-token", groupId: "12345" },
+        platform: "mastodon",
+        name: "Mastodon",
+        credentials: { instanceUrl: "https://mastodon.example", accessToken: "test-token" },
       })
       .expect(201);
     const item = await owner
@@ -268,6 +268,24 @@ describe.skipIf(!url)("media library e2e", () => {
       .patch(`/api/media/posts/${item.body.id}/video`)
       .send({ mediaId: video.body.id })
       .expect(409);
+    const vk = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK",
+        credentials: { accessToken: "test-user-token", groupId: "12345" },
+      })
+      .expect(201);
+    const vkPost = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "VK video", channelIds: [vk.body.id] })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${vkPost.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    await owner.post(`/api/content/${vkPost.body.id}/approve`).send({}).expect(200);
     const telegram = await owner
       .post("/api/channels")
       .send({

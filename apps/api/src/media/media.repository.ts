@@ -386,13 +386,19 @@ export class MediaRepository {
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, itemId)),
           );
-        if (targets.some((target) => target.platform !== "telegram")) {
+        if (targets.some((target) => !["telegram", "vk"].includes(target.platform))) {
           throw conflict(
             "content_media_unsupported",
-            "Videos currently publish only to Telegram; remove other channels from this post",
+            "Videos currently publish only to Telegram and VK; remove other channels from this post",
           );
         }
-        if (targets.some((target) => (target.body ?? item.body).length > TELEGRAM_CAPTION_LIMIT)) {
+        if (
+          targets.some(
+            (target) =>
+              target.platform === "telegram" &&
+              (target.body ?? item.body).length > TELEGRAM_CAPTION_LIMIT,
+          )
+        ) {
           throw conflict(
             "content_media_caption_too_long",
             "Telegram video captions must be 1024 characters or fewer",

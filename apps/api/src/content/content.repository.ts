@@ -3943,10 +3943,13 @@ export class ContentRepository {
         }
       }
       if (coveredItem?.videoId) {
-        if (platforms.some((channel) => channel.platform !== "telegram") || manualReady.length) {
+        if (
+          platforms.some((channel) => !["telegram", "vk"].includes(channel.platform)) ||
+          manualReady.length
+        ) {
           throw conflict(
             "content_media_unsupported",
-            "Videos currently publish only to Telegram channels",
+            "Videos currently publish only to Telegram and VK channels",
           );
         }
         const overrideBodies = await tx
@@ -3955,7 +3958,11 @@ export class ContentRepository {
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
           );
-        const telegramChannelIds = new Set(platforms.map((channel) => channel.id));
+        const telegramChannelIds = new Set(
+          platforms
+            .filter((channel) => channel.platform === "telegram")
+            .map((channel) => channel.id),
+        );
         if (
           overrideBodies.some(
             (row) =>

@@ -589,7 +589,7 @@
     "reviewPreviewLocalNote": "Esta é uma prévia local do texto, não uma publicação.",
     "reviewPreviewPublishedNote": "A cópia salva pode ser diferente da publicação. Abra o canal para conferir o resultado publicado.",
     "reviewPreviewCoverAlt": "Capa selecionada para esta publicação no Telegram",
-    "reviewPreviewVideoLabel": "Vídeo selecionado para esta publicação no Telegram",
+    "reviewPreviewVideoLabel": "Vídeo selecionado para esta publicação",
     "reviewPreviewCaptionTooLong": "Legendas de mídia do Telegram aceitam até {limit} caracteres. Encurte o texto ou remova o anexo.",
     "reviewPreviewTooLong": "Este canal aceita no máximo {limit} caracteres. Encurte o texto antes de publicar.",
     "overridePlaceholder": "Deixe em branco para usar o texto acima",
@@ -1159,7 +1159,7 @@
   "Media": {
     "title": "Biblioteca de mídia",
     "back": "Voltar à marca",
-    "hint": "JPEG, PNG ou WebP até 10 MB; vídeo MP4 até 20 MB. Imagens viram JPEG. Vídeos só são publicados no Telegram; o Pubrick não transcodifica nem valida codecs.",
+    "hint": "JPEG, PNG ou WebP até 10 MB; vídeo MP4 até 20 MB. Imagens viram JPEG. Vídeos são publicados no Telegram e VK; o Pubrick não transcodifica nem valida codecs.",
     "add": "Adicionar imagem ou vídeo",
     "empty": "Adicione uma imagem para usar como capa no Telegram, no VK, no MAX ou no Bluesky.",
     "selected": "Mídia atual",
