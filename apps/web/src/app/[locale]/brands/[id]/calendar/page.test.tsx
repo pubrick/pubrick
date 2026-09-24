@@ -57,6 +57,45 @@ describe("brand calendar", () => {
     });
   });
 
+  it("sends an explicit cover opt-in for a scheduled draft with a Google key", async () => {
+    const brandId = "5a21d62a-94ca-4dcb-85c5-865120886414";
+    const channelId = "a887ef22-a936-41d6-a404-4ef90d5f2357";
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/ai-credentials")) return jsonResponse([{ provider: "google" }]);
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/slots") && init?.method === "POST")
+        return jsonResponse({ id: "slot-1" });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: en.ContentNew.generateCover })).toBeEnabled(),
+    );
+    await user.type(screen.getByLabelText(en.Calendar.brief), "Launch story");
+    await user.click(screen.getByLabelText("Main"));
+    await user.click(screen.getByRole("checkbox", { name: en.ContentNew.generateCover }));
+    await user.click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
+    await waitFor(() => expect(calls.some((call) => call.init?.method === "POST")).toBe(true));
+    const posted = calls.find((call) => call.init?.method === "POST");
+    const sent = JSON.parse(String(posted?.init?.body));
+    expect(sent).toEqual({
+      brandId,
+      scheduledAt: expect.any(String),
+      brief: "Launch story",
+      channelIds: [channelId],
+      generateCover: true,
+      notes: null,
+    });
+    expect(calendarSlotCreateSchema.parse(sent)).toEqual(sent);
+  });
+
   it("schedules an approved topic by id without accepting a stale browser brief", async () => {
     const brandId = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
     const topicId = "40a21268-4c10-4ad9-b05d-519c11231322";

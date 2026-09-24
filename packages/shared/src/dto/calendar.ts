@@ -24,6 +24,8 @@ const slotFields = z.object({
     .refine((ids) => new Set(ids).size === ids.length, {
       message: "channelIds must not contain duplicates",
     }),
+  /** One optional BYOK image call when the planned draft is generated. */
+  generateCover: z.boolean().optional(),
   notes: z
     .string()
     .max(2000)

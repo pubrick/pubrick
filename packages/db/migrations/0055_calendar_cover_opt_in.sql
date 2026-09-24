@@ -1,0 +1,1 @@
+ALTER TABLE "calendar_slots" ADD COLUMN "generate_cover" boolean DEFAULT false NOT NULL;

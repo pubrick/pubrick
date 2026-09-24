@@ -1078,7 +1078,7 @@
     "channelsMissing": "A channel was removed. Edit this slot to choose another.",
     "invalidInput": "This slot is invalid. Edit and save it again before generating.",
     "topicChanged": "The linked topic changed or lost approval. Edit this slot and select an approved topic again.",
-    "waitingCapacity": "Waiting for an available generation slot. Pubrick will retry automatically.",
+    "waitingCapacity": "Waiting to start generation. Pubrick will retry automatically.",
     "viewRun": "View generation",
     "edit": "Edit",
     "remove": "Remove",

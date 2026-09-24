@@ -54,7 +54,7 @@ describe.skipIf(!url)("planned calendar generation", () => {
     await pool?.end();
   });
 
-  async function seed(channelIds = [channelId]) {
+  async function seed(channelIds = [channelId], generateCover = false) {
     const [slot] = await db
       .insert(schema.calendarSlots)
       .values({
@@ -63,6 +63,7 @@ describe.skipIf(!url)("planned calendar generation", () => {
         scheduledAt: new Date(Date.now() - 60_000),
         brief: "A useful topic",
         channelIds,
+        generateCover,
       })
       .returning({ id: schema.calendarSlots.id });
     return slot?.id as string;
@@ -232,5 +233,58 @@ describe.skipIf(!url)("planned calendar generation", () => {
       material: "Reference\n\nApproved facts",
       channelIds: [channelId],
     });
+  });
+
+  it("carries a planned cover choice into the queued run", async () => {
+    const { eq } = await import("drizzle-orm");
+    const slotId = await seed([channelId], true);
+    await service.trigger(boss, orgId, slotId);
+    const [slot] = await db
+      .select({ runId: schema.calendarSlots.runId })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slotId));
+    const [run] = await db
+      .select({ input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, slot?.runId as string));
+    expect(run?.input).toEqual({
+      kind: "brief",
+      text: "A useful topic",
+      channelIds: [channelId],
+      generateCover: true,
+    });
+  });
+
+  it("defers a planned cover while the hourly image budget is full", async () => {
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.pipelineRuns)
+      .set({ status: "succeeded" })
+      .where(eq(schema.pipelineRuns.orgId, orgId));
+    const slotId = await seed([channelId], true);
+    await db.insert(schema.usageLedger).values(
+      Array.from({ length: 12 }, () => ({
+        orgId,
+        step: "image_generate",
+        provider: "google" as const,
+        modelId: "test-image-model",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+      })),
+    );
+    await service.trigger(boss, orgId, slotId);
+    const [slot] = await db
+      .select({ runId: schema.calendarSlots.runId, retryAfter: schema.calendarSlots.retryAfter })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slotId));
+    expect(slot?.runId).toBeNull();
+    expect(slot?.retryAfter?.getTime()).toBeGreaterThan(Date.now());
+    const invalidSlotId = await seed([randomUUID()], true);
+    await service.trigger(boss, orgId, invalidSlotId);
+    const [invalid] = await db
+      .select({ errorCode: schema.calendarSlots.errorCode })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, invalidSlotId));
+    expect(invalid?.errorCode).toBe("channels_missing");
   });
 });

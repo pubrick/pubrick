@@ -1,6 +1,10 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { CalendarSlotCreate, CalendarSlotUpdate } from "@pubrick/shared";
+import {
+  type CalendarSlotCreate,
+  type CalendarSlotUpdate,
+  COVER_SUPPORTED_PLATFORMS,
+} from "@pubrick/shared";
 import { and, asc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
@@ -17,6 +21,7 @@ const SLOT_COLUMNS = {
   topicUpdatedAt: schema.calendarSlots.topicUpdatedAt,
   topicRevision: schema.calendarSlots.topicRevision,
   channelIds: schema.calendarSlots.channelIds,
+  generateCover: schema.calendarSlots.generateCover,
   notes: schema.calendarSlots.notes,
   runId: schema.calendarSlots.runId,
   errorCode: schema.calendarSlots.errorCode,
@@ -41,7 +46,7 @@ export class CalendarRepository {
       .orderBy(asc(schema.calendarSlots.scheduledAt));
   }
 
-  private async requireChannels(orgId: string, brandId: string, ids: string[]) {
+  private async requireChannels(orgId: string, brandId: string, ids: string[], cover = false) {
     const brand = await db
       .select({ id: schema.brands.id })
       .from(schema.brands)
@@ -49,7 +54,7 @@ export class CalendarRepository {
       .limit(1);
     if (!brand[0]) throw notFound("brand_not_found", "Brand not found");
     const owned = await db
-      .select({ id: schema.channels.id })
+      .select({ id: schema.channels.id, platform: schema.channels.platform })
       .from(schema.channels)
       .where(
         and(
@@ -60,13 +65,36 @@ export class CalendarRepository {
       );
     if (owned.length !== ids.length)
       throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
+    if (!cover) return;
+    if (
+      owned.some(
+        (channel) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+      )
+    ) {
+      throw badRequest(
+        "content_media_unsupported",
+        "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
+      );
+    }
+    const [google] = await db
+      .select({ id: schema.aiCredentials.id })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!google)
+      throw badRequest(
+        "cover_requires_google_key",
+        "Add a Google AI key before requesting a cover",
+      );
   }
 
   async create(orgId: string, data: CalendarSlotCreate) {
     if (new Date(data.scheduledAt).getTime() <= Date.now()) {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
-    await this.requireChannels(orgId, data.brandId, data.channelIds);
+    await this.requireChannels(orgId, data.brandId, data.channelIds, data.generateCover);
     if (data.topicId && data.brief !== undefined)
       throw badRequest("invalid_request", "A linked topic supplies its own brief");
     return db.transaction(async (tx) => {
@@ -109,6 +137,7 @@ export class CalendarRepository {
           topicUpdatedAt: topic?.updatedAt ?? null,
           topicRevision: topic?.revision ?? null,
           channelIds: data.channelIds,
+          generateCover: data.generateCover ?? false,
           notes: data.notes ?? null,
         })
         .returning(SLOT_COLUMNS);
@@ -120,10 +149,14 @@ export class CalendarRepository {
     if (data.scheduledAt && new Date(data.scheduledAt).getTime() <= Date.now()) {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
-    if (data.channelIds) await this.requireChannels(orgId, brandId, data.channelIds);
     return db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ topicId: schema.calendarSlots.topicId, runId: schema.calendarSlots.runId })
+        .select({
+          topicId: schema.calendarSlots.topicId,
+          runId: schema.calendarSlots.runId,
+          channelIds: schema.calendarSlots.channelIds,
+          generateCover: schema.calendarSlots.generateCover,
+        })
         .from(schema.calendarSlots)
         .where(
           and(
@@ -136,6 +169,14 @@ export class CalendarRepository {
       if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
       if (existing.runId)
         throw conflict("calendar_slot_started", "Generation has already started for this slot");
+      if (data.channelIds || data.generateCover === true) {
+        await this.requireChannels(
+          orgId,
+          brandId,
+          data.channelIds ?? existing.channelIds,
+          data.generateCover ?? existing.generateCover,
+        );
+      }
       if (data.brief !== undefined && existing.topicId && data.topicId === undefined)
         throw conflict("calendar_topic_linked", "Unlink the topic to write a custom brief");
       if (data.topicId && data.brief !== undefined)
@@ -175,6 +216,7 @@ export class CalendarRepository {
           topicUpdatedAt: data.topicId === null ? null : topic?.updatedAt,
           topicRevision: data.topicId === null ? null : topic?.revision,
           channelIds: data.channelIds,
+          generateCover: data.generateCover,
           notes: data.notes,
           errorCode: null,
           retryAfter: null,
