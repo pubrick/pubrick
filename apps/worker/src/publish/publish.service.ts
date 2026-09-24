@@ -1,13 +1,19 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  BLUESKY_REQUEST_TIMEOUT_MS,
   getPublisher,
+  MASTODON_REQUEST_TIMEOUT_MS,
+  MAX_REQUEST_TIMEOUT_MS,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
   type PublishResult,
   TELEGRAM_REQUEST_TIMEOUT_MS,
   UnknownOutcomePublishError,
+  VK_REQUEST_TIMEOUT_MS,
 } from "@pubrick/integrations";
 import {
   isUnreadableCiphertext,
@@ -20,6 +26,7 @@ import { env } from "../env";
 import {
   type AttemptFence,
   ChannelNotFoundError,
+  NoAutomaticCredentialsError,
   PublishRepository,
   type SendClaim,
 } from "./publish.repository";
@@ -82,8 +89,9 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  * Derived, not picked, because the failure it prevents is a duplicate post: a
  * job failed by `failWip()` is a job pg-boss redelivers, and a handler
  * interrupted mid-request may already have posted. The window has to cover the
- * longest one attempt can legitimately still be running — a platform request at
- * its own timeout, plus the worst case of recording the result afterwards —
+ * longest one attempt can legitimately still be running — all sequential
+ * platform requests at their own timeouts, plus the worst case of recording
+ * the result afterwards —
  * with margin for the writes themselves. pg-boss's default is 30s, which is
  * exactly the adapter's request timeout and so the worst possible value: a
  * request that started a moment before SIGTERM is guaranteed to be cut off at
@@ -96,7 +104,17 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  * "outcome unknown, go look at the channel".
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
-  TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS + 10_000;
+  Math.max(
+    TELEGRAM_REQUEST_TIMEOUT_MS,
+    VK_REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_TIMEOUT_MS,
+    // Bluesky: session, mention resolution, optional cover upload, createRecord.
+    BLUESKY_REQUEST_TIMEOUT_MS * 4,
+    // Mastodon: instance configuration, then create status.
+    MASTODON_REQUEST_TIMEOUT_MS * 2,
+  ) +
+  PUBLISH_RECORD_BUDGET_MS +
+  10_000;
 
 /**
  * Seconds as hours, to one decimal, for a sentence a person reads — ROUNDED IN
@@ -201,7 +219,7 @@ export class PublishService {
 
   async handle(job: PublishJob): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
-    if (!adaptation || adaptation.status === "published") return;
+    if (!adaptation || adaptation.status === "published" || adaptation.platform === "vc_ru") return;
 
     // Defense in depth against a delivered rejection. The api cancels the
     // pg-boss job when an approved item is rejected, but a job that was
@@ -447,6 +465,9 @@ export class PublishService {
         if (credentialsError instanceof ChannelNotFoundError) {
           throw new ClassifiedPermanentError(credentialsError.message, "credentials_missing");
         }
+        if (credentialsError instanceof NoAutomaticCredentialsError) {
+          throw new ClassifiedPermanentError(credentialsError.message, "credentials_invalid");
+        }
         throw credentialsError;
       }
       // Validate against the adapter's own schema before sending, the same way
@@ -466,7 +487,109 @@ export class PublishService {
           "credentials_invalid",
         );
       }
-      result = await publisher.publish(parsed.data, { text }, { baseUrl: this.baseUrl });
+      const baseUrl =
+        adaptation.platform === "vk"
+          ? env.VK_API_BASE_URL
+          : adaptation.platform === "max"
+            ? env.MAX_API_BASE_URL
+            : adaptation.platform === "telegram"
+              ? this.baseUrl
+              : undefined;
+      let image: { bytes: Uint8Array; mimeType: "image/jpeg" } | undefined;
+      if (adaptation.coverMediaId) {
+        if (adaptation.itemBrandId !== adaptation.channelBrandId) {
+          throw new ClassifiedPermanentError(
+            "Cover image cannot publish to a channel in another brand",
+            "rejected_before_send",
+          );
+        }
+        if (adaptation.coverAuthorizedId !== adaptation.coverMediaId) {
+          throw new ClassifiedPermanentError(
+            "Cover image does not belong to this post's organization and brand",
+            "rejected_before_send",
+          );
+        }
+        if (!["telegram", "vk", "max", "bluesky"].includes(adaptation.platform)) {
+          throw new ClassifiedPermanentError(
+            "This channel cannot publish a cover image",
+            "rejected_before_send",
+          );
+        }
+        const file = path.join(
+          process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media"),
+          `${adaptation.coverMediaId}.jpg`,
+        );
+        try {
+          image = { bytes: await readFile(file), mimeType: "image/jpeg" };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ClassifiedPermanentError(
+              "Cover image is missing from media storage",
+              "rejected_before_send",
+            );
+          }
+          throw error;
+        }
+      }
+      let video: { bytes: Uint8Array; mimeType: "video/mp4" } | undefined;
+      if (adaptation.videoMediaId) {
+        if (adaptation.platform !== "telegram" || image) {
+          throw new ClassifiedPermanentError(
+            "This channel cannot publish the attached video",
+            "rejected_before_send",
+          );
+        }
+        if (
+          adaptation.itemBrandId !== adaptation.channelBrandId ||
+          adaptation.videoAuthorizedId !== adaptation.videoMediaId
+        ) {
+          throw new ClassifiedPermanentError(
+            "Video does not belong to this post's organization and brand",
+            "rejected_before_send",
+          );
+        }
+        if (
+          !adaptation.videoByteSize ||
+          adaptation.videoByteSize < 1024 ||
+          adaptation.videoByteSize > 20 * 1024 * 1024 ||
+          text.length > 1024
+        ) {
+          throw new ClassifiedPermanentError(
+            "Telegram video must be under 20 MB with a caption of at most 1024 characters",
+            "rejected_before_send",
+          );
+        }
+        const file = path.join(
+          process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media"),
+          `${adaptation.videoMediaId}.mp4`,
+        );
+        let bytes: Buffer;
+        try {
+          bytes = await readFile(file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ClassifiedPermanentError(
+              "Video is missing from media storage",
+              "rejected_before_send",
+            );
+          }
+          throw error;
+        }
+        if (bytes.length !== adaptation.videoByteSize) {
+          throw new ClassifiedPermanentError(
+            "Video bytes no longer match the reviewed upload",
+            "rejected_before_send",
+          );
+        }
+        video = { bytes, mimeType: "video/mp4" };
+      }
+      result = await publisher.publish(
+        parsed.data,
+        { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
+        {
+          baseUrl,
+        },
+      );
     } catch (error) {
       const message = (error as Error).message;
       if (error instanceof UnknownOutcomePublishError) {

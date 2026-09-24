@@ -76,6 +76,27 @@ beforeEach(() => {
 });
 
 describe("the step checklist", () => {
+  it("shows an optional cover failure without hiding the completed text draft", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        input: { kind: "brief", text: "Brief", channelIds: [CHANNEL_A], generateCover: true },
+        steps: { cover: { status: "succeeded", output: { mediaId: null, result: "unavailable" } } },
+      }),
+    });
+    await renderRun();
+    const rows = await screen.findAllByRole("listitem");
+    const cover = rows.find((row) => row.textContent?.startsWith(en.Runs.step.cover));
+    expect(cover).toHaveTextContent(en.Runs.stepState.unavailable);
+    expect(cover).toHaveTextContent(en.Runs.coverUnavailable);
+    expect(screen.getByRole("link", { name: en.Runs.draftReady })).toHaveAttribute(
+      "href",
+      `/en/content/${ITEM_ID}`,
+    );
+  });
+
   it("derives each step's state from the run's checkpoints", async () => {
     installHandlers({
       current: makeRun({
@@ -105,6 +126,39 @@ describe("the step checklist", () => {
     await renderRun();
 
     expect(await screen.findByText("A post about our new pricing")).toBeInTheDocument();
+  });
+
+  it("links selected brand notes without claiming they verify the draft", async () => {
+    const noteId = "77777777-7777-4777-8777-777777777777";
+    installHandlers({
+      current: makeRun({
+        steps: {
+          knowledge: {
+            status: "succeeded",
+            output: {
+              entries: [
+                {
+                  id: noteId,
+                  title: "Autumn guide",
+                  category: "product_info",
+                  content: "Private context",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.knowledgeNotesTitle)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Autumn guide" })).toHaveAttribute(
+      "href",
+      `/en/brands/55555555-5555-4555-8555-555555555555/knowledge#knowledge-${noteId}`,
+    );
+    expect(screen.getByText(en.Runs.knowledgeNotesHint)).toBeInTheDocument();
+    expect(screen.queryByText("Private context")).not.toBeInTheDocument();
   });
 
   it("marks the step the run died on as failed and shows the run's own error", async () => {
@@ -268,6 +322,50 @@ describe("the finished draft is offered, never forced", () => {
  * prompt promises the model the list will be shown under.
  */
 describe("the claims the run listed", () => {
+  it("shows a frozen excerpt and links separately to the current brand note without a verified badge", async () => {
+    const noteId = "11111111-1111-4111-8111-111111111111";
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        steps: {
+          knowledge: {
+            status: "succeeded",
+            output: {
+              entries: [
+                { id: noteId, title: "Office", content: "The Lisbon office opened in 2024." },
+              ],
+            },
+          },
+          factcheck: {
+            status: "succeeded",
+            output: {
+              claims: [
+                {
+                  text: "The office opened in 2024.",
+                  needsCheck: true,
+                  sourceId: `note:${noteId}`,
+                  sourceQuote: "The Lisbon office opened in 2024.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    const heading = await screen.findByText(en.Runs.step.factcheck);
+    const row = heading.closest("li") as HTMLElement;
+    expect(within(row).getByText(en.Runs.foundInBrandNote)).toBeInTheDocument();
+    expect(within(row).getByText(/The Lisbon office opened in 2024/)).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: en.Runs.currentNote })).toHaveAttribute(
+      "href",
+      `/en/brands/55555555-5555-4555-8555-555555555555/knowledge#knowledge-${noteId}`,
+    );
+    expect(row).not.toHaveTextContent(/verified|fact-checked/i);
+  });
+
   const CLAIMS = [
     { text: "Revenue tripled in the second quarter.", needsCheck: true },
     { text: "Our office is in Lisbon.", needsCheck: false },
@@ -564,6 +662,18 @@ describe("a run drafted from pasted material", () => {
       },
     });
   }
+
+  it.each(["product_update", "repost", "comparison", "case_study"] as const)(
+    "shows the selected %s format on the run receipt",
+    async (contentType) => {
+      installHandlers({ current: sourceRun({ contentType }) });
+
+      await renderRun();
+
+      expect(await screen.findByText(en.Runs.contentTypeLabel)).toBeInTheDocument();
+      expect(screen.getByText(en.Runs.contentType[contentType])).toBeInTheDocument();
+    },
+  );
 
   it("shows the material it was drafted from, under its own label", async () => {
     installHandlers({ current: sourceRun() });

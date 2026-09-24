@@ -2,10 +2,14 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type ApiErrorCode,
+  COVER_SUPPORTED_PLATFORMS,
   DISMISSABLE_RUN_STATUSES,
+  IMAGE_CALL_STEPS,
   isLiveRunStatus,
   LIVE_RUN_STATUSES,
   MAX_CONCURRENT_RUNS,
+  MAX_IMAGE_CALLS_PER_HOUR,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   RUN_LIST_STATES,
   type RunCreate,
   type RunListInput,
@@ -183,7 +187,6 @@ function isCancellable(status: RunStatus): status is CancellableStatus {
  * the one-argument space `runMigrations` uses — so the two can never collide
  * however their keys hash.
  */
-const ADMISSION_LOCK_NAMESPACE = 0x7a11;
 
 /**
  * The two schemas `retry` validates with, through the SAME pipe the HTTP
@@ -287,7 +290,7 @@ export class RunsRepository {
     if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
 
     const brandChannels = await db
-      .select({ id: schema.channels.id })
+      .select({ id: schema.channels.id, platform: schema.channels.platform })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.brandId, data.brandId)));
     if (brandChannels.length === 0) {
@@ -303,6 +306,32 @@ export class RunsRepository {
       // caller's side it is the identical mistake.
       throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
     }
+    if (data.generateCover) {
+      const chosen = brandChannels.filter((channel) => data.channelIds.includes(channel.id));
+      if (
+        chosen.some(
+          (channel) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+        )
+      ) {
+        throw badRequest(
+          "content_media_unsupported",
+          "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
+        );
+      }
+      const google = await db
+        .select({ id: schema.aiCredentials.id })
+        .from(schema.aiCredentials)
+        .where(
+          and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+        )
+        .limit(1);
+      if (!google[0]) {
+        throw badRequest(
+          "cover_requires_google_key",
+          "Add a Google AI key before requesting a cover",
+        );
+      }
+    }
   }
 
   /**
@@ -317,9 +346,9 @@ export class RunsRepository {
    * this transaction holds any row lock (so it cannot participate in a
    * deadlock), and only ever contends with another create for the SAME org.
    */
-  private async admit(tx: Tx, orgId: string): Promise<void> {
+  private async admit(tx: Tx, orgId: string, generateCover = false): Promise<void> {
     await tx.execute(
-      sql`select pg_advisory_xact_lock(${ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+      sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
     );
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })
@@ -336,6 +365,31 @@ export class RunsRepository {
         "run_limit_reached",
         `This organization already has ${MAX_CONCURRENT_RUNS} generation runs queued or running; wait for one to finish or cancel it`,
       );
+    }
+    if (generateCover) {
+      const spent = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.usageLedger)
+        .where(
+          and(
+            eq(schema.usageLedger.orgId, orgId),
+            inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+            sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+          ),
+        );
+      const reserved = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
+            sql`${schema.pipelineRuns.input}->>'generateCover' = 'true'`,
+          ),
+        );
+      if ((spent[0]?.count ?? 0) + (reserved[0]?.count ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
+        throw conflict("media_generation_limit", "The hourly image generation limit is reached");
+      }
     }
   }
 
@@ -371,7 +425,7 @@ export class RunsRepository {
     const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
 
     const id = await db.transaction(async (tx) => {
-      await this.admit(tx, orgId);
+      await this.admit(tx, orgId, data.generateCover);
       const inserted = await tx
         .insert(schema.pipelineRuns)
         .values({
@@ -387,13 +441,21 @@ export class RunsRepository {
               ? // The refine guarantees at least one of the two is non-blank, so
                 // with no material the brief is non-null. This is the one place
                 // that guarantee is invisible to the compiler.
-                { kind: "brief", text: brief as string, channelIds: data.channelIds }
+                {
+                  kind: "brief",
+                  text: brief as string,
+                  channelIds: data.channelIds,
+                  ...(data.generateCover && { generateCover: true }),
+                  ...(data.contentType && { contentType: data.contentType }),
+                }
               : {
                   kind: "source",
                   text: brief,
                   sourceUrl: data.sourceUrl ?? null,
                   material,
                   channelIds: data.channelIds,
+                  ...(data.generateCover && { generateCover: true }),
+                  ...(data.contentType && { contentType: data.contentType }),
                 },
         })
         .returning({ id: schema.pipelineRuns.id });
@@ -452,6 +514,8 @@ export class RunsRepository {
       orgId,
       parseRunCreate.transform({
         brandId: row.brandId,
+        contentType: stored.contentType,
+        generateCover: stored.generateCover,
         brief: stored.text ?? undefined,
         ...(stored.kind === "source"
           ? { material: stored.material, sourceUrl: stored.sourceUrl ?? undefined }

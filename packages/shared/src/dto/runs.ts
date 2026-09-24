@@ -153,6 +153,24 @@ export const MAX_SOURCE_URL_LENGTH = 2048;
  */
 export const MAX_CONCURRENT_RUNS = 3;
 
+/** Editorial format for an existing generation run; no extra pipeline or model call. */
+export const CONTENT_TYPES = [
+  "social_post",
+  "news_digest",
+  "repost",
+  "product_update",
+  "expert_article",
+  "comparison",
+  "case_study",
+  "educational",
+] as const;
+export type ContentType = (typeof CONTENT_TYPES)[number];
+
+/** Formats that would invite invented facts if admitted without source text. */
+export function contentTypeRequiresMaterial(contentType: ContentType | undefined): boolean {
+  return contentType === "repost" || contentType === "case_study";
+}
+
 /**
  * What the fact-checking step's output is called, everywhere a human can read it.
  *
@@ -199,6 +217,9 @@ const pastedMaterial = z
 export const runCreateSchema = z
   .object({
     brandId: z.string().uuid(),
+    contentType: z.enum(CONTENT_TYPES).optional(),
+    /** One additional BYOK Gemini image call, only when explicitly requested. */
+    generateCover: z.boolean().optional(),
     /**
      * No longer `.min(1)`: a run asked for from pasted material has nothing to
      * put here, and the brief keeps its own meaning beside one — what to do
@@ -210,7 +231,8 @@ export const runCreateSchema = z
       .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
       .optional(),
     /**
-     * The article, pasted. Normalised first and bounded second — the rule
+     * Article text, pasted or accepted from an explicit extraction preview.
+     * Normalised first and bounded second — the rule
      * `contentCreateSchema.body` follows for the same reason
      * (`CLAUDE.md`, `normalizeNewlines`): a `<textarea>` strips CR from its own
      * value, so `MAX_SOURCE_TEXT_LENGTH` has to measure what gets stored rather
@@ -223,7 +245,8 @@ export const runCreateSchema = z
     material: pastedMaterial,
     /**
      * Where the material came from. Recorded for the receipt and the draft; the
-     * server never fetches it, and it never reaches a model.
+     * generation never fetches it, and it never reaches a model. The separate
+     * preview endpoint can fetch a page before the person accepts its text.
      *
      * `http`/`https` only. `z.url()` alone constrains no scheme in zod 4, and
      * this value is rendered as an `<a href>` on two screens and read by the
@@ -285,6 +308,12 @@ export const runCreateSchema = z
   .refine((v) => (v.brief ?? "").trim() !== "" || (v.material ?? "").trim() !== "", {
     message: "provide a brief, material, or both",
     path: ["brief"],
+  })
+  // A retelling or case study cannot be inferred from a brief or URL. The
+  // model receives stored text, not a fetched page or a customer's real story.
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType) || (v.material ?? "").trim() !== "", {
+    message: "this format requires source material",
+    path: ["material"],
   });
 export type RunCreate = z.infer<typeof runCreateSchema>;
 
@@ -390,19 +419,28 @@ export function isRunFailure(value: unknown): value is RunFailure {
  * `kind` is discriminated from the start so a second kind can be added
  * without a migration.
  */
-export const briefRunInputSchema = z.object({
-  kind: z.literal("brief"),
-  text: z.string().min(1),
-  channelIds: z.array(z.string().uuid()).min(1),
-});
+export const briefRunInputSchema = z
+  .object({
+    kind: z.literal("brief"),
+    /** Optional for runs created before content types were introduced. */
+    contentType: z.enum(CONTENT_TYPES).optional(),
+    /** Optional so runs created before cover generation remain executable. */
+    generateCover: z.boolean().optional(),
+    text: z.string().min(1),
+    channelIds: z.array(z.string().uuid()).min(1),
+  })
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
+    message: "this format requires source material",
+    path: ["contentType"],
+  });
 export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
 
 /**
  * A run asked for from material a person pasted — the second thing this column
  * may hold.
  *
- * The bounds mirror the brief member EXACTLY: `.min(1)` on the text a person
- * wrote, no `.max()` anywhere. The length limit belongs to
+ * The bounds mirror the brief member: nonblank text, no `.max()` anywhere.
+ * The length limit belongs to
  * `runCreateSchema.material`, the boundary a request crosses, precisely as
  * `MAX_BRIEF_LENGTH` sits on `runCreateSchema.brief` beside an unbounded
  * `briefRunInputSchema.text`. A stored input is a receipt of what was asked
@@ -410,6 +448,8 @@ export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
  */
 export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
+  contentType: z.enum(CONTENT_TYPES).optional(),
+  generateCover: z.boolean().optional(),
   /**
    * What the person typed, if anything — instructions about the material, not a
    * second thing to work from.
@@ -425,9 +465,9 @@ export const sourceRunInputSchema = z.object({
    */
   text: z.string().min(1).nullable(),
   /**
-   * Where the material came from. Recorded; never fetched, and never sent to a
-   * model in any step — a URL in a prompt invites the model to write as though
-   * it had read the page, which nothing here ever did.
+   * Where the material came from. Recorded; never fetched by a run, and never
+   * sent to a model in any step — the separate preview endpoint may have fetched
+   * it before the text was accepted, but generation works from the stored copy.
    *
    * `http`/`https` only, for the reason `runCreateSchema.sourceUrl` gives, and
    * TOP-LEVEL rather than nested under an attribution object: the gate that
@@ -449,7 +489,9 @@ export const sourceRunInputSchema = z.object({
    * what the run screen says happened, and a receipt resolved through a foreign
    * key renders as a blank the day the row behind it goes.
    */
-  material: z.string().min(1),
+  material: z.string().refine((text) => text.trim() !== "", {
+    message: "source material must not be blank",
+  }),
   channelIds: z.array(z.string().uuid()).min(1),
 });
 export type SourceRunInput = z.infer<typeof sourceRunInputSchema>;

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/main.ts"],
+  entry: ["src/main.ts", "src/telegram-connect.ts", "src/telegram-private-source.ts"],
   format: ["cjs"],
   outExtension: () => ({ js: ".cjs" }),
   clean: true,

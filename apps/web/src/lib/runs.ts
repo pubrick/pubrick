@@ -68,6 +68,7 @@ export const RUN_STEP_BADGE_STATUS: Record<RunStepState, StatusBadgeStatus> = {
   failed: "failed",
   pending: "draft",
   skipped: "draft",
+  unavailable: "failed",
 };
 
 /**
@@ -151,12 +152,19 @@ export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 export type RunDetail = RunDetailDto;
 
 /**
- * The five roles, in the order the worker runs them. `adapter` is one row for
+ * The five text roles, followed by an optional cover. `adapter` is one row for
  * the whole fan-out even though its checkpoints are keyed `adapter:<channelId>`
  * — the human is watching one pipeline, not N of them, and the per-channel
  * progress rides along as a count.
  */
-export const RUN_STEP_KEYS = ["researcher", "writer", "editor", "factcheck", "adapter"] as const;
+export const RUN_STEP_KEYS = [
+  "researcher",
+  "writer",
+  "editor",
+  "factcheck",
+  "adapter",
+  "cover",
+] as const;
 export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
 
 /**
@@ -164,7 +172,7 @@ export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
  * the step is still going to run, and on a run that is over that is a lie.
  * A failed or cancelled run's un-reached steps read "not run" instead.
  */
-export type RunStepState = "done" | "active" | "failed" | "pending" | "skipped";
+export type RunStepState = "done" | "active" | "failed" | "pending" | "skipped" | "unavailable";
 
 export type RunStepProgress = {
   key: RunStepKey;
@@ -189,27 +197,42 @@ const ADAPTER_PREFIX = "adapter:";
 export function runStepStates(run: RunDetail): RunStepProgress[] {
   const channelIds = run.input?.channelIds ?? [];
 
-  return RUN_STEP_KEYS.map((key) => {
-    if (key === "adapter") {
-      const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);
-      const done = checkpoints.filter((c) => c?.status === "succeeded").length;
-      const total = channelIds.length;
-      const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
-      const state =
-        total > 0 && done === total
-          ? "done"
-          : stepState(
-              run,
-              checkpoints.find((c) => c?.status === "failed"),
-              isCurrent,
-            );
-      return { key, state, done, total };
-    }
+  return RUN_STEP_KEYS.filter((key) => key !== "cover" || run.input.generateCover === true).map(
+    (key) => {
+      if (key === "adapter") {
+        const checkpoints = channelIds.map(
+          (channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`],
+        );
+        const done = checkpoints.filter((c) => c?.status === "succeeded").length;
+        const total = channelIds.length;
+        const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
+        const state =
+          total > 0 && done === total
+            ? "done"
+            : stepState(
+                run,
+                checkpoints.find((c) => c?.status === "failed"),
+                isCurrent,
+              );
+        return { key, state, done, total };
+      }
 
-    const checkpoint = run.steps[key];
-    const isCurrent = run.currentStep === key;
-    return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
-  });
+      const checkpoint = run.steps[key];
+      const isCurrent = run.currentStep === key;
+      if (key === "cover" && checkpoint?.status === "succeeded") {
+        const output = checkpoint.output;
+        if (
+          typeof output === "object" &&
+          output !== null &&
+          "result" in output &&
+          output.result === "unavailable"
+        ) {
+          return { key, state: "unavailable", done: 0, total: 0 };
+        }
+      }
+      return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
+    },
+  );
 }
 
 function stepState(
@@ -270,11 +293,38 @@ export function runFailureMessage(
  *
  * `needsCheck` is the model's judgement that a reader could reasonably ask
  * whether the claim is true — NOT a verdict about the claim, and not the
- * result of a check. Nothing was checked: this step has no sources (see
- * `@pubrick/ai`'s FACTCHECK, and `CLAIMS_TO_VERIFY_LABEL`, which is what the
- * heading over this list says).
+ * result of a check. A source excerpt only shows that matching words appeared
+ * in material supplied for this run; no independent truth check occurred.
+ * `CLAIMS_TO_VERIFY_LABEL` remains the heading over the whole list.
  */
-export type RunClaim = { text: string; needsCheck: boolean };
+export type RunClaim = {
+  text: string;
+  needsCheck: boolean;
+  sourceId?: string | null;
+  sourceQuote?: string | null;
+};
+
+const NOTE_SOURCE_ID =
+  /^note:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+
+function excerptCorpus(run: RunDetail): Map<string, string> {
+  const corpus = new Map<string, string>();
+  const output = succeededOutput(run, "knowledge");
+  if (isRecord(output) && Array.isArray(output.entries)) {
+    for (const entry of output.entries.slice(0, 5)) {
+      if (isRecord(entry) && typeof entry.id === "string" && typeof entry.content === "string") {
+        const id = `note:${entry.id}`;
+        if (NOTE_SOURCE_ID.test(id)) corpus.set(id, entry.content.slice(0, 3000));
+      }
+    }
+  }
+  if (run.input.kind === "source") corpus.set("material", run.input.material.slice(0, 6000));
+  return corpus;
+}
+
+function normalizedExcerpt(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
 
 /**
  * A step's stored output, but only from a checkpoint that SUCCEEDED.
@@ -283,13 +333,37 @@ export type RunClaim = { text: string; needsCheck: boolean };
  * its `output` is not a result. Returning it would put half a list under a
  * heading promising a whole one.
  */
-function succeededOutput(run: RunDetail, key: RunStepKey): unknown {
+function succeededOutput(run: RunDetail, key: RunStepKey | "knowledge"): unknown {
   const checkpoint = run.steps?.[key];
   return checkpoint?.status === "succeeded" ? checkpoint.output : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type RunKnowledgeNote = { id: string | null; title: string };
+
+/** Notes actually selected for this run's model context, not claims verified by them. */
+export function runKnowledgeNotes(run: RunDetail): RunKnowledgeNote[] | null {
+  const output = succeededOutput(run, "knowledge");
+  if (!isRecord(output) || !Array.isArray(output.entries)) return null;
+  const notes: RunKnowledgeNote[] = [];
+  for (const entry of output.entries) {
+    if (!isRecord(entry) || typeof entry.title !== "string" || entry.title === "") return null;
+    const id = entry.id;
+    // Older checkpoints have no ID. Never put an arbitrary stored value into
+    // a URL; display its title without a link if the ID is missing or invalid.
+    notes.push({
+      id:
+        typeof id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+          ? id
+          : null,
+      title: entry.title,
+    });
+  }
+  return notes;
 }
 
 /**
@@ -315,11 +389,27 @@ export function runClaims(run: RunDetail): RunClaim[] | null {
   const output = succeededOutput(run, "factcheck");
   if (!isRecord(output) || !Array.isArray(output.claims)) return null;
   const claims: RunClaim[] = [];
+  const corpus = excerptCorpus(run);
   for (const claim of output.claims) {
     if (!isRecord(claim)) return null;
     const { text, needsCheck } = claim;
     if (typeof text !== "string" || text === "" || typeof needsCheck !== "boolean") return null;
-    claims.push({ text, needsCheck });
+    const { sourceId, sourceQuote } = claim;
+    if (sourceId === undefined && sourceQuote === undefined) {
+      claims.push({ text, needsCheck });
+      continue;
+    }
+    const quote = typeof sourceQuote === "string" ? normalizedExcerpt(sourceQuote) : "";
+    if (
+      typeof sourceId === "string" &&
+      quote.length > 0 &&
+      quote.length <= 320 &&
+      normalizedExcerpt(corpus.get(sourceId) ?? "").includes(quote)
+    ) {
+      claims.push({ text, needsCheck, sourceId, sourceQuote: quote });
+    } else {
+      claims.push({ text, needsCheck, sourceId: null, sourceQuote: null });
+    }
   }
   return claims;
 }

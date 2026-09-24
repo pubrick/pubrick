@@ -6,6 +6,7 @@ import {
   type ChannelUpdate,
   decryptJson,
   encryptJson,
+  isManualPlatform,
   isOutstandingAdaptation,
   isUnreadableCiphertext,
   rewrapJson,
@@ -25,6 +26,7 @@ const PUBLIC_COLUMNS = {
   brandId: schema.channels.brandId,
   platform: schema.channels.platform,
   name: schema.channels.name,
+  metricsAutoRefresh: schema.channels.metricsAutoRefresh,
   createdAt: schema.channels.createdAt,
   /**
    * Returned because it is the only thing that answers "when was this
@@ -87,10 +89,17 @@ export class ChannelsRepository {
    * written, so a refused create leaves no row and no ciphertext behind.
    */
   async create(orgId: string, data: ChannelCreate) {
-    if (!getPublisher(data.platform)) {
+    if (!getPublisher(data.platform) && !isManualPlatform(data.platform)) {
       throw new BadRequestException(
         `Pubrick cannot publish to ${data.platform} yet, so a channel for it would never deliver a post`,
       );
+    }
+    let credentialsEncrypted: string | null = null;
+    if (!isManualPlatform(data.platform)) {
+      if (!data.credentials) {
+        throw new BadRequestException("Automatic channels require credentials");
+      }
+      credentialsEncrypted = encryptJson(data.credentials, env.APP_ENCRYPTION_KEY);
     }
     const brand = await db
       .select({ id: schema.brands.id })
@@ -105,7 +114,7 @@ export class ChannelsRepository {
         brandId: data.brandId,
         platform: data.platform,
         name: data.name,
-        credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY),
+        credentialsEncrypted,
       })
       .returning(PUBLIC_COLUMNS);
     return rows[0];
@@ -142,10 +151,27 @@ export class ChannelsRepository {
    * and `updated_at` always moves.
    */
   async update(orgId: string, id: string, data: ChannelUpdate) {
+    if (data.credentials !== undefined || data.metricsAutoRefresh === true) {
+      const channel = await db
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
+        .limit(1);
+      if (channel[0] && isManualPlatform(channel[0].platform)) {
+        if (data.credentials !== undefined)
+          throw new BadRequestException("Manual channels do not use credentials");
+      }
+      if (channel[0] && data.metricsAutoRefresh === true && channel[0].platform !== "vk") {
+        throw new BadRequestException("Automatic metric checks are only available for VK channels");
+      }
+    }
     const rows = await db
       .update(schema.channels)
       .set({
         ...(data.name === undefined ? {} : { name: data.name }),
+        ...(data.metricsAutoRefresh === undefined
+          ? {}
+          : { metricsAutoRefresh: data.metricsAutoRefresh }),
         ...(data.credentials === undefined
           ? {}
           : { credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY) }),
@@ -291,6 +317,12 @@ export class ChannelsRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw notFound("channel_not_found", "Channel not found");
+    if (row.credentialsEncrypted === null) {
+      throw conflict(
+        "unreadable_credentials",
+        "This channel has no automatic publishing credentials",
+      );
+    }
 
     let credentials: Record<string, string>;
     try {
@@ -397,6 +429,13 @@ export class ChannelsRepository {
     const channel = rows[0];
     if (!channel) throw notFound("channel_not_found", "Channel not found");
 
+    if (isManualPlatform(channel.platform)) {
+      return {
+        ok: false,
+        reason: "Manual channels are prepared in Pubrick and published by a person",
+      };
+    }
+
     const publisher = getPublisher(channel.platform);
     if (!publisher) return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
 
@@ -412,7 +451,15 @@ export class ChannelsRepository {
     // adapter bug or an unanticipated response shape must not escape as a
     // raw exception and become an HTTP 500 here.
     try {
-      return await publisher.verify(parsed.data, { baseUrl: env.TELEGRAM_API_BASE_URL });
+      const baseUrl =
+        channel.platform === "vk"
+          ? env.VK_API_BASE_URL
+          : channel.platform === "max"
+            ? env.MAX_API_BASE_URL
+            : channel.platform === "telegram"
+              ? env.TELEGRAM_API_BASE_URL
+              : undefined;
+      return await publisher.verify(parsed.data, { baseUrl });
     } catch {
       return { ok: false, reason: "Connection test failed unexpectedly" };
     }

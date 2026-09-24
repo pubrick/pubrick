@@ -26,37 +26,96 @@ export const factcheckSchema = z.object({
     z.object({
       text: z.string().min(1),
       needsCheck: z.boolean(),
+      sourceId: z.string().nullable().optional(),
+      sourceQuote: z.string().nullable().optional(),
     }),
   ),
 });
 export type FactcheckOutput = z.infer<typeof factcheckSchema>;
 
-export type FactcheckInput = { body: string };
+export type FactcheckSource = { id: string; text: string };
+export type FactcheckInput = { body: string; sources?: FactcheckSource[] };
+
+const NOTE_ID = /^note:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const QUOTE_LIMIT = 320;
+const NOTE_LIMIT = 3000;
+const MATERIAL_LIMIT = 6000;
+
+/** The same bounded snapshots are sent to the model and used for validation. */
+export function factcheckSources(
+  knowledge: readonly { id?: string; content: string }[] | undefined,
+  material: string | null | undefined,
+): FactcheckSource[] {
+  const sources: FactcheckSource[] = [];
+  for (const entry of (knowledge ?? []).slice(0, 5)) {
+    const id = `note:${entry.id ?? ""}`;
+    if (NOTE_ID.test(id) && entry.content) {
+      sources.push({ id, text: entry.content.slice(0, NOTE_LIMIT) });
+    }
+  }
+  if (material) sources.push({ id: "material", text: material.slice(0, MATERIAL_LIMIT) });
+  return sources;
+}
+
+function normalized(text: string): string {
+  return text.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
+
+/** Never let a model-created citation become evidence without an exact excerpt. */
+export function validateFactcheckSources(
+  output: FactcheckOutput,
+  sources: readonly FactcheckSource[],
+): FactcheckOutput {
+  const corpus = new Map(sources.map((source) => [source.id, normalized(source.text)]));
+  return {
+    claims: output.claims.map((claim) => {
+      if (claim.sourceId === undefined && claim.sourceQuote === undefined) return claim;
+      const quote = typeof claim.sourceQuote === "string" ? normalized(claim.sourceQuote) : "";
+      if (
+        typeof claim.sourceId === "string" &&
+        quote.length > 0 &&
+        quote.length <= QUOTE_LIMIT &&
+        corpus.get(claim.sourceId)?.includes(quote)
+      ) {
+        return { ...claim, sourceQuote: quote };
+      }
+      return { ...claim, sourceId: null, sourceQuote: null };
+    }),
+  };
+}
 
 /**
  * Step 4 — list the claims, check none of them.
  *
- * With no retrieval, this step **verifies nothing**: it reads the draft and
+ * This step **verifies nothing**: it reads the draft and
  * lists what a person would have to confirm before publishing. The list rides
  * with the draft into the review queue under the heading
  * `CLAIMS_TO_VERIFY_LABEL`, and no string anywhere — instructions, schema, API
  * or UI — may suggest a check happened. A run started from a pasted story
- * gives the step a single source, but a single source is attribution, not
- * verification: this rule is unconditional, not "unconditional until a
- * source exists". *Found in the source* would be the honest upgrade, and is
- * deliberately not taken here — saying otherwise would be the exact slop
- * this product exists to oppose.
+ * gives the step supplied material, but a source excerpt is attribution, not
+ * independent verification. The human still checks every factual claim.
  */
-export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = defineStep({
+const factcheckStep = defineStep<FactcheckInput, FactcheckOutput>({
   name: "factcheck",
   schema: factcheckSchema,
   role: [
-    `You read a draft post and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
-    "You have no sources and no way to look anything up, so you check nothing and decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
+    `You read a draft and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
+    "You have no way to look anything up. Supplied excerpts are only material someone provided, not independent verification. Decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
     "Produce, for each claim:",
     "- text: the claim in one sentence, as the draft states it.",
     "- needsCheck: true when a reader could reasonably ask whether it is true — numbers, dates, prices, comparisons, superlatives, attributions, anything about the world outside the post. False for common knowledge and for plainly signalled opinion.",
+    "- sourceId and sourceQuote: optional pair. If a short exact excerpt from a supplied SOURCE block relates to the claim, copy its source ID and verbatim excerpt. Otherwise omit both. A URL alone is never a source, and an excerpt does not prove the claim.",
     "If the draft makes no factual claims, return an empty list.",
   ],
-  material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
+  material: (_ctx, input) => [
+    { label: "DRAFT", text: input.body },
+    ...(input.sources ?? []).map((source) => ({ label: `SOURCE ${source.id}`, text: source.text })),
+  ],
 });
+
+export const FACTCHECK: Step<FactcheckInput, FactcheckOutput> = {
+  name: factcheckStep.name,
+  schema: factcheckStep.schema,
+  run: async (ctx, input) =>
+    validateFactcheckSources(await factcheckStep.run(ctx, input), input.sources ?? []),
+};

@@ -6,10 +6,24 @@ export {
   withRunFailure,
 } from "./classify.js";
 export {
+  GeminiImageCaller,
+  IMAGE_MODEL,
+  type ImageCall,
+  type ImageUsage,
+  imageCostUsd,
+} from "./gemini-image.js";
+export {
   type GenerateStructuredArgs,
   generateStructured,
   type ModelCallOptions,
 } from "./generate.js";
+export {
+  embedKnowledgeBatch,
+  embedKnowledgeText,
+  KNOWLEDGE_EMBEDDING_DIMENSIONS,
+  KNOWLEDGE_EMBEDDING_MODEL,
+  type KnowledgeEmbeddingTask,
+} from "./knowledge-embedding.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,
@@ -35,7 +49,9 @@ export {
   FACTCHECK,
   type FactcheckInput,
   type FactcheckOutput,
+  type FactcheckSource,
   factcheckSchema,
+  factcheckSources,
   type Material,
   type Platform,
   RESEARCHER,
@@ -48,11 +64,13 @@ export {
   type StepChannel,
   type StepContext,
   type StepUsageSink,
+  validateFactcheckSources,
   WRITER,
   type WriterInput,
 } from "./steps/index.js";
 export {
   type CostSource,
+  callOutcomeOf,
   type MeteredCall,
   type ProviderCallResult,
   providerReportedCostUsd,

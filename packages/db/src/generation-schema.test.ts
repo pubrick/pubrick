@@ -72,6 +72,7 @@ describe("generation schema", () => {
 
     expect(ADAPTATION_STATUSES).toEqual([
       "pending",
+      "manual_ready",
       "scheduled",
       "queued",
       "publishing",

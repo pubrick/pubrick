@@ -21,6 +21,7 @@ import {
   runClaims,
   runEditorChanges,
   runFailureMessage,
+  runKnowledgeNotes,
   runStepStates,
 } from "@/lib/runs";
 
@@ -45,7 +46,7 @@ const isRunFinished = (run: RunDetail) => isTerminalRunStatus(run.status);
  * next action to teach, and "the step listed nothing" is a finding with no next
  * action, so it would have to invent one.
  */
-function StepLines({ lines, empty, mark }: StepLinesProps) {
+function StepLines({ lines, empty, mark, source }: StepLinesProps) {
   if (lines === null) return null;
   if (lines.length === 0) {
     return <p className="mt-2 text-sm text-fg-tertiary">{empty}</p>;
@@ -62,13 +63,24 @@ function StepLines({ lines, empty, mark }: StepLinesProps) {
           {line.marked && mark !== undefined && (
             <span className="ml-2 text-[13px] text-fg-tertiary">{mark}</span>
           )}
+          {line.sourceId && line.sourceQuote && source && (
+            <div className="mt-1 border-l-2 border-border-soft pl-3 text-[13px] text-fg-tertiary">
+              <p>{source(line.sourceId)}</p>
+              <p className="whitespace-pre-wrap">“{line.sourceQuote}”</p>
+            </div>
+          )}
         </li>
       ))}
     </ul>
   );
 }
 
-type StepLine = { text: string; marked: boolean };
+type StepLine = {
+  text: string;
+  marked: boolean;
+  sourceId?: string | null;
+  sourceQuote?: string | null;
+};
 
 /**
  * The two step outputs, each in the one shape `StepLines` renders — and each
@@ -76,7 +88,14 @@ type StepLine = { text: string; marked: boolean };
  * ("nothing to say") and not an absence to be mapped over.
  */
 function claimLines(claims: RunClaim[] | null): StepLine[] | null {
-  return claims === null ? null : claims.map((c) => ({ text: c.text, marked: c.needsCheck }));
+  return claims === null
+    ? null
+    : claims.map((c) => ({
+        text: c.text,
+        marked: c.needsCheck,
+        sourceId: c.sourceId,
+        sourceQuote: c.sourceQuote,
+      }));
 }
 
 function changeLines(changes: string[] | null): StepLine[] | null {
@@ -88,6 +107,7 @@ type StepLinesProps = {
   empty: string;
   /** Suffix for a marked line. Only the claims have one. */
   mark?: string;
+  source?: (id: string) => ReactNode;
 };
 
 /** One labelled thing the run was asked for. Every block in the card is one. */
@@ -101,7 +121,7 @@ function RunField({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * The generation receipt: five steps as a live checklist, the error when the
+ * The generation receipt: text steps and an optional cover as a live checklist, the error when the
  * run failed, and a "Draft ready" link when it worked.
  *
  * The link is a link, and this screen NEVER navigates on its own. Auto-forwarding
@@ -173,6 +193,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
    * where the link used to be.
    */
   const draftDeleted = run?.status === "succeeded" && run.contentItemId === null;
+  const knowledgeNotes = run ? runKnowledgeNotes(run) : null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
   // One primary action, and only one: the finished draft while there is one to
@@ -215,10 +236,43 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             lines={claimLines(runClaims(run))}
             empty={t("claimsEmpty")}
             mark={t("claimNeedsCheck")}
+            source={(id) =>
+              id === "material" ? (
+                t("foundInMaterial")
+              ) : (
+                <>
+                  {t("foundInBrandNote")}{" "}
+                  <Link
+                    href={`/${locale}/brands/${run.brandId}/knowledge#knowledge-${id.slice(5)}`}
+                    className="text-accent hover:underline"
+                  >
+                    {t("currentNote")}
+                  </Link>
+                </>
+              )
+            }
           />
         );
       case "editor":
         return <StepLines lines={changeLines(runEditorChanges(run))} empty={t("changesEmpty")} />;
+      case "cover": {
+        const checkpoint = run.steps.cover;
+        if (checkpoint?.status !== "succeeded") return null;
+        const output = checkpoint.output;
+        const unavailable =
+          typeof output === "object" &&
+          output !== null &&
+          "result" in output &&
+          output.result === "unavailable";
+        const message = unavailable
+          ? "coverUnavailable"
+          : run.contentItemId
+            ? "coverAttached"
+            : isTerminalRunStatus(run.status)
+              ? "coverSavedNoDraft"
+              : "coverReady";
+        return <p className="mt-2 text-sm text-fg-secondary">{t(message)}</p>;
+      }
       // The other three steps produce the draft itself (or a per-channel copy
       // of it), and the draft belongs on the item screen where it can be
       // edited. A receipt is not a second, frozen copy of the post.
@@ -261,6 +315,11 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           */}
           <Card className="mb-6">
             <div className="flex flex-col gap-4">
+              <RunField label={t("contentTypeLabel")}>
+                <p className="text-sm text-fg">
+                  {t(`contentType.${run.input.contentType ?? "social_post"}`)}
+                </p>
+              </RunField>
               {run.input.kind === "source" && run.input.text === null ? (
                 /*
                   Not an empty "Brief" block. A label with nothing under it reads
@@ -312,6 +371,34 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               )}
             </div>
           </Card>
+
+          {knowledgeNotes !== null && (
+            <Card className="mb-6">
+              <h2 className="mb-2 text-base font-semibold text-fg">{t("knowledgeNotesTitle")}</h2>
+              {knowledgeNotes.length === 0 ? (
+                <p className="text-sm text-fg-secondary">{t("knowledgeNotesEmpty")}</p>
+              ) : (
+                <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+                  {knowledgeNotes.map((note, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: frozen checkpoint entries are never reordered or edited
+                    <li key={`${note.id ?? note.title}-${index}`}>
+                      {note.id ? (
+                        <Link
+                          href={`/${locale}/brands/${run.brandId}/knowledge#knowledge-${note.id}`}
+                          className="text-accent hover:underline"
+                        >
+                          {note.title}
+                        </Link>
+                      ) : (
+                        <span className="text-fg">{note.title}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-3 text-sm text-fg-tertiary">{t("knowledgeNotesHint")}</p>
+            </Card>
+          )}
 
           {/* A failed run produces no content item, so this sentence is the
               only place the failure is explained at all — collapsing it into a

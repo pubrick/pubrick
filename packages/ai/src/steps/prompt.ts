@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { PermanentError } from "@pubrick/shared";
+import { PermanentError, PROMPT_ROLES } from "@pubrick/shared";
 import type { ZodType } from "zod";
 import { withRunFailure } from "../classify.js";
 import { generateStructured } from "../generate.js";
+import { contentTypePolicy } from "./content-type-policy.js";
 import type { Step, StepAttribution, StepContext } from "./types.js";
 
 /**
@@ -30,6 +31,7 @@ export type Material = { label: string; text: string };
  * the same trust tier as the brand's voice: org configuration, not content.)
  */
 export function instructionsFor(ctx: StepContext, role: readonly string[]): string {
+  const currentDate = (ctx.now?.() ?? new Date()).toISOString().slice(0, 10);
   const brand = [`Name: ${ctx.brand.name}`];
   // An unset voice omits its line. Interpolating a null would tell the model the
   // brand's voice is the word "null", which it would dutifully take as guidance.
@@ -48,6 +50,8 @@ export function instructionsFor(ctx: StepContext, role: readonly string[]): stri
 
   return [
     ...role,
+    "",
+    `Current date (UTC): ${currentDate}. Use it for date and year references; do not treat it as evidence that a claim in the supplied material is current.`,
     "",
     "About the brand you are writing for:",
     ...brand.map((line) => `- ${line}`),
@@ -118,13 +122,22 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
   return {
     name: spec.name,
     schema: spec.schema,
-    run: (ctx, input) =>
-      callStep(ctx, {
+    run: (ctx, input) => {
+      const key = spec.name.startsWith("adapter:") ? "adapter" : spec.name;
+      const role = PROMPT_ROLES.find((candidate) => candidate === key);
+      const guidance = role ? ctx.promptGuidance?.[role] : undefined;
+      const format = role ? contentTypePolicy(ctx.contentType ?? "social_post", role) : [];
+      return callStep(ctx, {
         schema: spec.schema,
         attribution,
-        role: spec.role,
+        role: [
+          ...spec.role,
+          ...format,
+          ...(guidance ? ["", "Additional guidance set by this organization:", guidance] : []),
+        ],
         material: spec.material(ctx, input),
-      }),
+      });
+    },
   };
 }
 

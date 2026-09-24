@@ -2,6 +2,9 @@ import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
+import { DraftRevisionCaller } from "./draft-revision.caller";
+import { EditorialNotesRepository } from "./editorial-notes.repository";
+import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller } from "./refine.caller";
 
 /**
@@ -12,13 +15,18 @@ import { RefineCaller } from "./refine.caller";
  * against one vendor and refined against another is a bill nobody can explain,
  * and `preferredCredential` is the one function that decides.
  *
- * `RefineCaller` is provided here rather than beside the credentials because it
- * belongs to this feature: it is every network line of a refine, and it is the
- * seam the content e2e replaces so that no test reaches a provider.
+ * Editor model callers live here: each owns every network line of its action,
+ * so content e2e tests can replace them without reaching a provider.
  */
 @Module({
   imports: [AiCredentialsModule],
   controllers: [ContentController],
-  providers: [ContentRepository, RefineCaller],
+  providers: [
+    ContentRepository,
+    EditorialNotesRepository,
+    RefineCaller,
+    ReadaptCaller,
+    DraftRevisionCaller,
+  ],
 })
 export class ContentModule {}

@@ -52,6 +52,7 @@
         // decides what that suite is actually testing. Undeclared, the suite
         // would silently test the default whatever an operator's shell says.
         "PUBLISH_MAX_LATENESS_HOURS",
+        "MEDIA_STORAGE_DIR",
         "DATABASE_URL",
         "HOME",
         "PATH",

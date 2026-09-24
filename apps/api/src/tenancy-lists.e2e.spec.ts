@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { encodeContentCursor } from "@pubrick/shared";
+import sharp from "sharp";
 import request from "supertest";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -26,7 +27,11 @@ type ListEndpoint = {
   controller: string;
   /** Pulls the identifying value out of one row of the response. */
   identify: (row: Record<string, unknown>) => string;
+  /** Unwrap a collection response that also carries metadata. */
+  rows?: (body: unknown) => Record<string, unknown>[];
   seed: (agent: request.Agent) => Promise<Seeded>;
+  /** A foreign brand id is rejected before listing, rather than returning an empty list. */
+  foreignBrandNotFound?: boolean;
 };
 
 type Seeded = {
@@ -34,6 +39,8 @@ type Seeded = {
   id: string;
   /** Every list URL that must contain it — one per branch of the query. */
   paths: string[];
+  /** Public routes have no cookie authority; seed supplies their bearer key. */
+  bearer?: string;
 };
 
 /**
@@ -43,6 +50,14 @@ type Seeded = {
  */
 const NOT_A_TENANT_LIST: Record<string, string> = {
   health: "anonymous liveness probe; returns a status and a version, never a row",
+  notifications:
+    "one org-scoped settings singleton, not a collection; notifications.repository.e2e.spec.ts proves another org sees only its defaults",
+  "brands/:brandId/feed":
+    "one brand-scoped feed resource, not an array collection; feeds.e2e.spec.ts proves another org cannot read its URL or entries",
+  "brands/:brandId/autopilot":
+    "one brand-scoped settings resource, not an array collection; autopilot.e2e.spec.ts proves another org cannot read its URL or history",
+  "client-review/:token":
+    "one bearer-capability preview, not a collection; client-review.e2e.spec.ts proves invalid and changed links close and status remains org-scoped",
 };
 
 async function orgAgent(app: INestApplication): Promise<request.Agent> {
@@ -95,11 +110,144 @@ function justAfter(createdAt: string): string {
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
   {
+    controller: "webhooks",
+    identify: id,
+    seed: async (agent) => {
+      const webhook = await agent
+        .post("/api/webhooks")
+        .send({ name: "Tenant list ratchet", url: "https://hooks.example.com/pubrick" })
+        .expect(201);
+      return { id: webhook.body.id as string, paths: ["/api/webhooks"] };
+    },
+  },
+  {
+    controller: "api-keys",
+    identify: id,
+    seed: async (agent) => {
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "List ratchet", scope: "content:read" })
+        .expect(201);
+      return { id: key.body.id as string, paths: ["/api/api-keys"] };
+    },
+  },
+  {
+    controller: "v1/content",
+    identify: id,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Public read.", channelIds: [channelId] })
+        .expect(201);
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "List ratchet", scope: "content:read" })
+        .expect(201);
+      return {
+        id: item.body.id as string,
+        bearer: key.body.key as string,
+        paths: [
+          "/api/v1/content",
+          "/api/v1/content?status=draft",
+          `/api/v1/content?cursor=${encodeURIComponent(justAfter(item.body.createdAt as string))}`,
+        ],
+      };
+    },
+  },
+  {
+    controller: "calendar/memorable-dates",
+    identify: id,
+    rows: (body) => (body as { dates: Record<string, unknown>[] }).dates,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Date brand" }).expect(201);
+      const date = await agent
+        .post("/api/calendar/memorable-dates")
+        .send({
+          brandId: brand.body.id,
+          monthDay: "02-29",
+          title: "Leap day",
+          leadDays: 14,
+          suggestedContentTypes: ["social_post"],
+          isActive: true,
+        })
+        .expect(201);
+      return {
+        id: date.body.id as string,
+        paths: [`/api/calendar/memorable-dates?brandId=${brand.body.id}`],
+      };
+    },
+  },
+  {
+    controller: "calendar/slots",
+    identify: id,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const slot = await agent
+        .post("/api/calendar/slots")
+        .send({
+          brandId,
+          scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+          brief: "Our launch",
+          channelIds: [channelId],
+        })
+        .expect(201);
+      const from = encodeURIComponent(new Date().toISOString());
+      const to = encodeURIComponent(new Date(Date.now() + 3 * 86_400_000).toISOString());
+      return {
+        id: slot.body.id as string,
+        paths: [`/api/calendar/slots?brandId=${brandId}&from=${from}&to=${to}`],
+      };
+    },
+  },
+  {
+    controller: "media",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Media brand" }).expect(201);
+      const bytes = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#ad5438" },
+      })
+        .png()
+        .toBuffer();
+      const uploaded = await agent
+        .post(`/api/media?brandId=${brand.body.id}`)
+        .attach("file", bytes, { filename: "cover.png", contentType: "image/png" })
+        .expect(201);
+      return {
+        id: uploaded.body.id as string,
+        paths: [
+          `/api/media?brandId=${brand.body.id}`,
+          `/api/media?brandId=${brand.body.id}&offset=0`,
+        ],
+      };
+    },
+  },
+  {
     controller: "brands",
     identify: id,
     seed: async (agent) => {
       const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
       return { id: brand.body.id as string, paths: ["/api/brands"] };
+    },
+  },
+  {
+    controller: "knowledge",
+    identify: id,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
+      const entry = await agent
+        .post("/api/knowledge")
+        .send({
+          brandId: brand.body.id,
+          title: "Origin",
+          content: "Arabica beans",
+          category: "product_info",
+        })
+        .expect(201);
+      return { id: entry.body.id as string, paths: [`/api/knowledge?brandId=${brand.body.id}`] };
     },
   },
   {
@@ -110,6 +258,39 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
       // Both branches. The brand-filtered one is the URL the channels screen
       // actually loads, and it carries an id the OTHER org can guess at.
       return { id: channelId, paths: ["/api/channels", `/api/channels?brandId=${brandId}`] };
+    },
+  },
+  {
+    controller: "sources",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Newsroom" }).expect(201);
+      const source = await agent
+        .post("/api/sources")
+        .send({
+          brandId: brand.body.id,
+          name: "Journal",
+          url: "https://example.com/feed.xml",
+        })
+        .expect(201);
+      return {
+        id: source.body.id as string,
+        paths: [`/api/sources?brandId=${brand.body.id}`],
+      };
+    },
+  },
+  {
+    controller: "topics",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Ideas" }).expect(201);
+      const topic = await agent
+        .post("/api/topics")
+        .send({ brandId: brand.body.id, title: "A better market report" })
+        .expect(201);
+      return { id: topic.body.id as string, paths: [`/api/topics?brandId=${brand.body.id}`] };
     },
   },
   {
@@ -172,6 +353,17 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
       return { id: model, paths: ["/api/ai-credentials"] };
     },
   },
+  {
+    controller: "prompts",
+    identify: id,
+    seed: async (agent) => {
+      const revision = await agent
+        .post("/api/prompts/researcher/revisions")
+        .send({ guidance: "Prefer primary sources." })
+        .expect(201);
+      return { id: revision.body.id as string, paths: ["/api/prompts"] };
+    },
+  },
 ];
 
 describe.skipIf(!url)("every list endpoint returns only this org's rows", () => {
@@ -208,7 +400,10 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // so an endpoint that answered `[]` to everything — a broken query, a
       // filter on the wrong column — cannot pass for correct scoping.
       for (const path of mine.paths) {
-        const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
+        const query = stranger.get(path);
+        if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
+        const body = (await query.expect(200)).body as unknown;
+        const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
         expect(listed.map(endpoint.identify)).toEqual([mine.id]);
       }
 
@@ -218,8 +413,15 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // stranger asking with its OWN parameters would be filtered correctly by
       // the parameter alone and prove nothing.
       for (const path of theirs.paths) {
-        const listed = (await stranger.get(path).expect(200)).body as Record<string, unknown>[];
-        expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
+        if (endpoint.foreignBrandNotFound) {
+          await stranger.get(path).expect(404);
+        } else {
+          const query = stranger.get(path);
+          if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
+          const body = (await query.expect(200)).body as unknown;
+          const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
+          expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
+        }
       }
     });
   }

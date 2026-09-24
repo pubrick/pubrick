@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ADAPTATION_STATUSES, type AdaptationStatus, nextItemStatus } from "@pubrick/shared";
+import { type AdaptationStatus, nextItemStatus } from "@pubrick/shared";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
@@ -90,28 +91,80 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * somebody wrote down, and a list computed from the same types the migration
  * was generated from could only ever agree with itself.
  *
- * Twelve of them are the publishing path, converted by 0014. The last two were
- * born zoned: `refine_proposals` (0016) is a table the editor writes, and
- * `publications.asserted_at` (0017) is the moment a person settled a delivery
- * nobody else could — and neither has any reason to inherit the "naive means
- * UTC" convention the conversion existed to end. They are deliberately NOT in
- * `UNZONED_TABLES`, which is the list of tables somebody decided to LEAVE.
+ * Twelve of them are the publishing path, converted by 0014. Proposals,
+ * publication assertions, public feeds, monitored news, guidance revisions,
+ * and calendar slots were born zoned in later migrations. They are deliberately
+ * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
+  "adaptation_proposals.created_at",
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "autopilot_configs.updated_at",
+  "autopilot_dispatches.created_at",
+  "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
+  "calendar_slots.created_at",
+  "calendar_slots.retry_after",
+  "calendar_slots.scheduled_at",
+  "calendar_slots.topic_updated_at",
+  "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
+  "client_review_links.created_at",
+  "client_review_links.expires_at",
+  "client_review_links.reviewed_at",
+  "client_review_links.revoked_at",
   "content_items.created_at",
   "content_items.first_opened_at",
   "content_items.updated_at",
   "content_versions.created_at",
+  "draft_revision_proposals.created_at",
+  "editorial_notes.created_at",
+  "feed_entries.published_at",
+  "knowledge_auto_index.last_attempt_at",
+  "knowledge_auto_index.updated_at",
+  "knowledge_entries.created_at",
+  "knowledge_entries.updated_at",
+  "media_assets.created_at",
+  "memorable_dates.created_at",
+  "memorable_dates.updated_at",
+  "news_comment_analyses.created_at",
+  "news_comment_analyses.sample_checked_at",
+  "news_comments.created_at",
+  "news_comments.published_at",
+  "news_items.comments_checked_at",
+  "news_items.created_at",
+  "news_items.published_at",
+  "news_items.relevance_scored_at",
+  "news_sources.created_at",
+  "news_sources.last_checked_at",
+  "news_sources.updated_at",
+  "notification_digest_configs.updated_at",
+  "notification_digest_snapshots.created_at",
+  "notification_events.created_at",
+  "notification_events.updated_at",
+  "notification_settings.updated_at",
+  "organization_api_keys.created_at",
+  "organization_api_keys.revoked_at",
+  "prompt_revisions.created_at",
+  "publication_metrics.checked_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "telegram_source_accounts.connected_at",
+  "telegram_source_accounts.last_private_resolve_at",
+  "topic_suggestion_requests.created_at",
+  "topic_suggestion_requests.updated_at",
+  "topics.created_at",
+  "topics.updated_at",
+  "webhook_deliveries.created_at",
+  "webhook_deliveries.next_attempt_at",
+  "webhook_deliveries.updated_at",
+  "webhook_subscriptions.created_at",
+  "webhook_subscriptions.revoked_at",
 ];
 
 /**
@@ -186,6 +239,48 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Webhook payload and subscription shape are checked on late-created tables.
+  "webhook_deliveries_event_check",
+  "webhook_deliveries_status_check",
+  "webhook_deliveries_attempts_check",
+  "webhook_subscriptions_name_check",
+  "webhook_subscriptions_endpoint_check",
+  // API key name and scope are pinned at the database boundary too.
+  "organization_api_keys_scope_check",
+  "organization_api_keys_name_check",
+  // Video media carries a distinct shape and content items may attach one medium.
+  "media_assets_kind_check",
+  "media_assets_shape_check",
+  "media_assets_byte_size_check",
+  "content_items_one_media_check",
+  // Guest approval capabilities are new after the historical seed. Their
+  // format and verdict relationship are exercised by client-review e2e tests.
+  "client_review_links_token_hash_check",
+  "client_review_links_snapshot_hash_check",
+  "client_review_links_verdict_check",
+  "client_review_links_comment_length_check",
+  "client_review_links_review_pair_check",
+  // Vector provenance must accompany every stored embedding. The knowledge
+  // E2E suite covers clearing and writing the metadata with the vector.
+  "knowledge_entries_embedding_metadata_check",
+  // Notification tables arrive after the historical seed; worker outbox tests
+  // exercise their values, and schema-invariants checks the enum expressions.
+  "notification_events_event_check",
+  "notification_digest_configs_hour_check",
+  "notification_events_status_check",
+  // Added with the comment sample after the historical seed; worker persistence e2e
+  // proves the database rejects an off-list status on a populated story.
+  "news_items_comments_status_check",
+  // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
+  "news_sources_kind_check",
+  // A private source always carries an encrypted channel peer, while public
+  // sources cannot carry one. Exercised by private source persistence e2e.
+  "news_sources_private_peer_check",
+  // 0022's: only the manual VC.ru channel may omit encrypted credentials.
+  // The API e2e suite proves both accepted and refused channel shapes.
+  "channels_credentials_mode_check",
+  // Automatic reads must remain a per-VK opt-in even for direct SQL writers.
+  "channels_metrics_auto_refresh_vk_check",
   // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
   // — it pins a value into a RELATIONSHIP with another column, so there is no
   // single `bogus` scalar the loop could try. Proved directly by "adds the
@@ -202,6 +297,48 @@ const NON_ENUM_CHECKS = [
   // 23514, against the real database.
   "refine_proposals_verb_check",
   "refine_proposals_range_check",
+  // The guidance table does not exist when the pre-0009 seed is written, so the
+  // generic UPDATE loop cannot exercise its role pin. The schema invariant
+  // test checks the enum expression; the repository e2e checks version writes.
+  "prompt_revisions_role_check",
+  "prompt_revisions_version_positive_check",
+  "prompt_revisions_guidance_limit_check",
+  // The nullable calendar error enum is on a table that did not exist when
+  // seedEveryTable wrote its pre-0009 rows, so the UPDATE loop cannot test it.
+  // schema-invariants.test.ts verifies the schema declaration; this count
+  // verifies that the generated migration installed the database guard.
+  "calendar_slots_error_code_check",
+  "calendar_slots_topic_snapshot_check",
+  // Memorable dates were born after the historical seed; the API e2e proves
+  // invalid MM-DD values are refused and this count pins the SQL guard.
+  "memorable_dates_month_day_check",
+  // The knowledge category pin arrives after the pre-0009 seed, so it has no row for
+  // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
+  // the category constraint against a bogus update at head.
+  "knowledge_entries_category_check",
+  // These late enum pins: neither topics nor news items exists in the pre-0009
+  // seed. The topic API e2e writes real rows and proves both reject off-list
+  // values with SQLSTATE 23514.
+  "topics_status_check",
+  // 0033's late enum pins are exercised by the topic API and suggestion worker
+  // e2e suites; this pre-0009 seed has no topic or request rows to update.
+  "topics_origin_check",
+  "topic_suggestion_requests_status_check",
+  "topic_suggestion_requests_error_code_check",
+  "news_items_editor_signal_check",
+  "news_items_relevance_status_check",
+  "news_items_relevance_urgency_check",
+  "news_items_relevance_error_code_check",
+  "news_items_relevance_score_check",
+  // 0050 keeps the editor adjustment bounded independently of the model score.
+  // The worker repository e2e covers a nonzero write and the raw/rank split.
+  "news_items_relevance_feedback_delta_check",
+  "news_items_relevance_consistency_check",
+  "news_items_relevance_attempts_check",
+  // The metric table is created after the pre-0009 seed. Analytics e2e proves
+  // measured zero and missing values; these checks pin the stored shape.
+  "publication_metrics_status_check",
+  "publication_metrics_counts_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -291,8 +428,8 @@ async function snapshotRows(pool: pg.Pool): Promise<Record<string, pg.QueryResul
 
 /**
  * Every value a row held before the migrations is still exactly that value
- * after them, and any column the migrations ADDED is null on every pre-existing
- * row.
+ * after them. New columns are null on pre-existing rows unless an explicit,
+ * safe default is part of their contract (VK background reads are opt-in).
  *
  * A plain `toEqual` of the two snapshots said the same thing while 0009 was the
  * only migration under test — it adds no columns, which is what let one seed
@@ -325,7 +462,11 @@ function expectNoRowRewritten(
       ).toEqual(beforeRow);
       const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
       expect(
-        added.filter((key) => afterRow[key] !== null),
+        added.filter((key) =>
+          table === "channels" && key === "metrics_auto_refresh"
+            ? afterRow[key] !== false
+            : afterRow[key] !== null,
+        ),
         `${table}: a column added after the seed was backfilled over an existing row`,
       ).toEqual([]);
     });
@@ -475,7 +616,9 @@ function multisets<T>(values: readonly T[], size: number): T[][] {
 /**
  * THE FAN-OUTS THE RATCHET BELOW RUNS OVER.
  *
- * Every multiset over the six adaptation statuses up to TWO deliveries (6 + 21)
+ * Every multiset over the six statuses available at migration 0018 up to TWO
+ * deliveries (6 + 21). The later `manual_ready` status cannot be seeded before
+ * 0018, so this historical migration ratchet deliberately pins that vocabulary.
  * — the size at which the fold's every clause can already disagree with the
  * SQL's — plus every multiset of size three over the three statuses that decide
  * anything (10), which is where a predicate written with `bool_and`/`bool_or`
@@ -484,10 +627,18 @@ function multisets<T>(values: readonly T[], size: number): T[][] {
  * item whose channels have all been deleted, where `every` is vacuously true
  * for all three arms and `bool_and` is `NULL`.
  */
+const PRE_MANUAL_STATUSES = [
+  "pending",
+  "scheduled",
+  "queued",
+  "publishing",
+  "published",
+  "failed",
+] as const satisfies readonly AdaptationStatus[];
 const FAN_OUTS: AdaptationStatus[][] = [
-  ...multisets(ADAPTATION_STATUSES, 0),
-  ...multisets(ADAPTATION_STATUSES, 1),
-  ...multisets(ADAPTATION_STATUSES, 2),
+  ...multisets(PRE_MANUAL_STATUSES, 0),
+  ...multisets(PRE_MANUAL_STATUSES, 1),
+  ...multisets(PRE_MANUAL_STATUSES, 2),
   ...multisets(["published", "failed", "queued"] as const, 3),
 ];
 
@@ -1138,6 +1289,11 @@ describe.skipIf(!url)("runMigrations", () => {
         // wrote one row per table through these same columns, above.
         const rows = await pool.query("SELECT count(*)::int AS n FROM adaptations");
         expect(rows.rows[0].n).toBe(1);
+        expect(await refusal(pool, "UPDATE channels SET credentials_encrypted = NULL")).toBe(
+          CHECK_VIOLATION,
+        );
+        expect(await refusal(pool, "UPDATE channels SET platform = 'vc_ru'")).toBe(CHECK_VIOLATION);
+        await pool.query("UPDATE channels SET platform = 'vc_ru', credentials_encrypted = NULL");
       } finally {
         await pool.end();
       }
@@ -2056,6 +2212,49 @@ describe.skipIf(!url)("runMigrations", () => {
         expect([...backfilled.values()].filter((status) => status === "approved")).not.toHaveLength(
           0,
         );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds automatic knowledge indexing as opt-in to an existing database", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0051_flat_gwen_stacy");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('auto_index_org', 'Test', 'auto-index-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('auto_index_org', 'Brand') RETURNING id",
+        );
+        assert(brand.rows[0]);
+        brandId = brand.rows[0].id;
+        const absent = await pool.query<{ exists: string | null }>(
+          "SELECT to_regclass('public.knowledge_auto_index')::text AS exists",
+        );
+        assert(absent.rows[0]);
+        expect(absent.rows[0].exists).toBeNull();
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const existing = await after.query("SELECT * FROM knowledge_auto_index");
+        expect(existing.rows).toEqual([]);
+        const inserted = await after.query<{ enabled: boolean; last_attempt_at: Date | null }>(
+          "INSERT INTO knowledge_auto_index (org_id, brand_id) VALUES ('auto_index_org', $1) RETURNING enabled, last_attempt_at",
+          [brandId],
+        );
+        expect(inserted.rows).toEqual([{ enabled: false, last_attempt_at: null }]);
       } finally {
         await after.end();
       }

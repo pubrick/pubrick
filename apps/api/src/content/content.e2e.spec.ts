@@ -10,6 +10,7 @@ import {
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ReadaptCaller, type ReadaptOutcome } from "./readapt.caller";
 import { RefineCaller, type RefineOutcome } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
 
@@ -52,6 +53,18 @@ describe.skipIf(!url)("content e2e", () => {
           // and the only way a test can be in it.
           if (refineDuringCall) await refineDuringCall();
           return refineOutcome;
+        },
+      })
+      .overrideProvider(ReadaptCaller)
+      .useValue({
+        run: async (args: {
+          channel: { id: string };
+          masterBody: string;
+          previousBody: string | null;
+        }): Promise<ReadaptOutcome> => {
+          readaptCalls.push(args);
+          if (readaptDuringCall) await readaptDuringCall();
+          return readaptOutcome;
         },
       })
       .compile();
@@ -210,6 +223,13 @@ describe.skipIf(!url)("content e2e", () => {
     input: { selection: string; before: string; after: string };
   };
   const refineCalls: RefineCall[] = [];
+  const readaptCalls: {
+    channel: { id: string };
+    masterBody: string;
+    previousBody: string | null;
+  }[] = [];
+  let readaptDuringCall: (() => Promise<void>) | null = null;
+  let readaptOutcome: ReadaptOutcome;
 
   /** One physical model call, in ledger shape. */
   function refineUsage(overrides: Record<string, unknown> = {}) {
@@ -244,6 +264,14 @@ describe.skipIf(!url)("content e2e", () => {
 
   beforeEach(() => {
     refineCalls.length = 0;
+    readaptCalls.length = 0;
+    readaptDuringCall = null;
+    readaptOutcome = {
+      ok: true,
+      text: "A concise channel post, written by the model.",
+      reason: "Fits this channel while preserving the source.",
+      usage: [],
+    };
     refineDuringCall = null;
     refineOutcome = {
       ok: true,
@@ -4090,6 +4118,128 @@ describe.skipIf(!url)("content e2e", () => {
    * human action wrote a row at all — so the version history increment 2c
    * renders had nothing to show, and Restore nothing to restore to.
    */
+  describe("saved version history and restore", () => {
+    it("lists whole-body snapshots on demand and restores an earlier body as a human edit", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "First draft.", channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Second draft." }).expect(200);
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Third draft." }).expect(200);
+
+      const history = await agent.get(`/api/content/${itemId}/versions`).expect(200);
+      expect(history.body.map((row: { body: string }) => row.body)).toEqual([
+        "Third draft.",
+        "Second draft.",
+      ]);
+      expect(
+        history.body.every((row: { adaptationId: string | null }) => row.adaptationId === null),
+      ).toBe(true);
+
+      const restored = await agent
+        .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
+        .send({ expectedBody: "Third draft." })
+        .expect(200);
+      expect(restored.body.body).toBe("Second draft.");
+      const after = await agent.get(`/api/content/${itemId}/versions`).expect(200);
+      expect(after.body[0].body).toBe("Second draft.");
+      expect(after.body[0].origin).toBe("human");
+
+      // A stale reader cannot overwrite a newer edit, even with a real version id.
+      await agent
+        .post(`/api/content/${itemId}/versions/${history.body[0].id}/restore`)
+        .send({ expectedBody: "Third draft." })
+        .expect(409);
+      expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.body).toBe(
+        "Second draft.",
+      );
+
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const pinned = await agent
+        .post(`/api/content/${itemId}/versions/${history.body[0].id}/restore`)
+        .send({ expectedBody: "Second draft." })
+        .expect(409);
+      expect(pinned.body.code).toBe("content_pinned_approved");
+    });
+
+    it("pages equal-timestamp drafts without repeating a boundary or listing refine fragments", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Current draft.", channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      await addItemVersions(itemId, [
+        ...Array.from({ length: 23 }, (_, index) => ({
+          id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          body: `Saved draft ${index}.`,
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+        })),
+        { body: "A refine fragment, never a whole draft.", scope: "fragment", unitDelta: 1 },
+      ]);
+
+      const first = await agent.get(`/api/content/${itemId}/versions`).expect(200);
+      expect(first.body).toHaveLength(20);
+      const cursor = first.headers["x-next-cursor"] as string;
+      expect(cursor).toBe(first.body[19].id);
+      const second = await agent
+        .get(`/api/content/${itemId}/versions?cursor=${cursor}`)
+        .expect(200);
+      expect(second.body).toHaveLength(3);
+      expect(second.headers["x-next-cursor"]).toBeUndefined();
+      expect([...first.body, ...second.body].map((row: { body: string }) => row.body)).toEqual(
+        Array.from({ length: 23 }, (_, index) => `Saved draft ${22 - index}.`),
+      );
+    });
+
+    it("keeps each channel's versions separate and refuses a cross-org restore", async () => {
+      const agent = await orgAgent();
+      const stranger = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Master copy.", channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "First channel copy." })
+        .expect(200);
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Second channel copy." })
+        .expect(200);
+
+      const master = await agent.get(`/api/content/${itemId}/versions`).expect(200);
+      expect(master.body).toEqual([]);
+      const history = await agent
+        .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+        .expect(200);
+      expect(history.body.map((row: { body: string }) => row.body)).toEqual([
+        "Second channel copy.",
+        "First channel copy.",
+      ]);
+      await stranger
+        .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+        .expect(404);
+      await stranger
+        .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
+        .send({ expectedBody: "Second channel copy." })
+        .expect(404);
+      const restored = await agent
+        .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
+        .send({ expectedBody: "Second channel copy." })
+        .expect(200);
+      expect(restored.body.body).toBe("Master copy.");
+      expect(restored.body.adaptations[0].body).toBe("First channel copy.");
+    });
+  });
+
   describe("a human edit leaves a version behind", () => {
     it("records a version when a human changes the body, and none when nothing changed", async () => {
       const agent = await orgAgent();
@@ -7506,6 +7656,122 @@ describe.skipIf(!url)("content e2e", () => {
       );
       expect(byId[otherId]).toBe("pending");
       expect(byId[liveId]).toBe("published");
+    });
+  });
+
+  describe("editor-side channel adaptation", () => {
+    async function setup() {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: "A saved source post.", channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      await agent
+        .put("/api/ai-credentials")
+        .send({ provider: "google", apiKey: "sk-live-never-leak-this-0123456789" })
+        .expect(200);
+      return { agent, itemId, adaptationId, orgId: await orgOf(itemId) };
+    }
+
+    it("stages a durable suggestion, meters its channel, and accepts it as a new AI version", async () => {
+      const { agent, itemId, adaptationId, orgId } = await setup();
+      readaptOutcome = {
+        ...readaptOutcome,
+        usage: [
+          {
+            ...refineUsage(),
+            attribution: {
+              step: "readapt",
+              channelId: (await agent.get(`/api/content/${itemId}`).expect(200)).body.adaptations[0]
+                .channelId,
+            },
+          },
+        ],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const first = await agent
+        .post(path)
+        .send({ body: "Client text must be ignored" })
+        .expect(201);
+      expect(readaptCalls).toHaveLength(1);
+      expect(readaptCalls[0]).toMatchObject({
+        masterBody: "A saved source post.",
+        previousBody: null,
+      });
+      expect(first.body.proposal).toBe("A concise channel post, written by the model.");
+      const before = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(before.body.adaptations[0].body).toBeNull();
+      expect(before.body.adaptationProposals).toContainEqual(first.body);
+      expect((await ledgerRows(orgId)).at(-1)).toMatchObject({ step: "readapt", adaptationId });
+
+      const accepted = await agent.post(`${path}/${first.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0]).toMatchObject({
+        body: first.body.proposal,
+        origin: "ai",
+      });
+      expect(accepted.body.adaptationProposals).toEqual([]);
+      const versions = await agent
+        .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+        .expect(200);
+      expect(versions.body[0]).toMatchObject({ body: first.body.proposal, origin: "ai" });
+      await agent.post(`${path}/${first.body.id}/accept`).expect(404);
+    });
+
+    it("keeps a paid suggestion on failed retries and refuses stale acceptance", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const first = await agent.post(path).expect(201);
+      readaptOutcome = { ok: false, failure: "failed", usage: [] };
+      await agent.post(path).expect(409);
+      expect(
+        (await agent.get(`/api/content/${itemId}`).expect(200)).body.adaptationProposals[0].id,
+      ).toBe(first.body.id);
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "A changed source post." })
+        .expect(200);
+      const stale = await agent.post(`${path}/${first.body.id}/accept`).expect(409);
+      expect(stale.body.code).toBe("readapt_source_changed");
+      await agent.delete(`${path}/${first.body.id}`).expect(204);
+      expect(
+        (await agent.get(`/api/content/${itemId}`).expect(200)).body.adaptationProposals,
+      ).toEqual([]);
+    });
+
+    it("stages a paid answer even when the source changes while the model is answering", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      readaptDuringCall = async () => {
+        await agent
+          .patch(`/api/content/${itemId}`)
+          .send({ body: "Changed while the model was answering." })
+          .expect(200);
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      expect(staged.body.masterBody).toBe("A saved source post.");
+      expect(
+        (await agent.get(`/api/content/${itemId}`).expect(200)).body.adaptationProposals[0].id,
+      ).toBe(staged.body.id);
+      const refused = await agent.post(`${path}/${staged.body.id}/accept`).expect(409);
+      expect(refused.body.code).toBe("readapt_source_changed");
+    });
+
+    it("scopes proposals to the organization and refuses pinned channels before spending", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const other = await orgAgent();
+      await other.post(`${path}/${staged.body.id}/accept`).expect(404);
+      await other.delete(`${path}/${staged.body.id}`).expect(404);
+      const calls = readaptCalls.length;
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      await agent.post(path).expect(409);
+      expect(readaptCalls).toHaveLength(calls);
+      await agent.post(`${path}/${staged.body.id}/accept`).expect(409);
+      await agent.delete(`${path}/${staged.body.id}`).expect(204);
     });
   });
 });

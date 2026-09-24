@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Logger } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { channelOf, type ScriptedUsage, scriptedModel } from "../test/scripted-model";
 
@@ -54,8 +58,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   let Repository: GenerateRepositoryCtor;
   let Service: GenerateServiceCtor;
   let seq = 0;
+  let mediaDir: string;
 
   beforeAll(async () => {
+    mediaDir = await mkdtemp(path.join(tmpdir(), "pubrick-cover-test-"));
+    process.env.MEDIA_STORAGE_DIR = mediaDir;
     process.env.DATABASE_URL = url as string;
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
 
@@ -72,6 +79,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   afterAll(async () => {
     await pool?.end();
     await workerPool?.end();
+    delete process.env.MEDIA_STORAGE_DIR;
+    if (mediaDir) await rm(mediaDir, { recursive: true, force: true });
   });
 
   type Seeded = {
@@ -90,6 +99,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     defaultModel?: string;
     /** Distinct per org where a test has to see WHOSE brand was read. */
     brandName?: string;
+    generateCover?: boolean;
   };
 
   async function seed(options: SeedOptions = {}): Promise<Seeded> {
@@ -149,7 +159,16 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
     const [run] = await db
       .insert(schema.pipelineRuns)
-      .values({ orgId, brandId, input: { kind: "brief", text: BRIEF, channelIds } })
+      .values({
+        orgId,
+        brandId,
+        input: {
+          kind: "brief",
+          text: BRIEF,
+          channelIds,
+          ...(options.generateCover && { generateCover: true }),
+        },
+      })
       .returning({ id: schema.pipelineRuns.id });
 
     return { orgId, brandId, runId: run?.id as string, channelIds, channelNames };
@@ -159,8 +178,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   function serviceFor(
     model: ReturnType<typeof scriptedModel>,
     repo: GenerateRepository = new Repository(),
+    imageCaller?: {
+      call: (key: string, prompt: string) => Promise<import("@pubrick/ai").ImageCall>;
+    },
   ): GenerateService {
-    return new Service(repo, () => model.model as never, 0);
+    return new Service(repo, () => model.model as never, 0, imageCaller);
   }
 
   async function runRow(runId: string) {
@@ -178,6 +200,148 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   async function ledgerOf(orgId: string) {
     return db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId));
   }
+
+  describe("opt-in draft covers", () => {
+    it("does not call the image provider unless the run requested a cover", async () => {
+      const seeded = await seed();
+      const imageCaller = { call: vi.fn() };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-off",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(imageCaller.call).not.toHaveBeenCalled();
+      expect((await itemsOf(seeded.orgId))[0]?.coverMediaId).toBeNull();
+    });
+
+    it("attaches a normalized image only to its new draft and records its cost", async () => {
+      const seeded = await seed({ generateCover: true });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 50,
+          usage: {
+            promptTokenCount: 100,
+            candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 1120 }],
+          },
+        })),
+      };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-success",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const [item] = await itemsOf(seeded.orgId);
+      expect(item?.status).toBe("draft");
+      expect(item?.coverMediaId).toBeTruthy();
+      expect(item?.firstOpenedAt).toBeNull();
+      const [asset] = await db
+        .select()
+        .from(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.id, item?.coverMediaId as string));
+      expect(asset).toMatchObject({
+        orgId: seeded.orgId,
+        brandId: seeded.brandId,
+        mimeType: "image/jpeg",
+      });
+      expect(
+        (await readFile(path.join(mediaDir, `${item?.coverMediaId}.jpg`))).length,
+      ).toBeGreaterThan(0);
+      const coverCall = (await ledgerOf(seeded.orgId)).find((row) => row.step === "cover");
+      expect(coverCall).toMatchObject({
+        outcome: "completed",
+        costSource: "price_table",
+        provider: "google",
+      });
+      expect((await runRow(seeded.runId))?.steps.cover?.output).toMatchObject({
+        mediaId: item?.coverMediaId,
+        result: "generated",
+      });
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the text draft when the image outcome and cost are unknown", async () => {
+      const seeded = await seed({ generateCover: true });
+      const imageCaller = {
+        call: vi.fn(async () => ({ outcome: "unknown" as const, responseMs: 120_000 })),
+      };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-unknown",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect((await itemsOf(seeded.orgId))[0]).toMatchObject({
+        status: "draft",
+        coverMediaId: null,
+      });
+      expect((await runRow(seeded.runId))?.steps.cover?.output).toEqual({
+        mediaId: null,
+        result: "unavailable",
+      });
+      expect((await ledgerOf(seeded.orgId)).find((row) => row.step === "cover")).toMatchObject({
+        outcome: "unknown",
+        costSource: "unknown",
+        status: "errored",
+      });
+    });
+
+    it("skips a cover while another process owns the organization's image call lock", async () => {
+      const seeded = await seed({ generateCover: true });
+      const holder = await workerPool.connect();
+      const key = `image-call-budget:${seeded.orgId}`;
+      try {
+        await holder.query("select pg_advisory_lock(hashtextextended($1, 0))", [key]);
+        const imageCaller = { call: vi.fn() };
+        await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+          id: "cover-busy",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
+        expect(imageCaller.call).not.toHaveBeenCalled();
+        expect((await itemsOf(seeded.orgId))[0]?.coverMediaId).toBeNull();
+      } finally {
+        await holder.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+        holder.release();
+      }
+    });
+
+    it("resumes from the cover checkpoint without buying another image", async () => {
+      const seeded = await seed({ generateCover: true });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 5,
+        })),
+      };
+      const repo = new Repository();
+      const finish = vi
+        .spyOn(repo, "finish")
+        .mockRejectedValue(new Error("temporary database failure"));
+      const service = serviceFor(scriptedModel(), repo, imageCaller);
+      const job = { id: "cover-resume", data: { runId: seeded.runId, orgId: seeded.orgId } };
+      await expect(service.handle(job)).rejects.toThrow("temporary database failure");
+      expect((await runRow(seeded.runId))?.steps.cover?.status).toBe("succeeded");
+      finish.mockRestore();
+      await service.handle(job);
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+      const checkpoint = (await runRow(seeded.runId))?.steps.cover?.output as { mediaId: string };
+      expect((await itemsOf(seeded.orgId))[0]).toMatchObject({
+        status: "draft",
+        coverMediaId: checkpoint.mediaId,
+      });
+      expect((await ledgerOf(seeded.orgId)).filter((row) => row.step === "cover")).toHaveLength(1);
+    });
+  });
 
   /**
    * Waits until some backend is parked on a row lock held by `pid`.
@@ -611,6 +775,102 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       return { victim, intruder };
     }
 
+    it("adds only active notes of the run's brand to material, without a provider embedding call", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const [otherBrand] = await db
+        .insert(schema.brands)
+        .values({ orgId: victim.orgId, name: "Other brand" })
+        .returning({ id: schema.brands.id });
+      const inserted = await db
+        .insert(schema.knowledgeEntries)
+        .values([
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            title: "Autumn menu",
+            content: "OWN_KNOWLEDGE_MARKER espresso uses Arabica.",
+            category: "product_info",
+          },
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            title: "Autumn menu",
+            content: "PAUSED_KNOWLEDGE_MARKER",
+            category: "product_info",
+            isActive: false,
+          },
+          {
+            orgId: victim.orgId,
+            brandId: otherBrand?.id as string,
+            title: "Autumn menu",
+            content: "OTHER_BRAND_MARKER",
+            category: "product_info",
+          },
+          {
+            orgId: intruder.orgId,
+            brandId: intruder.brandId,
+            title: "Autumn menu",
+            content: "OTHER_ORG_MARKER",
+            category: "product_info",
+          },
+        ])
+        .returning({ id: schema.knowledgeEntries.id });
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "knowledge-job",
+        data: { runId: victim.runId, orgId: victim.orgId },
+      });
+
+      for (const role of ["researcher", "writer"] as const) {
+        const call = script.calls.find((candidate) => candidate.role === role);
+        expect(call?.user).toContain("OWN_KNOWLEDGE_MARKER");
+        expect(call?.system).not.toContain("OWN_KNOWLEDGE_MARKER");
+        expect(call?.user).not.toContain("PAUSED_KNOWLEDGE_MARKER");
+        expect(call?.user).not.toContain("OTHER_BRAND_MARKER");
+        expect(call?.user).not.toContain("OTHER_ORG_MARKER");
+      }
+      const run = await runRow(victim.runId);
+      expect(run?.steps.knowledge?.status).toBe("succeeded");
+      const [ownEntry] = inserted;
+      if (!ownEntry) throw new Error("Knowledge fixture was not inserted");
+      expect(run?.steps.knowledge?.output).toMatchObject({
+        entries: [{ id: ownEntry.id, title: "Autumn menu" }],
+      });
+      expect((await ledgerOf(victim.orgId)).filter((row) => row.step === "knowledge")).toHaveLength(
+        0,
+      );
+    }, 25_000);
+
+    it("excludes vectors from a different embedding model", async () => {
+      const own = await seed({ channels: 1, apiKey: VICTIM_KEY, brandName: "Model scope" });
+      const [entry] = await db
+        .insert(schema.knowledgeEntries)
+        .values({
+          orgId: own.orgId,
+          brandId: own.brandId,
+          title: "Model-specific fact",
+          content: "A fact for vector search",
+          category: "product_info",
+          embedding: Array(768).fill(0.1),
+          embeddingModel: "other-model",
+          embeddingDimensions: 768,
+        })
+        .returning({ id: schema.knowledgeEntries.id });
+      const repository = new Repository();
+      expect(await repository.hasIndexedKnowledge(own.orgId, own.brandId)).toBe(false);
+      expect(
+        await repository.similarKnowledge(own.orgId, own.brandId, Array(768).fill(0.1)),
+      ).toEqual([]);
+      await db
+        .update(schema.knowledgeEntries)
+        .set({ embeddingModel: "gemini-embedding-001" })
+        .where(eq(schema.knowledgeEntries.id, entry?.id as string));
+      expect(await repository.hasIndexedKnowledge(own.orgId, own.brandId)).toBe(true);
+      expect(
+        await repository.similarKnowledge(own.orgId, own.brandId, Array(768).fill(0.1)),
+      ).toHaveLength(1);
+    });
+
     const checkpoint = {
       status: "succeeded" as const,
       output: { body: "x" },
@@ -659,17 +919,156 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // The brand carries the voice and audience that become the run's
       // instructions; reading it across orgs puts one org's positioning into
       // another org's post.
-      expect(await repo.context(intruder.orgId, victim.brandId, victim.channelIds)).toBeUndefined();
+      expect(
+        await repo.context(intruder.orgId, victim.brandId, victim.channelIds, {}),
+      ).toBeUndefined();
 
-      const own = await repo.context(victim.orgId, victim.brandId, [
-        ...victim.channelIds,
-        ...intruder.channelIds,
-      ]);
+      const own = await repo.context(
+        victim.orgId,
+        victim.brandId,
+        [...victim.channelIds, ...intruder.channelIds],
+        {},
+      );
       expect(own?.brand.name).toBe("Victim Coffee");
       // The channel list is scoped by brand as well as org — the brand predicate
       // alone would already exclude these — so this pins the pair, not either
       // predicate on its own.
       expect(own?.channels.map((channel) => channel.id)).toEqual(victim.channelIds);
+    }, 25_000);
+
+    it("pins each org's latest role revision on its first successful claim", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const revisions = await db
+        .insert(schema.promptRevisions)
+        .values([
+          { orgId: victim.orgId, role: "writer", version: 1, guidance: "VICTIM_OLD" },
+          { orgId: victim.orgId, role: "writer", version: 2, guidance: "VICTIM_LATEST" },
+          { orgId: intruder.orgId, role: "writer", version: 1, guidance: "INTRUDER_ONLY" },
+        ])
+        .returning({
+          id: schema.promptRevisions.id,
+          orgId: schema.promptRevisions.orgId,
+          version: schema.promptRevisions.version,
+        });
+      const repo = new Repository();
+      expect(await repo.claim(intruder.orgId, victim.runId, "cross#1", "cross")).toBeUndefined();
+      expect((await runRow(victim.runId))?.guidanceSnapshot).toBeNull();
+      const victimRun = await repo.claim(victim.orgId, victim.runId, "victim#1", "victim");
+      const intruderRun = await repo.claim(
+        intruder.orgId,
+        intruder.runId,
+        "intruder#1",
+        "intruder",
+      );
+      expect(victimRun?.guidanceSnapshot).toEqual({
+        writer: {
+          revisionId: revisions.find((r) => r.orgId === victim.orgId && r.version === 2)?.id,
+          version: 2,
+          text: "VICTIM_LATEST",
+        },
+      });
+      expect(intruderRun?.guidanceSnapshot).toEqual({
+        writer: {
+          revisionId: revisions.find((r) => r.orgId === intruder.orgId)?.id,
+          version: 1,
+          text: "INTRUDER_ONLY",
+        },
+      });
+      expect(
+        (
+          await repo.context(
+            victim.orgId,
+            victim.brandId,
+            victim.channelIds,
+            victimRun?.guidanceSnapshot ?? {},
+          )
+        )?.promptGuidance,
+      ).toEqual({ writer: "VICTIM_LATEST" });
+      expect(
+        (
+          await repo.context(
+            intruder.orgId,
+            intruder.brandId,
+            intruder.channelIds,
+            intruderRun?.guidanceSnapshot ?? {},
+          )
+        )?.promptGuidance,
+      ).toEqual({ writer: "INTRUDER_ONLY" });
+    }, 25_000);
+
+    it("keeps an empty first-claim snapshot empty after guidance is added", async () => {
+      const seeded = await seed();
+      const repo = new Repository();
+      expect(
+        (await repo.claim(seeded.orgId, seeded.runId, "empty#1", "empty"))?.guidanceSnapshot,
+      ).toEqual({});
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "writer", version: 1, guidance: "ADDED_LATER" });
+      const resumed = await repo.claim(seeded.orgId, seeded.runId, "empty#2", "empty");
+      expect(resumed?.guidanceSnapshot).toEqual({});
+      expect((await runRow(seeded.runId))?.guidanceSnapshot).toEqual({});
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "empty",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.calls.find((call) => call.role === "writer")?.system).not.toContain(
+        "ADDED_LATER",
+      );
+    }, 25_000);
+
+    it("keeps guidance through a lease takeover and checkpoint resume; a new run gets current guidance", async () => {
+      const seeded = await seed({ channels: 1 });
+      const repo = new Repository();
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "editor", version: 1, guidance: "PINNED_EDITOR" });
+      const first = await repo.claim(seeded.orgId, seeded.runId, "old-job#1", "old-job");
+      expect(first?.guidanceSnapshot.editor?.text).toBe("PINNED_EDITOR");
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          steps: {
+            researcher: {
+              status: "succeeded",
+              output: { angle: "An angle", keyPoints: ["A key point"], avoid: [] },
+            },
+            writer: { status: "succeeded", output: { body: "Checkpointed draft." } },
+          },
+          leaseExpiresAt: sql`now() - interval '1 second'`,
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      await db
+        .insert(schema.promptRevisions)
+        .values({ orgId: seeded.orgId, role: "editor", version: 2, guidance: "NEW_EDITOR" });
+      const taken = await repo.claim(seeded.orgId, seeded.runId, "new-job#1", "new-job");
+      expect(taken?.guidanceSnapshot).toEqual(first?.guidanceSnapshot);
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "new-job",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.callsFor("researcher")).toBe(0);
+      expect(script.callsFor("writer")).toBe(0);
+      expect(script.calls.find((call) => call.role === "editor")?.system).toContain(
+        "PINNED_EDITOR",
+      );
+      expect(script.calls.find((call) => call.role === "editor")?.system).not.toContain(
+        "NEW_EDITOR",
+      );
+      const [newRun] = await db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: seeded.orgId,
+          brandId: seeded.brandId,
+          input: { kind: "brief", text: BRIEF, channelIds: seeded.channelIds },
+        })
+        .returning({ id: schema.pipelineRuns.id });
+      expect(
+        (await repo.claim(seeded.orgId, newRun?.id as string, "new-run#1", "new-run"))
+          ?.guidanceSnapshot.editor,
+      ).toMatchObject({ version: 2, text: "NEW_EDITOR" });
     }, 25_000);
 
     it("spends the run's OWN org's provider key, never the oldest key in the table", async () => {
@@ -1833,6 +2232,92 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         seeded.channelNames[0],
       );
     }, 25_000);
+
+    it.each([
+      ["educational", "how-to", "how-to"],
+      ["product_update", "product update", "release change"],
+      ["comparison", "comparison", "comparison criteria"],
+    ] as const)(
+      "uses stored %s format without adding a paid step",
+      async (contentType, phrase, adapterPhrase) => {
+        const seeded = await seed({ channels: 1 });
+        await db
+          .update(schema.pipelineRuns)
+          .set({
+            input: {
+              kind: "brief",
+              text: BRIEF,
+              channelIds: seeded.channelIds,
+              contentType,
+            },
+          })
+          .where(eq(schema.pipelineRuns.id, seeded.runId));
+        const script = scriptedModel();
+
+        await serviceFor(script).handle({
+          id: `job-${contentType}`,
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
+
+        expect(script.calls.map((call) => call.role)).toEqual([
+          "researcher",
+          "writer",
+          "editor",
+          "factcheck",
+          "adapter",
+        ]);
+        expect(script.calls.find((call) => call.role === "writer")?.system).toContain(phrase);
+        expect(script.calls.find((call) => call.role === "researcher")?.system).toContain(phrase);
+        expect(script.calls.find((call) => call.role === "adapter")?.system).toContain(
+          adapterPhrase,
+        );
+        expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+      },
+      25_000,
+    );
+
+    it.each([
+      ["repost", "source-based retelling"],
+      ["case_study", "case study"],
+    ] as const)(
+      "uses stored source text for %s through the same five metered steps",
+      async (contentType, phrase) => {
+        const seeded = await seed({ channels: 1 });
+        const material = "SOURCE_MARKER The supplier announced new autumn ordering terms.";
+        await db
+          .update(schema.pipelineRuns)
+          .set({
+            input: {
+              kind: "source",
+              text: "Explain the effect for cafe owners",
+              material,
+              sourceUrl: null,
+              channelIds: seeded.channelIds,
+              contentType,
+            },
+          })
+          .where(eq(schema.pipelineRuns.id, seeded.runId));
+        const script = scriptedModel();
+
+        await serviceFor(script).handle({
+          id: `job-${contentType}`,
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
+
+        expect(script.calls.map((call) => call.role)).toEqual([
+          "researcher",
+          "writer",
+          "editor",
+          "factcheck",
+          "adapter",
+        ]);
+        expect(script.calls.find((call) => call.role === "writer")?.system).toContain(phrase);
+        expect(script.calls.find((call) => call.role === "researcher")?.user).toContain(material);
+        expect(script.calls.find((call) => call.role === "writer")?.user).toContain(material);
+        expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+      },
+      25_000,
+    );
   });
 
   /**

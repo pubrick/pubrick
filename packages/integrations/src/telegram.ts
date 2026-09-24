@@ -262,9 +262,9 @@ async function call<T>(
     // one guarded region. Nothing between "have a request body" and "have a
     // classified envelope" runs outside this try, so nothing in that path
     // can escape unclassified.
-    let requestBody: string;
+    let requestBody: string | FormData;
     try {
-      requestBody = JSON.stringify(body);
+      requestBody = body instanceof FormData ? body : JSON.stringify(body);
     } catch (cause) {
       // Will never succeed on retry either — a payload that can't be
       // serialized today can't be serialized tomorrow.
@@ -280,7 +280,7 @@ async function call<T>(
 
     const response = await doFetch(`${baseUrl}/bot${credentials.botToken}/${method}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: requestBody instanceof FormData ? undefined : { "content-type": "application/json" },
       body: requestBody,
       signal: AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS),
     });
@@ -401,6 +401,49 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       );
     }
 
+    if (input.video) {
+      if (
+        input.image ||
+        input.text.length > 1024 ||
+        input.video.bytes.length < 1024 ||
+        input.video.bytes.length > 20 * 1024 * 1024 ||
+        input.video.mimeType !== "video/mp4"
+      ) {
+        throw new PermanentPublishError(
+          "Telegram video requires one MP4 under 20 MB and a caption of at most 1024 characters",
+        );
+      }
+      const payload = new FormData();
+      payload.append("chat_id", credentials.chatId);
+      payload.append("caption", input.text);
+      payload.append(
+        "video",
+        new Blob([new Uint8Array(input.video.bytes)], { type: "video/mp4" }),
+        "video.mp4",
+      );
+      return messageLink(await call<unknown>("sendVideo", credentials, payload, options));
+    }
+
+    if (input.image) {
+      if (
+        input.text.length > 1024 ||
+        input.image.bytes.length === 0 ||
+        input.image.mimeType !== "image/jpeg"
+      ) {
+        throw new PermanentPublishError(
+          "Telegram photo captions must be 1..1024 characters and the image must be JPEG",
+        );
+      }
+      const payload = new FormData();
+      payload.append("chat_id", credentials.chatId);
+      payload.append("caption", input.text);
+      payload.append(
+        "photo",
+        new Blob([new Uint8Array(input.image.bytes)], { type: "image/jpeg" }),
+        "cover.jpg",
+      );
+      return messageLink(await call<unknown>("sendPhoto", credentials, payload, options));
+    }
     const payload: Record<string, unknown> = {
       chat_id: credentials.chatId,
       text: input.text,

@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { unlink } from "node:fs/promises";
+import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type BrandCreate,
@@ -9,6 +10,7 @@ import {
 import { and, eq, inArray, or } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db } from "../db";
+import { mediaPath } from "../media/media.repository";
 import { QueueService } from "../queue/queue.service";
 
 // Explicit allowlist: new columns (secrets included) must be opted in, never
@@ -20,6 +22,7 @@ const PUBLIC_COLUMNS = {
   voice: schema.brands.voice,
   audience: schema.brands.audience,
   contentLanguage: schema.brands.contentLanguage,
+  linkPolicy: schema.brands.linkPolicy,
   createdAt: schema.brands.createdAt,
   updatedAt: schema.brands.updatedAt,
 };
@@ -40,6 +43,7 @@ const PUBLIC_COLUMNS = {
 
 @Injectable()
 export class BrandsRepository {
+  private readonly logger = new Logger(BrandsRepository.name);
   constructor(private readonly queue: QueueService) {}
 
   list(orgId: string) {
@@ -154,7 +158,7 @@ export class BrandsRepository {
    * and everything the cascade will destroy is then a fixed set.
    */
   async delete(orgId: string, id: string) {
-    await db.transaction(async (tx) => {
+    const mediaIds = await db.transaction(async (tx) => {
       const brand = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
@@ -162,6 +166,10 @@ export class BrandsRepository {
         .limit(1)
         .for("update");
       if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
+      const assets = await tx
+        .select({ id: schema.mediaAssets.id, kind: schema.mediaAssets.kind })
+        .from(schema.mediaAssets)
+        .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.brandId, id)));
 
       // EVERY run of this brand, `FOR UPDATE`, by ascending id — the second
       // position in the canonical order, and taken here rather than left to the
@@ -224,7 +232,24 @@ export class BrandsRepository {
       await tx
         .delete(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)));
+      return assets;
     });
+    // The database is authoritative. A filesystem failure after commit cannot
+    // turn a successful brand deletion into a retryable 500, so report an
+    // orphaned file for operator cleanup without reversing the result.
+    await Promise.all(
+      mediaIds.map(async (asset) => {
+        try {
+          await unlink(mediaPath(asset.id, asset.kind));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            this.logger.warn(
+              `Could not remove media file after brand deletion: mediaId=${asset.id} error=${String(error)}`,
+            );
+          }
+        }
+      }),
+    );
     return { deleted: true };
   }
 }

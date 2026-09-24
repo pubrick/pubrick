@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   GENERATE_DLQ,
   GENERATE_QUEUE,
@@ -9,10 +9,40 @@ import {
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
   type PublishJob,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  RELEVANCE_SCAN_QUEUE,
+  type RelevanceJob,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
+  type RssPollJob,
+  TELEGRAM_COMMENTS_OPTIONS,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
+  VK_METRICS_OPTIONS,
+  VK_METRICS_QUEUE,
+  VK_METRICS_SCAN_QUEUE,
+  type VkMetricsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
+import { AutopilotService } from "./autopilot/autopilot.service";
+import { CalendarService } from "./calendar/calendar.service";
+import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
+import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
+import { MetricsService } from "./metrics/metrics.service";
+import { NotificationsService } from "./notifications/notifications.service";
 import { PublishService } from "./publish/publish.service";
+import { RelevanceService } from "./relevance/relevance.service";
+import { RssService } from "./rss/rss.service";
+import { SuggestionsService } from "./suggestions/suggestions.service";
+import { WebhooksService } from "./webhooks/webhooks.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
@@ -97,6 +127,16 @@ export class QueueService {
   constructor(
     private readonly publish: PublishService,
     private readonly generate: GenerateService,
+    @Optional() private readonly rss?: RssService,
+    @Optional() private readonly calendar?: CalendarService,
+    @Optional() private readonly relevance?: RelevanceService,
+    @Optional() private readonly comments?: CommentsService,
+    @Optional() private readonly suggestions?: SuggestionsService,
+    @Optional() private readonly autopilot?: AutopilotService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
+    @Optional() private readonly webhooks?: WebhooksService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -114,6 +154,118 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    if (this.notifications && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("notification-scan");
+      await boss.schedule("notification-scan", "* * * * *");
+      await boss.work("notification-scan", { batchSize: 1 }, async () =>
+        this.notifications?.scan(),
+      );
+      await boss.createQueue("notification-digest-scan");
+      await boss.schedule("notification-digest-scan", "*/5 * * * *");
+      await boss.work("notification-digest-scan", { batchSize: 1 }, async () =>
+        this.notifications?.scanDigests(),
+      );
+    }
+
+    if (this.webhooks && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("webhook-scan");
+      await boss.schedule("webhook-scan", "* * * * *");
+      await boss.work("webhook-scan", { batchSize: 1 }, async () => this.webhooks?.scan());
+    }
+
+    if (this.knowledgeAutoIndex && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("knowledge-auto-index-scan");
+      await boss.schedule("knowledge-auto-index-scan", "0 * * * *");
+      await boss.work("knowledge-auto-index-scan", { batchSize: 1 }, async () =>
+        this.knowledgeAutoIndex?.scan(),
+      );
+    }
+
+    if (this.metrics && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(VK_METRICS_QUEUE, { ...VK_METRICS_OPTIONS });
+      await boss.updateQueue(VK_METRICS_QUEUE, { ...VK_METRICS_OPTIONS });
+      await boss.work<VkMetricsJob>(
+        VK_METRICS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.metrics?.handle(job.data);
+        },
+      );
+      await boss.createQueue(VK_METRICS_SCAN_QUEUE);
+      await boss.schedule(VK_METRICS_SCAN_QUEUE, "0 * * * *");
+      await boss.work(VK_METRICS_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.metrics?.scan(boss);
+      });
+    }
+
+    if (this.rss && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+      await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+      await boss.work<RssPollJob>(
+        RSS_POLL_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.rss?.handle(job.data);
+        },
+      );
+      await boss.createQueue(RSS_SCAN_QUEUE);
+      await boss.schedule(RSS_SCAN_QUEUE, "*/15 * * * *");
+      await boss.work(RSS_SCAN_QUEUE, { batchSize: 1 }, async () => this.rss?.scan(boss));
+    }
+
+    if (this.relevance && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(RELEVANCE_DLQ);
+      await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+      await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+      await boss.work<RelevanceJob>(
+        RELEVANCE_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.relevance?.handle(job.data);
+        },
+      );
+      await boss.work<RelevanceJob>(RELEVANCE_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.relevance?.exhausted(job.data);
+      });
+      await boss.createQueue(RELEVANCE_SCAN_QUEUE);
+      await boss.schedule(RELEVANCE_SCAN_QUEUE, "0 * * * *");
+      await boss.work(RELEVANCE_SCAN_QUEUE, { batchSize: 1 }, async () =>
+        this.relevance?.scan(boss),
+      );
+    }
+
+    if (this.comments && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
+      await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
+      await boss.work<TelegramCommentsJob>(
+        TELEGRAM_COMMENTS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.comments?.handle(job.data);
+        },
+      );
+    }
+
+    if (this.suggestions && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
+      await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.handle(job.data);
+        },
+      );
+      await boss.work<TopicSuggestionsJob>(
+        TOPIC_SUGGESTIONS_DLQ,
+        { batchSize: 1 },
+        async ([job]) => {
+          if (job) await this.suggestions?.exhausted(job.data);
+        },
+      );
+    }
 
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
     // Names and options come from @pubrick/shared, the single definition shared with
@@ -193,5 +345,21 @@ export class QueueService {
     await boss.work(sweepQueue, { batchSize: 1 }, async () => {
       await this.generate.sweepAbandoned();
     });
+
+    // Private test queues must not consume production calendar ticks.
+    if (this.calendar && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("calendar-scan");
+      await boss.schedule("calendar-scan", "* * * * *");
+      await boss.work("calendar-scan", { batchSize: 1 }, async () => {
+        await this.calendar?.scan(boss);
+      });
+    }
+    if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("autopilot-scan");
+      await boss.schedule("autopilot-scan", "*/5 * * * *");
+      await boss.work("autopilot-scan", { batchSize: 1 }, async () => {
+        await this.autopilot?.scan(boss);
+      });
+    }
   }
 }

@@ -38,7 +38,7 @@ export const EDITOR: Step<EditorInput, EditOutput, RunStepContext> = defineStep(
   name: "editor",
   schema: editSchema,
   role: [
-    "You edit a draft post into the brand's voice. You are the last person to touch it before a human reads it.",
+    "You edit a draft into the brand's voice. You are the last person to touch it before a human reads it.",
     "Cut what does not earn its place, fix what is limp or generic, and keep the writer's meaning. Do not add facts, numbers, names or claims that are not already in the draft.",
     `The edited post must be at most ${MAX_BODY_LENGTH} characters.`,
     "Produce:",

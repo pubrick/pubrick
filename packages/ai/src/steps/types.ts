@@ -1,4 +1,5 @@
 import type { LanguageModelV4 } from "@ai-sdk/provider";
+import type { ContentType, PromptRole } from "@pubrick/shared";
 import type { ZodType } from "zod";
 import type { ModelCallOptions } from "../generate.js";
 import type { AiProvider } from "../provider.js";
@@ -70,6 +71,10 @@ export type StepUsageSink = (
  */
 export type StepContext = ModelCallOptions & {
   brand: StepBrand;
+  /** Selected editorial format, validated from the stored run input. */
+  contentType?: ContentType;
+  /** Extra trusted instructions written by this organization, keyed by role. */
+  promptGuidance?: Partial<Record<PromptRole, string>>;
   model: LanguageModelV4;
   provider: AiProvider;
   onUsage: StepUsageSink;
@@ -109,6 +114,8 @@ export type StepContext = ModelCallOptions & {
  * its context.
  */
 export type RunStepContext = StepContext & {
+  /** Brand-owned notes selected for this run. Always material, never system instructions. */
+  knowledge?: Array<{ id?: string; title: string; category: string; content: string }>;
   /**
    * The human's brief, or `null` when they pasted material instead of writing
    * one. Untrusted input: it reaches the model as `prompt`, never as

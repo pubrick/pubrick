@@ -20,6 +20,78 @@
 /** Queue the api enqueues to and the worker consumes. */
 export const PUBLISH_QUEUE = "publish";
 
+/** Brand-scoped RSS/Atom source poll. */
+export const RSS_POLL_QUEUE = "rss-poll";
+/** AI scoring is intentionally capped at twenty newly collected articles per hour. */
+export const RELEVANCE_QUEUE = "news-relevance";
+export const RELEVANCE_SCAN_QUEUE = "news-relevance-scan";
+export const RELEVANCE_DLQ = "news-relevance-dlq";
+export type RelevanceJob = { orgId: string; brandId: string; itemId: string };
+export const RELEVANCE_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 180,
+  heartbeatSeconds: 30,
+  deadLetter: RELEVANCE_DLQ,
+} as const;
+export const TOPIC_SUGGESTIONS_QUEUE = "topic-suggestions";
+export const TOPIC_SUGGESTIONS_DLQ = "topic-suggestions-dlq";
+export type TopicSuggestionsJob = { orgId: string; brandId: string; requestId: string };
+export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 180,
+  heartbeatSeconds: 30,
+  deadLetter: TOPIC_SUGGESTIONS_DLQ,
+} as const;
+export const RSS_SCAN_QUEUE = "rss-scan";
+export type RssPollJob = { orgId: string; sourceId: string };
+export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
+/** Opt-in, bounded VK publication metric refresh. No credentials in job data. */
+export const VK_METRICS_QUEUE = "vk-metrics";
+export const VK_METRICS_SCAN_QUEUE = "vk-metrics-scan";
+export type VkMetricsJob = {
+  orgId: string;
+  brandId: string;
+  channelId: string;
+  publicationId: string;
+};
+export const VK_METRICS_OPTIONS = {
+  retryLimit: 1,
+  retryDelay: 60,
+  retryBackoff: true,
+  expireInSeconds: 90,
+} as const;
+export function vkMetricsJobOptions(publicationId: string, channelId: string) {
+  return { singletonKey: publicationId, singletonSeconds: 3600, group: { id: channelId } } as const;
+}
+export type TelegramCommentsJob = { orgId: string; itemId: string };
+export const TELEGRAM_COMMENTS_OPTIONS = {
+  retryLimit: 1,
+  retryDelay: 60,
+  expireInSeconds: 90,
+} as const;
+export function telegramCommentsJobOptions(itemId: string, orgId: string) {
+  return { singletonKey: itemId, singletonSeconds: 900, group: { id: orgId } } as const;
+}
+export const RSS_POLL_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 120,
+} as const;
+export const RSS_POLL_MIN_GAP_SECONDS = 300;
+export function rssPollJobOptions(sourceId: string, orgId: string) {
+  return {
+    singletonKey: sourceId,
+    singletonSeconds: RSS_POLL_MIN_GAP_SECONDS,
+    // One workspace's MTProto session must never be opened concurrently across workers.
+    group: { id: orgId },
+  } as const;
+}
+
+/** The two-argument advisory-lock namespace shared by API and calendar admissions. */
+export const RUN_ADMISSION_LOCK_NAMESPACE = 0x7a11;
+
 /** Dead-letter queue for publish jobs whose retries were exhausted. */
 export const PUBLISH_DLQ = "publish-dlq";
 

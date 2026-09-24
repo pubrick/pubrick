@@ -10,6 +10,7 @@ import {
   formatUsd,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
+import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
@@ -449,6 +450,10 @@ export default function SettingsPage() {
   // there is no second round trip and no way for the two to disagree about
   // which organization they describe.
   const members = organization?.members ?? [];
+  const canManageApiKeys = members.some(
+    (member) =>
+      member.user.id === session?.user?.id && (member.role === "owner" || member.role === "admin"),
+  );
   const invitations = (organization?.invitations ?? []).filter(isLiveInvitation);
 
   const themeOptions = [
@@ -587,6 +592,54 @@ export default function SettingsPage() {
             </Advanced>
           </form>
         </Card>
+
+        <Card>
+          <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>
+          <p className="mb-3 text-sm text-fg-secondary">{t("promptsHint")}</p>
+          <Link
+            href={`/${locale}/settings/prompts`}
+            className="text-sm font-medium text-accent underline"
+          >
+            {t("promptsOpen")}
+          </Link>
+        </Card>
+
+        <Card>
+          <h2 className="mb-2 text-base font-semibold text-fg">{t("notificationsTitle")}</h2>
+          <p className="mb-3 text-sm text-fg-secondary">{t("notificationsHint")}</p>
+          <Link
+            href={`/${locale}/settings/notifications`}
+            className="text-sm font-medium text-accent underline"
+          >
+            {t("notificationsOpen")}
+          </Link>
+        </Card>
+
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("publicApiTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("publicApiHint")}</p>
+            <Link
+              href={`/${locale}/settings/api-keys`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("publicApiOpen")}
+            </Link>
+          </Card>
+        )}
+
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("webhooksTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("webhooksHint")}</p>
+            <Link
+              href={`/${locale}/settings/webhooks`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("webhooksOpen")}
+            </Link>
+          </Card>
+        )}
 
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>

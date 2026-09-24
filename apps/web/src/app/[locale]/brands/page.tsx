@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconBrands, IconChevronRight } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { TRANSITION_COLORS } from "@/components/ui/transition";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
@@ -36,6 +38,11 @@ export default function BrandsPage() {
   const router = useRouter();
   const [brands, setBrands] = useState<Brand[] | null>(null);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [voice, setVoice] = useState("");
+  const [audience, setAudience] = useState("");
+  const [contentLanguage, setContentLanguage] = useState("en");
+  const [created, setCreated] = useState<Brand | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Read failure and write failure are different sentences in different
   // places: "we could not fetch your brands" belongs where the list would
@@ -82,10 +89,25 @@ export default function BrandsPage() {
   async function createBrand(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setCreated(null);
     setBusy(true);
     try {
-      await api("/api/brands", { method: "POST", body: JSON.stringify({ name }) });
+      const newBrand = await api<Brand>("/api/brands", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          ...(description.trim() ? { description: description.trim() } : {}),
+          ...(voice.trim() ? { voice: voice.trim() } : {}),
+          ...(audience.trim() ? { audience: audience.trim() } : {}),
+          contentLanguage: contentLanguage.trim(),
+        }),
+      });
+      setCreated(newBrand);
       setName("");
+      setDescription("");
+      setVoice("");
+      setAudience("");
+      setContentLanguage("en");
       load();
     } catch (err) {
       setError(describeError(err));
@@ -109,6 +131,28 @@ export default function BrandsPage() {
         </Button>
       }
     >
+      {created && (
+        <Card className="mb-6" aria-live="polite">
+          <h2 className="text-lg font-semibold text-fg">
+            {t("createdTitle", { name: created.name })}
+          </h2>
+          <p className="mt-2 text-sm text-fg-secondary">{t("createdHint")}</p>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
+            <Link
+              className="text-accent underline-offset-2 hover:underline"
+              href={`/${locale}/brands/${created.id}#channels`}
+            >
+              {t("addChannelNext")}
+            </Link>
+            <Link
+              className="text-accent underline-offset-2 hover:underline"
+              href={`/${locale}/brands/${created.id}/knowledge`}
+            >
+              {t("addKnowledgeNext")}
+            </Link>
+          </div>
+        </Card>
+      )}
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
@@ -116,15 +160,56 @@ export default function BrandsPage() {
       )}
 
       <Card className="mb-6">
-        <form id={FORM_ID} onSubmit={createBrand} className="flex flex-wrap items-end gap-3">
+        <h2 className="mb-2 text-lg font-semibold text-fg">{t("setupTitle")}</h2>
+        <p className="mb-4 text-sm text-fg-secondary">{t("setupHint")}</p>
+        <form id={FORM_ID} onSubmit={createBrand} className="flex flex-col gap-4">
           <Input
             id={NAME_INPUT_ID}
             value={name}
             onChange={(e) => setName(e.target.value)}
             label={t("namePlaceholder")}
             required
-            className="min-w-[220px] flex-1"
+            maxLength={200}
           />
+          <Advanced dirty={Boolean(description || voice || audience || contentLanguage !== "en")}>
+            <div className="grid gap-4">
+              <div>
+                <Textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  label={t("descriptionLabel")}
+                  placeholder={t("descriptionPlaceholder")}
+                  maxLength={2000}
+                />
+                <p className="mt-1 text-sm text-fg-tertiary">{t("descriptionHint")}</p>
+              </div>
+              <Textarea
+                value={voice}
+                onChange={(e) => setVoice(e.target.value)}
+                label={t("voiceLabel")}
+                placeholder={t("voicePlaceholder")}
+                maxLength={2000}
+              />
+              <Textarea
+                value={audience}
+                onChange={(e) => setAudience(e.target.value)}
+                label={t("audienceLabel")}
+                placeholder={t("audiencePlaceholder")}
+                maxLength={2000}
+              />
+              <div>
+                <Input
+                  value={contentLanguage}
+                  onChange={(e) => setContentLanguage(e.target.value)}
+                  label={t("languageLabel")}
+                  required
+                  minLength={2}
+                  maxLength={10}
+                />
+                <p className="mt-1 text-sm text-fg-tertiary">{t("languageHint")}</p>
+              </div>
+            </div>
+          </Advanced>
         </form>
       </Card>
 

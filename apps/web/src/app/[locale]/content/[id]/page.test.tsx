@@ -1,4 +1,5 @@
 import type {
+  AdaptationProposal,
   AdaptationStatus,
   ContentStatus,
   DeliveryOutcome,
@@ -22,17 +23,23 @@ import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
+import ru from "../../../../../messages/ru.json";
 import ContentItemPage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, api: vi.fn(), apiVoid: vi.fn() };
+  return { ...actual, api: vi.fn(), apiPage: vi.fn(), apiVoid: vi.fn() };
 });
 
+// Editorial notes exercise their own fetch and paging in editorial-notes.test.
+// Keep these page tests focused on publishing and version actions.
+vi.mock("./editorial-notes", () => ({ EditorialNotes: () => null }));
+
 // Imported after the mock so this binding is the mocked export.
-import { ApiError, api, apiVoid } from "@/lib/api";
+import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
+const mockApiPage = vi.mocked(apiPage);
 const mockApiVoid = vi.mocked(apiVoid);
 
 type Adaptation = {
@@ -56,6 +63,7 @@ type Adaptation = {
 type ContentItem = {
   id: string;
   brandId: string;
+  coverMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -67,8 +75,11 @@ type ContentItem = {
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
   /** The run that generated this item, or null for a hand-written one. */
   runId: string | null;
+  linkPolicyWebsite: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
+  draftRevisionProposal: import("@pubrick/shared").DraftRevisionProposal | null;
+  adaptationProposals: AdaptationProposal[];
   /** What that run was asked for — the source strip's input. */
   runInput: RunInput | null;
 };
@@ -108,6 +119,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
   const merged = {
     id: "c1",
     brandId: "b1",
+    coverMediaId: null as string | null,
     title: "Launch post",
     body: "Hello world",
     status: "draft" as ContentStatus,
@@ -122,9 +134,12 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // the key either way, so a fixture that omitted it would be a payload the
     // API cannot produce.
     runId: null as string | null,
+    linkPolicyWebsite: null as string | null,
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
     refineProposal: null as RefineProposal | null,
+    draftRevisionProposal: null as import("@pubrick/shared").DraftRevisionProposal | null,
+    adaptationProposals: [] as AdaptationProposal[],
     // ...and this one. The api returns the key on every item, `null` for the
     // hand-written draft that no run made.
     runInput: null as RunInput | null,
@@ -198,6 +213,8 @@ function installBaseHandlers(
     }
 
     if (method === "GET" && path === `/api/content/${served.current.id}`) return served.current;
+    if (method === "GET" && path === `/api/content/${served.current.id}/client-review-link`)
+      return { status: "none", expiresAt: null, reviewedAt: null, comment: null };
     if (method === "GET" && path.startsWith("/api/channels")) return channels;
     throw new Error(`unhandled request in test: ${method} ${path}`);
   });
@@ -225,6 +242,8 @@ function resultsList(): HTMLElement {
 
 beforeEach(() => {
   mockApi.mockReset();
+  mockApiPage.mockReset();
+  mockApiPage.mockResolvedValue({ rows: [], nextCursor: null });
   mockApiVoid.mockReset();
   mockApiVoid.mockResolvedValue(undefined);
   // AppShell (now wrapping this page) reads a session for its sidebar user
@@ -828,7 +847,158 @@ describe("buttons disabled when published (Step 5)", () => {
   });
 });
 
+describe("restoring saved text", () => {
+  it("updates the editor draft and re-reads the saved item after restore", async () => {
+    const served = { current: makeItem({ body: "Current text." }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/restore")) {
+        served.current = { ...served.current, body: "Earlier text." };
+        return served.current;
+      }
+      return undefined;
+    });
+    mockApiPage.mockResolvedValue({
+      rows: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          adaptationId: null,
+          body: "Earlier text.",
+          origin: "human",
+          createdAt: "2026-09-01T10:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    expect(mockApiPage.mock.calls.some(([path]) => String(path).includes("/versions"))).toBe(false);
+    await user.click(screen.getByText(en.Publish.versionHistory));
+    await user.click(await screen.findByRole("button", { name: en.Publish.versionPreview }));
+    await user.click(screen.getByRole("button", { name: en.Publish.versionRestore }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toHaveValue(
+        "Earlier text.",
+      );
+    });
+    expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/restore"))).toBe(
+      true,
+    );
+    expect(
+      calls.filter((call) => call.method === "GET" && call.path === "/api/content/c1"),
+    ).toHaveLength(2);
+  });
+});
+
 describe("per-channel override (Step 6)", () => {
+  it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation({ body: "Saved text" })] }) };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).getByText("Saved text")).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewSaved)).toBeVisible();
+
+    const draft = "First line\n<script>alert('xss')</script>\nLast line";
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Override for Telegram · Main channel" }),
+      {
+        target: { value: draft },
+      },
+    );
+
+    const text = within(preview).getByText(
+      (_, element) => element?.tagName === "P" && element.textContent === draft,
+    );
+    expect(text).toHaveClass("whitespace-pre-wrap");
+    expect(text.textContent).toBe(draft);
+    expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
+    expect(preview.querySelector("script")).toBeNull();
+    expect(within(preview).getByText(en.Publish.reviewPreviewLocalNote)).toBeVisible();
+  });
+
+  it("previews the unsaved master draft when a channel override is empty", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).getByText("Hello world")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.bodyLabel }), {
+      target: { value: "Changed master draft" },
+    });
+    expect(within(preview).getByText("Changed master draft")).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
+  });
+
+  it("shows the Telegram cover and warns only beyond the 1024-character caption limit", async () => {
+    const served = {
+      current: makeItem({
+        coverMediaId: "cover-1",
+        adaptations: [makeAdaptation({ body: "a".repeat(1024) })],
+      }),
+    };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(
+      within(preview).getByRole("img", { name: en.Publish.reviewPreviewCoverAlt }),
+    ).toHaveAttribute("src", "/api/media/cover-1/file");
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(counterFor(field)).toHaveTextContent("1024 / 1024");
+    expect(within(preview).queryByRole("alert")).toBeNull();
+
+    fireEvent.change(field, { target: { value: "a".repeat(1025) } });
+    expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
+    expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+  });
+
+  it("keeps Telegram's 4096-character text limit without a cover and marks published copy as local", async () => {
+    const served = {
+      current: makeItem({
+        adaptations: [makeAdaptation({ body: "a".repeat(1025), status: "published" })],
+      }),
+    };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(within(preview).queryByRole("img")).toBeNull();
+    expect(within(preview).queryByRole("alert")).toBeNull();
+    expect(within(preview).getByText(en.Publish.reviewPreviewPublishedNote)).toBeVisible();
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+  });
+
+  it("shows translated preview text without a Telegram cover for a VK channel", async () => {
+    const served = {
+      current: makeItem({ coverMediaId: "cover-1", adaptations: [makeAdaptation()] }),
+    };
+    installBaseHandlers(served, [], undefined, [{ ...channel, platform: "vk" }]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, {
+      locale: "ru",
+    });
+    const preview = await screen.findByRole("region", {
+      name: ru.Publish.reviewPreviewFor.replace("{channel}", "VK · Main channel"),
+    });
+    expect(within(preview).queryByRole("img")).toBeNull();
+    expect(within(preview).getByText(ru.Publish.reviewPreview)).toBeVisible();
+    expect(within(preview).getByText(ru.Publish.reviewPreviewLocalNote)).toBeVisible();
+  });
+
   it("PATCHes the adaptation, not the item", async () => {
     const adaptation = makeAdaptation({ id: "a1", channelId: "ch1", body: null });
     const served = { current: makeItem({ adaptations: [adaptation] }) };
@@ -895,6 +1065,78 @@ describe("per-channel override (Step 6)", () => {
     );
     expect(patchCall?.body).toBe(JSON.stringify({ body: null }));
     expect(adaptationUpdateSchema.safeParse(JSON.parse(patchCall?.body ?? "")).success).toBe(true);
+  });
+});
+
+describe("channel adaptation suggestion", () => {
+  const suggested: AdaptationProposal = {
+    id: "p1",
+    adaptationId: "a1",
+    masterBody: "Hello world",
+    previousBody: null,
+    proposal: "Hello, channel readers.",
+    reason: "A clearer opening for this channel.",
+  };
+
+  it("previews the model's text and applies only the server's accepted response", async () => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/readapt") return suggested;
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/readapt/p1/accept") {
+        served.current = makeItem({
+          adaptations: [makeAdaptation({ body: "Server-approved wording.", origin: "ai" })],
+          adaptationProposals: [],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Publish.readaptAction }));
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(en.Publish.overridePlaceholder)).toHaveValue("");
+    expect(screen.getByText(suggested.reason)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Publish.readaptAccept }));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(en.Publish.overridePlaceholder)).toHaveValue(
+        "Server-approved wording.",
+      ),
+    );
+    expect(calls.filter((call) => call.path.endsWith("/readapt"))).toHaveLength(1);
+    expect(screen.queryByText(suggested.proposal)).not.toBeInTheDocument();
+  });
+
+  it("preserves a staged suggestion but blocks acceptance after the source changes", async () => {
+    const served = {
+      current: makeItem({
+        adaptations: [makeAdaptation()],
+        adaptationProposals: [suggested],
+        body: "Changed source",
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByText(en.Publish.readaptStale)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAccept })).toBeDisabled();
+  });
+
+  it("keeps a pinned suggestion visible for discard while blocking model and accept actions", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+        adaptationProposals: [suggested],
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(suggested.proposal)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAction })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.readaptAccept })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineDiscard })).toBeEnabled();
   });
 });
 
@@ -2053,6 +2295,16 @@ describe("the way back to the run that made this", () => {
     await screen.findByText(en.Publish.backToQueue);
     expect(screen.queryByTestId("source-strip")).not.toBeInTheDocument();
   });
+
+  it("shows the link policy receipt on a generated draft before review", async () => {
+    installBaseHandlers({ current: makeItem({ linkPolicyWebsite: "https://example.com" }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(await screen.findByText(/Brand link policy was applied/)).toHaveTextContent(
+      "https://example.com",
+    );
+  });
 });
 
 /**
@@ -3146,5 +3398,78 @@ describe("a post whose channels disagreed", () => {
 
     expect(screen.queryByText(/already received the previous text/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
+  });
+});
+
+describe("VC.ru manual publication", () => {
+  it("exports the reviewed override and records a user-supplied URL only after approval", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
+    const current = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Reviewed VC article." })],
+    });
+    const served = { current };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method, _init) => {
+        if (method === "POST" && path.endsWith("/manual-publication")) {
+          served.current = makeItem({
+            ...current,
+            status: "published",
+            adaptations: [
+              makeAdaptation({
+                status: "published",
+                body: "Reviewed VC article.",
+                externalUrl: "https://vc.ru/marketing/123-article",
+                assertedByName: "Editor",
+                assertedAt: "2026-09-23T12:00:00.000Z",
+              }),
+            ],
+          });
+          return served.current;
+        }
+        return undefined;
+      },
+      [manualChannel],
+    );
+
+    const copy = vi.fn().mockResolvedValue(undefined);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    const results = within(resultsList());
+    expect(results.getByText(en.Content.adaptationStatus.manual_ready)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.manualReadyAction })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeDisabled();
+    expect(results.getByRole("link", { name: en.Publish.openVc })).toHaveAttribute(
+      "href",
+      "https://vc.ru/",
+    );
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: copy },
+    });
+    await user.click(results.getByRole("button", { name: en.Publish.copyBody }));
+    expect(copy).toHaveBeenCalledWith("Reviewed VC article.");
+    await user.type(
+      results.getByRole("textbox", { name: en.Publish.vcUrlLabel }),
+      "https://vc.ru/marketing/123-article",
+    );
+    await user.click(results.getByRole("button", { name: en.Publish.recordManualPublication }));
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.path.endsWith("/manual-publication"))).toBe(true),
+    );
+    const posted = calls.find((call) => call.path.endsWith("/manual-publication"));
+    expect(posted?.body && JSON.parse(posted.body)).toEqual({
+      url: "https://vc.ru/marketing/123-article",
+    });
+    expect(await results.findByRole("link", { name: en.Publish.viewPost })).toHaveAttribute(
+      "href",
+      "https://vc.ru/marketing/123-article",
+    );
+    expect(results.getByText(/self reported; Pubrick did not ask VC.ru/)).toBeInTheDocument();
   });
 });

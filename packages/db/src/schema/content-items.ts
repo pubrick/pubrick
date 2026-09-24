@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   pgTable,
@@ -19,6 +20,7 @@ import {
 import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { enumCheck } from "./enum-check.js";
+import { mediaAssets } from "./media.js";
 
 /**
  * Name of the "at most one PUBLISHED RECORD per adaptation" unique index
@@ -42,10 +44,14 @@ export const contentItems = pgTable(
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
     title: text("title"),
+    coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
+    videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
+    /** Website used by the generation-time link policy; null means none ran. */
+    linkPolicyWebsite: text("link_policy_website"),
     /**
      * Stamped by an explicit `POST /content/:id/opened` the item page fires once
      * after render — never as a side effect of the GET, which the future public
@@ -110,6 +116,10 @@ export const contentItems = pgTable(
      */
     enumCheck("content_items_status_check", t.status, CONTENT_STATUSES),
     enumCheck("content_items_origin_check", t.origin, CONTENT_ORIGINS),
+    check(
+      "content_items_one_media_check",
+      sql`${t.coverMediaId} IS NULL OR ${t.videoMediaId} IS NULL`,
+    ),
   ],
 );
 

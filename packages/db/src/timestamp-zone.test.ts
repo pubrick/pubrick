@@ -41,12 +41,15 @@ const OTHER_ZONE_OFFSET_MS = 9 * 60 * 60 * 1000;
  * database.
  */
 const ZONED_TABLES = [
+  "brand_feeds",
   "brands",
   "channels",
   "content_items",
   "adaptations",
   "publications",
   "content_versions",
+  "feed_entries",
+  "media_assets",
 ] as const;
 
 /**
@@ -235,6 +238,7 @@ describe("timestamps carry their zone", () => {
       "adaptations.created_at",
       "adaptations.scheduled_at",
       "adaptations.updated_at",
+      "brand_feeds.created_at",
       "brands.created_at",
       "brands.updated_at",
       "channels.created_at",
@@ -243,6 +247,8 @@ describe("timestamps carry their zone", () => {
       "content_items.first_opened_at",
       "content_items.updated_at",
       "content_versions.created_at",
+      "feed_entries.published_at",
+      "media_assets.created_at",
       // 0017's, and born zoned: it records the moment a person settled a
       // delivery, written by the api's `now()` and read back beside the
       // receipt's own `created_at`, so the two clocks 0014 separated meet on

@@ -24,6 +24,20 @@ export const env = parseEnv({
     }
   }, "APP_ENCRYPTION_KEY must be one or more comma-separated base64 keys, each decoding to exactly 32 bytes, newest first"),
   TELEGRAM_API_BASE_URL: z.string().default("https://api.telegram.org"),
+  WEB_ORIGIN: z.url().default("http://localhost:3000"),
+  TELEGRAM_API_ID: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z
+      .string()
+      .regex(/^[1-9][0-9]*$/)
+      .optional(),
+  ),
+  TELEGRAM_API_HASH: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  VK_API_BASE_URL: z.string().default("https://api.vk.com/method"),
+  MAX_API_BASE_URL: z.string().default("https://platform-api2.max.ru"),
   /**
    * HOW LATE A SCHEDULED POST MAY STILL GO OUT, in hours. Beyond it the
    * delivery is `failed` with `failure_reason = 'schedule_missed'` having sent

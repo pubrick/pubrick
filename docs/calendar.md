@@ -1,0 +1,90 @@
+# Planned generation calendar
+
+The calendar is a brand-scoped plan for **draft generation**. A slot contains a
+future local date and time (stored as an absolute timestamp), a custom brief or
+an approved topic from the same brand, one or more of the brand's channels, and
+optional team notes. The month grid shows the
+plan; the selected day's list allows edits or removal until generation starts.
+On narrow screens a date picker replaces the seven-column grid so every date
+target remains large enough to tap. The brand page links to its calendar.
+
+At the scheduled time, a pg-boss tick scans due slots. It takes the same
+per-organization advisory admission lock as `POST /api/runs`, checks the limit
+of three live runs and revalidates channel ownership. A successful tick inserts
+the `pipeline_runs` row, enqueues the existing `generate` job, and stores the
+run ID on the slot **in one database transaction**. Another tick cannot create
+a second run for that slot. If the organization is at its concurrency limit,
+the slot stays planned and is retried five minutes later. A removed channel
+sets an explicit error on the slot; editing it with a valid channel clears the
+error. A database or queue outage rolls back the transaction and the next tick
+can retry.
+
+The topic bank's **Schedule** action opens the calendar with that approved
+topic selected. The calendar form can also pick any approved topic. The API
+reads and locks the topic in the slot transaction, checks its organization,
+brand, and approval, and stores its title, description, source URL, and revision
+timestamp alongside the link. It derives the brief from that snapshot; a client
+cannot override it with a second brief. Before creating a run or enqueueing a
+job, the due worker locks the topic and checks that it is still approved and
+matches the complete snapshot. An archived, edited, or missing topic sets
+`topic_changed` on the slot and spends no model tokens. An editor can reselect
+an approved topic to refresh the snapshot, or explicitly unlink it and write a
+custom brief. Editing a linked slot's brief without unlinking is refused.
+
+Deleting a topic with any linked calendar slot is refused, including after a
+slot starts. This preserves the original approval trail; remove unstarted
+slots or keep the topic as an archive. A started slot remains immutable.
+
+The generated draft follows the existing human review gate. Scheduling a slot
+does not approve or publish content. Operators can open the run receipt from
+the calendar after it starts. A slot already linked to a run is immutable; the
+run's cancellation and review controls remain on the run and content screens.
+
+The scanner processes up to 100 due slots per minute. Future work can add
+richer recurring plans and a separate explicit opt-in
+schedule for publication.
+
+## Memorable dates
+
+Each brand can maintain its own annual editorial dates. A date has an `MM-DD`
+month and day, a title, 0–365 lead days, optional suggested content formats,
+and an active switch. The calendar shows active dates on their occurrence day
+and during their lead window. Dates are **suggestions only**: adding or editing
+one never creates a topic, run, draft, or publication. There are no built-in
+brand-specific dates or automatic seeds.
+
+The brand's configured IANA timezone is shown with these dates; until a brand
+configures one, the zone is UTC. Calendar day arithmetic uses the date label,
+so a suggestion does not drift when an editor opens the UI from another zone.
+February 29 appears only in leap years, with no February 28 substitute. Lead
+windows cross New Year and the next actual occurrence is used. For example,
+January 1 with a 14-day lead appears from December 18 of the previous year.
+
+The secondary **Manage dates** control opens the CRUD panel. The calendar's
+primary Add action still plans a generation slot.
+
+## API
+
+- `GET /api/calendar/slots?brandId=<uuid>&from=<ISO>&to=<ISO>`: up to 93 days,
+  half-open interval.
+- `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `channelIds`, optional
+  `notes`, and either `brief` or an approved `topicId` in that brand. The API
+  rejects a request containing both `topicId` and `brief`.
+- `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
+  `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
+  snapshots the currently approved topic again.
+- `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
+
+Every route requires an active organization. The repository scopes all reads
+and writes by organization and brand and returns only explicit public columns.
+
+- `GET /api/calendar/memorable-dates?brandId=<uuid>`: returns `{ timezone, dates }`,
+  including inactive dates for management.
+- `POST /api/calendar/memorable-dates`: required `brandId`, `monthDay`, `title`,
+  `leadDays`, `suggestedContentTypes`, `isActive`.
+- `PATCH /api/calendar/memorable-dates/:id?brandId=<uuid>`: change one or more
+  fields of a date in the requested brand.
+- `DELETE /api/calendar/memorable-dates/:id?brandId=<uuid>`: remove that date.
+
+These routes also require an active organization. All four methods check both
+organization and brand; a foreign brand/date returns 404.

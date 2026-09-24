@@ -13,8 +13,10 @@ import {
   type PublishFailureReason,
 } from "@pubrick/shared";
 import { and, eq, inArray, isNull, type SQLWrapper, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import { env } from "../env";
+import { enqueueNotification } from "../notifications/notifications.outbox";
 
 export type LoadedAdaptation = {
   id: string;
@@ -23,6 +25,13 @@ export type LoadedAdaptation = {
   status: AdaptationStatus;
   body: string | null;
   itemBody: string;
+  itemBrandId: string;
+  channelBrandId: string;
+  coverMediaId: string | null;
+  coverAuthorizedId: string | null;
+  videoMediaId?: string | null;
+  videoAuthorizedId?: string | null;
+  videoByteSize?: number | null;
   /** Parent content item's status: `rejected` means do not deliver. */
   itemStatus: ContentStatus;
   platform: PlatformId;
@@ -493,6 +502,10 @@ export class ChannelNotFoundError extends Error {
   readonly name = "ChannelNotFoundError";
 }
 
+export class NoAutomaticCredentialsError extends Error {
+  readonly name = "NoAutomaticCredentialsError";
+}
+
 @Injectable()
 export class PublishRepository {
   /**
@@ -507,6 +520,7 @@ export class PublishRepository {
    * published yesterday's post with nothing in the record to say it was late.
    */
   async load(orgId: string, adaptationId: string): Promise<LoadedAdaptation | undefined> {
+    const videoAsset = alias(schema.mediaAssets, "video_asset");
     const rows = await db
       .select({
         id: schema.adaptations.id,
@@ -515,6 +529,13 @@ export class PublishRepository {
         status: schema.adaptations.status,
         body: schema.adaptations.body,
         itemBody: schema.contentItems.body,
+        itemBrandId: schema.contentItems.brandId,
+        channelBrandId: schema.channels.brandId,
+        coverMediaId: schema.contentItems.coverMediaId,
+        coverAuthorizedId: schema.mediaAssets.id,
+        videoMediaId: schema.contentItems.videoMediaId,
+        videoAuthorizedId: videoAsset.id,
+        videoByteSize: videoAsset.byteSize,
         itemStatus: schema.contentItems.status,
         platform: schema.channels.platform,
         attemptCount: schema.adaptations.attemptCount,
@@ -529,6 +550,24 @@ export class PublishRepository {
       })
       .from(schema.adaptations)
       .innerJoin(schema.contentItems, eq(schema.contentItems.id, schema.adaptations.contentItemId))
+      .leftJoin(
+        schema.mediaAssets,
+        and(
+          eq(schema.mediaAssets.id, schema.contentItems.coverMediaId),
+          eq(schema.mediaAssets.orgId, schema.contentItems.orgId),
+          eq(schema.mediaAssets.brandId, schema.contentItems.brandId),
+          eq(schema.mediaAssets.kind, "image"),
+        ),
+      )
+      .leftJoin(
+        videoAsset,
+        and(
+          eq(videoAsset.id, schema.contentItems.videoMediaId),
+          eq(videoAsset.orgId, schema.contentItems.orgId),
+          eq(videoAsset.brandId, schema.contentItems.brandId),
+          eq(videoAsset.kind, "video"),
+        ),
+      )
       .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
       .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
       .limit(1);
@@ -561,6 +600,9 @@ export class PublishRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw new ChannelNotFoundError(`Channel ${channelId} not found for org ${orgId}`);
+    if (row.credentialsEncrypted === null) {
+      throw new NoAutomaticCredentialsError("This channel requires manual publication");
+    }
     return decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
   }
 
@@ -993,6 +1035,14 @@ export class PublishRepository {
       );
 
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+      await enqueueNotification(
+        tx,
+        orgId,
+        outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+        adaptationId,
+        updated.contentItemId,
+        updated.attemptCount,
+      );
       return true;
     });
   }
@@ -1183,6 +1233,14 @@ export class PublishRepository {
           attempt: row.attemptCount,
         });
         await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+        await enqueueNotification(
+          tx,
+          row.orgId,
+          row.outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+          row.id,
+          row.contentItemId,
+          row.attemptCount,
+        );
       }
 
       return swept.map((row) => ({ id: row.id, orgId: row.orgId, outcome: row.outcome }));
@@ -1362,6 +1420,14 @@ export class PublishRepository {
           attempt: row.attemptCount,
         });
         await this.recomputeItemStatus(tx, row.orgId, row.contentItemId);
+        await enqueueNotification(
+          tx,
+          row.orgId,
+          row.outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+          row.id,
+          row.contentItemId,
+          row.attemptCount,
+        );
       }
 
       return swept.map((row) => ({

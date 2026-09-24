@@ -46,26 +46,30 @@ adding a Node import.
 applied programmatically under an advisory lock at api boot. The schema
 *imports* its enums from `shared` rather than restating them; a CHECK constraint
 on every enum-bounded column is asserted in both directions by
-`schema-invariants.test.ts`. Sixteen tables in four files: `auth.ts` (better-auth:
+`schema-invariants.test.ts`. Eighteen tables in six files: `auth.ts` (better-auth:
 user, session, account, verification, organization, member, invitation),
-`content.ts` (brands, channels), `content-items.ts` (content_items,
+`content.ts` (brands, channels), `knowledge.ts` (brand notes), `content-items.ts` (content_items,
 adaptations, publications), `generation.ts` (ai_credentials, pipeline_runs,
-usage_ledger, content_versions).
+usage_ledger, content_versions), `refine.ts` (refine_proposals),
+`draft-revision.ts` (one staged whole-body suggestion per post).
 
 **`packages/ai`** — every model call in the product. `defineStep` is the only
-way to make one and is what keeps the untrusted-text boundary, the schema sent
+way to make a structured text step and is what keeps the untrusted-text boundary, the schema sent
 to the model, and the ledger attribution from drifting apart. Five pipeline
-steps live in `steps/`; the metering (`usage.ts`), the call budget
+steps live in `steps/`; knowledge embeddings use the AI SDK's `embed` with a
+fixed model and dimension. The metering (`usage.ts`), the call budget
 (`budget.ts`), the failure classifier (`classify.ts`) and the price table
 (`pricing.ts`) are shared by every caller.
 
 **`packages/integrations`** — publishers, one per platform, behind a registry
-typed over the platforms `shared` declares as publishable. Today: Telegram. A
+typed over the platforms `shared` declares as publishable. Today: Telegram,
+VK community walls, MAX chats or channels, Bluesky accounts, and Mastodon
+instances. A
 publisher's errors are one of three kinds — permanent, transient, or unknown
 outcome — and that distinction is the whole delivery story (below).
 
 **`apps/api`** — NestJS, one module per domain (`brands`, `channels`, `content`,
-`runs`, `ai-credentials`, `org`, `queue`, `health`). Controllers never touch the
+`runs`, `knowledge`, `ai-credentials`, `org`, `queue`, `health`). Controllers never touch the
 database; repositories take `orgId` first and select explicit column lists.
 Runs migrations on boot. Enqueues jobs in the same transaction as the write
 that justifies them.
@@ -92,6 +96,47 @@ A draft is written (by hand, or by a five-step generation run) → adapted per
 channel → opened and judged by the publish gate → approved, now or on a schedule
 → claimed and sent by the worker → recorded as a publication with its id and
 link, or as a failure, or as an outcome nobody can determine from here.
+
+### Saved text history
+
+The editor reads whole-body `content_versions` only when its Version history
+disclosure opens. `GET /api/content/:id/versions` lists the master draft;
+`?adaptationId=` lists one channel's text. Both return up to 20 rows, newest
+first, with the next version ID in `X-Next-Cursor`. Refine fragments are excluded
+because they are not complete drafts.
+
+`POST /api/content/:id/versions/:versionId/restore` requires the currently saved
+body as `expectedBody`. A newer edit returns `version_changed` (409), so an old
+browser tab cannot overwrite it. The usual item and adaptation edit locks still
+apply. A successful restore records a new human version; it does not rewrite an
+earlier row or claim that the model's original text was written by a person.
+The editor also requires local unsaved text to be saved before restore.
+
+Generated drafts have an initial AI version. A manually created draft currently
+gets its first history row on its first body edit, so the creation text has no
+restorable snapshot. Clearing a channel override also creates no row because a
+version body cannot be null. Both limits follow the existing version writer;
+future history work should address them deliberately rather than synthesize a
+body that was never saved.
+
+### Re-adapting a channel in the editor
+
+`POST /api/content/:id/adaptations/:adaptationId/readapt` asks the configured
+BYOK model to rewrite the saved master post for one channel. It sends the
+current channel text as context when present. The response is stored in
+`adaptation_proposals`, one immutable proposal per adaptation, and returned
+with the item on reload. The model call runs outside any row lock; every
+physical call is recorded in `usage_ledger` with the content item, adaptation,
+and channel. Refinement and re-adaptation share the editor's hourly allowance.
+
+Accept uses only the stored model answer. Under the adaptation and item locks,
+it checks that both source texts still match those shown to the model, updates
+the channel body and its AI origin, and appends a full AI version. If either
+source changed, it returns `readapt_source_changed` and keeps the paid
+proposal for review or discard. A newer request supersedes the old proposal
+with a new ID; a failed request leaves the existing proposal intact. Discard
+never changes the channel text. Published or in-flight adaptations cannot be
+re-adapted until the existing edit rules make them editable again.
 
 ## The rules that cross package boundaries
 

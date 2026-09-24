@@ -64,11 +64,55 @@
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
  */
 export const API_ERROR_CODES = [
+  "client_review_role_required",
+  "client_review_required",
+  "client_review_link_invalid",
+  "client_review_link_closed",
+  "client_review_rate_limited",
+  "client_review_invalid",
+  "private_source_owner_required",
+  "private_source_not_configured",
+  "private_source_not_connected",
+  "private_source_cooldown",
+  "private_source_access_denied",
+  "private_source_session_changed",
+  "private_source_duplicate",
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
+  "editorial_note_stale",
+  "draft_revision_stale",
+  "draft_revision_note_not_found",
+  "draft_revision_needs_ai_draft",
+  "draft_revision_limit_reached",
+  "draft_revision_no_credential",
+  "draft_revision_timed_out",
+  "draft_revision_failed",
+  "draft_revision_proposal_not_found",
+  "publication_not_found",
+  "metrics_refresh_cooldown",
+  "metrics_unavailable",
+  "content_media_unsupported",
+  "content_media_invalid",
+  "content_media_too_large_for_bluesky",
+  "content_media_caption_too_long",
+  "media_invalid",
+  "media_not_found",
+  "media_in_use",
+  "media_video_pinned",
+  "media_cover_pinned",
+  "media_generation_limit",
+  "media_generation_busy",
+  "media_generation_failed",
+  "cover_requires_google_key",
+  /** Public syndication is opt-in; the feed may have been disabled. */
+  "feed_not_found",
+  /** A feed entry must be a titled post already delivered somewhere. */
+  "feed_item_not_ready",
   /** The channel override's row is gone — usually its channel was deleted. */
   "adaptation_not_found",
+  "version_not_found",
+  "version_changed",
 
   // ── content: the text is pinned ───────────────────────────────────────────
   // One code per pinned status rather than one code plus a status argument:
@@ -78,6 +122,7 @@ export const API_ERROR_CODES = [
   "content_pinned_approved",
   "content_pinned_published",
   "adaptation_pinned_scheduled",
+  "adaptation_pinned_manual_ready",
   "adaptation_pinned_queued",
   "adaptation_pinned_publishing",
   "adaptation_pinned_published",
@@ -146,6 +191,9 @@ export const API_ERROR_CODES = [
    * `publications_one_published_per_adaptation` as a raw 23505.
    */
   "delivery_outcome_already_known",
+  "manual_schedule_unsupported",
+  "manual_publication_pending",
+  "manual_publication_not_ready",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
   /**
@@ -207,6 +255,12 @@ export const API_ERROR_CODES = [
    * `run_limit_reached` has, and the same `ERROR_MESSAGE_VALUES` entry.
    */
   "refine_limit_reached",
+  "readapt_limit_reached",
+  "readapt_no_credential",
+  "readapt_timed_out",
+  "readapt_failed",
+  "readapt_proposal_not_found",
+  "readapt_source_changed",
   /**
    * The draft has no `ai` `full` version row at the item level: nobody has
    * generated this text, so there is no anchor for the publish gate's deletion
@@ -308,7 +362,16 @@ export const API_ERROR_CODES = [
 
   // ── runs ──────────────────────────────────────────────────────────────────
   "run_not_found",
+  "source_fetch_failed",
+  "source_response_too_large",
+  "source_unreadable",
+  "topic_not_found",
+  "news_item_not_found",
+  "topic_not_approved",
+  "topic_suggestions_cooldown",
   "brand_not_found",
+  "knowledge_not_found",
+  "knowledge_batch_owner_required",
   /** Generating for a brand that has nothing to publish to. */
   "brand_has_no_channels",
   /** The admission cap. Its number is `MAX_CONCURRENT_RUNS`, not an argument. */
@@ -322,6 +385,13 @@ export const API_ERROR_CODES = [
   // ── credentials ───────────────────────────────────────────────────────────
   /** Test or Remove against a provider whose key is no longer stored. */
   "ai_credential_not_found",
+  // ── planned calendar generation ──────────────────────────────────────────
+  "calendar_slot_not_found",
+  "memorable_date_not_found",
+  "calendar_slot_started",
+  "calendar_time_in_past",
+  "calendar_topic_linked",
+  "topic_has_calendar_slots",
 
   // ── the session's organization ────────────────────────────────────────────
   /**
@@ -379,10 +449,10 @@ export function isApiErrorCode(value: unknown): value is ApiErrorCode {
 }
 
 /**
- * The four statuses a coded refusal is allowed to use, and the name Nest gives
+ * The statuses a coded refusal is allowed to use, and the name Nest gives
  * each one.
  *
- * A closed map rather than a lookup, so `refusalBody(410, …)` does not compile.
+ * A closed map rather than a lookup, so an unlisted status does not compile.
  * The pairing matters because the api's helpers wrap these in the matching Nest
  * exception class: a body whose `statusCode` disagreed with the response's real
  * status would be a lie told in the one place a client goes to find out what
@@ -393,6 +463,8 @@ const REFUSAL_STATUS_NAME = {
   403: "Forbidden",
   404: "Not Found",
   409: "Conflict",
+  410: "Gone",
+  429: "Too Many Requests",
 } as const;
 
 export type RefusalStatus = keyof typeof REFUSAL_STATUS_NAME;

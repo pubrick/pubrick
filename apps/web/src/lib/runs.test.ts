@@ -13,6 +13,7 @@ import {
   runClaims,
   runEditorChanges,
   runFailureMessage,
+  runKnowledgeNotes,
   runStepStates,
   sourceHost,
 } from "./runs";
@@ -77,6 +78,42 @@ describe("runStepStates", () => {
       "adapter",
     ]);
     expect(states.every((s) => s.state === "pending")).toBe(true);
+  });
+
+  it("shows the optional cover outcome without calling a missing image done", () => {
+    const input = {
+      kind: "brief" as const,
+      text: "Brief",
+      channelIds: [CH_A],
+      generateCover: true,
+    };
+    expect(stateOf(makeRun({ input, status: "running", currentStep: "cover" }), "cover")).toBe(
+      "active",
+    );
+    expect(
+      stateOf(
+        makeRun({
+          input,
+          status: "succeeded",
+          steps: {
+            cover: { status: "succeeded", output: { mediaId: null, result: "unavailable" } },
+          },
+        }),
+        "cover",
+      ),
+    ).toBe("unavailable");
+    expect(
+      stateOf(
+        makeRun({
+          input,
+          status: "succeeded",
+          steps: {
+            cover: { status: "succeeded", output: { mediaId: "asset", result: "generated" } },
+          },
+        }),
+        "cover",
+      ),
+    ).toBe("done");
   });
 
   it("marks checkpointed steps done and the current one active", () => {
@@ -211,7 +248,54 @@ describe("runFailureMessage", () => {
  * Collapsing the last two is how "the step found nothing to flag" gets printed
  * over a step that never ran.
  */
+describe("runKnowledgeNotes", () => {
+  const noteId = "77777777-7777-4777-8777-777777777777";
+
+  it("shows selected notes with IDs while keeping old checkpoints readable", () => {
+    const run = makeRun({
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [
+              { id: noteId, title: "Brand guide", category: "brand_voice", content: "Private" },
+              { title: "Old note", category: "product_info", content: "Private" },
+            ],
+          },
+        },
+      },
+    });
+    expect(runKnowledgeNotes(run)).toEqual([
+      { id: noteId, title: "Brand guide" },
+      { id: null, title: "Old note" },
+    ]);
+  });
+
+  it("does not turn malformed stored IDs into links or show partial context", () => {
+    const malformed = makeRun({
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: { entries: [{ id: "../settings", title: "Note" }] },
+        },
+      },
+    });
+    expect(runKnowledgeNotes(malformed)).toEqual([{ id: null, title: "Note" }]);
+    expect(runKnowledgeNotes(makeRun())).toBeNull();
+    expect(
+      runKnowledgeNotes(
+        makeRun({
+          steps: {
+            knowledge: { status: "succeeded", output: { entries: [{ title: 42 }] } },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("runClaims", () => {
+  const noteId = "11111111-1111-4111-8111-111111111111";
   const claims = [
     { text: "Revenue tripled in Q2.", needsCheck: true },
     { text: "Water is wet.", needsCheck: false },
@@ -220,6 +304,70 @@ describe("runClaims", () => {
   it("reads the claims out of a succeeded factcheck checkpoint", () => {
     const run = makeRun({ steps: { factcheck: { status: "succeeded", output: { claims } } } });
     expect(runClaims(run)).toEqual(claims);
+  });
+
+  it("renders only excerpts backed by this run's frozen note or pasted text", () => {
+    const claim = (sourceId: string, sourceQuote: string) => ({
+      text: "The office opened in 2024.",
+      needsCheck: true,
+      sourceId,
+      sourceQuote,
+    });
+    const sourceInput = {
+      kind: "source" as const,
+      text: null,
+      material: "The office opened in 2024.",
+      sourceUrl: "https://example.com/unfetched",
+      channelIds: [CH_A],
+    };
+    const run = makeRun({
+      input: sourceInput,
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [
+              { id: noteId, title: "Office", content: "The Lisbon office opened in 2024." },
+            ],
+          },
+        },
+        factcheck: {
+          status: "succeeded",
+          output: {
+            claims: [
+              claim(`note:${noteId}`, "Lisbon office opened in 2024."),
+              claim("material", "The office opened in 2024."),
+              claim(
+                "note:22222222-2222-4222-8222-222222222222",
+                "The Lisbon office opened in 2024.",
+              ),
+              claim("material", "https://example.com/unfetched"),
+            ],
+          },
+        },
+      },
+    });
+    expect(runClaims(run)?.map(({ sourceId, sourceQuote }) => ({ sourceId, sourceQuote }))).toEqual(
+      [
+        { sourceId: `note:${noteId}`, sourceQuote: "Lisbon office opened in 2024." },
+        { sourceId: "material", sourceQuote: "The office opened in 2024." },
+        { sourceId: null, sourceQuote: null },
+        { sourceId: null, sourceQuote: null },
+      ],
+    );
+    expect(
+      runClaims(
+        makeRun({
+          ...run,
+          steps: {
+            factcheck: {
+              status: "succeeded",
+              output: { claims: [claim(`note:${noteId}`, "Lisbon office opened in 2024.")] },
+            },
+          },
+        }),
+      )?.[0],
+    ).toMatchObject({ sourceId: null, sourceQuote: null });
   });
 
   it("says [] — ran, listed nothing — for an empty list, and null for no checkpoint", () => {

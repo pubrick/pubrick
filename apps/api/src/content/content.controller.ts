@@ -18,11 +18,23 @@ import {
   type ContentApprove,
   type ContentCreate,
   type ContentUpdate,
+  type ContentVersionListQuery,
+  type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
   contentUpdateSchema,
+  contentVersionListQuerySchema,
+  contentVersionRestoreSchema,
   type DeliveryAssertion,
+  type DraftRevisionRequest,
   deliveryAssertionSchema,
+  draftRevisionRequestSchema,
+  type EditorialNoteCreate,
+  type EditorialNoteListQuery,
+  editorialNoteCreateSchema,
+  editorialNoteListQuerySchema,
+  type ManualPublication,
+  manualPublicationSchema,
   NEXT_CURSOR_HEADER,
   type RefineRequest,
   refineRequestSchema,
@@ -32,11 +44,15 @@ import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
+import { EditorialNotesRepository } from "./editorial-notes.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
 export class ContentController {
-  constructor(private readonly content: ContentRepository) {}
+  constructor(
+    private readonly content: ContentRepository,
+    private readonly editorialNotes: EditorialNotesRepository,
+  ) {}
 
   /**
    * ONE PAGE OF THE QUEUE. `?status=` filters it, `?limit=` sizes it (50 by
@@ -86,6 +102,82 @@ export class ContentController {
     return this.content.get(orgId, id);
   }
 
+  @Get(":id/versions")
+  async versions(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(contentVersionListQuerySchema)) query: ContentVersionListQuery,
+    @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
+  ) {
+    const page = await this.content.versions(orgId, id, query.adaptationId, query.cursor);
+    if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
+    return page.rows;
+  }
+
+  @Get(":id/editorial-notes")
+  async notes(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(editorialNoteListQuerySchema)) query: EditorialNoteListQuery,
+    @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
+  ) {
+    const page = await this.editorialNotes.list(orgId, id, query.cursor);
+    if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
+    return page.rows;
+  }
+
+  @Post(":id/editorial-notes")
+  addNote(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(editorialNoteCreateSchema)) body: EditorialNoteCreate,
+  ) {
+    return this.editorialNotes.create(orgId, id, userId, body);
+  }
+
+  @Post(":id/draft-revision")
+  reviseDraft(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(draftRevisionRequestSchema)) body: DraftRevisionRequest,
+  ) {
+    return this.content.reviseDraft(orgId, id, userId, body);
+  }
+
+  @Post(":id/draft-revision/:proposalId/accept")
+  @HttpCode(200)
+  acceptDraftRevision(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptDraftRevision(orgId, id, proposalId);
+  }
+
+  @Delete(":id/draft-revision/:proposalId")
+  @HttpCode(204)
+  async discardDraftRevision(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardDraftRevision(orgId, id, proposalId);
+  }
+
+  @Post(":id/versions/:versionId/restore")
+  @HttpCode(200)
+  restoreVersion(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("versionId", ParseUUIDPipe) versionId: string,
+    @Body(new ZodValidationPipe(contentVersionRestoreSchema)) body: ContentVersionRestore,
+  ) {
+    return this.content.restoreVersion(orgId, id, versionId, body, userId);
+  }
+
   /**
    * `@UserId()` because a save that changes the body leaves a `content_versions`
    * row behind, and that row records WHO typed it — the history increment 2c
@@ -110,6 +202,38 @@ export class ContentController {
     @Body(new ZodValidationPipe(adaptationUpdateSchema)) body: AdaptationUpdate,
   ) {
     return this.content.updateAdaptation(orgId, id, adaptationId, body, userId);
+  }
+
+  @Post(":id/adaptations/:adaptationId/readapt")
+  readapt(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+  ) {
+    return this.content.readapt(orgId, id, adaptationId, userId);
+  }
+
+  @Post(":id/adaptations/:adaptationId/readapt/:proposalId/accept")
+  @HttpCode(200)
+  acceptReadapt(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptReadapt(orgId, id, adaptationId, proposalId);
+  }
+
+  @Delete(":id/adaptations/:adaptationId/readapt/:proposalId")
+  @HttpCode(204)
+  async discardReadapt(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardReadapt(orgId, id, adaptationId, proposalId);
   }
 
   /**
@@ -230,6 +354,18 @@ export class ContentController {
     @Body(new ZodValidationPipe(deliveryAssertionSchema)) body: DeliveryAssertion,
   ) {
     return this.content.assertDelivery(orgId, id, adaptationId, body.delivered, userId);
+  }
+
+  @Post(":id/adaptations/:adaptationId/manual-publication")
+  @HttpCode(200)
+  confirmManualPublication(
+    @OrgId() orgId: string,
+    @UserId() userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(manualPublicationSchema)) body: ManualPublication,
+  ) {
+    return this.content.confirmManualPublication(orgId, id, adaptationId, body.url, userId);
   }
 
   @Post(":id/approve")

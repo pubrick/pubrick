@@ -6,6 +6,16 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  RELEVANCE_SCAN_QUEUE,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
 import { publishSweepQueueOf, QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
@@ -37,6 +47,121 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers bounded topic suggestions and their exhausted-job handler", async () => {
+    const boss = bossStub();
+    const suggestions = { handle: vi.fn(), exhausted: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      suggestions as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_QUEUE, {
+      ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(TOPIC_SUGGESTIONS_QUEUE, {
+      ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+    });
+    expect(boss.work).toHaveBeenCalledWith(
+      TOPIC_SUGGESTIONS_QUEUE,
+      { batchSize: 1, groupConcurrency: 1 },
+      expect.any(Function),
+    );
+    const handle = boss.work.mock.calls.find(
+      (call) => call[0] === TOPIC_SUGGESTIONS_QUEUE,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const exhausted = boss.work.mock.calls.find(
+      (call) => call[0] === TOPIC_SUGGESTIONS_DLQ,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const payload = { orgId: "org", brandId: "brand", requestId: "request" };
+    await handle([{ data: payload }]);
+    await exhausted([{ data: payload }]);
+    expect(suggestions.handle).toHaveBeenCalledWith(payload);
+    expect(suggestions.exhausted).toHaveBeenCalledWith(payload);
+  });
+
+  it("registers bounded relevance work, hourly scanning, and exhausted-job handling", async () => {
+    const boss = bossStub();
+    const relevance = { handle: vi.fn(), scan: vi.fn(), exhausted: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      relevance as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    expect(boss.updateQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
+    expect(boss.schedule).toHaveBeenCalledWith(RELEVANCE_SCAN_QUEUE, "0 * * * *");
+    const handle = boss.work.mock.calls.find((call) => call[0] === RELEVANCE_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const scan = boss.work.mock.calls.find(
+      (call) => call[0] === RELEVANCE_SCAN_QUEUE,
+    )?.[2] as () => Promise<void>;
+    const exhausted = boss.work.mock.calls.find((call) => call[0] === RELEVANCE_DLQ)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const payload = { orgId: "org", brandId: "brand", itemId: "item" };
+    await handle([{ data: payload }]);
+    await scan();
+    await exhausted([{ data: payload }]);
+    expect(relevance.handle).toHaveBeenCalledWith(payload);
+    expect(relevance.scan).toHaveBeenCalledWith(boss);
+    expect(relevance.exhausted).toHaveBeenCalledWith(payload);
+  });
+  it("registers the RSS poll and scan queues when the RSS service is installed", async () => {
+    const boss = bossStub();
+    const rss = { handle: vi.fn(), scan: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(publish as never, generate as never, rss as never);
+    await service.registerAll(boss as never);
+
+    expect(boss.createQueue).toHaveBeenCalledWith(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    expect(boss.updateQueue).toHaveBeenCalledWith(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
+    expect(boss.schedule).toHaveBeenCalledWith(RSS_SCAN_QUEUE, "*/15 * * * *");
+    const poll = boss.work.mock.calls.find((call) => call[0] === RSS_POLL_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const scan = boss.work.mock.calls.find(
+      (call) => call[0] === RSS_SCAN_QUEUE,
+    )?.[2] as () => Promise<void>;
+    const payload = { orgId: "org", sourceId: "source" };
+    await poll([{ data: payload }]);
+    await scan();
+    expect(rss.handle).toHaveBeenCalledWith(payload);
+    expect(rss.scan).toHaveBeenCalledWith(boss);
+  });
+
+  it("registers a single calendar tick on the default queues", async () => {
+    const boss = bossStub();
+    const calendar = { scan: vi.fn().mockResolvedValue(undefined) };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      calendar as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith("calendar-scan");
+    expect(boss.schedule).toHaveBeenCalledWith("calendar-scan", "* * * * *");
+    const tick = boss.work.mock.calls.find(
+      (call) => call[0] === "calendar-scan",
+    )?.[2] as () => Promise<void>;
+    await tick();
+    expect(calendar.scan).toHaveBeenCalledWith(boss);
+  });
+
   it("consumes the shared publish queue with the shared options", async () => {
     const boss = bossStub();
     const { service } = serviceStub();

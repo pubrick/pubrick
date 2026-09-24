@@ -2,9 +2,17 @@ import { randomUUID } from "node:crypto";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   type AiCredential,
+  adaptationLimit,
   adapterFor,
+  callOutcomeOf,
   EDITOR,
+  embedKnowledgeText,
   FACTCHECK,
+  factcheckSources,
+  GeminiImageCaller,
+  IMAGE_MODEL,
+  imageCostUsd,
+  KNOWLEDGE_EMBEDDING_MODEL,
   RESEARCHER,
   type RunStepContext,
   redactSecrets,
@@ -17,7 +25,9 @@ import {
   withRunFailure,
 } from "@pubrick/ai";
 import {
+  brandLinkPolicySchema,
   briefRunInputSchema,
+  COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
   PermanentError,
   type RunFailure,
@@ -31,6 +41,7 @@ import {
   type RunContext,
   type TerminalPayload,
 } from "./generate.repository";
+import { applyLinkPolicy } from "./link-policy";
 
 export type { GenerateJob } from "@pubrick/shared";
 
@@ -149,6 +160,26 @@ type RunState = {
   signal: AbortSignal | undefined;
 };
 
+const knowledgeContextSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        // Optional so an in-flight run can resume a checkpoint written before
+        // note IDs were retained. New retrievals always include the ID.
+        id: z.uuid().optional(),
+        title: z.string(),
+        category: z.string(),
+        content: z.string(),
+      }),
+    )
+    .max(5),
+});
+
+const coverOutputSchema = z.object({
+  mediaId: z.string().uuid().nullable(),
+  result: z.enum(["generated", "unavailable"]),
+});
+
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -164,6 +195,8 @@ export class GenerateService {
     @Optional() private readonly buildModel: ModelFactory = resolveModel,
     /** Backoff unit between terminal-write attempts; 0 in tests for determinism. */
     @Optional() private readonly terminalRetryDelayMs: number = 200,
+    @Optional()
+    private readonly imageCaller: Pick<GeminiImageCaller, "call"> = new GeminiImageCaller(),
   ) {}
 
   /**
@@ -303,6 +336,10 @@ export class GenerateService {
       this.logger.log(`Run ${run.id} stopped: its brand no longer exists`);
       return STOPPED;
     }
+    // JSONB can be changed outside the API. A malformed rule cannot invalidate
+    // model output after the run has already spent the organization's credits.
+    const parsedPolicy = brandLinkPolicySchema.safeParse(context.linkPolicy);
+    const linkPolicy = parsedPolicy.success ? parsedPolicy.data : null;
 
     const credential = await this.repo.credential(run.orgId);
     if (!credential) {
@@ -350,6 +387,8 @@ export class GenerateService {
       // finish so the work it is already paying for gets checkpointed.
       ctx: {
         brand: context.brand,
+        contentType: input.contentType ?? "social_post",
+        promptGuidance: context.promptGuidance,
         // THE THREE TEXT FIELDS COME FROM THE ARM THE RUN WAS STORED AS, and
         // each arm names all three: `RunStepContext` makes them
         // required-and-nullable so that an absence is STATED by the builder
@@ -397,6 +436,97 @@ export class GenerateService {
       },
     };
 
+    // Skip the step entirely for brands with no notes: existing runs keep the
+    // same checkpoints and make no additional model call.
+    if (state.checkpoints.knowledge || (await this.repo.hasKnowledge(run.orgId, run.brandId))) {
+      const topic = (input.text ?? (input.kind === "source" ? input.material : "")).slice(0, 2000);
+      const knowledge = await this.runStep(
+        state,
+        {
+          name: "knowledge",
+          schema: knowledgeContextSchema,
+          run: async (ctx) => {
+            let entries: Awaited<ReturnType<GenerateRepository["lexicalKnowledge"]>>;
+            const indexed = await this.repo.hasIndexedKnowledge(run.orgId, run.brandId);
+            const key = indexed ? await this.repo.googleKnowledgeKey(run.orgId) : undefined;
+            if (key && topic.trim()) {
+              const started = Date.now();
+              let result: Awaited<ReturnType<typeof embedKnowledgeText>> | undefined;
+              try {
+                result = await embedKnowledgeText(key, topic, "RETRIEVAL_QUERY");
+              } catch (error) {
+                await ctx.onUsage(
+                  {
+                    provider: "google",
+                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                    attempt: 1,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cachedInputTokens: 0,
+                    reasoningTokens: 0,
+                    costUsd: null,
+                    costSource: "unknown",
+                    responseMs: Date.now() - started,
+                    status: "errored",
+                    outcome: callOutcomeOf(error),
+                  },
+                  { step: "knowledge" },
+                );
+                this.logger.warn(
+                  `Knowledge embedding unavailable for run ${run.id}; using text search`,
+                );
+              }
+              if (result) {
+                await ctx.onUsage(
+                  {
+                    provider: "google",
+                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                    attempt: 1,
+                    inputTokens: result.tokens,
+                    outputTokens: 0,
+                    cachedInputTokens: 0,
+                    reasoningTokens: 0,
+                    costUsd: null,
+                    costSource: "unknown",
+                    responseMs: Date.now() - started,
+                    status: "ok",
+                    outcome: "completed",
+                  },
+                  { step: "knowledge" },
+                );
+                const similar = await this.repo.similarKnowledge(
+                  run.orgId,
+                  run.brandId,
+                  result.embedding,
+                );
+                // Include unindexed imported notes that match the brief even
+                // when this brand already has some indexed notes.
+                const lexical = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+                const seen = new Set(similar.map((entry) => entry.id));
+                entries = [...similar, ...lexical.filter((entry) => !seen.has(entry.id))].slice(
+                  0,
+                  5,
+                );
+              } else {
+                entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+              }
+            } else {
+              entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+            }
+            return {
+              entries: entries.map((entry) => ({
+                ...entry,
+                content: entry.content.slice(0, 3000),
+              })),
+            };
+          },
+        },
+        undefined,
+      );
+      if (knowledge === STOPPED) return STOPPED;
+      state.ctx.knowledge = knowledge.entries;
+    }
+
     const research = await this.runStep(state, RESEARCHER, undefined);
     if (research === STOPPED) return STOPPED;
 
@@ -409,7 +539,10 @@ export class GenerateService {
     // The claims list rides with the draft in the run's own checkpoint map; this
     // increment verifies nothing and stores nothing on the content item that
     // could be mistaken for a check having happened.
-    const checked = await this.runStep(state, FACTCHECK, { body: edited.body });
+    const checked = await this.runStep(state, FACTCHECK, {
+      body: edited.body,
+      sources: factcheckSources(state.ctx.knowledge, state.ctx.material),
+    });
     if (checked === STOPPED) return STOPPED;
 
     const adaptations: Array<{ channelId: string; body: string }> = [];
@@ -418,10 +551,119 @@ export class GenerateService {
       // re-runs only the channels that had not finished.
       const adapted = await this.runStep(state, adapterFor(channel), { body: edited.body });
       if (adapted === STOPPED) return STOPPED;
-      adaptations.push({ channelId: channel.id, body: adapted.body });
+      adaptations.push({
+        channelId: channel.id,
+        body: applyLinkPolicy(
+          adapted.body,
+          linkPolicy,
+          channel.platform,
+          run.createdAt,
+          input.contentType ?? "social_post",
+          adaptationLimit(channel.platform),
+        ),
+      });
     }
 
-    return { body: edited.body, adaptations };
+    let coverMediaId: string | null = null;
+    if (input.generateCover) {
+      const cover = await this.runStep(
+        state,
+        {
+          name: "cover",
+          schema: coverOutputSchema,
+          run: async (ctx) => {
+            if (
+              context.channels.some(
+                (channel) =>
+                  !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+              ) ||
+              adaptations.some(
+                (adaptation) =>
+                  context.channels.find((channel) => channel.id === adaptation.channelId)
+                    ?.platform === "telegram" && adaptation.body.length > 1024,
+              )
+            ) {
+              this.logger.warn(`Run ${run.id}: cover skipped because a channel cannot accept it`);
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            const googleKey = await this.repo.googleKnowledgeKey(run.orgId);
+            if (!googleKey) {
+              this.logger.warn(
+                `Run ${run.id}: cover skipped because the Google key is unavailable`,
+              );
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            const locked = await this.repo.withImageCallLock(run.orgId, async () => {
+              if (!(await this.repo.mayCallImageModel(run.orgId))) return null;
+              // One opt-in image call. Its text is data about the draft, never
+              // instructions to modify the publishing or review workflow.
+              const prompt =
+                `Create one 1K editorial cover image for ${context.brand.name}. ` +
+                "The image should illustrate this draft without text, logos, or watermarks. " +
+                `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
+              const result = await this.imageCaller.call(googleKey, prompt);
+              const cost = imageCostUsd(result.usage);
+              const record: UsageRecord = {
+                provider: "google",
+                modelId: IMAGE_MODEL,
+                attempt: 1,
+                inputTokens: result.usage?.promptTokenCount ?? 0,
+                outputTokens:
+                  (result.usage?.candidatesTokenCount ?? 0) +
+                  (result.usage?.thoughtsTokenCount ?? 0),
+                cachedInputTokens: 0,
+                reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
+                costUsd: cost,
+                costSource: cost === null ? "unknown" : "price_table",
+                responseMs: result.responseMs,
+                status: result.bytes ? "ok" : "errored",
+                outcome: result.outcome,
+              };
+              try {
+                await ctx.onUsage(record, { step: "cover" });
+              } catch (error) {
+                await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+              }
+              return result;
+            });
+            if (!locked.acquired || !locked.value) {
+              this.logger.warn(
+                `Run ${run.id}: cover skipped because the image budget is busy or full`,
+              );
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            const result = locked.value;
+            if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
+              this.logger.warn(`Run ${run.id}: cover image was unavailable`);
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            try {
+              const mediaId = await this.repo.saveGeneratedCover(
+                run.orgId,
+                run.brandId,
+                result.bytes,
+              );
+              return { mediaId, result: "generated" as const };
+            } catch (error) {
+              this.logger.warn(
+                `Run ${run.id}: generated cover could not be saved: ${messageOf(error)}`,
+              );
+              return { mediaId: null, result: "unavailable" as const };
+            }
+          },
+        },
+        undefined,
+      );
+      if (cover === STOPPED) return STOPPED;
+      coverMediaId = cover.mediaId;
+    }
+
+    return {
+      body: edited.body,
+      adaptations,
+      coverMediaId,
+      linkPolicyWebsite: linkPolicy?.website ?? null,
+    };
   }
 
   /**
@@ -606,7 +848,12 @@ export class GenerateService {
     run: ClaimedRun,
     channelIds: readonly string[],
   ): Promise<RunContext | undefined> {
-    const context = await this.repo.context(run.orgId, run.brandId, channelIds);
+    const context = await this.repo.context(
+      run.orgId,
+      run.brandId,
+      channelIds,
+      run.guidanceSnapshot,
+    );
     if (!context) return undefined;
     if (context.channels.length === 0) {
       throw withRunFailure(new PermanentError(EVERY_CHANNEL_DELETED_DETAIL), EVERY_CHANNEL_DELETED);

@@ -43,7 +43,7 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
   name: "researcher",
   schema: researchSchema,
   role: [
-    "You plan a social post before anyone writes it. You do not write the post itself.",
+    "You plan a content draft before anyone writes it. You do not write the draft itself.",
     "You have no web access: work from the material you are given — a brief, text a person pasted, or both — and from what you already know. Never invent a statistic, a date, a name or a quotation to make a point land.",
     "Produce:",
     "- angle: one sentence saying what this post is really about and why this audience should care.",
@@ -70,6 +70,14 @@ export const RESEARCHER: Step<void, ResearchOutput, RunStepContext> = defineStep
     }
     if (ctx.material != null && ctx.material.trim() !== "") {
       blocks.push({ label: "SOURCE", text: ctx.material });
+    }
+    if (ctx.knowledge?.length) {
+      blocks.push({
+        label: "BRAND KNOWLEDGE",
+        text: ctx.knowledge
+          .map((entry) => `[${entry.category}] ${entry.title}\n${entry.content}`)
+          .join("\n\n"),
+      });
     }
     // `ctx.sourceUrl` is deliberately absent: attribution, not material.
     return blocks;

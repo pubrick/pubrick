@@ -334,6 +334,46 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     expect(ledger).toHaveLength(6);
   }, 40_000);
 
+  it("writes tagged channel drafts while preserving source links and the master", async () => {
+    const seeded = await seed(1);
+    await db
+      .update(schema.brands)
+      .set({
+        linkPolicy: {
+          website: "https://example.com",
+          campaignTemplate: "cf_{YYYY_MM}",
+          platforms: {},
+        },
+      })
+      .where(eq(schema.brands.id, seeded.brandId));
+    const channelBody =
+      "[Source](https://news.test/story) Visit https://example.com/ and https://example.com/pricing";
+    active = scriptedModel({ adapter: () => ({ body: channelBody }) });
+
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    const run = await runRow(seeded.runId);
+    expect(run?.status).toBe("succeeded");
+    const month = `${run?.createdAt.getUTCFullYear()}_${String((run?.createdAt.getUTCMonth() ?? 0) + 1).padStart(2, "0")}`;
+    const [item] = await db
+      .select()
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, run?.contentItemId as string));
+    expect(item?.linkPolicyWebsite).toBe("https://example.com");
+    expect(item?.body).not.toContain("utm_source");
+    const [adaptation] = await db
+      .select()
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.contentItemId, item?.id as string));
+    const expected = `[Source](https://news.test/story) Visit https://example.com/?utm_source=tg_channel&utm_medium=post&utm_campaign=cf_${month} and https://example.com/pricing`;
+    expect(adaptation?.body).toBe(expected);
+    const [version] = await db
+      .select()
+      .from(schema.contentVersions)
+      .where(eq(schema.contentVersions.adaptationId, adaptation?.id as string));
+    expect(version?.body).toBe(expected);
+  }, 40_000);
+
   /**
    * THE TERMINAL WRITE STORES WHAT THE OUTPUT SCHEMA RETURNED, VERBATIM —
    * so the canonical form of a generated body is settled in `packages/ai`, at
@@ -445,16 +485,16 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     // same thing from a context literal; this is the only place the row, the
     // parse and the context builder are checked as one path. Per role rather
     // than "somewhere": "the material reached a step" stays green with the
-    // editor's block deleted AND with the fact-checker's added, and those are
-    // the two mutations that matter most in opposite directions.
+    // editor's block deleted AND with the fact-checker's source excerpt
+    // input deleted, and those are two distinct steps that need the snapshot.
     const sawMaterial = (role: StepRole) =>
       script.calls.filter((call) => call.role === role).map((call) => call.user.includes(MATERIAL));
     expect(sawMaterial("researcher")).toEqual([true]);
     expect(sawMaterial("writer")).toEqual([true]);
     expect(sawMaterial("editor")).toEqual([true]);
-    // §7.2 rests on this one: the fact-checker verifies nothing BECAUSE it
-    // cannot see the source, not because its wording says so.
-    expect(sawMaterial("factcheck")).toEqual([false]);
+    // The fact-checker can attribute an exact excerpt to this saved material;
+    // it still does not verify that the material's claims are true.
+    expect(sawMaterial("factcheck")).toEqual([true]);
     expect(sawMaterial("adapter")).toEqual([false, false]);
 
     for (const call of script.calls) {
@@ -474,6 +514,48 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     // the whole call list rather than as `calls[0]`, so "the researcher never
     // ran" cannot read as "the URL was carried".
     expect(researcher.mock.calls.map((call) => call[0].sourceUrl)).toEqual([SOURCE_URL]);
+  }, 40_000);
+
+  it("checkpoints only excerpts present in this run's pasted material", async () => {
+    const seeded = await seed(1, (channelIds) => ({
+      kind: "source",
+      text: null,
+      material: MATERIAL,
+      sourceUrl: SOURCE_URL,
+      channelIds,
+    }));
+    active = scriptedModel({
+      factcheck: () => ({
+        claims: [
+          {
+            text: "The council approved it Tuesday.",
+            needsCheck: true,
+            sourceId: "material",
+            sourceQuote: "The council approved the market hall on Tuesday.",
+          },
+          {
+            text: "It cost a million.",
+            needsCheck: true,
+            sourceId: "material",
+            sourceQuote: "It cost a million.",
+          },
+        ],
+      }),
+    });
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    const run = await runRow(seeded.runId);
+    const output = run?.steps.factcheck?.output as {
+      claims: Array<{ needsCheck: boolean; sourceId: string | null; sourceQuote: string | null }>;
+    };
+    expect(output.claims[0]).toMatchObject({
+      needsCheck: true,
+      sourceId: "material",
+      sourceQuote: "The council approved the market hall on Tuesday.",
+    });
+    expect(output.claims[1]).toMatchObject({ needsCheck: true, sourceId: null, sourceQuote: null });
+    expect(active.callsFor("factcheck")).toBe(1);
+    expect(active.calls.find((call) => call.role === "factcheck")?.user).not.toContain(URL_MARKER);
   }, 40_000);
 
   it("gives a source run that also carries a brief BOTH blocks, brief first, to the three steps that read them", async () => {
@@ -527,9 +609,11 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       expect(brief, `${role} was given the SOURCE before the BRIEF`).toBeLessThan(source);
     }
 
-    // And neither reaches the two that must see neither — as whole call lists,
+    // The fact-checker sees the saved source, but never the brief. The adapter
+    // sees neither — as whole call lists,
     // so "was never called" cannot pass for "was called and saw nothing".
-    expect(seenBy("factcheck")).toEqual([{ brief: -1, source: -1 }]);
+    expect(seenBy("factcheck")[0]?.brief).toBe(-1);
+    expect(seenBy("factcheck")[0]?.source).toBeGreaterThanOrEqual(0);
     expect(seenBy("adapter")).toEqual([
       { brief: -1, source: -1 },
       { brief: -1, source: -1 },
@@ -900,6 +984,36 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.runId, seeded.runId));
     expect(ledger).toHaveLength(2);
+  }, 40_000);
+
+  it("resumes a legacy claims checkpoint without repaying the fact-check model", async () => {
+    const seeded = await seed(1);
+    await db
+      .update(schema.pipelineRuns)
+      .set({
+        steps: {
+          researcher: {
+            status: "succeeded",
+            output: { angle: "An angle", keyPoints: ["A key point"], avoid: [] },
+          },
+          writer: { status: "succeeded", output: { body: "A draft." } },
+          editor: { status: "succeeded", output: { body: EDITED, changes: [] } },
+          factcheck: {
+            status: "succeeded",
+            output: { claims: [{ text: "The menu lands Monday.", needsCheck: true }] },
+          },
+        },
+      })
+      .where(eq(schema.pipelineRuns.id, seeded.runId));
+    active = scriptedModel();
+    const jobId = await enqueue(seeded.runId, seeded.orgId);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    expect(active.callsFor("factcheck")).toBe(0);
+    const run = await runRow(seeded.runId);
+    expect(run?.status).toBe("succeeded");
+    expect(run?.steps.factcheck?.output).toEqual({
+      claims: [{ text: "The menu lands Monday.", needsCheck: true }],
+    });
   }, 40_000);
 
   /**

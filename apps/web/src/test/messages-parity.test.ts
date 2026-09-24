@@ -1,4 +1,4 @@
-import { REFINE_VERBS } from "@pubrick/shared";
+import { CONTENT_TYPES, REFINE_VERBS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import en from "../../messages/en.json";
 import es from "../../messages/es.json";
@@ -27,6 +27,16 @@ function keyPaths(messages: Messages, prefix = ""): string[] {
 }
 
 const reference = keyPaths(en as Messages).sort();
+
+it("labels every supported generation format wherever the format list is rendered", () => {
+  for (const messages of [en, es, ru, pt]) {
+    for (const type of CONTENT_TYPES) {
+      expect(messages.ContentNew.contentType[type]).toBeTruthy();
+      expect(messages.Runs.contentType[type]).toBeTruthy();
+      expect(messages.CalendarMemorable[`type_${type}`]).toBeTruthy();
+    }
+  }
+});
 
 describe.each([
   ["es", es],

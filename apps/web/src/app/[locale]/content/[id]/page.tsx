@@ -1,5 +1,6 @@
 "use client";
 
+import type { AdaptationProposal, DraftRevisionProposal } from "@pubrick/shared";
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -13,6 +14,8 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { FeedEntryAction } from "@/components/feed-controls";
+import { MediaLibrary } from "@/components/media-library";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -37,7 +40,11 @@ import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
+import { ClientReviewLink } from "./client-review-link";
+import { DraftRevision } from "./draft-revision";
+import { EditorialNotes } from "./editorial-notes";
 import { SourceStrip } from "./source-strip";
+import { VersionHistory } from "./version-history";
 
 type Channel = { id: string; platform: string; name: string };
 
@@ -92,6 +99,8 @@ type Adaptation = {
 type ContentItem = {
   id: string;
   brandId: string;
+  coverMediaId: string | null;
+  videoMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -127,6 +136,7 @@ type ContentItem = {
    * cannot go stale against it.
    */
   runId: string | null;
+  linkPolicyWebsite: string | null;
   /**
    * The one refine proposal staged against this draft, or `null`.
    *
@@ -137,6 +147,8 @@ type ContentItem = {
    * after any of those — there is no separate GET.
    */
   refineProposal: RefineProposal | null;
+  draftRevisionProposal: DraftRevisionProposal | null;
+  adaptationProposals: AdaptationProposal[];
   /**
    * What that run was asked for — the source strip's whole input, or `null`
    * for a hand-written draft. `RunInput` is the column's own schema, so this
@@ -144,6 +156,14 @@ type ContentItem = {
    */
   runInput: RunInput | null;
 };
+
+/** Match the API's edit gate for a channel and its parent post. */
+function canEditChannel(item: ContentItem, adaptation: Adaptation): boolean {
+  return (
+    ["draft", "partially_published", "rejected", "failed"].includes(item.status) &&
+    ["pending", "failed"].includes(adaptation.status)
+  );
+}
 
 /**
  * One frozen empty array for every adaptation with no `ai` version of its own.
@@ -196,6 +216,7 @@ function toDatetimeLocalValue(date: Date): string {
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Publish");
+  const tm = useTranslations("Media");
   const tc = useTranslations("Content");
   /**
    * One string, from the namespace it belongs to: the label names the run
@@ -216,9 +237,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
 
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [showMedia, setShowMedia] = useState(false);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+  const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   /**
@@ -267,6 +290,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [refineBusy, setRefineBusy] = useState<RefineAction | null>(null);
   /** The adaptation whose verdict is in flight, if any — see `assertDelivery`. */
   const [deliveryBusy, setDeliveryBusy] = useState<string | null>(null);
+  const [manualUrlDrafts, setManualUrlDrafts] = useState<Record<string, string>>({});
+  const [manualBusy, setManualBusy] = useState<string | null>(null);
+  const [copiedManualField, setCopiedManualField] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -583,6 +609,80 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function proposeReadapt(adaptationId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      const staged = await api<AdaptationProposal>(
+        `/api/content/${id}/adaptations/${adaptationId}/readapt`,
+        { method: "POST" },
+      );
+      applyToItem((previous) =>
+        previous
+          ? {
+              ...previous,
+              adaptationProposals: [
+                ...(previous.adaptationProposals ?? []).filter(
+                  (p) => p.adaptationId !== adaptationId,
+                ),
+                staged,
+              ],
+            }
+          : previous,
+      );
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
+    }
+  }
+
+  async function acceptReadapt(adaptationId: string, proposalId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      const updated = await api<ContentItem>(
+        `/api/content/${id}/adaptations/${adaptationId}/readapt/${proposalId}/accept`,
+        { method: "POST" },
+      );
+      applyToItem(() => updated);
+      const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
+      if (adaptation)
+        setOverrideDrafts((drafts) => ({ ...drafts, [adaptationId]: adaptation.body ?? "" }));
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
+    }
+  }
+
+  async function discardReadapt(adaptationId: string, proposalId: string) {
+    setReadaptBusy(adaptationId);
+    setActionError(null);
+    try {
+      await apiVoid(`/api/content/${id}/adaptations/${adaptationId}/readapt/${proposalId}`, {
+        method: "DELETE",
+      });
+      applyToItem((previous) =>
+        previous
+          ? {
+              ...previous,
+              adaptationProposals: (previous.adaptationProposals ?? []).filter(
+                (p) => p.id !== proposalId,
+              ),
+            }
+          : previous,
+      );
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setReadaptBusy(null);
+    }
+  }
+
   async function approve(withSchedule: boolean) {
     setActionError(null);
     /*
@@ -677,6 +777,32 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       // In `finally`, so a refusal gives the buttons back: the row is still
       // unknown after one, and the reader must be able to answer again.
       setDeliveryBusy(null);
+    }
+  }
+
+  async function copyManualField(key: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedManualField(key);
+    } catch {
+      setActionError(t("copyFailed"));
+    }
+  }
+
+  async function confirmManualPublication(adaptationId: string) {
+    const url = (manualUrlDrafts[adaptationId] ?? "").trim();
+    setActionError(null);
+    setManualBusy(adaptationId);
+    try {
+      await api(`/api/content/${id}/adaptations/${adaptationId}/manual-publication`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      await reload();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setManualBusy(null);
     }
   }
 
@@ -856,6 +982,73 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
   }
 
+  function previewLimit(channelId: string): number {
+    const ch = channels.find((c) => c.id === channelId);
+    return ch?.platform === "telegram" && (item?.coverMediaId || item?.videoMediaId)
+      ? 1024
+      : overrideLimit(channelId);
+  }
+
+  function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
+    const channel = channels.find((c) => c.id === adaptation.channelId);
+    const override = overrideDrafts[adaptation.id] ?? adaptation.body ?? "";
+    const usesMaster = override.trim() === "";
+    const previewText = usesMaster ? bodyDraft : override;
+    const unsaved =
+      override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
+    const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const telegramVideo = channel?.platform === "telegram" && currentItem.videoMediaId !== null;
+    const limit = previewLimit(adaptation.channelId);
+
+    return (
+      <section
+        aria-label={t("reviewPreviewFor", { channel: channelLabel(adaptation.channelId) })}
+        className="mt-4 rounded-control border border-border-soft bg-bg-sunken p-4"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-fg">{t("reviewPreview")}</h3>
+          <span className="text-xs text-fg-secondary">
+            {unsaved ? t("reviewPreviewUnsaved") : t("reviewPreviewSaved")}
+          </span>
+        </div>
+        <p className="mb-3 text-xs text-fg-secondary">
+          {adaptation.deliveryOutcome === "published"
+            ? t("reviewPreviewPublishedNote")
+            : t("reviewPreviewLocalNote")}
+        </p>
+        {telegramCover && (
+          // Authenticated, tenant-scoped file endpoint shared with MediaLibrary.
+          // biome-ignore lint/performance/noImgElement: this endpoint requires the signed-in session
+          <img
+            src={`/api/media/${currentItem.coverMediaId}/file`}
+            alt={t("reviewPreviewCoverAlt")}
+            className="mb-3 max-h-64 w-full rounded-control object-contain"
+          />
+        )}
+        {telegramVideo && (
+          // biome-ignore lint/a11y/useMediaCaption: Uploaded clips have no caption track in this milestone; the written post remains visible below.
+          <video
+            src={`/api/media/${currentItem.videoMediaId}/file`}
+            controls
+            preload="none"
+            playsInline
+            aria-label={t("reviewPreviewVideoLabel")}
+            className="mb-3 max-h-64 w-full rounded-control bg-surface"
+          />
+        )}
+        {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
+        <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        {previewText.length > limit && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {telegramCover || telegramVideo
+              ? t("reviewPreviewCaptionTooLong", { limit })
+              : t("reviewPreviewTooLong", { limit })}
+          </p>
+        )}
+      </section>
+    );
+  }
+
   /**
    * What the user just did wins over what the poll is complaining about: a
    * rejected approval must not be replaced two seconds later by a generic
@@ -905,7 +1098,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * deliveries from keeps one reading of "this channel has the post".
    */
   const liveChannels = item.adaptations.filter((a) => a.deliveryOutcome === "published");
-  const hasOutstanding = item.adaptations.some((a) => isOutstandingAdaptation(a.status));
+  const hasOutstanding = item.adaptations.some(
+    (a) => isOutstandingAdaptation(a.status) || a.status === "manual_ready",
+  );
+  const manualAdaptations = item.adaptations.filter(
+    (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
+  );
+  const hasManualApprovalTarget = manualAdaptations.some(
+    (a) => a.status === "pending" || a.status === "failed",
+  );
+  const manualReadyWithoutApprovalTargets =
+    manualAdaptations.some((a) => a.status === "manual_ready") &&
+    item.adaptations.every((a) => !["pending", "failed", "scheduled"].includes(a.status));
   /** Live somewhere, but not a published ITEM — the state reject decides on. */
   const partlyLive = !isPublished && liveChannels.length > 0;
   /**
@@ -973,7 +1177,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        * card, next to the other approval path.
        */
       primaryAction={
-        <Button variant="primary" onClick={() => approve(false)} disabled={isPublished}>
+        <Button
+          variant="primary"
+          onClick={() => approve(false)}
+          disabled={isPublished || manualReadyWithoutApprovalTargets}
+        >
           {/*
             The same button, saying what it will do to THIS post. "Publish now"
             on a post that is already live in one channel reads as "publish it
@@ -985,9 +1193,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             send to no channels: an item whose only remaining half ended
             `unknown` has nothing approve will target, and the api refuses it.
           */}
-          {partialSendCount > 0
-            ? t("approveNowPartial", { count: partialSendCount })
-            : t("approveNow")}
+          {manualReadyWithoutApprovalTargets
+            ? t("manualReadyAction")
+            : hasManualApprovalTarget
+              ? t("approveManual")
+              : partialSendCount > 0
+                ? t("approveNowPartial", { count: partialSendCount })
+                : t("approveNow")}
         </Button>
       }
     >
@@ -1080,6 +1292,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <Card className="mb-6">
         <SourceStrip input={item.runInput} />
+        {item.linkPolicyWebsite && (
+          <p className="mb-4 text-sm text-fg-secondary">
+            {t("linkPolicyApplied", { website: item.linkPolicyWebsite })}
+          </p>
+        )}
         {/*
           WHAT EDITING COSTS ON A HALF-SENT POST, said before it is paid.
 
@@ -1189,6 +1406,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               {t("saveBody")}
             </Button>
           </div>
+          <VersionHistory
+            itemId={id}
+            currentBody={item.body}
+            draftBody={bodyDraft}
+            editable={["draft", "partially_published", "rejected", "failed"].includes(item.status)}
+            onRestored={async (body) => {
+              setBodyDraft(body);
+              await reload();
+            }}
+          />
         </div>
       </Card>
 
@@ -1339,19 +1566,135 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                * than the platform limit has to stay editable, or it is
                * unfixable forever.
                */
-              displayLimit={overrideLimit(a.channelId)}
+              displayLimit={previewLimit(a.channelId)}
               maxLength={MAX_BODY_LENGTH}
               showCount
               rows={4}
             />
-            <div className="mt-3">
+            {reviewPreview(a, item)}
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
                 {t("saveOverride")}
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => proposeReadapt(a.id)}
+                disabled={
+                  readaptBusy !== null ||
+                  draftMoved ||
+                  (overrideDrafts[a.id] ?? "") !== (a.body ?? "") ||
+                  !canEditChannel(item, a)
+                }
+              >
+                {readaptBusy === a.id ? t("readaptWorking") : t("readaptAction")}
+              </Button>
             </div>
+            {(draftMoved || (overrideDrafts[a.id] ?? "") !== (a.body ?? "")) && (
+              <p className="mt-2 text-sm text-fg-tertiary">{t("readaptSaveFirst")}</p>
+            )}
+            {!canEditChannel(item, a) && (
+              <p className="mt-2 text-sm text-fg-tertiary">{t("versionPinned")}</p>
+            )}
+            {(item.adaptationProposals ?? [])
+              .filter((p) => p.adaptationId === a.id)
+              .map((p) => {
+                const stale = p.masterBody !== item.body || p.previousBody !== a.body;
+                return (
+                  <section
+                    key={p.id}
+                    aria-label={t("readaptSuggestion")}
+                    className="mt-4 rounded-md border border-border-soft bg-bg-sunken p-4"
+                  >
+                    <h3 className="text-sm font-semibold text-fg">{t("readaptSuggestion")}</h3>
+                    <p className="mt-1 text-sm text-fg-secondary">{p.reason}</p>
+                    <p className="mt-3 whitespace-pre-wrap text-sm text-fg">{p.proposal}</p>
+                    {stale && (
+                      <p role="alert" className="mt-2 text-sm text-danger">
+                        {t("readaptStale")}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => acceptReadapt(a.id, p.id)}
+                        disabled={
+                          readaptBusy !== null ||
+                          stale ||
+                          draftMoved ||
+                          !canEditChannel(item, a) ||
+                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                        }
+                      >
+                        {t("readaptAccept")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => proposeReadapt(a.id)}
+                        disabled={
+                          readaptBusy !== null ||
+                          draftMoved ||
+                          !canEditChannel(item, a) ||
+                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                        }
+                      >
+                        {t("refineRetry")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => discardReadapt(a.id, p.id)}
+                        disabled={readaptBusy !== null}
+                      >
+                        {t("refineDiscard")}
+                      </Button>
+                    </div>
+                  </section>
+                );
+              })}
+            <VersionHistory
+              itemId={id}
+              adaptationId={a.id}
+              currentBody={a.body}
+              draftBody={
+                (overrideDrafts[a.id] ?? "").trim() === "" ? null : (overrideDrafts[a.id] ?? "")
+              }
+              editable={canEditChannel(item, a)}
+              onRestored={async (body) => {
+                setOverrideDrafts((current) => ({ ...current, [a.id]: body }));
+                await reload();
+              }}
+            />
           </Card>
         ))}
       </div>
+
+      <ClientReviewLink
+        itemId={id}
+        canCreate={["draft", "rejected", "failed"].includes(item.status)}
+        revision={JSON.stringify([
+          item.updatedAt,
+          item.coverMediaId,
+          item.videoMediaId,
+          item.adaptations.map((adaptation) => [adaptation.id, adaptation.body]),
+        ])}
+      />
+
+      <EditorialNotes itemId={id} currentBody={item.body} draftBody={bodyDraft} />
+
+      <DraftRevision
+        itemId={id}
+        currentBody={item.body}
+        draftBody={bodyDraft}
+        eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
+        staged={item.draftRevisionProposal}
+        onAccepted={async (updatedBody) => {
+          setBodyDraft(updatedBody);
+          await reload();
+        }}
+      />
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
@@ -1394,10 +1737,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <Button
             variant="secondary"
             onClick={() => approve(true)}
-            disabled={isPublished || !scheduledAt || scheduledAtIsPast}
+            disabled={
+              isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+            }
           >
             {t("approveScheduled")}
           </Button>
+          {manualAdaptations.length > 0 && (
+            <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+          )}
           <Button
             variant="danger"
             onClick={reject}
@@ -1421,6 +1769,57 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
+            {a.status === "manual_ready" &&
+              channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru" && (
+                <div className="flex flex-col gap-3 rounded-card border border-border bg-panel p-4">
+                  <p className="text-sm text-fg-secondary">{t("vcManualInstructions")}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => copyManualField(`${a.id}:title`, item.title ?? "")}
+                      disabled={!item.title}
+                    >
+                      {copiedManualField === `${a.id}:title` ? t("copied") : t("copyTitle")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => copyManualField(`${a.id}:body`, a.body ?? item.body)}
+                    >
+                      {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
+                    </Button>
+                    <a
+                      href="https://vc.ru/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className={buttonClasses("secondary", "sm")}
+                    >
+                      {t("openVc")}
+                    </a>
+                  </div>
+                  <Input
+                    type="url"
+                    label={t("vcUrlLabel")}
+                    placeholder="https://vc.ru/..."
+                    value={manualUrlDrafts[a.id] ?? ""}
+                    onChange={(event) =>
+                      setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
+                    }
+                  />
+                  <div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={!manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
+                      onClick={() => confirmManualPublication(a.id)}
+                    >
+                      {t("recordManualPublication")}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-fg-tertiary">{t("manualAssertionHint")}</p>
+                </div>
+              )}
             {a.status === "published" &&
               (isLinkableUrl(a.externalUrl) ? (
                 <a
@@ -1468,6 +1867,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       : t("linkUnavailable")}
                 </span>
               ))}
+            {a.status === "published" && a.assertedAt && a.externalUrl && (
+              <span className="text-sm text-fg-tertiary">
+                {a.assertedByName
+                  ? t("manualPublicationAsserted", {
+                      name: a.assertedByName,
+                      date: new Date(a.assertedAt).toLocaleString(locale),
+                    })
+                  : t("manualPublicationAssertedRemoved", {
+                      date: new Date(a.assertedAt).toLocaleString(locale),
+                    })}
+              </span>
+            )}
             {/*
               An outcome nobody knows, in the reader's language and in our own
               words — not the worker's English sentence, which is a log line
@@ -1593,6 +2004,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </li>
         ))}
       </ul>
+      <div className="mt-6">
+        <Button variant="secondary" onClick={() => setShowMedia((current) => !current)}>
+          {item.coverMediaId || item.videoMediaId ? tm("selected") : tm("title")}
+        </Button>
+      </div>
+      {showMedia && (
+        <MediaLibrary
+          brandId={item.brandId}
+          itemId={item.id}
+          selectedId={item.videoMediaId ?? item.coverMediaId}
+          selectedKind={item.videoMediaId ? "video" : "image"}
+          editable={["draft", "rejected", "failed"].includes(item.status)}
+          onChange={() => void reload()}
+        />
+      )}
+      <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
     </AppShell>
   );
 }

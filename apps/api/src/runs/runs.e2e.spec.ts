@@ -403,6 +403,59 @@ describe.skipIf(!url)("runs e2e", () => {
     expect((jobs.rows[0] as { n: number }).n).toBe(1);
   });
 
+  it("requires a Google key for an opted-in cover and preserves the choice on retry", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const requestBody = {
+      brandId,
+      brief: "Illustrate the new release",
+      channelIds: [channelId],
+      generateCover: true,
+    };
+    const denied = await agent.post("/api/runs").send(requestBody).expect(400);
+    expect(denied.body.code).toBe("cover_requires_google_key");
+    expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const { encryptJson, runDetailDtoSchema } = await import("@pubrick/shared");
+    const { db, pool } = createDb(url as string);
+    const orgId = await orgIdOfBrand(brandId);
+    await db.insert(schema.aiCredentials).values({
+      orgId,
+      provider: "google",
+      credentialsEncrypted: encryptJson(
+        { apiKey: "test-google-key" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    await pool.end();
+
+    const first = runDetailDtoSchema.parse(
+      (await agent.post("/api/runs").send(requestBody).expect(201)).body,
+    );
+    expect(first.input.generateCover).toBe(true);
+    const retried = runDetailDtoSchema.parse(
+      (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+    );
+    expect(retried.input.generateCover).toBe(true);
+
+    const budget = createDb(url as string);
+    await budget.db.insert(schema.usageLedger).values(
+      Array.from({ length: 10 }, () => ({
+        orgId,
+        step: "image_generate",
+        provider: "google" as const,
+        modelId: "gemini-3.1-flash-image",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      })),
+    );
+    await budget.pool.end();
+    const capped = await agent.post("/api/runs").send(requestBody).expect(409);
+    expect(capped.body.code).toBe("media_generation_limit");
+  });
+
   it("refuses a brand with no channels (400): a run with no channels produces an item with zero adaptations", async () => {
     const agent = await orgAgent();
     const emptyBrand = await agent.post("/api/brands").send({ name: "No channels" }).expect(201);
@@ -710,6 +763,105 @@ describe.skipIf(!url)("runs e2e", () => {
    * spelling of it.
    */
   describe("retrying a run the API already has", () => {
+    it.each(["educational", "product_update", "comparison"] as const)(
+      "preserves the %s format in the receipt and on retry",
+      async (contentType) => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        const created = await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Announce the supported product change",
+            channelIds: [channelId],
+            contentType,
+          })
+          .expect(201);
+        const first = runDetailDtoSchema.parse(created.body);
+        expect(first.input.contentType).toBe(contentType);
+        await setRunStatus(first.id, "failed", "internal");
+
+        const retried = runDetailDtoSchema.parse(
+          (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+        );
+        expect(retried.input).toEqual(first.input);
+      },
+    );
+
+    it("preserves an article format beside pasted source material", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          material: ARTICLE,
+          sourceUrl: "https://example.com/article",
+          channelIds: [channelId],
+          contentType: "expert_article",
+        })
+        .expect(201);
+      const first = runDetailDtoSchema.parse(created.body);
+      expect(first.input).toMatchObject({ kind: "source", contentType: "expert_article" });
+      await setRunStatus(first.id, "failed", "internal");
+
+      const retried = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(retried.input).toEqual(first.input);
+    });
+    it.each([
+      ["repost", null],
+      ["repost", "https://example.com/announcement"],
+      ["case_study", null],
+      ["case_study", "https://example.com/announcement"],
+    ] as const)("preserves %s and its optional URL %s on retry", async (contentType, sourceUrl) => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const material = "The supplier announced a new process for autumn orders.";
+      const created = await agent
+        .post("/api/runs")
+        .send({
+          brandId,
+          brief: "Explain the effect for cafe owners",
+          material,
+          ...(sourceUrl && { sourceUrl }),
+          channelIds: [channelId],
+          contentType,
+        })
+        .expect(201);
+      const first = runDetailDtoSchema.parse(created.body);
+      expect(first.input).toMatchObject({
+        kind: "source",
+        contentType,
+        material,
+        sourceUrl,
+      });
+      await setRunStatus(first.id, "failed", "internal");
+
+      const retried = runDetailDtoSchema.parse(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(retried.input).toEqual(first.input);
+    });
+
+    it.each(["repost", "case_study"] as const)(
+      "refuses %s with only a brief and URL",
+      async (contentType) => {
+        const agent = await orgAgent();
+        const { brandId, channelId } = await brandWithChannel(agent);
+        await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Retell this story",
+            sourceUrl: "https://example.com/announcement",
+            channelIds: [channelId],
+            contentType,
+          })
+          .expect(400);
+      },
+    );
     const ARTICLE = "The autumn menu, as somebody else wrote it.";
 
     async function pastedRun(agent: request.Agent, brandId: string, channelIds: string[]) {

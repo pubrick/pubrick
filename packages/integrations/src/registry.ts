@@ -1,6 +1,10 @@
 import type { PublishablePlatformId } from "@pubrick/shared";
+import { blueskyPublisher } from "./bluesky.js";
+import { mastodonPublisher } from "./mastodon.js";
+import { maxPublisher } from "./max.js";
 import { telegramPublisher } from "./telegram.js";
 import type { Publisher } from "./types.js";
+import { vkPublisher } from "./vk.js";
 
 /**
  * Every platform Pubrick can deliver a post to — one entry per implemented
@@ -23,6 +27,10 @@ import type { Publisher } from "./types.js";
  */
 const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   telegram: telegramPublisher as unknown as Publisher<never>,
+  vk: vkPublisher as unknown as Publisher<never>,
+  max: maxPublisher as unknown as Publisher<never>,
+  bluesky: blueskyPublisher as unknown as Publisher<never>,
+  mastodon: mastodonPublisher as unknown as Publisher<never>,
 };
 
 /**

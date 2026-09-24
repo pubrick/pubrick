@@ -18,36 +18,65 @@
 
 ---
 
-Pubrick watches your sources (RSS, Telegram channels), drafts on-brand posts and
-articles with a team of AI agents — text and images — queues everything for
-**your** approval, publishes on schedule, and learns from what performs.
+Pubrick watches RSS, web feeds, and Telegram sources, drafts on-brand posts
+with AI agents, queues them for **your** approval, and publishes approved posts
+on schedule. Brand knowledge, manual image generation, opt-in draft cover
+generation, Telegram video attachments, and VK performance metrics are available
+in the current pre-alpha.
 
 **Status: pre-alpha.** Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to
-Telegram, the one platform there is a publisher for — through a restyled,
-installable (PWA) web app. AI generation works too, with **your own** Gemini or
-OpenRouter key (there is no hosted key): type a brief and five roles —
+Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon instances — through a restyled,
+installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
+uses a manual copy and confirmation workflow. External clients can review a
+draft through an [expiring approval link](docs/client-review.md), while the team
+keeps [editorial notes](docs/editorial-notes.md) on saved versions. Editors can
+request a [metered whole-draft rewrite](docs/editorial-notes.md#whole-draft-ai-revision), compare
+it with the saved text, and explicitly accept or discard it. AI
+generation works too, with
+**your own** Gemini or OpenRouter key (there is no hosted key): start from a
+brief or schedule a draft in the [brand calendar](docs/calendar.md). Five roles —
 researcher, writer, editor, a fact-checker that lists claims to verify rather
 than checking them, and one adapter per channel — produce a draft with
 per-channel copy and an origin badge, while Settings shows what your key has
 spent. Nothing publishes that no human has opened or edited, and every model
 call is recorded, including the retries and the ones that failed after the
-provider had counted tokens. Not yet: publishers for the other seven platforms
-(the channel form names them and refuses to connect one), a per-brand knowledge
-base, refining text inside the editor, and drafting from watched sources.
+provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
+brand; an article's title and summary can start a draft. You can also
+[fetch a public article into an editable preview](docs/source-extraction.md) and
+generate [social posts, news digests, product updates, expert articles, how-to guides, source-based retellings, comparisons, or case studies](docs/content-types.md)
+for selected channels. See [watched sources](docs/watched-sources.md)
+for the exact limits. The per-brand
+knowledge base supports portable CSV import/export, text search, and optional
+Gemini vector indexing, including [opt-in automatic backfill](docs/brand-knowledge.md).
+The [media library](docs/media-library.md) accepts reviewed MP4 uploads for
+Telegram video posts and optional Gemini covers generated with a new draft.
+Organization owners and admins can issue one-time
+[public read API](docs/public-api.md) keys for tenant-scoped content reads; the
+[OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
+[optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
+platforms remain unavailable until their publishers are implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 
+Public RSS syndication is available for selected published posts; see
+[docs/public-rss.md](docs/public-rss.md). It does not confirm delivery to Dzen.
+Organizations can also opt in to [Telegram notifications](docs/notifications.md)
+for drafts awaiting review and delivery problems.
+[Outgoing webhooks](docs/webhooks.md) can send signed publication outcomes to
+your own HTTPS endpoint, with delivery history and explicit unknown outcomes.
+
 ## Why Pubrick
 
-- **Human-in-the-loop by design** — nothing is published without approval
-  unless you explicitly enable autopilot. Anti-slop is the point.
+- **Human-in-the-loop by design** — every post needs approval before publishing.
+  Owners can opt in to scheduled draft generation from approved topics, while
+  publication still requires a person to review and approve the result.
 - **Brand voice** — voice, audience and content language are set per brand and
   go into every generation's instructions, so drafts sound like you rather than
-  like a model. (A per-brand knowledge base with retrieval is planned, not
-  built.)
+  like a model. Brand knowledge notes can be selected as material for a draft;
+  see [brand knowledge](docs/brand-knowledge.md).
 - **Bring your own keys** — Gemini and OpenRouter (hundreds of models);
   self-hosted generation at your own API cost.
 - **Own it** — AGPL-3.0, docker compose, Postgres as the only stateful service.

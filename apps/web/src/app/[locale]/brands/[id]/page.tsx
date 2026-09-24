@@ -1,16 +1,23 @@
 "use client";
 
 import {
-  isPublishablePlatform,
+  type BrandLinkPolicy,
+  DEFAULT_CAMPAIGN_TEMPLATE,
+  DEFAULT_UTM,
+  isAvailablePlatform,
+  isManualPlatform,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
   PUBLISHABLE_PLATFORM_IDS,
 } from "@pubrick/shared";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { FeedSettings } from "@/components/feed-controls";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,21 +30,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 
-type Channel = { id: string; platform: string; name: string };
+type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
 /**
- * The brand as this screen edits it. `voice`, `audience` and `contentLanguage`
- * are not decoration: every generation step interpolates all three into the
- * model's `instructions` (`instructionsFor` in `@pubrick/ai`), and until this
- * screen grew the editor below there was no way for anyone to fill them — the
- * create form sends a name and nothing else, so "on-brand, on-voice" rested on
- * columns that were always null.
+ * Voice, audience and language shape generation. Description is used for
+ * source relevance and topic suggestions, not generation instructions.
  */
 type Brand = {
   id: string;
   name: string;
+  description: string | null;
   voice: string | null;
   audience: string | null;
   contentLanguage: string;
+  linkPolicy: BrandLinkPolicy | null;
 };
 type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
 
@@ -60,6 +65,8 @@ const EDIT_FORM_ID = "channel-edit-form";
 
 // The brand-voice modal's form id — same arrangement, its Save is in the footer.
 const VOICE_FORM_ID = "brand-voice-form";
+const PROFILE_FORM_ID = "brand-profile-form";
+const LINKS_FORM_ID = "brand-links-form";
 
 // The language field's hint is a sibling paragraph rather than a placeholder:
 // the field is always prefilled, so a placeholder would never be seen.
@@ -68,20 +75,20 @@ const LANGUAGE_HINT_ID = "brand-language-hint";
 /**
  * The picker's two groups.
  *
- * Every platform this product names is still shown, and the seven with no
+ * Every platform this product names is still shown, and those with no
  * adapter are shown as what they are — `disabled`, under a heading that says
- * so — rather than hidden. Hiding them would answer "does Pubrick support VK?"
+ * so — rather than hidden. Hiding them would answer "does Pubrick support this?"
  * with silence; the honest answer is "not yet", and this is a product whose
  * pitch is not overstating what it did. The browser will not let a disabled
  * option be selected, so nobody can reach the credential fields for one, and
  * `POST /api/channels` refuses the same set server-side (derived there from the
  * publisher registry) in case anything ever does.
  */
-const OFFERED_PLATFORMS = PLATFORM_IDS.filter((p) => isPublishablePlatform(p));
-const UNSUPPORTED_PLATFORMS = PLATFORM_IDS.filter((p) => !isPublishablePlatform(p));
+const OFFERED_PLATFORMS = PLATFORM_IDS.filter((p) => isAvailablePlatform(p));
+const UNSUPPORTED_PLATFORMS = PLATFORM_IDS.filter((p) => !isAvailablePlatform(p));
 
 /**
- * The picker's initial value, taken from the publishable set rather than
+ * The picker's initial value, taken from the available set rather than
  * written down again: a hard-coded `"telegram"` would put an unselectable
  * platform in `platform` the day Telegram's adapter is the one that goes.
  */
@@ -102,6 +109,18 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const closeProfileEditor = useCallback(() => setProfileOpen(false), []);
+  const [linksOpen, setLinksOpen] = useState(false);
+  const [websiteDraft, setWebsiteDraft] = useState("");
+  const [campaignDraft, setCampaignDraft] = useState(DEFAULT_CAMPAIGN_TEMPLATE);
+  const [platformDraft, setPlatformDraft] = useState<BrandLinkPolicy["platforms"]>({});
+  const [linksError, setLinksError] = useState<string | null>(null);
+  const [linksBusy, setLinksBusy] = useState(false);
   // `null` is "not asked yet / could not ask", never "none" — the same
   // distinction the title skeleton below already draws, and the one the
   // channels list was missing.
@@ -112,6 +131,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, VerifyResult | "loading">>({});
+  const [metricsBusy, setMetricsBusy] = useState<string | null>(null);
+  const [metricsError, setMetricsError] = useState<Record<string, string>>({});
   // POST /api/channels is not idempotent: the same credentials submitted twice
   // make two channels, and every future post goes out twice. A click is a
   // discrete React event, so `disabled` is on the button in the DOM before an
@@ -184,6 +205,32 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
 
   useEffect(load, [load]);
 
+  function startProfileEditing() {
+    if (!brand) return;
+    setProfileName(brand.name);
+    setProfileDescription(brand.description ?? "");
+    setProfileError(null);
+    setProfileOpen(true);
+  }
+
+  async function saveProfile(e: React.FormEvent) {
+    e.preventDefault();
+    setProfileError(null);
+    setProfileBusy(true);
+    try {
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: profileName.trim(), description: profileDescription.trim() }),
+      });
+      setBrand(updated);
+      setProfileOpen(false);
+    } catch (err) {
+      setProfileError(describeError(err));
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
   async function addChannel(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -191,7 +238,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     try {
       await api("/api/channels", {
         method: "POST",
-        body: JSON.stringify({ brandId: id, platform, name, credentials: creds }),
+        body: JSON.stringify({
+          brandId: id,
+          platform,
+          name,
+          ...(isManualPlatform(platform) ? {} : { credentials: creds }),
+        }),
       });
       setName("");
       setCreds({});
@@ -280,6 +332,41 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
    * symptom is a textarea that accepts exactly one character.
    */
   const closeVoiceEditor = useCallback(() => setVoiceOpen(false), []);
+  const closeLinksEditor = useCallback(() => setLinksOpen(false), []);
+
+  function startLinksEditing() {
+    if (!brand) return;
+    setWebsiteDraft(brand.linkPolicy?.website ?? "");
+    setCampaignDraft(brand.linkPolicy?.campaignTemplate ?? DEFAULT_CAMPAIGN_TEMPLATE);
+    setPlatformDraft(brand.linkPolicy?.platforms ?? {});
+    setLinksError(null);
+    setLinksOpen(true);
+  }
+
+  async function saveLinks(e: React.FormEvent) {
+    e.preventDefault();
+    setLinksError(null);
+    setLinksBusy(true);
+    try {
+      const linkPolicy = websiteDraft.trim()
+        ? {
+            website: websiteDraft.trim(),
+            campaignTemplate: campaignDraft.trim(),
+            platforms: platformDraft,
+          }
+        : null;
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ linkPolicy }),
+      });
+      setBrand(updated);
+      setLinksOpen(false);
+    } catch (err) {
+      setLinksError(describeError(err));
+    } finally {
+      setLinksBusy(false);
+    }
+  }
 
   function startVoiceEditing() {
     if (brand === null) return;
@@ -339,6 +426,25 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
+  async function toggleMetrics(channel: Channel) {
+    setMetricsBusy(channel.id);
+    setMetricsError((previous) => ({ ...previous, [channel.id]: "" }));
+    try {
+      const updated = await api<Channel>(`/api/channels/${channel.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ metricsAutoRefresh: !channel.metricsAutoRefresh }),
+      });
+      setChannels(
+        (previous) => previous?.map((item) => (item.id === channel.id ? updated : item)) ?? null,
+      );
+    } catch (err) {
+      const message = describeError(err);
+      if (message) setMetricsError((previous) => ({ ...previous, [channel.id]: message }));
+    } finally {
+      setMetricsBusy(null);
+    }
+  }
+
   const fields = PLATFORM_FIELDS[platform];
 
   return (
@@ -350,19 +456,71 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </Button>
       }
     >
+      <div className="mb-5 flex flex-wrap gap-4 text-sm font-medium">
+        <Link href={`/${locale}/brands/${id}/sources`} className="text-accent underline">
+          {tb("sourcesLink")}
+        </Link>
+        <Link href={`/${locale}/brands/${id}/calendar`} className="text-accent underline">
+          {tb("calendarLink")}
+        </Link>
+        <Link href={`/${locale}/brands/${id}/topics`} className="text-accent underline">
+          {tb("topicsLink")}
+        </Link>
+        <Link href={`/${locale}/brands/${id}/media`} className="text-accent underline">
+          {tb("mediaLink")}
+        </Link>
+        <Link href={`/${locale}/brands/${id}/analytics`} className="text-accent underline">
+          {tb("analyticsLink")}
+        </Link>
+      </div>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
           {error}
         </p>
       )}
 
-      {/* The brand's own settings, above its channels: this is the one place
-          voice, audience and content language can be set, and all three are
-          interpolated into every generation prompt. They used to exist only in
-          the schema, the PATCH route and the prompt builder — never on a
-          screen — so "on-brand, on-voice" was a promise resting on null
-          columns. `description` is deliberately absent: no prompt reads it, and
-          a field that changes nothing is the same overstatement in miniature. */}
+      <Card className="mb-6">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-fg">{tb("profileTitle")}</h2>
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={startProfileEditing}
+            disabled={!brand}
+          >
+            {tb("profileEdit")}
+          </Button>
+        </div>
+        <p className="mb-4 text-sm text-fg-secondary">{tb("descriptionHint")}</p>
+        {brand === null ? (
+          <div aria-busy="true">
+            <Skeleton lines={2} />
+          </div>
+        ) : (
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-sm font-medium text-fg-secondary">{tb("nameLabel")}</dt>
+              <dd className="mt-1 break-words text-sm text-fg">{brand.name}</dd>
+            </div>
+            <div>
+              <dt className="text-sm font-medium text-fg-secondary">{tb("descriptionLabel")}</dt>
+              <dd
+                className={
+                  brand.description?.trim()
+                    ? "mt-1 whitespace-pre-wrap text-sm text-fg"
+                    : "mt-1 text-sm text-fg-tertiary"
+                }
+              >
+                {brand.description?.trim() ? brand.description : tb("descriptionUnset")}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </Card>
+
+      {/* Voice, audience and content language are interpolated into generation
+          instructions. Description above has a separate targeting purpose. */}
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("voiceTitle")}</h2>
@@ -405,7 +563,41 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         )}
       </Card>
 
-      <h2 className="mb-3 text-lg font-semibold text-fg">{t("title")}</h2>
+      <Card className="mb-6">
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-fg">{tb("linksTitle")}</h2>
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={startLinksEditing}
+            disabled={!brand}
+          >
+            {tb("linksEdit")}
+          </Button>
+        </div>
+        <p className="text-sm text-fg-secondary">{tb("linksHint")}</p>
+        {brand?.linkPolicy ? (
+          <p className="mt-3 break-all text-sm font-medium text-fg">{brand.linkPolicy.website}</p>
+        ) : (
+          <p className="mt-3 text-sm text-fg-tertiary">{tb("linksUnset")}</p>
+        )}
+      </Card>
+
+      <Card className="mb-6">
+        <h2 className="text-lg font-semibold text-fg">{tb("knowledgeTitle")}</h2>
+        <p className="mt-2 text-sm text-fg-secondary">{tb("knowledgeHint")}</p>
+        <Link
+          href={`/${locale}/brands/${id}/knowledge`}
+          className="mt-3 inline-block text-sm font-semibold text-accent underline-offset-2 hover:underline"
+        >
+          {tb("knowledgeOpen")}
+        </Link>
+      </Card>
+
+      <h2 id="channels" className="mb-3 scroll-mt-6 text-lg font-semibold text-fg">
+        {t("title")}
+      </h2>
 
       {/* Failed / not answered yet / genuinely none — three different things
           to say, where there used to be one silence for all three. */}
@@ -460,7 +652,13 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                   // The failure case needs a real element for role="alert", so
                   // it stays an element — that test matches by role, not text,
                   // so the double wrapper there is harmless.
-                  result === "loading" ? (
+                  metricsError[c.id] ? (
+                    <span role="alert" className="text-danger">
+                      {metricsError[c.id]}
+                    </span>
+                  ) : isManualPlatform(c.platform) ? (
+                    t("vcManualMeta")
+                  ) : result === "loading" ? (
                     "…"
                   ) : result && !result.ok ? (
                     <span role="alert" className="text-danger">
@@ -472,9 +670,25 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 }
                 trailing={
                   <>
-                    <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
-                      {t("test")}
-                    </Button>
+                    {c.platform === "vk" && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={metricsBusy === c.id}
+                        onClick={() => toggleMetrics(c)}
+                        aria-label={
+                          c.metricsAutoRefresh ? t("autoMetricsDisable") : t("autoMetricsEnable")
+                        }
+                        title={t("autoMetricsHint")}
+                      >
+                        {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
+                      </Button>
+                    )}
+                    {!isManualPlatform(c.platform) && (
+                      <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
+                        {t("test")}
+                      </Button>
+                    )}
                     <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
                       {t("edit")}
                     </Button>
@@ -519,7 +733,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               ))}
               {/* Named, and plainly marked as not yet deliverable. Disabled
                   rather than hidden: hiding them answers "does Pubrick support
-                  VK?" with silence, and this is the product that refuses to
+                  a platform?" with silence, and this is the product that refuses to
                   overstate what it can do. The browser will not select a
                   disabled option, so the credential fields for one are
                   unreachable — and `POST /api/channels` refuses the same set
@@ -557,8 +771,19 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               />
             ))}
           </div>
+          {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
+          {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
+          {platform === "bluesky" && (
+            <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
+          )}
+          {platform === "mastodon" && (
+            <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
+          )}
+          {platform === "vc_ru" && <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>}
         </form>
       </Card>
+
+      <FeedSettings brandId={id} />
 
       <Modal
         open={editing !== null}
@@ -587,7 +812,23 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             label={t("namePlaceholder")}
             required
           />
-          <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          {editing?.platform === "vc_ru" ? (
+            <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>
+          ) : (
+            <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
+          )}
+          {editing?.platform === "vk" && (
+            <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>
+          )}
+          {editing?.platform === "max" && (
+            <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>
+          )}
+          {editing?.platform === "bluesky" && (
+            <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
+          )}
+          {editing?.platform === "mastodon" && (
+            <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
+          )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (
               <Input
@@ -600,6 +841,44 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               />
             ),
           )}
+        </form>
+      </Modal>
+
+      <Modal
+        open={profileOpen}
+        onClose={closeProfileEditor}
+        title={tb("profileTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeProfileEditor}>
+              {tb("voiceCancel")}
+            </Button>
+            <Button type="submit" form={PROFILE_FORM_ID} disabled={profileBusy}>
+              {tb("voiceSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={PROFILE_FORM_ID} onSubmit={saveProfile} className="flex flex-col gap-3">
+          {profileError && (
+            <p role="alert" className="text-sm text-danger">
+              {profileError}
+            </p>
+          )}
+          <Input
+            value={profileName}
+            onChange={(e) => setProfileName(e.target.value)}
+            label={tb("nameLabel")}
+            required
+            maxLength={200}
+          />
+          <Textarea
+            value={profileDescription}
+            onChange={(e) => setProfileDescription(e.target.value)}
+            label={tb("descriptionLabel")}
+            maxLength={2000}
+          />
+          <p className="text-sm text-fg-secondary">{tb("descriptionHint")}</p>
         </form>
       </Modal>
 
@@ -662,6 +941,83 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
+        open={linksOpen}
+        onClose={closeLinksEditor}
+        title={tb("linksTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeLinksEditor}>
+              {tb("voiceCancel")}
+            </Button>
+            <Button type="submit" form={LINKS_FORM_ID} disabled={linksBusy}>
+              {tb("voiceSave")}
+            </Button>
+          </>
+        }
+      >
+        <form id={LINKS_FORM_ID} onSubmit={saveLinks} className="flex flex-col gap-3">
+          {linksError && (
+            <p role="alert" className="text-sm text-danger">
+              {linksError}
+            </p>
+          )}
+          <p className="text-sm text-fg-secondary">{tb("linksFormHint")}</p>
+          <Input
+            type="url"
+            value={websiteDraft}
+            onChange={(e) => setWebsiteDraft(e.target.value)}
+            label={tb("linksWebsite")}
+            placeholder="https://example.com"
+          />
+          <Advanced
+            dirty={
+              campaignDraft !== DEFAULT_CAMPAIGN_TEMPLATE || Object.keys(platformDraft).length > 0
+            }
+          >
+            <div className="flex flex-col gap-3">
+              <Input
+                value={campaignDraft}
+                onChange={(e) => setCampaignDraft(e.target.value)}
+                label={tb("linksCampaign", {
+                  YYYY_MM: "{YYYY_MM}",
+                  content_type: "{content_type}",
+                })}
+              />
+              <p className="text-sm text-fg-secondary">{tb("linksPlatformsHint")}</p>
+              {PLATFORM_IDS.map((p) => {
+                const mapping = platformDraft[p] ?? DEFAULT_UTM[p];
+                return (
+                  <div key={p} className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <span className="text-sm font-medium text-fg">{platformName(p)}</span>
+                    <Input
+                      value={mapping.source}
+                      onChange={(e) =>
+                        setPlatformDraft({
+                          ...platformDraft,
+                          [p]: { ...mapping, source: e.target.value },
+                        })
+                      }
+                      label={`${platformName(p)} ${tb("linksSource")}`}
+                    />
+                    <Input
+                      value={mapping.medium}
+                      onChange={(e) =>
+                        setPlatformDraft({
+                          ...platformDraft,
+                          [p]: { ...mapping, medium: e.target.value },
+                        })
+                      }
+                      label={`${platformName(p)} ${tb("linksMedium")}`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </Advanced>
+        </form>
+      </Modal>
+
+      <Modal
         open={pendingRemoval !== null}
         onClose={() => setPendingRemoval(null)}
         title={t("removeTitle")}
@@ -678,7 +1034,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         }
       >
         <p className="text-sm text-fg-secondary">
-          {t("removeBody", {
+          {t(pendingRemoval?.platform === "vc_ru" ? "removeManualBody" : "removeBody", {
             channel:
               pendingRemoval === null
                 ? ""

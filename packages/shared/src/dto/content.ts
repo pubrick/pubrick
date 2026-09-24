@@ -51,6 +51,7 @@ export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 /** Per-channel delivery lifecycle. One declaration, for the reasons above. */
 export const ADAPTATION_STATUSES = [
   "pending",
+  "manual_ready",
   "scheduled",
   "queued",
   "publishing",
@@ -548,6 +549,16 @@ export type RefineProposal = {
   selectedText: string;
 };
 
+/** A model suggestion for one channel, held until a person accepts or discards it. */
+export type AdaptationProposal = {
+  id: string;
+  adaptationId: string;
+  proposal: string;
+  reason: string;
+  masterBody: string;
+  previousBody: string | null;
+};
+
 export const contentApproveSchema = z.object({
   /**
    * ISO timestamp; when omitted the post is queued immediately.
@@ -597,6 +608,22 @@ export const deliveryAssertionSchema = z.object({
   delivered: z.boolean(),
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
+
+/** A person supplied the public VC.ru article URL after publishing it there. */
+export const manualPublicationSchema = z.object({
+  url: z.url().refine((value) => {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname === "vc.ru" &&
+      parsed.port === "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname !== "/"
+    );
+  }, "Enter an HTTPS vc.ru article URL"),
+});
+export type ManualPublication = z.infer<typeof manualPublicationSchema>;
 
 /**
  * WHAT HAPPENED TO ONE CHANNEL'S POST — the `deliveryOutcome` the api reports
@@ -736,6 +763,28 @@ export const contentListItemDtoSchema = z.strictObject({
 });
 export type ContentListItemDto = z.infer<typeof contentListItemDtoSchema>;
 
+/** A saved whole-body snapshot. Refine fragments are provenance evidence, not drafts to restore. */
+export const contentVersionDtoSchema = z.strictObject({
+  id: z.string().uuid(),
+  adaptationId: z.string().uuid().nullable(),
+  body: z.string(),
+  origin: z.enum(CONTENT_ORIGINS),
+  createdAt: z.string(),
+});
+export type ContentVersionDto = z.infer<typeof contentVersionDtoSchema>;
+
+export const contentVersionListQuerySchema = z.object({
+  adaptationId: z.string().uuid().optional(),
+  cursor: z.string().uuid().optional(),
+});
+export type ContentVersionListQuery = z.infer<typeof contentVersionListQuerySchema>;
+
+export const contentVersionRestoreSchema = z.object({
+  /** The text the reader saw; a newer save must not be silently overwritten. */
+  expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+});
+export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
+
 /**
  * THE SAME ITEM WITH ITS TEXT — `GET /api/content/:id`, and what every mutation
  * on the resource answers with.
@@ -754,7 +803,7 @@ export type ContentListItemDto = z.infer<typeof contentListItemDtoSchema>;
  * body, the list does not.
  */
 export const contentDetailDtoSchema = contentListItemDtoSchema
-  .extend({ body: z.string() })
+  .extend({ body: z.string(), linkPolicyWebsite: z.string().url().nullable() })
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;
 

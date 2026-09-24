@@ -1,0 +1,2 @@
+ALTER TABLE "news_items" ADD COLUMN "relevance_feedback_delta" double precision DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "news_items" ADD CONSTRAINT "news_items_relevance_feedback_delta_check" CHECK ("news_items"."relevance_feedback_delta" >= -0.2 AND "news_items"."relevance_feedback_delta" <= 0.2);

@@ -128,6 +128,12 @@ connection** on a channel re-encrypts it, and saving credentials through
 until nothing is left on it; there is no harm in leaving it there, and removing
 it early makes whatever is still on it unreadable.
 
+Telegram source sessions are different: polling reads them but does not re-encrypt
+them. If you connected a workspace before rotation, run the terminal command in
+[Telegram channel sources](telegram-sources.md) again for that workspace before
+removing the old key. The source row reports a connection error if its session
+cannot be opened.
+
 Nothing moves while the ring has one key. Rows written before the ring existed
 carry no version and no key id; under a single key **Test connection** leaves
 them exactly as they are, because there is no other key to move them off — and
@@ -254,6 +260,69 @@ never be limited at all.
    channel, since the same failure will otherwise surface later as a `failed`
    adaptation once the worker attempts the real publish.
 
+## Connect a VK community
+
+1. Create a **user access token** with the `wall` permission for a VK account
+   that administers the community. Keep the token private. VK's published
+   [API schema for `wall.post`](https://github.com/VKCOM/vk-api-schema/blob/master/wall/methods.json)
+   declares user authorization for this method.
+2. Find the community's **positive numeric ID** (without the minus sign used
+   in wall URLs). In Pubrick, open a brand → add a channel → platform **VK**,
+   then enter the token and this ID.
+3. Press **Test connection**. Pubrick checks the user, the token's `wall`
+   permission, and community administration without publishing a test post.
+
+VK publishing sends text posts and one reviewed JPEG cover. A cover also needs
+the token's `photos` permission. The result links to the new community
+wall post. A failed or uncertain send is classified by the same delivery rules
+as Telegram; an uncertain outcome requires a human to inspect the wall before
+another attempt.
+
+## Connect a MAX chat or channel
+
+1. Create a MAX bot and copy its token from the bot's settings. Find the numeric
+   chat or channel ID and make the bot an admin with the **write** permission.
+2. In Pubrick, open a brand → add a channel → platform **MAX**, then enter the
+   bot token and chat ID. Press **Test connection** to check the bot, destination,
+   and posting permission without sending a message.
+
+MAX publishing sends text posts and one reviewed JPEG cover. Pubrick uses the current
+[`platform-api2.max.ru` API](https://dev.max.ru/docs-api/methods/POST/messages)
+and puts the token in the `Authorization` header, as MAX requires. If MAX returns
+a public post URL, Pubrick keeps it with the publication.
+
+## Connect a Bluesky account
+
+1. Create an app password in your Bluesky account settings. Use the account's
+   handle and this app password, not the account password. The current
+   connector supports accounts hosted on `bsky.social`.
+2. In Pubrick, open a brand → add a channel → platform **Bluesky**. Enter the
+   handle and app password, then press **Test connection**. This authenticates
+   without publishing a post.
+
+Bluesky delivery supports text within its 300-grapheme limit and one JPEG cover.
+The worker records the post URI and public URL when Bluesky returns them. An
+uncertain create-record response is not retried automatically; inspect the
+account before trying again. See Bluesky's
+[post and image guide](https://docs.bsky.app/docs/tutorials/creating-a-post).
+
+## Connect a Mastodon account
+
+1. Create an access token with `write:statuses` permission in your Mastodon
+   account settings. Copy the public HTTPS origin of your server, such as
+   `https://mastodon.social`, without a path or port.
+2. In Pubrick, open a brand → add a channel → platform **Mastodon**. Enter the
+   server origin and token, then press **Test connection**. This verifies the
+   account without posting.
+
+Mastodon delivery currently sends text only and defaults to public visibility.
+It checks the server's own status length limit before posting. A cover is
+refused before any provider call. A confirmed status records its ID and public
+URL when available; an uncertain send requires a human to inspect the account
+before another attempt. See Mastodon's
+[statuses API](https://docs.joinmastodon.org/methods/statuses/) and
+[instance configuration](https://docs.joinmastodon.org/methods/instance/).
+
 ## Upgrade
 
 ```bash
@@ -261,7 +330,9 @@ git pull
 docker compose up -d --build
 ```
 
-Migrations apply on boot; back up the `pgdata` volume before major upgrades.
+Migrations apply on boot; back up the `pgdata` and `media` volumes before major
+upgrades. Keep them together: post cover references live in Postgres and image
+bytes live in `media` (see [Media library](media-library.md)).
 
 ### Variables added since August 2026
 
@@ -282,6 +353,7 @@ each one in full.
 | 2026-09-04 | `WEB_PORT` | no | host port for the web app (default `3000`) — **set it and `PUBLIC_ORIGIN` must match** |
 | 2026-09-04 | `API_HOST_PORT` | no | localhost-only debug mapping for the api (default `3001`) |
 | 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
+| 2026-09-23 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | no | required together when reading Telegram channel sources ([setup](telegram-sources.md)) |
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot

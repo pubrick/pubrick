@@ -45,6 +45,14 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # Leave on unless something in front of Pubrick already rate-limits /api/auth.
       AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
+      MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
+      MEDIA_STORAGE_DIR: /data/media
+    volumes:
+      - media:/data/media
     # Localhost-only: the web service proxies /api, so the api needs no public port.
     # This mapping exists for local debugging (curl the health endpoint directly);
     # override the host side in .env if 3001 is already taken — API_HOST_PORT is
@@ -65,16 +73,25 @@ services:
   worker:
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     environment:
+      WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
-      # Same value as the api's — it decrypts channel credentials the api encrypted.
+      # Same value as the api's; the Telegram connect command encrypts this worker's session.
       # No fallback on purpose, same reasoning as the api's: see that service above.
       APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY:?set it in .env - generate one with `openssl rand -base64 32`, see .env.example}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
       # How many hours past its slot a scheduled post may still go out. Passed
       # through rather than defaulted here: the default lives in the worker's
       # own env schema, and an empty string would override it with a parse
       # failure at boot. Worker-only — the web needs no bound to paint an
       # overdue row (see .env.example).
       PUBLISH_MAX_LATENESS_HOURS: "${PUBLISH_MAX_LATENESS_HOURS:-6}"
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
+      MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
+      MEDIA_STORAGE_DIR: /data/media
+    volumes:
+      - media:/data/media
     depends_on:
       postgres: { condition: service_healthy }
       api: { condition: service_healthy }   # api healthcheck passes only after migrations ran (listen comes after runMigrations)
@@ -99,3 +116,4 @@ services:
 
 volumes:
   pgdata:
+  media:

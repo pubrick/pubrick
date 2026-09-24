@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   briefRunInputSchema,
+  contentTypeRequiresMaterial,
   DISMISSABLE_RUN_STATUSES,
   isLiveRunStatus,
   LIVE_RUN_STATUSES,
@@ -83,6 +84,14 @@ describe("what a run was asked to produce", () => {
     expect(briefRunInputSchema.parse(valid)).toEqual(valid);
   });
 
+  it("refuses source retellings and case studies stored as brief runs", () => {
+    for (const contentType of ["repost", "case_study"]) {
+      const denied = briefRunInputSchema.safeParse({ ...valid, contentType });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["contentType"]]);
+    }
+  });
+
   it("refuses a run with no channels, which would produce an item nothing ships", () => {
     expect(briefRunInputSchema.safeParse({ ...valid, channelIds: [] }).success).toBe(false);
   });
@@ -155,6 +164,18 @@ describe("a run asked for from material a person pasted", () => {
     const denied = sourceRunInputSchema.safeParse({ ...pasted, material: "" });
     expect(denied.success).toBe(false);
     expect(denied.error?.issues.map((issue) => issue.path)).toEqual([["material"]]);
+    expect(sourceRunInputSchema.safeParse({ ...pasted, material: " \n " }).success).toBe(false);
+  });
+
+  it("stores source-grounded formats with optional attribution URL", () => {
+    for (const contentType of ["repost", "case_study"]) {
+      const grounded = { ...pasted, contentType };
+      expect(sourceRunInputSchema.parse(grounded)).toEqual(grounded);
+      expect(sourceRunInputSchema.parse({ ...grounded, sourceUrl: null })).toEqual({
+        ...grounded,
+        sourceUrl: null,
+      });
+    }
   });
 
   /**
@@ -213,6 +234,30 @@ describe("what a run may be asked for", () => {
   const brandId = "22222222-2222-4222-8222-222222222222";
   const base = { brandId, channelIds };
 
+  it("accepts each supported format and refuses unknown content types", () => {
+    for (const contentType of [
+      "social_post",
+      "news_digest",
+      "repost",
+      "product_update",
+      "expert_article",
+      "comparison",
+      "case_study",
+      "educational",
+    ] as const) {
+      const body = {
+        ...base,
+        brief: "Supported facts",
+        contentType,
+        ...(contentTypeRequiresMaterial(contentType) && { material: "The source text." }),
+      };
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    }
+    expect(
+      runCreateSchema.safeParse({ ...base, brief: "Facts", contentType: "not_a_format" }).success,
+    ).toBe(false);
+  });
+
   it("accepts a brief alone, exactly as it did before material existed", () => {
     const body = { ...base, brief: "Announce the autumn menu" };
     expect(runCreateSchema.parse(body)).toEqual(body);
@@ -221,6 +266,24 @@ describe("what a run may be asked for", () => {
   it("accepts material alone: a paste-only run has no brief to send", () => {
     const body = { ...base, material: "The article, pasted in full." };
     expect(runCreateSchema.parse(body)).toEqual(body);
+  });
+
+  it("requires nonblank stored source text for a retelling or case study", () => {
+    for (const contentType of ["repost", "case_study"] as const) {
+      for (const material of [undefined, "", " \n "]) {
+        const denied = runCreateSchema.safeParse({
+          ...base,
+          contentType,
+          brief: "Explain this for our readers",
+          sourceUrl: "https://example.com/article",
+          ...(material !== undefined && { material }),
+        });
+        expect(denied.success).toBe(false);
+        expect(denied.error?.issues.map((issue) => issue.path)).toContainEqual(["material"]);
+      }
+      const body = { ...base, contentType, material: "Actual article text." };
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    }
   });
 
   it("accepts both, and the brief keeps its own meaning beside the paste", () => {

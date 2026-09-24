@@ -20,6 +20,10 @@ import type { z } from "zod";
 export interface PublishInput {
   text: string;
   disableLinkPreview?: boolean;
+  /** Normalized JPEG bytes. Only adapters that implement image delivery may accept it. */
+  image?: { bytes: Uint8Array; mimeType: "image/jpeg" };
+  /** Original bounded MP4 bytes; only Telegram currently implements video delivery. */
+  video?: { bytes: Uint8Array; mimeType: "video/mp4" };
 }
 
 export interface PublishResult {

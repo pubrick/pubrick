@@ -1,28 +1,49 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
+  KNOWLEDGE_EMBEDDING_DIMENSIONS,
+  KNOWLEDGE_EMBEDDING_MODEL,
   type StepAttribution,
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import { schema, withImageCallLock } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
+  IMAGE_CALL_STEPS,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   LIVE_RUN_STATUSES,
+  MAX_IMAGE_CALLS_PER_HOUR,
   PermanentError,
   type PlatformId,
+  type PromptRole,
   parseStoredAiCredential,
   preferredCredential,
   type RunFailure,
   type RunStepCheckpoint,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, eq, inArray, isNotNull, type SQL, type SQLWrapper, sql } from "drizzle-orm";
-import { db } from "../db";
+import {
+  and,
+  asc,
+  cosineDistance,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from "drizzle-orm";
+import sharp from "sharp";
+import { db, pool } from "../db";
 import { env } from "../env";
+import { enqueueNotification } from "../notifications/notifications.outbox";
 
 /**
  * Every write in this file that touches `pipeline_runs` sets `updated_at`
@@ -120,6 +141,9 @@ const PGBOSS_SCHEMA = "pgboss";
 
 /** The checkpoint map exactly as `pipeline_runs.steps` types it. */
 export type RunSteps = (typeof schema.pipelineRuns.$inferSelect)["steps"];
+export type GuidanceSnapshot = NonNullable<
+  (typeof schema.pipelineRuns.$inferSelect)["guidanceSnapshot"]
+>;
 
 /** The run, as the handler needs it after a successful claim. */
 export type ClaimedRun = {
@@ -128,18 +152,24 @@ export type ClaimedRun = {
   brandId: string;
   input: unknown;
   steps: RunSteps;
+  guidanceSnapshot: GuidanceSnapshot;
+  createdAt: Date;
 };
 
 /** The brand and channels one run writes for, in the shape `@pubrick/ai` takes. */
 export type RunContext = {
   brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
   channels: Array<{ id: string; name: string; platform: PlatformId }>;
+  promptGuidance?: Partial<Record<PromptRole, string>>;
+  linkPolicy: (typeof schema.brands.$inferSelect)["linkPolicy"];
 };
 
 /** What one finished run writes: the master body plus one body per channel. */
 export type TerminalPayload = {
   body: string;
   adaptations: ReadonlyArray<{ channelId: string; body: string }>;
+  linkPolicyWebsite?: string | null;
+  coverMediaId?: string | null;
 };
 
 /**
@@ -247,6 +277,31 @@ export class GenerateRepository {
       .set({
         activeJobId: fence,
         status: "running",
+        // The UPDATE locks this run row. A re-claim sees the stored value,
+        // including {}, even when guidance changes between deliveries.
+        guidanceSnapshot: sql`coalesce(
+          ${schema.pipelineRuns.guidanceSnapshot},
+          (
+            select coalesce(
+              jsonb_object_agg(latest.role, jsonb_build_object(
+                'revisionId', latest.id,
+                'version', latest.version,
+                'text', latest.guidance
+              )),
+              '{}'::jsonb
+            )
+            from (
+              select distinct on (${schema.promptRevisions.role})
+                ${schema.promptRevisions.id} as id,
+                ${schema.promptRevisions.role} as role,
+                ${schema.promptRevisions.version} as version,
+                ${schema.promptRevisions.guidance} as guidance
+              from ${schema.promptRevisions}
+              where ${schema.promptRevisions.orgId} = ${orgId}
+              order by ${schema.promptRevisions.role}, ${schema.promptRevisions.version} desc
+            ) as latest
+          )
+        )`,
         leaseExpiresAt: leaseExpiry(),
         updatedAt: nowSql(),
       })
@@ -268,10 +323,20 @@ export class GenerateRepository {
         brandId: schema.pipelineRuns.brandId,
         input: schema.pipelineRuns.input,
         steps: schema.pipelineRuns.steps,
+        guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
+        createdAt: schema.pipelineRuns.createdAt,
       });
     const row = rows[0];
     if (!row) return undefined;
-    return { id: row.id, orgId, brandId: row.brandId, input: row.input, steps: row.steps ?? {} };
+    return {
+      id: row.id,
+      orgId,
+      brandId: row.brandId,
+      input: row.input,
+      steps: row.steps ?? {},
+      guidanceSnapshot: row.guidanceSnapshot ?? {},
+      createdAt: row.createdAt,
+    };
   }
 
   /**
@@ -527,6 +592,7 @@ export class GenerateRepository {
     orgId: string,
     brandId: string,
     channelIds: readonly string[],
+    guidanceSnapshot: GuidanceSnapshot,
   ): Promise<RunContext | undefined> {
     const brands = await db
       .select({
@@ -534,6 +600,7 @@ export class GenerateRepository {
         voice: schema.brands.voice,
         audience: schema.brands.audience,
         contentLanguage: schema.brands.contentLanguage,
+        linkPolicy: schema.brands.linkPolicy,
       })
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
@@ -560,7 +627,19 @@ export class GenerateRepository {
       )
       .orderBy(asc(schema.channels.id));
 
-    return { brand, channels };
+    return {
+      brand: {
+        name: brand.name,
+        voice: brand.voice,
+        audience: brand.audience,
+        contentLanguage: brand.contentLanguage,
+      },
+      linkPolicy: brand.linkPolicy,
+      channels,
+      promptGuidance: Object.fromEntries(
+        Object.entries(guidanceSnapshot).map(([role, revision]) => [role, revision.text]),
+      ),
+    };
   }
 
   /**
@@ -628,6 +707,168 @@ export class GenerateRepository {
       throw error;
     }
     return { provider: row.provider, apiKey, defaultModel: row.defaultModel };
+  }
+
+  async hasKnowledge(orgId: string, brandId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: schema.knowledgeEntries.id })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasIndexedKnowledge(orgId: string, brandId: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: schema.knowledgeEntries.id })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNotNull(schema.knowledgeEntries.embedding),
+          eq(schema.knowledgeEntries.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.knowledgeEntries.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async googleKnowledgeKey(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!row) return undefined;
+    try {
+      return parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).apiKey;
+    } catch (error) {
+      if (isUnreadableCiphertext(error) || isMalformedStoredAiCredential(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /** Save a generated cover in the same shared media volume the API serves. */
+  async saveGeneratedCover(orgId: string, brandId: string, bytes: Buffer): Promise<string> {
+    if (bytes.length === 0 || bytes.length > 10 * 1024 * 1024) {
+      throw new Error("Gemini returned an image outside the 10 MB media limit");
+    }
+    const source = sharp(bytes, { limitInputPixels: 40_000_000, failOn: "error" });
+    const metadata = await source.metadata();
+    if (!["jpeg", "png", "webp"].includes(metadata.format ?? "")) {
+      throw new Error("Gemini returned an unsupported image format");
+    }
+    const output = await source
+      .rotate()
+      .resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+    if (output.data.length > 10 * 1024 * 1024) {
+      throw new Error("Normalized cover exceeded the 10 MB media limit");
+    }
+    const id = randomUUID();
+    const directory = process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media");
+    const target = path.join(directory, `${id}.jpg`);
+    await mkdir(directory, { recursive: true });
+    await writeFile(target, output.data, { flag: "wx", mode: 0o600 });
+    try {
+      await db.insert(schema.mediaAssets).values({
+        id,
+        orgId,
+        brandId,
+        name: "Generated draft cover",
+        mimeType: "image/jpeg",
+        width: output.info.width,
+        height: output.info.height,
+        byteSize: output.data.length,
+      });
+    } catch (error) {
+      await unlink(target).catch(() => undefined);
+      throw error;
+    }
+    return id;
+  }
+
+  /** Recheck the shared image budget after a run has waited in the queue. */
+  withImageCallLock<T>(orgId: string, call: () => Promise<T>) {
+    return withImageCallLock(pool, orgId, call);
+  }
+
+  /** Recheck the shared image budget while holding the per-org image call lock. */
+  async mayCallImageModel(orgId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+          sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+        ),
+      );
+    return (row?.count ?? 0) < MAX_IMAGE_CALLS_PER_HOUR;
+  }
+
+  async similarKnowledge(orgId: string, brandId: string, embedding: number[]) {
+    return db
+      .select({
+        id: schema.knowledgeEntries.id,
+        title: schema.knowledgeEntries.title,
+        category: schema.knowledgeEntries.category,
+        content: schema.knowledgeEntries.content,
+      })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          isNotNull(schema.knowledgeEntries.embedding),
+          eq(schema.knowledgeEntries.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.knowledgeEntries.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
+        ),
+      )
+      .orderBy(asc(cosineDistance(schema.knowledgeEntries.embedding, embedding)))
+      .limit(5);
+  }
+
+  /** Lexical fallback is useful before indexing and when Google is unavailable. */
+  async lexicalKnowledge(orgId: string, brandId: string, topic: string) {
+    const document = sql`to_tsvector('simple', ${schema.knowledgeEntries.title} || ' ' || ${schema.knowledgeEntries.content})`;
+    // A brief contains instructions as well as nouns. `plainto_tsquery` joins
+    // every token with AND and misses a note sharing the actual subject but
+    // not words such as "announce". PostgreSQL's own parser still escapes the
+    // input; OR permits a partial match and the rank sorts the strongest one.
+    const query = sql`websearch_to_tsquery('simple', regexp_replace(${topic}, '[[:space:]]+', ' OR ', 'g'))`;
+    return db
+      .select({
+        id: schema.knowledgeEntries.id,
+        title: schema.knowledgeEntries.title,
+        category: schema.knowledgeEntries.category,
+        content: schema.knowledgeEntries.content,
+      })
+      .from(schema.knowledgeEntries)
+      .where(
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          eq(schema.knowledgeEntries.isActive, true),
+          sql`${document} @@ ${query}`,
+        ),
+      )
+      .orderBy(desc(sql`ts_rank_cd(${document}, ${query})`))
+      .limit(5);
   }
 
   /**
@@ -792,7 +1033,15 @@ export class GenerateRepository {
 
         const items = await tx
           .insert(schema.contentItems)
-          .values({ orgId, brandId, body: payload.body, status: "draft", origin: "ai" })
+          .values({
+            orgId,
+            brandId,
+            body: payload.body,
+            status: "draft",
+            origin: "ai",
+            coverMediaId: payload.coverMediaId ?? null,
+            linkPolicyWebsite: payload.linkPolicyWebsite ?? null,
+          })
           .returning({ id: schema.contentItems.id });
         const contentItemId = items[0]?.id;
         if (contentItemId === undefined) throw new Error("content item insert returned no row");
@@ -857,6 +1106,8 @@ export class GenerateRepository {
         // the alternative to rolling back is an orphan content item belonging to
         // a run that says it never produced one.
         if (updated.length === 0) throw new TerminalFenceLost();
+
+        await enqueueNotification(tx, orgId, "draft_ready", runId, contentItemId);
 
         return "held";
       });

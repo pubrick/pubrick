@@ -1,6 +1,7 @@
 import {
   brandUpdateSchema,
   channelUpdateSchema,
+  isAvailablePlatform,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -14,6 +15,7 @@ import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
+import ru from "../../../../../messages/ru.json";
 import BrandPage from "./page";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -35,6 +37,49 @@ const brand = { id: "b1", name: "Acme" };
 // has its own beforeEach for stubbing fetch, but none for the session.
 beforeEach(() => {
   signedInSession();
+});
+
+describe("VK automatic metrics setting", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("is off by default and sends an explicit opt-in through the channel patch schema", async () => {
+    const channel = { id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false };
+    const patches: unknown[] = [];
+    installHandlers([channel], (url, init) => {
+      if (url.endsWith("/api/channels/c1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        patches.push(body);
+        return jsonResponse(200, { ...channel, ...body });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Channels.autoMetricsEnable }));
+    expect(patches).toEqual([{ metricsAutoRefresh: true }]);
+    expect(channelUpdateSchema.parse(patches[0])).toEqual(patches[0]);
+    expect(
+      screen.getByRole("button", { name: en.Channels.autoMetricsDisable }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the setting off and shows a translated refusal when the patch fails", async () => {
+    installHandlers(
+      [{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }],
+      (url, init) =>
+        url.endsWith("/api/channels/c1") && init?.method === "PATCH"
+          ? jsonResponse(500, { message: "secret internal failure" })
+          : undefined,
+    );
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />, { locale: "es" });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /Activar métricas automáticas de VK/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Algo salió mal/i);
+    expect(
+      screen.getByRole("button", { name: /Activar métricas automáticas de VK/i }),
+    ).toBeInTheDocument();
+  });
 });
 
 /**
@@ -256,7 +301,7 @@ describe("addChannel POST body (Step 3, Critical)", () => {
  * which fails this test for that platform, rather than silently skipping it.
  *
  * The ADD form can only reach the platforms Pubrick has an adapter for; the
- * seven it does not are disabled in the picker, and `user.selectOptions`
+ * unsupported ones are disabled in the picker, and `user.selectOptions`
  * refuses a disabled option exactly as a browser does. Every other platform's
  * field mapping is covered through the EDIT modal below, which renders for
  * whatever platform a stored channel says it is — including a row created
@@ -301,6 +346,20 @@ describe.each(PUBLISHABLE_PLATFORM_IDS)(
   },
 );
 
+it("explains the user token and community ID when VK is selected", async () => {
+  installHandlers([]);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "vk");
+  expect(screen.getByText(/VK user access token with wall permission/)).toBeInTheDocument();
+});
+
+it("explains MAX bot permissions when MAX is selected", async () => {
+  installHandlers([]);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await userEvent.setup().selectOptions(screen.getByRole("combobox"), "max");
+  expect(screen.getByText(/MAX bot token and the numeric chat or channel ID/)).toBeInTheDocument();
+});
+
 /**
  * The add form's credential fields are cleared when the platform changes —
  * otherwise a value typed under one platform resurfaces in a same-named field
@@ -308,8 +367,8 @@ describe.each(PUBLISHABLE_PLATFORM_IDS)(
  *
  * The pair this needs is two PUBLISHABLE platforms sharing a credential field
  * name, computed here rather than hard-coded. It used to be vk + mastodon, both
- * of which the picker now disables: while Telegram is the only adapter there is
- * no such pair, the switch this describes cannot be performed at all, and
+ * of which the picker once disabled: while no two publishable adapters share a
+ * credential field, the switch this describes cannot be performed at all, and
  * driving it with a `fireEvent` the browser would refuse would be theatre. So
  * the suite is generated — no pair, no suite — and the guard in the picker's
  * `onChange` comes back under test on its own the day a second publisher lands.
@@ -787,6 +846,90 @@ describe("BrandPage edit() — rotating credentials", () => {
  * `z.object()` strips unknown keys, so a renamed field would parse happily and
  * silently yield `{}`.
  */
+describe("BrandPage — brand profile", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows a translated refusal inside the profile editor", async () => {
+    const initial = {
+      id: "b1",
+      name: "Acme",
+      description: null,
+      voice: null,
+      audience: null,
+      contentLanguage: "en",
+    };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/") && init?.method === "PATCH") {
+        return jsonResponse(404, refusalBody(404, "brand_not_found", "Brand not found"));
+      }
+      if (url.includes("/api/brands/")) return jsonResponse(200, initial);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />, { locale: "ru" });
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: ru.Brands.profileEdit })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole("button", { name: ru.Brands.profileEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: ru.Brands.profileTitle }));
+    await user.click(dialog.getByRole("button", { name: ru.Brands.voiceSave }));
+
+    expect(await dialog.findByRole("alert")).toHaveTextContent(ru.Errors.brand_not_found);
+  });
+
+  it("edits the name and targeting description, then displays the stored response", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    const initial = {
+      id: "b1",
+      name: "Acme",
+      description: "Old targeting context",
+      voice: null,
+      audience: null,
+      contentLanguage: "en",
+    };
+    const stored = { ...initial, name: "Acme Studio", description: "Coffee for commuters" };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method, body: init?.body as string | undefined });
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.includes("/api/brands/") && method === "PATCH") return jsonResponse(200, stored);
+      if (url.includes("/api/brands/")) return jsonResponse(200, initial);
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Brands.profileEdit })).toBeEnabled(),
+    );
+    expect(screen.getByText("Old targeting context")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Brands.profileEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.profileTitle }));
+    expect(dialog.getByLabelText(en.Brands.nameLabel)).toHaveValue("Acme");
+    expect(dialog.getByLabelText(en.Brands.descriptionLabel)).toHaveValue("Old targeting context");
+    await user.clear(dialog.getByLabelText(en.Brands.nameLabel));
+    await user.type(dialog.getByLabelText(en.Brands.nameLabel), "Acme Studio");
+    await user.clear(dialog.getByLabelText(en.Brands.descriptionLabel));
+    await user.type(dialog.getByLabelText(en.Brands.descriptionLabel), "Coffee for commuters");
+    await user.click(dialog.getByRole("button", { name: en.Brands.voiceSave }));
+
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    const patch = calls.find((call) => call.method === "PATCH");
+    expect(patch?.url).toBe("/api/brands/b1");
+    const body = JSON.parse(patch?.body ?? "{}");
+    expect(body).toEqual({ name: "Acme Studio", description: "Coffee for commuters" });
+    // The create schema's language default also applies to its partial PATCH
+    // schema; keep that known addition while still detecting stripped fields.
+    expect(brandUpdateSchema.parse(body)).toEqual({ ...body, contentLanguage: "en" });
+    expect(await screen.findByText("Coffee for commuters")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Acme Studio" })).toBeInTheDocument();
+  });
+});
+
 describe("BrandPage — the brand's voice", () => {
   const VOICE = "Dry and concrete, never an exclamation mark";
   const AUDIENCE = "Independent cafe owners who roast their own beans";
@@ -931,6 +1074,42 @@ describe("BrandPage — the brand's voice", () => {
   });
 });
 
+describe("BrandPage — link policy", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows the opt-in rule and saves the configured website without publishing", async () => {
+    const calls: Array<{ method: string; body?: string }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, body: init?.body as string | undefined });
+      if (String(input).includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (String(input).includes("/api/brands/")) {
+        return jsonResponse(200, {
+          ...brand,
+          linkPolicy: method === "PATCH" ? JSON.parse(String(init?.body)).linkPolicy : null,
+        });
+      }
+      return jsonResponse(200, {});
+    });
+
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(await screen.findByText(en.Brands.linksUnset)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Brands.linksEdit }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.linksTitle }));
+    await user.type(dialog.getByLabelText(en.Brands.linksWebsite), "https://example.com");
+    await user.click(dialog.getByRole("button", { name: en.Brands.voiceSave }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    const patch = JSON.parse(calls.find((call) => call.method === "PATCH")?.body ?? "{}");
+    expect(brandUpdateSchema.parse(patch).linkPolicy).toEqual({
+      website: "https://example.com",
+      campaignTemplate: "cf_{content_type}_{YYYY_MM}",
+      platforms: {},
+    });
+    expect(await screen.findByText("https://example.com")).toBeInTheDocument();
+  });
+});
+
 /**
  * The platform picker offers only what Pubrick can actually deliver to.
  *
@@ -951,9 +1130,7 @@ describe("BrandPage — the platform picker", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  const unsupported = PLATFORM_IDS.filter(
-    (p) => !(PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(p),
-  );
+  const unsupported = PLATFORM_IDS.filter((p) => !isAvailablePlatform(p));
 
   it("has platforms to mark (this is what the API refuses)", () => {
     expect(unsupported.length).toBeGreaterThan(0);
@@ -968,6 +1145,29 @@ describe("BrandPage — the platform picker", () => {
       expect(option).toBeEnabled();
     });
   }
+
+  it("offers VC.ru as manual and submits no credential bag", async () => {
+    const requests: { url: string; body: string | undefined }[] = [];
+    installHandlers([], (url, init) => {
+      if (url.endsWith("/api/channels") && init?.method === "POST") {
+        requests.push({ url, body: init.body as string | undefined });
+        return jsonResponse(201, { id: "vc1", platform: "vc_ru", name: "VC blog" });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole("combobox"), "vc_ru");
+    expect(screen.getByText(en.Channels.vcManualHint)).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: en.Channels.namePlaceholder }), "VC blog");
+    await user.click(screen.getByRole("button", { name: en.Channels.add }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({
+      platform: "vc_ru",
+      name: "VC blog",
+    });
+    expect(JSON.parse(requests[0]?.body ?? "{}")).not.toHaveProperty("credentials");
+  });
 
   for (const platform of unsupported) {
     it(`names ${platform} but will not let it be chosen`, async () => {

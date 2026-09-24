@@ -76,6 +76,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   const fakeScripts = new Map<string, FakeTelegramBehaviour[]>();
   /** sendMessage requests whose BODY the fake server actually received. */
   const sendCounts = new Map<string, number>();
+  const vkRequests: URLSearchParams[] = [];
+  const maxRequests: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
 
   beforeAll(async () => {
     // Fake Telegram: a real HTTP server (not a mocked fetch) so the worker's own
@@ -83,6 +85,32 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // Keyed by chat_id so the two scenarios below (different channels, different
     // chat ids) can share one server instance for the whole describe block.
     server = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url?.startsWith("/messages?chat_id=")) {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          maxRequests.push({
+            url: req.url ?? "",
+            authorization: req.headers.authorization,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+          });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({ message: { body: { mid: "max_88" }, url: "https://max.ru/c/88" } }),
+          );
+        });
+        return;
+      }
+      if (req.method === "POST" && req.url === "/method/wall.post") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          vkRequests.push(new URLSearchParams(Buffer.concat(chunks).toString("utf8")));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ response: { post_id: 88 } }));
+        });
+        return;
+      }
       if (req.method !== "POST" || !req.url?.endsWith("/sendMessage")) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: false, error_code: 404, description: "not found" }));
@@ -126,6 +154,8 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     process.env.DATABASE_URL = url as string;
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     process.env.TELEGRAM_API_BASE_URL = `http://127.0.0.1:${port}`;
+    process.env.VK_API_BASE_URL = `http://127.0.0.1:${port}/method`;
+    process.env.MAX_API_BASE_URL = `http://127.0.0.1:${port}`;
 
     const dbModule = await import("@pubrick/db");
     schema = dbModule.schema;
@@ -325,6 +355,95 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // against. Assert the job itself, not just the row.
     const job = await waitForJobState(jobId);
     expect(job.state).toBe("completed");
+  }, 25_000);
+
+  it("publishes a VK community post through the real registry and records its wall link", async () => {
+    const { encryptJson } = await import("@pubrick/shared");
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "vk",
+        name: "VK community",
+        credentialsEncrypted: encryptJson(
+          { accessToken: "vk-e2e-token", groupId: "12345" },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Hello from VK", status: "approved" })
+      .returning({ id: schema.contentItems.id });
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId,
+        contentItemId: item?.id as string,
+        channelId: channel?.id as string,
+        status: "queued",
+      })
+      .returning({ id: schema.adaptations.id });
+    const adaptationId = adaptation?.id as string;
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null");
+
+    expect((await waitUntilLeftQueued(adaptationId)).status).toBe("published");
+    expect(await publicationFor(adaptationId)).toMatchObject({
+      status: "published",
+      externalId: "88",
+      externalUrl: "https://vk.com/wall-12345_88",
+    });
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    expect(vkRequests).toHaveLength(1);
+    expect(vkRequests[0]?.get("owner_id")).toBe("-12345");
+    expect(vkRequests[0]?.get("message")).toBe("Hello from VK");
+  }, 25_000);
+
+  it("publishes to MAX through the real registry and records its post link", async () => {
+    const { encryptJson } = await import("@pubrick/shared");
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "max",
+        name: "MAX channel",
+        credentialsEncrypted: encryptJson(
+          { accessToken: "max-e2e-token", chatId: "-12345" },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Hello from MAX", status: "approved" })
+      .returning({ id: schema.contentItems.id });
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId,
+        contentItemId: item?.id as string,
+        channelId: channel?.id as string,
+        status: "queued",
+      })
+      .returning({ id: schema.adaptations.id });
+    const adaptationId = adaptation?.id as string;
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null");
+
+    expect((await waitUntilLeftQueued(adaptationId)).status).toBe("published");
+    expect(await publicationFor(adaptationId)).toMatchObject({
+      status: "published",
+      externalId: "max_88",
+      externalUrl: "https://max.ru/c/88",
+    });
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+    expect(maxRequests).toHaveLength(1);
+    expect(maxRequests[0]?.url).toContain("chat_id=-12345");
+    expect(maxRequests[0]?.authorization).toBe("max-e2e-token");
+    expect(maxRequests[0]?.body).toEqual({ text: "Hello from MAX" });
   }, 25_000);
 
   it("never delivers a job whose content item was rejected", async () => {

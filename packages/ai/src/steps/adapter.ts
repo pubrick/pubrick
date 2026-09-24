@@ -144,7 +144,7 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
     schema,
     channelId: id,
     role: [
-      `You rewrite an approved post for one channel: ${name}, on ${platform}.`,
+      `You rewrite an approved draft for one channel: ${name}, on ${platform}.`,
       `The result must be at most ${limit} characters — characters, not words or tokens, counted including spaces, punctuation and any link.`,
       "Fitting the limit matters more than keeping every detail: cut the least important point rather than going over, and never end mid-sentence to make room.",
       "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make, and do not add hashtags or emoji unless the draft already uses them.",

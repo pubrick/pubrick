@@ -40,12 +40,35 @@ export {
   originMismatchMessage,
 } from "./deploy-origin.js";
 export * from "./dto/ai-credentials.js";
+export * from "./dto/analytics.js";
+export * from "./dto/api-keys.js";
+export * from "./dto/autopilot.js";
 export * from "./dto/brands.js";
+export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
+export * from "./dto/client-review.js";
 export * from "./dto/content.js";
+export * from "./dto/draft-revision.js";
+export * from "./dto/editorial-notes.js";
 export * from "./dto/errors.js";
+export * from "./dto/knowledge.js";
+export * from "./dto/media.js";
+export * from "./dto/memorable-dates.js";
+export * from "./dto/notifications.js";
+export {
+  PROMPT_ROLES,
+  type PromptRevisionCreate,
+  type PromptRevisionDto,
+  type PromptRole,
+  promptRevisionCreateSchema,
+  promptRevisionDtoSchema,
+  promptRoleSchema,
+} from "./dto/prompts.js";
 export * from "./dto/runs.js";
+export * from "./dto/source-extraction.js";
+export * from "./dto/sources.js";
 export * from "./dto/text.js";
+export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {
@@ -63,9 +86,35 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  RELEVANCE_DLQ,
+  RELEVANCE_QUEUE,
+  RELEVANCE_QUEUE_OPTIONS,
+  RELEVANCE_SCAN_QUEUE,
+  type RelevanceJob,
+  RSS_POLL_MIN_GAP_SECONDS,
+  RSS_POLL_OPTIONS,
+  RSS_POLL_QUEUE,
+  RSS_SCAN_QUEUE,
+  type RssPollJob,
+  RUN_ADMISSION_LOCK_NAMESPACE,
+  rssPollJobOptions,
   SCHEDULED_DISPATCH_WINDOW_SECONDS,
+  TELEGRAM_COMMENTS_OPTIONS,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
+  TOPIC_SUGGESTIONS_DLQ,
+  TOPIC_SUGGESTIONS_QUEUE,
+  TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
+  type TopicSuggestionsJob,
+  telegramCommentsJobOptions,
+  VK_METRICS_OPTIONS,
+  VK_METRICS_QUEUE,
+  VK_METRICS_SCAN_QUEUE,
+  type VkMetricsJob,
+  vkMetricsJobOptions,
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
+export * from "./link-policy-defaults.js";
 export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
 export {
   type AiVersionRow,

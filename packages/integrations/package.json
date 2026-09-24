@@ -19,7 +19,9 @@
     "test": "vitest run --reporter=dot"
   },
   "dependencies": {
+    "@bsky/sdk": "^1.1.4",
     "@pubrick/shared": "workspace:*",
+    "guarded-fetch": "^0.1.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
