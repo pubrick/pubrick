@@ -1,13 +1,28 @@
 import { Injectable } from "@nestjs/common";
-import type { UsageRecord } from "@pubrick/ai";
+import { KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
-import { toLedgerCostUsd } from "@pubrick/shared";
+import { decryptJson, parseStoredAiCredential, toLedgerCostUsd } from "@pubrick/shared";
 import { and, asc, desc, eq, gt, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
+import { env } from "../env";
 import type { FeedbackSignals } from "./feedback-adjustment";
 
 @Injectable()
 export class RelevanceRepository {
+  /** The relevance verdict provider can differ from the organization's Google BYOK key. */
+  async googleKey(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    return row
+      ? parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).apiKey
+      : undefined;
+  }
+
   /** Privileged scheduler scan; only unscored rows are picked, twenty per hour. */
   async unscored(afterId?: string) {
     return db
@@ -75,7 +90,13 @@ export class RelevanceRepository {
   async recentFeedback(orgId: string, brandId: string, itemId: string): Promise<FeedbackSignals> {
     const fetch = (signal: "relevant" | "irrelevant") =>
       db
-        .select({ title: schema.newsItems.title, summary: schema.newsItems.summary })
+        .select({
+          title: schema.newsItems.title,
+          summary: schema.newsItems.summary,
+          embedding: schema.newsItems.embedding,
+          embeddingModel: schema.newsItems.embeddingModel,
+          embeddingDimensions: schema.newsItems.embeddingDimensions,
+        })
         .from(schema.newsItems)
         .where(
           and(
@@ -100,6 +121,7 @@ export class RelevanceRepository {
       feedbackDelta: number;
       reason: string;
       urgency: "breaking" | "timely" | "evergreen";
+      embedding?: number[] | null;
     },
   ) {
     await db
@@ -112,6 +134,9 @@ export class RelevanceRepository {
         relevanceUrgency: result.urgency,
         relevanceErrorCode: null,
         relevanceScoredAt: new Date(),
+        embedding: result.embedding ?? null,
+        embeddingModel: result.embedding ? KNOWLEDGE_EMBEDDING_MODEL : null,
+        embeddingDimensions: result.embedding ? result.embedding.length : null,
       })
       .where(
         and(
@@ -184,6 +209,33 @@ export class RelevanceRepository {
       status: record.status,
       outcome: record.outcome,
       responseMs: record.responseMs,
+      keyOwnership: "byok",
+    });
+  }
+
+  /** A separate ledger entry is written for each physical Google embedding call. */
+  async recordEmbeddingUsage(
+    orgId: string,
+    tokens: number,
+    responseMs: number,
+    status: "ok" | "errored",
+    outcome: "completed" | "refused" | "unknown",
+  ) {
+    await db.insert(schema.usageLedger).values({
+      orgId,
+      step: "news_feedback_embedding",
+      provider: "google",
+      modelId: KNOWLEDGE_EMBEDDING_MODEL,
+      attempt: 1,
+      inputTokens: Number.isFinite(tokens) ? tokens : 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      costUsd: null,
+      costSource: "unknown",
+      status,
+      outcome,
+      responseMs,
       keyOwnership: "byok",
     });
   }

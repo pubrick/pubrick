@@ -34,20 +34,22 @@ physical model call to the usage ledger. The AI returns a 0–100% match, a shor
 reason, and an urgency label. The badge shows that raw AI score. On a newly
 scored article, Pubrick also compares its feed headline and summary with up to
 50 previously marked Relevant and 50 marked Irrelevant articles from the same
-organization and brand. A strong headline overlap adjusts its **ranking score**
-by at most 20 percentage points in either direction. Opposing matches cancel;
-unrelated marks have no effect. **Sort by relevance** and AI topic suggestions
+organization and brand. When the organization has a Google key, one bounded,
+separately metered Gemini embedding call stores a 768-dimensional vector for
+this article. Compatible vectors compare related phrasing by meaning; old rows
+without a vector use conservative headline matching. A strong match adjusts
+the **ranking score** by at most 20 percentage points in either direction.
+Opposing matches cancel; unrelated marks have no effect. **Sort by relevance** and AI topic suggestions
 use the ranking score. The API returns both `relevanceScore` (the raw AI score)
 and `rankScore` with `feedbackDelta` so the adjustment is inspectable. When
 feedback applies, the app shows the ranking score beside the raw AI badge.
 Changing a mark affects future scores only; existing scored articles
 are not silently rescored.
 
-This comparison is intentionally lexical. It recognizes sufficiently similar
-headlines, not semantic paraphrases, and can miss related articles. The
-reference implementation used 768-dimensional news embeddings; Pubrick does
-not currently index news vectors. This adjustment makes no additional provider
-call and does not train a model. Filter by scoring status in Recent articles.
+When no Google key is available, or an embedding call fails, the score still
+finishes with the existing lexical comparison. A failed embedding is recorded
+in the usage ledger; it does not train a model or change an editor's mark.
+Filter by scoring status in Recent articles.
 An unscored or failed article has no numeric score; a
 provider error is never shown as 0%. A failed score can be retried manually.
 The AI score is advisory and never changes the editor's Relevant/Irrelevant

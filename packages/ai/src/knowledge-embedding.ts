@@ -47,6 +47,7 @@ export async function embedKnowledgeText(
     model: createGoogleGenerativeAI({ apiKey }).embeddingModel(KNOWLEDGE_EMBEDDING_MODEL),
     value: text,
     maxRetries: 0,
+    abortSignal: AbortSignal.timeout(30_000),
     providerOptions: { google: { outputDimensionality: KNOWLEDGE_EMBEDDING_DIMENSIONS, taskType } },
   });
   if (!validVector(result.embedding)) {

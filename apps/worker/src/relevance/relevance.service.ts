@@ -1,12 +1,18 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   type AiCredential,
+  callOutcomeOf,
+  embedKnowledgeText,
   generateStructured,
+  KNOWLEDGE_EMBEDDING_DIMENSIONS,
+  KNOWLEDGE_EMBEDDING_MODEL,
   redactSecrets,
   resolveModel,
   runFailureOf,
 } from "@pubrick/ai";
 import {
+  isMalformedStoredAiCredential,
+  isUnreadableCiphertext,
   PermanentError,
   RELEVANCE_QUEUE,
   type RelevanceJob,
@@ -25,6 +31,7 @@ const verdictSchema = z.object({
 });
 
 type ModelFactory = (credential: AiCredential) => ReturnType<typeof resolveModel>;
+type Embedder = typeof embedKnowledgeText;
 
 @Injectable()
 export class RelevanceService {
@@ -33,6 +40,7 @@ export class RelevanceService {
     private readonly repo: RelevanceRepository,
     private readonly credentials: GenerateRepository,
     @Optional() private readonly buildModel: ModelFactory = resolveModel,
+    @Optional() private readonly embedText: Embedder = embedKnowledgeText,
   ) {}
 
   async handle(job: RelevanceJob): Promise<void> {
@@ -93,9 +101,69 @@ export class RelevanceService {
     }
     // A database error after a paid call is infrastructure failure, not a bad
     // model verdict. Let pg-boss retry rather than marking the article failed.
+    let embedding: number[] | undefined;
+    let googleKey: string | undefined;
+    try {
+      googleKey = await this.repo.googleKey(job.orgId);
+    } catch (error) {
+      if (!isUnreadableCiphertext(error) && !isMalformedStoredAiCredential(error)) throw error;
+      this.logger.warn(
+        `Google feedback credential unavailable for item ${job.itemId}; using headline matching`,
+      );
+    }
+    if (googleKey) {
+      const started = Date.now();
+      let result: Awaited<ReturnType<Embedder>> | undefined;
+      try {
+        result = await this.embedText(
+          googleKey,
+          `${input.title.slice(0, 500)}\n\n${input.summary.slice(0, 1500)}`,
+          "RETRIEVAL_DOCUMENT",
+        );
+      } catch (error) {
+        await this.repo.recordEmbeddingUsage(
+          job.orgId,
+          0,
+          Date.now() - started,
+          "errored",
+          callOutcomeOf(error),
+        );
+        this.logger.warn(
+          `News feedback embedding unavailable for item ${job.itemId}; using headline matching`,
+        );
+      }
+      if (result) {
+        await this.repo.recordEmbeddingUsage(
+          job.orgId,
+          result.tokens,
+          Date.now() - started,
+          "ok",
+          "completed",
+        );
+        if (
+          result.embedding.length === KNOWLEDGE_EMBEDDING_DIMENSIONS &&
+          result.embedding.every(Number.isFinite)
+        ) {
+          embedding = result.embedding;
+        } else {
+          this.logger.warn(
+            `News feedback embedding malformed for item ${job.itemId}; using headline matching`,
+          );
+        }
+      }
+    }
     await this.repo.scored(job.orgId, job.brandId, job.itemId, {
       ...verdict,
-      feedbackDelta: feedbackAdjustment(input, feedback),
+      feedbackDelta: feedbackAdjustment(
+        {
+          ...input,
+          embedding,
+          embeddingModel: embedding ? KNOWLEDGE_EMBEDDING_MODEL : null,
+          embeddingDimensions: embedding ? KNOWLEDGE_EMBEDDING_DIMENSIONS : null,
+        },
+        feedback,
+      ),
+      embedding,
     });
   }
 
