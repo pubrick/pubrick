@@ -2233,6 +2233,35 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       );
     }, 25_000);
 
+    it("uses a stored editorial snapshot only for the writer, without changing other steps", async () => {
+      const seeded = await seed({ channels: 1 });
+      const note = "FEEDBACK_MARKER prefer a calm opening";
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          input: {
+            kind: "brief",
+            text: BRIEF,
+            channelIds: seeded.channelIds,
+            useEditorialFeedback: true,
+            editorialFeedback: [{ id: "a61851c4-7fac-4a2a-9aa4-2dd0d77b854b", note }],
+          },
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      const script = scriptedModel();
+
+      await serviceFor(script).handle({
+        id: "job-editorial-feedback",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+
+      expect(script.calls.find((call) => call.role === "writer")?.user).toContain(note);
+      for (const call of script.calls) {
+        expect(call.system).not.toContain(note);
+        if (call.role !== "writer") expect(call.user).not.toContain(note);
+      }
+    }, 25_000);
+
     it.each([
       ["educational", "how-to", "how-to"],
       ["product_update", "product update", "release change"],

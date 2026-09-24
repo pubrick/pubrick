@@ -13,7 +13,7 @@ import {
   sourceRunInputSchema,
 } from "@pubrick/shared";
 import { MockLanguageModelV4 } from "ai/test";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -454,6 +454,189 @@ describe.skipIf(!url)("runs e2e", () => {
     await budget.pool.end();
     const capped = await agent.post("/api/runs").send(requestBody).expect(409);
     expect(capped.body.code).toBe("media_generation_limit");
+  });
+
+  it("keeps editorial feedback off by default and records an explicit empty opt-in", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const base = { brandId, brief: "A new announcement", channelIds: [channelId] };
+
+    const ordinary = runDetailDtoSchema.parse(
+      (await agent.post("/api/runs").send(base).expect(201)).body,
+    );
+    expect(ordinary.input).not.toHaveProperty("useEditorialFeedback");
+    expect(ordinary.input).not.toHaveProperty("editorialFeedback");
+
+    const optedIn = runDetailDtoSchema.parse(
+      (
+        await agent
+          .post("/api/runs")
+          .send({ ...base, useEditorialFeedback: true })
+          .expect(201)
+      ).body,
+    );
+    expect(optedIn.input).toMatchObject({
+      useEditorialFeedback: true,
+      editorialFeedback: [],
+    });
+    const listed = (await agent.get("/api/runs?state=open").expect(200)).body as Array<{
+      id: string;
+      input: Record<string, unknown>;
+    }>;
+    expect(listed.find((row) => row.id === optedIn.id)?.input).toMatchObject({
+      useEditorialFeedback: true,
+    });
+    expect(listed.every((row) => !("editorialFeedback" in row.input))).toBe(true);
+  });
+
+  it("snapshots at most five latest notes from this organization and brand in stable order", async () => {
+    const agent = await orgAgent();
+    const outsider = await orgAgent();
+    const own = await brandWithChannel(agent);
+    const otherBrand = await brandWithChannel(agent);
+    const foreign = await brandWithChannel(outsider);
+
+    async function noteFor(
+      owner: request.Agent,
+      brandId: string,
+      channelId: string,
+      body: string,
+      note: string,
+    ): Promise<string> {
+      const item = await owner
+        .post("/api/content")
+        .send({ brandId, channelIds: [channelId], body })
+        .expect(201);
+      const created = await owner
+        .post(`/api/content/${item.body.id}/editorial-notes`)
+        .send({ expectedBody: body, note })
+        .expect(201);
+      return created.body.id as string;
+    }
+
+    const ids: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      ids.push(
+        await noteFor(
+          agent,
+          own.brandId,
+          own.channelId,
+          `Draft ${i}`,
+          `Note ${i} ${"x".repeat(600)}`,
+        ),
+      );
+    }
+    await noteFor(agent, otherBrand.brandId, otherBrand.channelId, "Other brand", "Wrong brand");
+    await noteFor(outsider, foreign.brandId, foreign.channelId, "Other org", "Wrong org");
+
+    // Force a timestamp tie. Ordering must still be total through the UUID.
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    await db
+      .update(schema.editorialNotes)
+      .set({ createdAt: new Date("2026-01-01T00:00:00.000Z") })
+      .where(inArray(schema.editorialNotes.id, ids));
+    await pool.end();
+
+    const created = runDetailDtoSchema.parse(
+      (
+        await agent
+          .post("/api/runs")
+          .send({
+            brandId: own.brandId,
+            brief: "Learn from these notes",
+            channelIds: [own.channelId],
+            useEditorialFeedback: true,
+          })
+          .expect(201)
+      ).body,
+    );
+    expect(created.input.editorialFeedback?.map((entry) => entry.id)).toEqual(
+      ids.sort().reverse().slice(0, 5),
+    );
+    expect(created.input.editorialFeedback).toHaveLength(5);
+    expect(created.input.editorialFeedback?.every((entry) => entry.note.length === 500)).toBe(true);
+    const listed = (await agent.get("/api/runs?state=open").expect(200)).body as Array<{
+      id: string;
+      input: Record<string, unknown>;
+    }>;
+    expect(listed.find((row) => row.id === created.id)?.input).not.toHaveProperty(
+      "editorialFeedback",
+    );
+  });
+
+  it("retries an opted-in run with a fresh note snapshot and leaves its first receipt intact", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const item = await agent
+      .post("/api/content")
+      .send({ brandId, channelIds: [channelId], body: "Draft for feedback" })
+      .expect(201);
+    const notesPath = `/api/content/${item.body.id}/editorial-notes`;
+    const firstNote = await agent
+      .post(notesPath)
+      .send({ expectedBody: "Draft for feedback", note: "Use a clearer opening" })
+      .expect(201);
+    const original = runDetailDtoSchema.parse(
+      (
+        await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Write a post",
+            channelIds: [channelId],
+            useEditorialFeedback: true,
+          })
+          .expect(201)
+      ).body,
+    );
+    expect(original.input.editorialFeedback).toEqual([
+      { id: firstNote.body.id, note: "Use a clearer opening" },
+    ]);
+    const secondNote = await agent
+      .post(notesPath)
+      .send({ expectedBody: "Draft for feedback", note: "Specify the audience" })
+      .expect(201);
+    const retried = runDetailDtoSchema.parse(
+      (await agent.post(`/api/runs/${original.id}/retry`).expect(201)).body,
+    );
+    expect(retried.input.useEditorialFeedback).toBe(true);
+    expect(retried.input.editorialFeedback).toHaveLength(2);
+    expect(new Set(retried.input.editorialFeedback?.map((entry) => entry.id))).toEqual(
+      new Set([firstNote.body.id, secondNote.body.id]),
+    );
+    const firstReceipt = runDetailDtoSchema.parse(
+      (await agent.get(`/api/runs/${original.id}`).expect(200)).body,
+    );
+    expect(firstReceipt.input.editorialFeedback).toEqual(original.input.editorialFeedback);
+  });
+
+  it("keeps a valid JSONB snapshot when the note limit lands inside an emoji", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const item = await agent
+      .post("/api/content")
+      .send({ brandId, channelIds: [channelId], body: "Draft for Unicode feedback" })
+      .expect(201);
+    await agent
+      .post(`/api/content/${item.body.id}/editorial-notes`)
+      .send({ expectedBody: "Draft for Unicode feedback", note: `${"x".repeat(499)}😌` })
+      .expect(201);
+
+    const run = runDetailDtoSchema.parse(
+      (
+        await agent
+          .post("/api/runs")
+          .send({
+            brandId,
+            brief: "Write a post",
+            channelIds: [channelId],
+            useEditorialFeedback: true,
+          })
+          .expect(201)
+      ).body,
+    );
+    expect(run.input.editorialFeedback?.[0]?.note).toBe("x".repeat(499));
   });
 
   it("refuses a brand with no channels (400): a run with no channels produces an item with zero adaptations", async () => {

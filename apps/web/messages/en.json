@@ -505,6 +505,8 @@
     "sourceUrlLabel": "Source URL",
     "sourceUrlPlaceholder": "https://example.com/article (optional)",
     "sourceHelp": "Paste text, or fetch a public article and confirm its preview. Generation uses the saved text and does not revisit the link.",
+    "useEditorialFeedback": "Use recent editorial notes to guide style",
+    "useEditorialFeedbackHint": "Uses up to five recent notes for this brand to guide tone and style, never as factual sources. If there are no notes, generation continues normally.",
     "generateCover": "Generate a cover image for this draft",
     "generateCoverHint": "Usually uses one extra Gemini image call billed to your Google key; interruption or retry can make another billable call. The image is attached to the draft for review. Cost may be unknown.",
     "generateCoverNeedsGoogle": "Add a Google AI key in Settings to enable this option.",

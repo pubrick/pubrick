@@ -505,6 +505,8 @@
     "sourceUrlLabel": "URL da fonte",
     "sourceUrlPlaceholder": "https://example.com/artigo (opcional)",
     "sourceHelp": "Cole o texto ou carregue um artigo público e confirme a prévia. A geração usa o texto salvo e não acessa o link novamente.",
+    "useEditorialFeedback": "Usar notas editoriais recentes para orientar o estilo",
+    "useEditorialFeedbackHint": "Usa até cinco notas recentes desta marca para orientar o tom e o estilo, nunca como fontes de dados. Se não houver notas, a geração continua normalmente.",
     "generateCover": "Gerar uma imagem de capa para este rascunho",
     "generateCoverHint": "Normalmente usa uma chamada adicional ao Gemini cobrada na sua chave Google; uma interrupção ou nova tentativa pode gerar outra chamada faturável. A capa é anexada ao rascunho para revisão. O custo pode ser desconhecido.",
     "generateCoverNeedsGoogle": "Adicione uma chave Google AI nas Definições para ativar esta opção.",
