@@ -37,12 +37,16 @@ describe("brand calendar", () => {
     });
     await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
     expect(screen.getByText(en.Calendar.reviewHint)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText("Main")).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: en.Calendar.bulkOpenTopics })).toHaveAttribute(
+      "href",
+      "/en/brands/brand-1/topics",
+    );
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Main" })).toBeInTheDocument());
     const future = new Date(Date.now() + 2 * 86_400_000);
     const local = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, "0")}-${String(future.getDate()).padStart(2, "0")}T11:30`;
     fireEvent.change(screen.getByLabelText(en.Calendar.dateTime), { target: { value: local } });
     await userEvent.setup().type(screen.getByLabelText(en.Calendar.brief), "Opening day story");
-    await userEvent.setup().click(screen.getByLabelText("Main"));
+    await userEvent.setup().click(screen.getByRole("checkbox", { name: "Main" }));
     await userEvent
       .setup()
       .click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
@@ -82,7 +86,7 @@ describe("brand calendar", () => {
         expect(screen.getByRole("option", { name: "Approved topic" })).toBeInTheDocument(),
       );
       expect(screen.queryByLabelText(en.Calendar.brief)).not.toBeInTheDocument();
-      await userEvent.setup().click(screen.getByLabelText("Main"));
+      await userEvent.setup().click(screen.getByRole("checkbox", { name: "Main" }));
       await userEvent
         .setup()
         .click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
@@ -96,6 +100,159 @@ describe("brand calendar", () => {
     } finally {
       window.history.replaceState({}, "", "/");
     }
+  });
+
+  it("reviews each approved topic's time and channels before creating bulk slots", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: "channel-1", name: "Main", platform: "telegram" }]);
+      if (url.includes("/api/topics?"))
+        return jsonResponse([
+          { id: "topic-1", title: "Launch story", status: "approved" },
+          { id: "topic-2", title: "Founder interview", status: "approved" },
+          { id: "topic-3", title: "Unreviewed story", status: "draft" },
+        ]);
+      if (url.endsWith("/api/calendar/slots/bulk") && init?.method === "POST")
+        return jsonResponse([{ id: "slot-1" }, { id: "slot-2" }]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    await waitFor(() => expect(screen.getByLabelText("Launch story")).toBeInTheDocument());
+    expect(screen.queryByLabelText("Unreviewed story")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByLabelText("Launch story"));
+    await userEvent.setup().click(screen.getByLabelText("Founder interview"));
+    const first = new Date(Date.now() + 3 * 86_400_000);
+    const second = new Date(Date.now() + 4 * 86_400_000);
+    const local = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}T11:30`;
+    fireEvent.change(
+      screen.getByLabelText(en.Calendar.bulkDateForTopic.replace("{topic}", "Launch story")),
+      { target: { value: local(first) } },
+    );
+    fireEvent.change(
+      screen.getByLabelText(en.Calendar.bulkDateForTopic.replace("{topic}", "Founder interview")),
+      { target: { value: local(second) } },
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByLabelText(en.Calendar.bulkChannelLabel.replace("{channel}", "Main")));
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Calendar.bulkReview }));
+    expect(calls.some((call) => call.url.endsWith("/api/calendar/slots/bulk"))).toBe(false);
+    const dialog = screen.getByRole("dialog", { name: en.Calendar.bulkPreviewTitle });
+    expect(dialog).toHaveTextContent("Launch story");
+    expect(dialog).toHaveTextContent("Founder interview");
+    expect(dialog).toHaveTextContent("Main");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Calendar.bulkConfirm.replace("{count}", "2") }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.endsWith("/api/calendar/slots/bulk"))).toBe(true),
+    );
+    const posted = calls.find((call) => call.url.endsWith("/api/calendar/slots/bulk"));
+    expect(JSON.parse(String(posted?.init?.body))).toEqual({
+      brandId: "brand-1",
+      slots: [
+        {
+          topicId: "topic-1",
+          scheduledAt: new Date(local(first)).toISOString(),
+          channelIds: ["channel-1"],
+        },
+        {
+          topicId: "topic-2",
+          scheduledAt: new Date(local(second)).toISOString(),
+          channelIds: ["channel-1"],
+        },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        en.Calendar.bulkSuccess.replace("{count}", "2"),
+      ),
+    );
+  });
+
+  it("limits bulk selection to 20 approved topics", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/topics?"))
+        return jsonResponse(
+          Array.from({ length: 21 }, (_, index) => ({
+            id: `topic-${index + 1}`,
+            title: `Topic ${index + 1}`,
+            status: "approved",
+          })),
+        );
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    await waitFor(() => expect(screen.getByLabelText("Topic 21")).toBeInTheDocument());
+    const user = userEvent.setup();
+    for (let index = 1; index <= 20; index++) {
+      await user.click(screen.getByLabelText(`Topic ${index}`, { exact: true }));
+    }
+    expect(screen.getByLabelText("Topic 21")).toBeDisabled();
+    expect(
+      screen.getByText(
+        en.Calendar.bulkSelectedCount.replace("{count}", "20").replace("{limit}", "20"),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a rejected bulk plan editable and explains duplicate topics", async () => {
+    let bulkPosts = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/topics?"))
+        return jsonResponse([{ id: "topic-1", title: "Launch story", status: "approved" }]);
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: "channel-1", name: "Main", platform: "telegram" }]);
+      if (url.endsWith("/api/calendar/slots/bulk") && init?.method === "POST") {
+        bulkPosts += 1;
+        return {
+          ok: false,
+          status: 409,
+          statusText: "Conflict",
+          text: async () =>
+            JSON.stringify({
+              code: "calendar_topic_already_planned",
+              message: "Topic already planned",
+            }),
+        } as Response;
+      }
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    await waitFor(() => expect(screen.getByLabelText("Launch story")).toBeInTheDocument());
+    await userEvent.setup().click(screen.getByLabelText("Launch story"));
+    await userEvent
+      .setup()
+      .click(screen.getByLabelText(en.Calendar.bulkChannelLabel.replace("{channel}", "Main")));
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Calendar.bulkReview }));
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Calendar.bulkConfirm.replace("{count}", "1") }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(en.Errors.calendar_topic_already_planned),
+    );
+    expect(bulkPosts).toBe(1);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Calendar.cancel }));
+    expect(screen.getByLabelText("Launch story")).toBeChecked();
+    fireEvent.change(
+      screen.getByLabelText(en.Calendar.bulkDateForTopic.replace("{topic}", "Launch story")),
+      { target: { value: "2000-01-01T09:00" } },
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Calendar.bulkReview }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.Calendar.bulkInvalidDate);
+    expect(bulkPosts).toBe(1);
   });
 
   it("explains a due slot delayed by the generation cap", async () => {

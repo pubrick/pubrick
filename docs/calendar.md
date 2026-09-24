@@ -31,6 +31,15 @@ matches the complete snapshot. An archived, edited, or missing topic sets
 an approved topic to refresh the snapshot, or explicitly unlink it and write a
 custom brief. Editing a linked slot's brief without unlinking is refused.
 
+For a larger plan, editors can select up to 20 approved topics, set a future
+date and time for each, review the proposed rows, and confirm one bulk request.
+Every row uses channels from the same brand. The API validates the full batch
+and creates all slots in one transaction, so a conflict or stale topic leaves
+the calendar unchanged. A topic can appear only once in a batch. The bulk
+action also refuses a topic that already has a calendar slot; existing
+single-slot actions keep their current rules. This action creates planned draft
+generation slots; it does not start a run or approve publication.
+
 Deleting a topic with any linked calendar slot is refused, including after a
 slot starts. This preserves the original approval trail; remove unstarted
 slots or keep the topic as an archive. A started slot remains immutable.
@@ -70,6 +79,10 @@ primary Add action still plans a generation slot.
 - `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `channelIds`, optional
   `notes`, and either `brief` or an approved `topicId` in that brand. The API
   rejects a request containing both `topicId` and `brief`.
+- `POST /api/calendar/slots/bulk`: `brandId` and `slots` (1–20 entries with
+  `topicId`, `scheduledAt`, and `channelIds`). All topics must be distinct,
+  approved, and part of that brand. A failed row rejects the entire batch;
+  successful responses return the created slots.
 - `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
   `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
   snapshots the currently approved topic again.

@@ -30,8 +30,11 @@ type Slot = {
   errorCode: string | null;
   retryAfter: string | null;
 };
+type BulkRow = { topicId: string; dateInput: string };
 const FORM_ID = "calendar-add-slot";
 const EDIT_FORM_ID = "calendar-edit-slot";
+const BULK_FORM_ID = "calendar-bulk-slots";
+const BULK_LIMIT = 20;
 const WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 const pad = (n: number) => String(n).padStart(2, "0");
 function dayKey(date: Date): string {
@@ -39,6 +42,16 @@ function dayKey(date: Date): string {
 }
 function localInput(date: Date): string {
   return `${dayKey(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function nextBulkDate(rows: BulkRow[]): string {
+  const latest = Math.max(
+    Date.now(),
+    ...rows.map((row) => new Date(row.dateInput).getTime()).filter(Number.isFinite),
+  );
+  const date = new Date(latest);
+  date.setDate(date.getDate() + 1);
+  date.setHours(9, 0, 0, 0);
+  return localInput(date);
 }
 function monthStart(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -63,6 +76,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [brief, setBrief] = useState("");
   const [notes, setNotes] = useState("");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [bulkChannels, setBulkChannels] = useState<string[]>([]);
+  const [bulkPreview, setBulkPreview] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkSuccess, setBulkSuccess] = useState<number | null>(null);
   const [editing, setEditing] = useState<Slot | null>(null);
   const [removing, setRemoving] = useState<Slot | null>(null);
   const loadSequence = useRef(0);
@@ -101,6 +119,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       setChannels(channelRows);
       const approved = topicRows.filter((topic) => topic.status === "approved");
       setTopics(approved);
+      setBulkRows((current) =>
+        current.filter((row) => approved.some((topic) => topic.id === row.topicId)),
+      );
       setSelectedTopicId((current) =>
         current && !approved.some((topic) => topic.id === current) ? "" : current,
       );
@@ -227,6 +248,75 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         await load();
       }
       setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function toggleBulkTopic(topicId: string, checked: boolean) {
+    setBulkError(null);
+    setBulkSuccess(null);
+    setBulkRows((current) => {
+      if (!checked) return current.filter((row) => row.topicId !== topicId);
+      if (current.some((row) => row.topicId === topicId) || current.length >= BULK_LIMIT)
+        return current;
+      return [...current, { topicId, dateInput: nextBulkDate(current) }];
+    });
+  }
+  function reviewBulk(e: React.FormEvent) {
+    e.preventDefault();
+    setBulkError(null);
+    if (bulkRows.length === 0) {
+      setBulkError(t("bulkChooseTopic"));
+      return;
+    }
+    if (bulkChannels.length === 0) {
+      setBulkError(t("chooseChannel"));
+      return;
+    }
+    if (
+      bulkRows.some(
+        (row) =>
+          !Number.isFinite(new Date(row.dateInput).getTime()) ||
+          new Date(row.dateInput).getTime() <= Date.now(),
+      )
+    ) {
+      setBulkError(t("bulkInvalidDate"));
+      return;
+    }
+    setBulkPreview(true);
+  }
+  async function confirmBulk() {
+    if (busy || bulkRows.length === 0 || bulkChannels.length === 0) return;
+    setBusy(true);
+    setBulkError(null);
+    try {
+      const created = await api<Slot[]>("/api/calendar/slots/bulk", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId,
+          slots: bulkRows.map((row) => ({
+            topicId: row.topicId,
+            scheduledAt: new Date(row.dateInput).toISOString(),
+            channelIds: bulkChannels,
+          })),
+        }),
+      });
+      const firstDate = new Date(
+        Math.min(...bulkRows.map((row) => new Date(row.dateInput).getTime())),
+      );
+      setBulkPreview(false);
+      setBulkRows([]);
+      setBulkChannels([]);
+      setBulkSuccess(created.length);
+      setMonth(monthStart(firstDate));
+      setSelectedDay(dayKey(firstDate));
+      if (
+        firstDate.getMonth() === month.getMonth() &&
+        firstDate.getFullYear() === month.getFullYear()
+      )
+        await load();
+    } catch (err) {
+      setBulkError(describe(err));
     } finally {
       setBusy(false);
     }
@@ -495,6 +585,166 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           {fields(false)}
         </form>
       </Card>
+      <Card className="mt-6">
+        <h2 className="mb-2 text-lg font-semibold text-fg">{t("bulkTitle")}</h2>
+        <p className="mb-4 text-sm text-fg-secondary">{t("bulkIntro")}</p>
+        {bulkSuccess !== null && (
+          <p role="status" className="mb-4 text-sm text-fg-secondary">
+            {t("bulkSuccess", { count: bulkSuccess })}
+          </p>
+        )}
+        <form id={BULK_FORM_ID} onSubmit={reviewBulk} className="space-y-4" noValidate>
+          <fieldset className="rounded-card border border-border p-3">
+            <legend className="px-1 text-sm font-medium text-fg">{t("bulkTopics")}</legend>
+            <p className="mb-2 text-sm text-fg-secondary" aria-live="polite">
+              {t("bulkSelectedCount", { count: bulkRows.length, limit: BULK_LIMIT })}
+            </p>
+            {topics.length === 0 ? (
+              <div className="space-y-1 text-sm">
+                <p className="text-fg-secondary">{t("bulkNoTopics")}</p>
+                <Link
+                  href={`/${locale}/brands/${brandId}/topics`}
+                  className="inline-block min-h-11 content-center text-accent underline"
+                >
+                  {t("bulkOpenTopics")}
+                </Link>
+              </div>
+            ) : (
+              <div className="max-h-52 space-y-1 overflow-y-auto">
+                {topics.map((topic) => {
+                  const checked = bulkRows.some((row) => row.topicId === topic.id);
+                  return (
+                    <label
+                      key={topic.id}
+                      className="flex min-h-11 items-center gap-3 text-sm text-fg"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={busy || (!checked && bulkRows.length >= BULK_LIMIT)}
+                        onChange={(e) => toggleBulkTopic(topic.id, e.target.checked)}
+                      />
+                      <span>{topic.title}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+          {bulkRows.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-fg-secondary">{t("bulkDatesHint")}</p>
+              {bulkRows.map((row) => {
+                const topic = topics.find((item) => item.id === row.topicId);
+                return (
+                  <Input
+                    key={row.topicId}
+                    type="datetime-local"
+                    label={t("bulkDateForTopic", { topic: topic?.title ?? row.topicId })}
+                    value={row.dateInput}
+                    min={localInput(new Date())}
+                    onChange={(e) => {
+                      setBulkError(null);
+                      setBulkSuccess(null);
+                      setBulkRows((current) =>
+                        current.map((item) =>
+                          item.topicId === row.topicId
+                            ? { ...item, dateInput: e.target.value }
+                            : item,
+                        ),
+                      );
+                    }}
+                    required
+                  />
+                );
+              })}
+            </div>
+          )}
+          <fieldset className="rounded-card border border-border p-3">
+            <legend className="px-1 text-sm font-medium text-fg">{t("bulkChannels")}</legend>
+            <div className="flex flex-wrap gap-3">
+              {(channels ?? []).map((channel) => (
+                <label key={channel.id} className="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    aria-label={t("bulkChannelLabel", { channel: channel.name })}
+                    checked={bulkChannels.includes(channel.id)}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setBulkError(null);
+                      setBulkSuccess(null);
+                      setBulkChannels((current) =>
+                        e.target.checked
+                          ? [...current, channel.id]
+                          : current.filter((id) => id !== channel.id),
+                      );
+                    }}
+                  />
+                  {channel.name}
+                </label>
+              ))}
+            </div>
+            {channels?.length === 0 && (
+              <p className="text-sm text-fg-secondary">{t("noChannels")}</p>
+            )}
+          </fieldset>
+          <p className="text-xs text-fg-tertiary">{t("timezone", { zone: timezone })}</p>
+          {bulkError && !bulkPreview && (
+            <p role="alert" className="text-sm text-danger">
+              {bulkError}
+            </p>
+          )}
+          <Button type="submit" variant="secondary" disabled={busy || topics.length === 0}>
+            {t("bulkReview")}
+          </Button>
+        </form>
+      </Card>
+      <Modal
+        open={bulkPreview}
+        onClose={() => {
+          if (!busy) setBulkPreview(false);
+        }}
+        title={t("bulkPreviewTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setBulkPreview(false)} disabled={busy}>
+              {t("cancel")}
+            </Button>
+            <Button onClick={confirmBulk} disabled={busy}>
+              {t("bulkConfirm", { count: bulkRows.length })}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-fg-secondary">{t("bulkPreviewIntro")}</p>
+        <ol className="space-y-2">
+          {bulkRows.map((row) => (
+            <li key={row.topicId} className="rounded-card border border-border p-3 text-sm">
+              <p className="font-medium text-fg">
+                {topics.find((topic) => topic.id === row.topicId)?.title ?? row.topicId}
+              </p>
+              <p className="mt-1 text-fg-secondary">
+                {new Intl.DateTimeFormat(locale, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }).format(new Date(row.dateInput))}
+                {" · "}
+                {bulkChannels
+                  .map(
+                    (id) =>
+                      channels?.find((channel) => channel.id === id)?.name ?? t("missingChannel"),
+                  )
+                  .join(", ")}
+              </p>
+            </li>
+          ))}
+        </ol>
+        {bulkError && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {bulkError}
+          </p>
+        )}
+      </Modal>
       <Modal
         open={editing !== null}
         onClose={() => setEditing(null)}
