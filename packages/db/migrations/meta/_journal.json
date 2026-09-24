@@ -372,6 +372,13 @@
       "when": 1790256772998,
       "tag": "0053_tranquil_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790259089060,
+      "tag": "0054_cool_champions",
+      "breakpoints": true
     }
   ]
 }

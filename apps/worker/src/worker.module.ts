@@ -19,6 +19,7 @@ import { RssService } from "./rss/rss.service";
 import { TelegramReader } from "./rss/telegram.reader";
 import { SuggestionsRepository } from "./suggestions/suggestions.repository";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
   providers: [
@@ -42,6 +43,7 @@ import { SuggestionsService } from "./suggestions/suggestions.service";
     CommentsService,
     SuggestionsRepository,
     SuggestionsService,
+    WebhooksService,
   ],
 })
 export class WorkerModule {}
