@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -29,6 +30,7 @@ export const contentImageSlots = pgTable(
     afterParagraph: integer("after_paragraph").notNull(),
     alt: text("alt").notNull(),
     caption: text("caption"),
+    needsReview: boolean("needs_review").notNull().default(false),
   },
   (t) => [
     foreignKey({

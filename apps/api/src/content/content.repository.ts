@@ -4078,6 +4078,23 @@ export class ContentRepository {
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
       await requireClientReviewApproval(tx, orgId, id);
+      const [unreviewedImage] = await tx
+        .select({ id: schema.contentImageSlots.id })
+        .from(schema.contentImageSlots)
+        .where(
+          and(
+            eq(schema.contentImageSlots.orgId, orgId),
+            eq(schema.contentImageSlots.contentItemId, id),
+            eq(schema.contentImageSlots.needsReview, true),
+          ),
+        )
+        .limit(1);
+      if (unreviewedImage) {
+        throw conflict(
+          "content_images_need_review",
+          "Review the generated article images and their descriptions before approving",
+        );
+      }
       /*
        * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
        * ROW.

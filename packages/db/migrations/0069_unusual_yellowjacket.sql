@@ -1,0 +1,1 @@
+ALTER TABLE "content_image_slots" ADD COLUMN "needs_review" boolean DEFAULT false NOT NULL;

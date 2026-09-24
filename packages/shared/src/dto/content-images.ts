@@ -15,6 +15,8 @@ export const contentImagesReplaceSchema = z
   .strictObject({
     images: z.array(contentImageInputSchema).max(MAX_CONTENT_IMAGES),
     expectedRevision: z.number().int().nonnegative(),
+    /** Explicit acknowledgment of all retained generated illustrations. */
+    reviewGeneratedImages: z.literal(true).optional(),
   })
   .superRefine(({ images }, context) => {
     const seen = new Set<number>();
@@ -34,6 +36,7 @@ export type ContentImagesReplace = z.infer<typeof contentImagesReplaceSchema>;
 export const contentImageDtoSchema = contentImageInputSchema.extend({
   id: z.uuid(),
   caption: z.string().nullable(),
+  needsReview: z.boolean(),
 });
 export type ContentImageDto = z.infer<typeof contentImageDtoSchema>;
 

@@ -456,6 +456,63 @@ describe.skipIf(!url)("runs e2e", () => {
     expect(capped.body.code).toBe("media_generation_limit");
   });
 
+  it("reserves two inline image calls and preserves the opt-in on retry", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const requestBody = {
+      brandId,
+      brief: "An illustrated educational article",
+      contentType: "educational",
+      channelIds: [channelId],
+      generateInlineImages: true,
+    };
+    const denied = await agent.post("/api/runs").send(requestBody).expect(400);
+    expect(denied.body.code).toBe("inline_images_require_google_key");
+    await agent
+      .post("/api/runs")
+      .send({ ...requestBody, contentType: "social_post" })
+      .expect(400);
+
+    const { createDb, schema } = await import("@pubrick/db");
+    const { encryptJson, runDetailDtoSchema } = await import("@pubrick/shared");
+    const { db, pool } = createDb(url as string);
+    const orgId = await orgIdOfBrand(brandId);
+    await db.insert(schema.aiCredentials).values({
+      orgId,
+      provider: "google",
+      credentialsEncrypted: encryptJson(
+        { apiKey: "test-google-key" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    await pool.end();
+
+    const first = runDetailDtoSchema.parse(
+      (await agent.post("/api/runs").send(requestBody).expect(201)).body,
+    );
+    expect(first.input.generateInlineImages).toBe(true);
+    const retried = runDetailDtoSchema.parse(
+      (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+    );
+    expect(retried.input.generateInlineImages).toBe(true);
+
+    const budget = createDb(url as string);
+    await budget.db.insert(schema.usageLedger).values(
+      Array.from({ length: 8 }, () => ({
+        orgId,
+        step: "inline_image",
+        provider: "google" as const,
+        modelId: "gemini-3.1-flash-image",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      })),
+    );
+    await budget.pool.end();
+    const capped = await agent.post("/api/runs").send(requestBody).expect(409);
+    expect(capped.body.code).toBe("media_generation_limit");
+  });
+
   it("keeps editorial feedback off by default and records an explicit empty opt-in", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

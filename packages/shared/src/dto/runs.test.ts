@@ -302,6 +302,42 @@ describe("what a run may be asked for", () => {
     );
   });
 
+  it("admits generated inline images only for article formats", () => {
+    for (const contentType of [
+      "expert_article",
+      "comparison",
+      "case_study",
+      "educational",
+    ] as const) {
+      const body = {
+        ...base,
+        brief: "Illustrate the article",
+        contentType,
+        ...(contentType === "case_study" && { material: "Real case evidence." }),
+        generateInlineImages: true,
+      };
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    }
+    for (const contentType of [
+      undefined,
+      "social_post",
+      "news_digest",
+      "product_update",
+      "repost",
+    ] as const) {
+      const denied = runCreateSchema.safeParse({
+        ...base,
+        brief: "Illustrate the post",
+        contentType,
+        generateInlineImages: true,
+      });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toContainEqual([
+        "generateInlineImages",
+      ]);
+    }
+  });
+
   it("accepts material alone: a paste-only run has no brief to send", () => {
     const body = { ...base, material: "The article, pasted in full." };
     expect(runCreateSchema.parse(body)).toEqual(body);

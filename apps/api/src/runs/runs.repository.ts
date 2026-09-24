@@ -7,6 +7,7 @@ import {
   IMAGE_CALL_STEPS,
   isLiveRunStatus,
   LIVE_RUN_STATUSES,
+  MAX_AUTO_INLINE_IMAGES,
   MAX_CONCURRENT_RUNS,
   MAX_IMAGE_CALLS_PER_HOUR,
   RUN_ADMISSION_LOCK_NAMESPACE,
@@ -326,6 +327,8 @@ export class RunsRepository {
           "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
         );
       }
+    }
+    if (data.generateCover || data.generateInlineImages) {
       const google = await db
         .select({ id: schema.aiCredentials.id })
         .from(schema.aiCredentials)
@@ -335,8 +338,8 @@ export class RunsRepository {
         .limit(1);
       if (!google[0]) {
         throw badRequest(
-          "cover_requires_google_key",
-          "Add a Google AI key before requesting a cover",
+          data.generateCover ? "cover_requires_google_key" : "inline_images_require_google_key",
+          "Add a Google AI key before requesting generated images",
         );
       }
     }
@@ -354,7 +357,12 @@ export class RunsRepository {
    * this transaction holds any row lock (so it cannot participate in a
    * deadlock), and only ever contends with another create for the SAME org.
    */
-  private async admit(tx: Tx, orgId: string, generateCover = false): Promise<void> {
+  private async admit(
+    tx: Tx,
+    orgId: string,
+    generateCover = false,
+    generateInlineImages = false,
+  ): Promise<void> {
     await tx.execute(
       sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
     );
@@ -374,7 +382,9 @@ export class RunsRepository {
         `This organization already has ${MAX_CONCURRENT_RUNS} generation runs queued or running; wait for one to finish or cancel it`,
       );
     }
-    if (generateCover) {
+    const requestedImageCalls =
+      Number(generateCover) + (generateInlineImages ? MAX_AUTO_INLINE_IMAGES : 0);
+    if (requestedImageCalls > 0) {
       const spent = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(schema.usageLedger)
@@ -386,16 +396,20 @@ export class RunsRepository {
           ),
         );
       const reserved = await tx
-        .select({ count: sql<number>`count(*)::int` })
+        .select({
+          count: sql<number>`coalesce(sum((case when ${schema.pipelineRuns.input}->>'generateCover' = 'true' then 1 else 0 end) + (case when ${schema.pipelineRuns.input}->>'generateInlineImages' = 'true' then ${MAX_AUTO_INLINE_IMAGES} else 0 end)), 0)::int`,
+        })
         .from(schema.pipelineRuns)
         .where(
           and(
             eq(schema.pipelineRuns.orgId, orgId),
             inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
-            sql`${schema.pipelineRuns.input}->>'generateCover' = 'true'`,
           ),
         );
-      if ((spent[0]?.count ?? 0) + (reserved[0]?.count ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
+      if (
+        (spent[0]?.count ?? 0) + (reserved[0]?.count ?? 0) + requestedImageCalls >
+        MAX_IMAGE_CALLS_PER_HOUR
+      ) {
         throw conflict("media_generation_limit", "The hourly image generation limit is reached");
       }
     }
@@ -433,7 +447,7 @@ export class RunsRepository {
     const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
 
     const id = await db.transaction(async (tx) => {
-      await this.admit(tx, orgId, data.generateCover);
+      await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
       // Capture a bounded, deterministic by-value snapshot under the same
       // transaction as admission and enqueue. Both sides of the join carry the
       // tenant predicate; the item supplies the brand boundary.
@@ -481,6 +495,7 @@ export class RunsRepository {
                   text: brief as string,
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
+                  ...(data.generateInlineImages && { generateInlineImages: true }),
                   ...(data.useEditorialFeedback && {
                     useEditorialFeedback: true,
                     editorialFeedback,
@@ -494,6 +509,7 @@ export class RunsRepository {
                   material,
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
+                  ...(data.generateInlineImages && { generateInlineImages: true }),
                   ...(data.useEditorialFeedback && {
                     useEditorialFeedback: true,
                     editorialFeedback,
@@ -559,6 +575,7 @@ export class RunsRepository {
         brandId: row.brandId,
         contentType: stored.contentType,
         generateCover: stored.generateCover,
+        generateInlineImages: stored.generateInlineImages,
         useEditorialFeedback: stored.useEditorialFeedback,
         brief: stored.text ?? undefined,
         ...(stored.kind === "source"

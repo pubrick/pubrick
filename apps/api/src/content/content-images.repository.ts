@@ -11,6 +11,7 @@ const COLUMNS = {
   afterParagraph: schema.contentImageSlots.afterParagraph,
   alt: schema.contentImageSlots.alt,
   caption: schema.contentImageSlots.caption,
+  needsReview: schema.contentImageSlots.needsReview,
 };
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -139,6 +140,22 @@ export class ContentImagesRepository {
         }
       }
 
+      const existing = await tx
+        .select({
+          mediaId: schema.contentImageSlots.mediaId,
+          afterParagraph: schema.contentImageSlots.afterParagraph,
+          needsReview: schema.contentImageSlots.needsReview,
+        })
+        .from(schema.contentImageSlots)
+        .where(
+          and(
+            eq(schema.contentImageSlots.orgId, orgId),
+            eq(schema.contentImageSlots.contentItemId, contentItemId),
+          ),
+        );
+      const pending = new Set(
+        existing.filter((slot) => slot.needsReview).map((slot) => slot.mediaId),
+      );
       await tx
         .delete(schema.contentImageSlots)
         .where(
@@ -157,6 +174,7 @@ export class ContentImagesRepository {
             afterParagraph: image.afterParagraph,
             alt: image.alt,
             caption: image.caption || null,
+            needsReview: !data.reviewGeneratedImages && pending.has(image.mediaId),
           })),
         );
       }

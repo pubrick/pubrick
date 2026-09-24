@@ -477,6 +477,13 @@
       "when": 1790290651328,
       "tag": "0068_elite_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790291817304,
+      "tag": "0069_unusual_yellowjacket",
+      "breakpoints": true
     }
   ]
 }

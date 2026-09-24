@@ -244,6 +244,50 @@ describe.skipIf(!url)("article image slots e2e", () => {
     await owner.get(uri).expect(404);
   });
 
+  it("requires explicit review of generated images before approval", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Illustrated article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const image = await upload(owner, brand.body.id);
+    const uri = `/api/content/${item.body.id}/images`;
+    await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId: image.body.id, afterParagraph: 0, alt: "Draft description" }],
+      })
+      .expect(200);
+    await direct.db
+      .update(schema.contentImageSlots)
+      .set({ needsReview: true })
+      .where(eq(schema.contentImageSlots.contentItemId, item.body.id));
+
+    const before = await owner.get(uri).expect(200);
+    expect(before.body.images[0].needsReview).toBe(true);
+    const refusal = await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(409);
+    expect(refusal.body.code).toBe("content_images_need_review");
+
+    const noAcknowledgment = await owner
+      .put(uri)
+      .send({
+        expectedRevision: before.body.revision,
+        images: [{ mediaId: image.body.id, afterParagraph: 1, alt: "Reviewed description" }],
+      })
+      .expect(200);
+    expect(noAcknowledgment.body.images[0].needsReview).toBe(true);
+    expect(noAcknowledgment.body.images[0].afterParagraph).toBe(1);
+    const acknowledged = await owner
+      .put(uri)
+      .send({
+        expectedRevision: noAcknowledgment.body.revision,
+        reviewGeneratedImages: true,
+        images: [{ mediaId: image.body.id, afterParagraph: 1, alt: "Reviewed description" }],
+      })
+      .expect(200);
+    expect(acknowledged.body.images[0].needsReview).toBe(false);
+    await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(200);
+  });
+
   it("refuses a stale whole-set save without erasing another editor's images", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Editors" }).expect(201);
