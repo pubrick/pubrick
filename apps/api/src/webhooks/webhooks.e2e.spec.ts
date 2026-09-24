@@ -106,8 +106,25 @@ describe.skipIf(!url)("outgoing webhook management", () => {
       .update(schema.webhookDeliveries)
       .set({ status: "attempting", attempts: 1 })
       .where(eq(schema.webhookDeliveries.publicationId, second.id));
+    const foreign = await owner();
+    await foreign.agent
+      .post("/api/webhooks")
+      .send({ name: "Foreign", url: "https://hooks.example.com/foreign" })
+      .expect(201);
+    const [foreignPublication] = await connection.db
+      .insert(schema.publications)
+      .values({ orgId: foreign.orgId, status: "failed" })
+      .returning({ id: schema.publications.id });
+    if (!foreignPublication) throw new Error("Foreign publication fixture missing");
     const history = await agent.get("/api/webhooks/deliveries").expect(200);
     expect(history.body).toHaveLength(2);
+    expect(history.body.map((row: { publicationId: string }) => row.publicationId)).not.toContain(
+      foreignPublication.id,
+    );
+    const foreignHistory = await foreign.agent.get("/api/webhooks/deliveries").expect(200);
+    expect(foreignHistory.body.map((row: { publicationId: string }) => row.publicationId)).toEqual([
+      foreignPublication.id,
+    ]);
     expect(JSON.stringify(history.body)).not.toContain("private-capability");
     expect(JSON.stringify(history.body)).not.toContain(created.body.secret);
 

@@ -110,6 +110,17 @@ function justAfter(createdAt: string): string {
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
   {
+    controller: "webhooks",
+    identify: id,
+    seed: async (agent) => {
+      const webhook = await agent
+        .post("/api/webhooks")
+        .send({ name: "Tenant list ratchet", url: "https://hooks.example.com/pubrick" })
+        .expect(201);
+      return { id: webhook.body.id as string, paths: ["/api/webhooks"] };
+    },
+  },
+  {
     controller: "api-keys",
     identify: id,
     seed: async (agent) => {
