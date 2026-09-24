@@ -2,11 +2,12 @@
 
 Pubrick prepares and reviews a VC.ru article, but a person publishes it in the
 VC.ru editor. The old Content Factory called an undocumented Osnova endpoint at
-`api.vc.ru/v2.8/entry/create`. Pubrick does not call that endpoint: the former
-[Osnova API documentation](https://cmtt-ru.github.io/osnova-api/swaggerui/index.html)
-describes an older API version, and its [source repository](https://github.com/cmtt-ru/osnova-api)
-is no longer available. VC.ru's current [help page](https://vc.ru/support)
-describes writing and publishing through its editor.
+`api.vc.ru/v2.8/entry/create`. Its JSON `entry` payload differs from the
+multipart fields in the published [v1 API schema](https://cmtt-ru.github.io/osnova-api/v1/api.yaml),
+while the published [v2.31 schema](https://cmtt-ru.github.io/osnova-api/v2.31/api.yaml)
+does not list `entry/create`. Neither confirms the old v2.8 contract works
+today. VC.ru's current [help page](https://vc.ru/support) describes writing
+and publishing through its editor, so Pubrick keeps this step manual.
 
 ## Workflow
 
