@@ -35,6 +35,7 @@ import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
+import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
 import { MetricsService } from "./metrics/metrics.service";
 import { NotificationsService } from "./notifications/notifications.service";
 import { PublishService } from "./publish/publish.service";
@@ -133,6 +134,7 @@ export class QueueService {
     @Optional() private readonly autopilot?: AutopilotService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -161,6 +163,14 @@ export class QueueService {
       await boss.schedule("notification-digest-scan", "*/5 * * * *");
       await boss.work("notification-digest-scan", { batchSize: 1 }, async () =>
         this.notifications?.scanDigests(),
+      );
+    }
+
+    if (this.knowledgeAutoIndex && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("knowledge-auto-index-scan");
+      await boss.schedule("knowledge-auto-index-scan", "0 * * * *");
+      await boss.work("knowledge-auto-index-scan", { batchSize: 1 }, async () =>
+        this.knowledgeAutoIndex?.scan(),
       );
     }
 

@@ -5,6 +5,8 @@ import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateRepository } from "./generate/generate.repository";
 import { GenerateService } from "./generate/generate.service";
+import { KnowledgeAutoIndexRepository } from "./knowledge/knowledge-auto-index.repository";
+import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
 import { MetricsService } from "./metrics/metrics.service";
 import { NotificationsService } from "./notifications/notifications.service";
 import { PublishRepository } from "./publish/publish.repository";
@@ -26,6 +28,8 @@ import { SuggestionsService } from "./suggestions/suggestions.service";
     PublishService,
     GenerateRepository,
     GenerateService,
+    KnowledgeAutoIndexRepository,
+    KnowledgeAutoIndexService,
     MetricsService,
     NotificationsService,
     RssRepository,

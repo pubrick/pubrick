@@ -449,4 +449,51 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .where(eq(schema.usageLedger.orgId, orgId));
     expect(ledger).toEqual([{ step: "knowledge_batch_index", status: "errored" }]);
   });
+
+  it("keeps background indexing off until an owner enables it for this brand", async () => {
+    const { agent, orgId } = await orgAgent();
+    const { agent: outsider } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Auto" }).expect(201);
+    expect(
+      (await agent.get(`/api/knowledge/auto-index?brandId=${brand.body.id}`).expect(200)).body,
+    ).toEqual({ enabled: false, lastAttemptAt: null });
+    await outsider.get(`/api/knowledge/auto-index?brandId=${brand.body.id}`).expect(404);
+    await outsider
+      .patch("/api/knowledge/auto-index")
+      .send({ brandId: brand.body.id, enabled: true })
+      .expect(404);
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.organizationId, orgId));
+    await agent
+      .patch("/api/knowledge/auto-index")
+      .send({ brandId: brand.body.id, enabled: true })
+      .expect(403);
+    await db
+      .update(schema.member)
+      .set({ role: "owner" })
+      .where(eq(schema.member.organizationId, orgId));
+    expect(
+      (
+        await agent
+          .patch("/api/knowledge/auto-index")
+          .send({ brandId: brand.body.id, enabled: true })
+          .expect(200)
+      ).body.enabled,
+    ).toBe(true);
+    expect(
+      (await agent.get(`/api/knowledge/auto-index?brandId=${brand.body.id}`).expect(200)).body
+        .enabled,
+    ).toBe(true);
+    expect(
+      (
+        await agent
+          .patch("/api/knowledge/auto-index")
+          .send({ brandId: brand.body.id, enabled: false })
+          .expect(200)
+      ).body.enabled,
+    ).toBe(false);
+    expect(embedKnowledgeBatch).not.toHaveBeenCalled();
+  });
 });

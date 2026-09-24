@@ -88,7 +88,7 @@ previous Ozon Tools database or copy its vectors. Reindex active notes in
 Pubrick after import if semantic search is needed.
 
 Imported notes are searchable by text immediately. They do not get embeddings
-automatically. An organization owner or admin can click **Index next 10** to
+automatically by default. An organization owner or admin can click **Index next 10** to
 index up to ten active, unindexed notes in one explicit Google request. Repeat
 the click to continue. The page shows how many notes remain and the outcome of
 the most recent batch. Paused notes are skipped. Each click uses the
@@ -100,6 +100,18 @@ Malformed vectors remain unindexed and can be retried. A provider failure
 leaves notes searchable by text. No indexing request is made by CSV import.
 If Google does not confirm a result, the ledger records an unknown outcome;
 the page warns that the call might still have been billed before a retry.
+
+An owner or admin can opt a brand into **Automatic vector indexing** on its
+knowledge page. The worker scans hourly, handles at most ten eligible brands
+per scan, and makes at most one ten-note Gemini batch per brand each day. It
+records the 24-hour interval before provider I/O, including when an outcome
+is unknown, so a worker restart does not immediately repeat a possibly paid
+call. Automatic and manual requests share the same per-brand advisory lock.
+Turning the setting off stops future batches. The worker uses only the
+organization's stored Google key; notes remain available through text search
+when a key is missing or a provider attempt fails. Brands without a Google
+key are skipped without consuming their daily attempt; after the key is saved,
+they become eligible on the next hourly scan.
 The schema fixes all stored vectors at 768 dimensions. Each indexed note stores
 its embedding model and dimensions; the migration labels existing vectors with
 the only model previously used, `gemini-embedding-001`. Vector retrieval accepts
@@ -132,6 +144,10 @@ available.
   validated entries and returns `{created, ids}`.
 - `GET /api/knowledge/index-summary?brandId=<uuid>` returns the count of active,
   unindexed notes.
+- `GET /api/knowledge/auto-index?brandId=<uuid>` returns `{enabled, lastAttemptAt}`;
+  absent configuration reads as disabled.
+- `PATCH /api/knowledge/auto-index` accepts `{brandId, enabled}` from an
+  organization owner or admin. It changes only that brand's opt-in setting.
 - `POST /api/knowledge/index-batch` accepts `{brandId}` from an organization
   owner or admin. It returns counts for selected, indexed, changed, invalid,
   and remaining notes; the optional reason; `usageRecorded`, `tokensKnown`,

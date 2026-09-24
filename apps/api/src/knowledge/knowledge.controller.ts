@@ -11,10 +11,12 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type KnowledgeAutoIndex,
   type KnowledgeBatchIndex,
   type KnowledgeCreate,
   type KnowledgeImport,
   type KnowledgeUpdate,
+  knowledgeAutoIndexSchema,
   knowledgeBatchIndexSchema,
   knowledgeCreateSchema,
   knowledgeImportSchema,
@@ -68,6 +70,20 @@ export class KnowledgeController {
     @Body(new ZodValidationPipe(knowledgeBatchIndexSchema)) data: KnowledgeBatchIndex,
   ) {
     return this.service.indexBatch(orgId, data.brandId);
+  }
+
+  @Get("auto-index")
+  autoIndex(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.entries.autoIndexConfig(orgId, brandId);
+  }
+
+  @Patch("auto-index")
+  @UseGuards(KnowledgeIndexOwnerGuard)
+  setAutoIndex(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(knowledgeAutoIndexSchema)) data: KnowledgeAutoIndex,
+  ) {
+    return this.entries.setAutoIndexConfig(orgId, data.brandId, data.enabled);
   }
 
   @Get(":id")

@@ -49,3 +49,20 @@ export const knowledgeEntries = pgTable(
     ),
   ],
 );
+
+/** Explicit per-brand consent and a durable cooldown for paid background indexing. */
+export const knowledgeAutoIndex = pgTable(
+  "knowledge_auto_index",
+  {
+    brandId: uuid("brand_id")
+      .primaryKey()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(false),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("knowledge_auto_index_org_enabled_idx").on(t.orgId, t.enabled)],
+);

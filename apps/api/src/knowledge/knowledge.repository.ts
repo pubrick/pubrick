@@ -104,6 +104,47 @@ export class KnowledgeRepository {
     return row?.count ?? 0;
   }
 
+  async autoIndexConfig(orgId: string, brandId: string) {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    const [config] = await db
+      .select({
+        enabled: schema.knowledgeAutoIndex.enabled,
+        lastAttemptAt: schema.knowledgeAutoIndex.lastAttemptAt,
+      })
+      .from(schema.knowledgeAutoIndex)
+      .where(
+        and(
+          eq(schema.knowledgeAutoIndex.orgId, orgId),
+          eq(schema.knowledgeAutoIndex.brandId, brandId),
+        ),
+      )
+      .limit(1);
+    return config ?? { enabled: false, lastAttemptAt: null };
+  }
+
+  async setAutoIndexConfig(orgId: string, brandId: string, enabled: boolean) {
+    await this.autoIndexConfig(orgId, brandId);
+    const [config] = await db
+      .insert(schema.knowledgeAutoIndex)
+      .values({ orgId, brandId, enabled })
+      .onConflictDoUpdate({
+        target: schema.knowledgeAutoIndex.brandId,
+        set: { enabled, updatedAt: new Date() },
+        setWhere: eq(schema.knowledgeAutoIndex.orgId, orgId),
+      })
+      .returning({
+        enabled: schema.knowledgeAutoIndex.enabled,
+        lastAttemptAt: schema.knowledgeAutoIndex.lastAttemptAt,
+      });
+    if (!config) throw notFound("brand_not_found", "Brand not found");
+    return config;
+  }
+
   async setBatchEmbedding(
     orgId: string,
     brandId: string,
