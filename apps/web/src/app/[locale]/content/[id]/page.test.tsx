@@ -3582,6 +3582,42 @@ describe("a post whose channels disagreed", () => {
 });
 
 describe("VC.ru manual publication", () => {
+  it("refuses a package if another editor withdrew manual approval before the click", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
+    const current = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Reviewed VC article." })],
+    });
+    const served = { current };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, undefined, [manualChannel]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const download = await within(resultsList()).findByRole("button", {
+      name: en.Publish.downloadVcPackage,
+    });
+    served.current = makeItem({
+      ...current,
+      status: "rejected",
+      adaptations: [makeAdaptation({ status: "pending", body: "Changed in another tab." })],
+    });
+    const beforeDownload = calls.length;
+
+    await userEvent.setup().click(download);
+
+    expect(await screen.findByText(en.Publish.vcPackageNotReady)).toHaveAttribute("role", "alert");
+    expect(
+      calls
+        .slice(beforeDownload)
+        .filter((call) => ["/api/content/c1/images", "/api/content/c1"].includes(call.path))
+        .map((call) => call.path),
+    ).toEqual(["/api/content/c1/images", "/api/content/c1"]);
+    expect(mockApi).toHaveBeenCalledWith("/api/content/c1", { cache: "no-store" });
+    expect(
+      within(resultsList()).queryByRole("button", { name: en.Publish.downloadVcPackage }),
+    ).toBeNull();
+  });
+
   it("exports the reviewed override and records a user-supplied URL only after approval", async () => {
     const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
     const current = makeItem({

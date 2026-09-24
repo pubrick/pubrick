@@ -1,6 +1,10 @@
 "use client";
 
-import type { AdaptationProposal, DraftRevisionProposal } from "@pubrick/shared";
+import type {
+  AdaptationProposal,
+  ContentImagesState,
+  DraftRevisionProposal,
+} from "@pubrick/shared";
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -46,6 +50,7 @@ import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
 import { SourceStrip } from "./source-strip";
+import { buildVcPackage } from "./vc-package";
 import { VersionHistory } from "./version-history";
 
 type Channel = { id: string; platform: string; name: string };
@@ -303,6 +308,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [manualUrlDrafts, setManualUrlDrafts] = useState<Record<string, string>>({});
   const [manualBusy, setManualBusy] = useState<string | null>(null);
   const [copiedManualField, setCopiedManualField] = useState<string | null>(null);
+  const [vcPackageBusy, setVcPackageBusy] = useState<string | null>(null);
+  const [vcPackageReady, setVcPackageReady] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -827,6 +834,65 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setCopiedManualField(key);
     } catch {
       setActionError(t("copyFailed"));
+    }
+  }
+
+  async function downloadVcPackage(adaptation: Adaptation, currentItem: ContentItem) {
+    if (vcPackageBusy) return;
+    setVcPackageBusy(adaptation.id);
+    setVcPackageReady(null);
+    setActionError(null);
+    try {
+      // Fetch the saved slots at click time: the inline editor can save them
+      // independently of this page's item poll.
+      const state = await api<ContentImagesState>(`/api/content/${currentItem.id}/images`, {
+        cache: "no-store",
+      });
+      // Manual-ready items stop polling. Re-read the item last so another tab's
+      // Reject/Edit cannot leave this package using a withdrawn adaptation.
+      const latest = await api<ContentItem>(`/api/content/${currentItem.id}`, {
+        cache: "no-store",
+      });
+      const latestAdaptation = latest.adaptations.find(
+        (candidate) => candidate.id === adaptation.id,
+      );
+      const channel = channels.find((candidate) => candidate.id === adaptation.channelId);
+      if (
+        latest.id !== currentItem.id ||
+        latest.brandId !== currentItem.brandId ||
+        !latestAdaptation ||
+        latestAdaptation.channelId !== adaptation.channelId ||
+        latestAdaptation.status !== "manual_ready" ||
+        channel?.platform !== "vc_ru"
+      ) {
+        applyToItem(() => latest);
+        setActionError(t("vcPackageNotReady"));
+        return;
+      }
+      const payload = await buildVcPackage({
+        title: latest.title || tc("untitled"),
+        body: latestAdaptation.body ?? latest.body,
+        masterBody: latest.body,
+        coverMediaId: latest.coverMediaId,
+        images: state.images,
+      });
+      const url = URL.createObjectURL(new Blob([payload], { type: "application/zip" }));
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `pubrick-vc-${latest.id}.zip`;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      setVcPackageReady(adaptation.id);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.noActiveOrg) handleError(cause);
+      else setActionError(errorMessage(cause, t("vcPackageFailed"), te));
+    } finally {
+      setVcPackageBusy(null);
     }
   }
 
@@ -1910,6 +1976,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     >
                       {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
                     </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => downloadVcPackage(a, item)}
+                      disabled={vcPackageBusy !== null}
+                    >
+                      {vcPackageBusy === a.id ? t("vcPackageWorking") : t("downloadVcPackage")}
+                    </Button>
                     <a
                       href="https://vc.ru/"
                       target="_blank"
@@ -1919,6 +1993,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       {t("openVc")}
                     </a>
                   </div>
+                  {vcPackageReady === a.id && (
+                    <p role="status" className="text-sm text-fg-secondary">
+                      {t("vcPackageReady")}
+                    </p>
+                  )}
                   <Input
                     type="url"
                     label={t("vcUrlLabel")}
