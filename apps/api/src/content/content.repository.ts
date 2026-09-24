@@ -41,6 +41,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
+import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 import { ReadaptCaller } from "./readapt.caller";
@@ -3612,6 +3613,7 @@ export class ContentRepository {
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
+      await requireClientReviewApproval(tx, orgId, id);
       /*
        * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
        * ROW.

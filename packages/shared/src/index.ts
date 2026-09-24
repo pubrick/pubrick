@@ -45,6 +45,7 @@ export * from "./dto/autopilot.js";
 export * from "./dto/brands.js";
 export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
+export * from "./dto/client-review.js";
 export * from "./dto/content.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";
