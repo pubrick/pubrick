@@ -5,6 +5,23 @@ admin saves the brand's channels, IANA time zone, earliest local hour, quiet
 window, daily run quota (1–5), and daily USD spend threshold. The default is off.
 The `autopilot-scan` pg-boss job checks enabled brands every five minutes.
 
+## Daily topic ideas
+
+**Suggest topics daily** is a separate, default-off brand setting. It does not
+enable draft generation. After 09:00 in the brand's configured IANA time zone,
+the worker can queue one suggestion request per local day using the
+organization's configured AI key. The request yields up to three ideas, charges
+at most one physical model call, and is skipped if there is no key or at least three AI
+ideas already awaiting review. A failed daily attempt is not retried at the
+provider; an owner can still request suggestions manually from the Topic bank
+after the normal 30-minute request cooldown.
+
+Suggested topics remain **Idea**. An editor reviews and approves them before
+generation, and chooses dates and channels through the calendar's reviewed bulk
+planning form. This setting creates no calendar slots, drafts, or publications.
+The generation spend threshold below covers generation runs; topic suggestion
+calls are recorded separately in the organization usage ledger.
+
 Only an editor-approved topic can be dispatched. The worker takes the same
 organization admission lock as manual and calendar generation, checks the
 brand's settings again, and writes the run, immutable topic-to-run dispatch

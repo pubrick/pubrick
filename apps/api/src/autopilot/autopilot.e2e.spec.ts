@@ -61,6 +61,7 @@ describe.skipIf(!url)("autopilot API", () => {
     const configUrl = `/api/brands/${brand.body.id}/autopilot`;
     const initial = await owner.agent.get(configUrl).expect(200);
     expect(initial.body.enabled).toBe(false);
+    expect(initial.body.autoSuggestTopics).toBe(false);
     await other.agent.get(configUrl).expect(404);
     await other.agent.get(`${configUrl}/history`).expect(404);
     const payload = {
@@ -77,6 +78,21 @@ describe.skipIf(!url)("autopilot API", () => {
     expect(autopilotConfigSchema.parse(payload)).toEqual(payload);
     await owner.agent
       .put(configUrl)
+      .send({ ...payload, autoSuggestTopics: undefined })
+      .expect(200);
+    const suggestionsOnly = {
+      ...initial.body,
+      autoSuggestTopics: true,
+    };
+    await owner.agent.put(configUrl).send(suggestionsOnly).expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body).toEqual(suggestionsOnly);
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, autoSuggestTopics: undefined })
+      .expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body.autoSuggestTopics).toBe(true);
+    await owner.agent
+      .put(configUrl)
       .send({ ...payload, channelIds: [brand.body.id] })
       .expect(404);
     await owner.agent
@@ -85,6 +101,11 @@ describe.skipIf(!url)("autopilot API", () => {
       .expect(400);
     await owner.agent.put(configUrl).send(payload).expect(200);
     expect((await owner.agent.get(configUrl).expect(200)).body).toEqual(payload);
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, autoSuggestTopics: true })
+      .expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body.autoSuggestTopics).toBe(true);
     await db
       .update(schema.member)
       .set({ role: "member" })
@@ -93,8 +114,10 @@ describe.skipIf(!url)("autopilot API", () => {
       );
     await owner.agent
       .put(configUrl)
-      .send({ ...payload, enabled: false })
+      .send({ ...payload, enabled: false, autoSuggestTopics: false })
       .expect(403);
-    expect((await owner.agent.get(configUrl).expect(200)).body.enabled).toBe(true);
+    const afterDenied = (await owner.agent.get(configUrl).expect(200)).body;
+    expect(afterDenied.enabled).toBe(true);
+    expect(afterDenied.autoSuggestTopics).toBe(true);
   });
 });

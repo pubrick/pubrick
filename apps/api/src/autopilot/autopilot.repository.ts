@@ -7,6 +7,7 @@ import { db } from "../db";
 
 const CONFIG_COLUMNS = {
   enabled: schema.autopilotConfigs.enabled,
+  autoSuggestTopics: schema.autopilotConfigs.autoSuggestTopics,
   channelIds: schema.autopilotConfigs.channelIds,
   timezone: schema.autopilotConfigs.timezone,
   startHour: schema.autopilotConfigs.startHour,

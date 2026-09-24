@@ -11,6 +11,14 @@ Every transaction that takes row locks on more than one of these tables takes
 them in that order. A transaction that needs only some of them skips the rest;
 it never goes backwards.
 
+Daily topic suggestions also serialize admission on `brands`. Both the manual
+`TopicsRepository.requestSuggestions` path and the automatic
+`SuggestionsScanService.trigger` path take that brand row `FOR UPDATE` before
+checking the 30-minute request cooldown. The automatic path then locks its
+`autopilot_configs` row and inserts the request and queue job in the same
+transaction. This order prevents simultaneous manual and automatic admissions
+from each missing the other's new request.
+
 Channel re-adaptation stages its proposal after the model returns. The stage
 transaction locks its adaptation, then its item, then replaces the proposal.
 Accept takes the same two parent locks before reading the proposal and writing

@@ -25,6 +25,7 @@ export const autopilotConfigs = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     enabled: boolean("enabled").notNull().default(false),
+    autoSuggestTopics: boolean("auto_suggest_topics").notNull().default(false),
     channelIds: jsonb("channel_ids").$type<string[]>().notNull().default([]),
     timezone: text("timezone").notNull().default("UTC"),
     startHour: integer("start_hour").notNull().default(9),

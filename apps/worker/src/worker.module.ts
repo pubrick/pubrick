@@ -19,6 +19,7 @@ import { RssService } from "./rss/rss.service";
 import { TelegramReader } from "./rss/telegram.reader";
 import { SuggestionsRepository } from "./suggestions/suggestions.repository";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
@@ -42,6 +43,7 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     CommentsRepository,
     CommentsService,
     SuggestionsRepository,
+    SuggestionsScanService,
     SuggestionsService,
     WebhooksService,
   ],

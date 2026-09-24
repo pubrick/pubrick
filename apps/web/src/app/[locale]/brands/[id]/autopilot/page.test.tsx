@@ -42,6 +42,7 @@ describe("autopilot settings page", () => {
     const user = userEvent.setup();
     const enabled = await screen.findByRole("checkbox", { name: /Enable scheduled generation/ });
     expect(enabled).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Suggest topics daily/ })).not.toBeChecked();
     await user.click(enabled);
     await user.click(screen.getByRole("checkbox", { name: /Main/ }));
     await user.click(screen.getByRole("button", { name: en.Autopilot.save }));
@@ -53,5 +54,32 @@ describe("autopilot settings page", () => {
       body: { ...autopilotDefaults, enabled: true, channelIds: [CHANNEL_ID] },
     });
     expect(autopilotConfigSchema.parse(request?.body)).toEqual(request?.body);
+  });
+
+  it("can request daily ideas without enabling automatic draft generation", async () => {
+    const requests: Array<{ method: string; body: unknown }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ method, body });
+      if (String(input).endsWith("/autopilot/history")) return response(200, []);
+      if (String(input).includes("/api/channels?")) return response(200, []);
+      if (method === "PUT") return response(200, body);
+      return response(200, autopilotDefaults);
+    });
+    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    const ideas = await screen.findByRole("checkbox", { name: /Suggest topics daily/ });
+    expect(ideas).not.toBeChecked();
+    await user.click(ideas);
+    await user.click(screen.getByRole("button", { name: en.Autopilot.save }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(en.Autopilot.saved));
+    expect(requests.find((entry) => entry.method === "PUT")?.body).toEqual({
+      ...autopilotDefaults,
+      enabled: false,
+      channelIds: [],
+      autoSuggestTopics: true,
+    });
   });
 });

@@ -47,6 +47,42 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("schedules daily suggestion discovery only for the production queue set", async () => {
+    const boss = bossStub();
+    const scan = { scan: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scan as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.schedule).toHaveBeenCalledWith("topic-suggestions-scan", "*/15 * * * *");
+    const scanHandler = boss.work.mock.calls.find(
+      (call) => call[0] === "topic-suggestions-scan",
+    )?.[2] as () => Promise<void>;
+    await scanHandler();
+    expect(scan.scan).toHaveBeenCalledWith(boss);
+    boss.schedule.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.schedule).not.toHaveBeenCalledWith("topic-suggestions-scan", expect.any(String));
+  });
+
   it("registers bounded topic suggestions and their exhausted-job handler", async () => {
     const boss = bossStub();
     const suggestions = { handle: vi.fn(), exhausted: vi.fn() };

@@ -42,6 +42,7 @@ import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
@@ -137,6 +138,7 @@ export class QueueService {
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
     @Optional() private readonly webhooks?: WebhooksService,
+    @Optional() private readonly suggestionsScan?: SuggestionsScanService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -265,6 +267,14 @@ export class QueueService {
           if (job) await this.suggestions?.exhausted(job.data);
         },
       );
+    }
+
+    if (this.suggestionsScan && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("topic-suggestions-scan");
+      await boss.schedule("topic-suggestions-scan", "*/15 * * * *");
+      await boss.work("topic-suggestions-scan", { batchSize: 1 }, async () => {
+        await this.suggestionsScan?.scan(boss);
+      });
     }
 
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.

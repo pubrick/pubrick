@@ -327,6 +327,8 @@ const NON_ENUM_CHECKS = [
   "topics_origin_check",
   "topic_suggestion_requests_status_check",
   "topic_suggestion_requests_error_code_check",
+  // 0057 adds an origin pin; historical request rows receive the manual default.
+  "topic_suggestion_requests_origin_check",
   "news_items_editor_signal_check",
   "news_items_relevance_status_check",
   "news_items_relevance_urgency_check",

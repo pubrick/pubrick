@@ -1,4 +1,5 @@
 import { TOPIC_ORIGINS, TOPIC_STATUSES, TOPIC_SUGGESTION_REQUEST_STATUSES } from "@pubrick/shared";
+import { sql } from "drizzle-orm";
 import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
@@ -46,6 +47,10 @@ export const topicSuggestionRequests = pgTable(
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
     status: text("status", { enum: TOPIC_SUGGESTION_REQUEST_STATUSES }).notNull().default("queued"),
+    origin: text("origin", { enum: ["manual", "automatic"] })
+      .notNull()
+      .default("manual"),
+    localDate: text("local_date"),
     errorCode: text("error_code", { enum: ["no_api_key", "unreadable_key", "model_failed"] }),
     suggestionCount: integer("suggestion_count").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
@@ -54,11 +59,15 @@ export const topicSuggestionRequests = pgTable(
   },
   (t) => [
     index("topic_suggestion_requests_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
+    uniqueIndex("topic_suggestion_requests_org_brand_local_date_idx")
+      .on(t.orgId, t.brandId, t.localDate)
+      .where(sql`${t.origin} = 'automatic' and ${t.localDate} is not null`),
     enumCheck(
       "topic_suggestion_requests_status_check",
       t.status,
       TOPIC_SUGGESTION_REQUEST_STATUSES,
     ),
+    enumCheck("topic_suggestion_requests_origin_check", t.origin, ["manual", "automatic"]),
     enumCheck("topic_suggestion_requests_error_code_check", t.errorCode, [
       "no_api_key",
       "unreadable_key",

@@ -397,6 +397,23 @@ describe("generateStructured", () => {
     expect(onUsage.mock.calls[1]?.[0]).toMatchObject({ attempt: 2 });
   });
 
+  it("does not buy a repair call when the caller sets a one-call budget", async () => {
+    const onUsage = vi.fn();
+    const model = textModel("not json at all", '{"headline":"Would be a repair"}');
+
+    const error = await generateStructured({
+      ...base,
+      model,
+      repairSchemaErrors: false,
+      onUsage,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(PermanentError);
+    expect(runFailureOf(error)).toBe("no_structured_output");
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    expect(onUsage.mock.calls[0]?.[0]).toMatchObject({ attempt: 1 });
+  });
+
   it("repairs valid JSON of the wrong shape, not only unparseable text", async () => {
     const onUsage = vi.fn();
     const result = await generateStructured({

@@ -147,6 +147,18 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
                 <span className="mt-1 block text-fg-secondary">{t("enabledHint")}</span>
               </span>
             </label>
+            <label className="flex items-start gap-3 border-t border-border pt-5 text-sm text-fg">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={current.autoSuggestTopics ?? false}
+                onChange={(event) => set("autoSuggestTopics", event.target.checked)}
+              />
+              <span>
+                <span className="font-medium">{t("autoSuggestTopics")}</span>
+                <span className="mt-1 block text-fg-secondary">{t("autoSuggestTopicsHint")}</span>
+              </span>
+            </label>
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-2 text-sm font-medium text-fg-secondary">
                 {t("channels")}

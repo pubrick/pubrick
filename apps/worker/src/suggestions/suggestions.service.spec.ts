@@ -64,6 +64,8 @@ describe("SuggestionsService", () => {
       complete: vi.fn().mockResolvedValue(1),
       failed: vi.fn().mockResolvedValue(undefined),
       recordUsage: vi.fn().mockResolvedValue(undefined),
+      recoverStaleAutomatic: vi.fn().mockResolvedValue(false),
+      heartbeatAutomatic: vi.fn().mockResolvedValue(undefined),
     };
     const credentials = {
       credential: vi.fn().mockResolvedValue({ provider: "google", apiKey: "secret" }),
@@ -121,5 +123,38 @@ describe("SuggestionsService", () => {
     expect(repo.recordUsage).toHaveBeenCalledOnce();
     expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
     expect(repo.complete).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a failed automatic provider call", async () => {
+    const { service, repo } = harness(
+      new APICallError({
+        message: "busy",
+        url: "https://example.invalid",
+        requestBodyValues: {},
+        statusCode: 503,
+      }),
+    );
+    repo.claim.mockResolvedValue({ ...input, origin: "automatic" });
+    await service.handle(job);
+    expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
+  });
+
+  it("uses the stored brand-local day and makes no schema repair call automatically", async () => {
+    const { service, repo, calls } = harness("{}");
+    repo.claim.mockResolvedValue({ ...input, origin: "automatic", localDate: "2026-01-02" });
+    await service.handle(job);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.user).toContain("TODAY: 2026-01-02");
+    expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
+  });
+
+  it("checks stale automatic recovery when a redelivery cannot claim another call", async () => {
+    const { service, repo, calls } = harness("{}");
+    repo.claim.mockResolvedValue(null);
+    await service.handle(job);
+    expect(repo.recoverStaleAutomatic).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId);
+    expect(calls).toHaveLength(0);
   });
 });

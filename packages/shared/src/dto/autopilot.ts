@@ -9,6 +9,8 @@ const channelIds = z
 export const autopilotConfigSchema = z
   .object({
     enabled: z.boolean(),
+    /** Optional on writes so older clients do not reset an existing opt-in. */
+    autoSuggestTopics: z.boolean().optional(),
     channelIds,
     timezone: z
       .string()
@@ -36,6 +38,7 @@ export type AutopilotConfig = z.infer<typeof autopilotConfigSchema>;
 
 export const autopilotDefaults: AutopilotConfig = {
   enabled: false,
+  autoSuggestTopics: false,
   channelIds: [],
   timezone: "UTC",
   startHour: 9,
