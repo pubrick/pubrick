@@ -154,6 +154,38 @@ describe("the step checklist", () => {
     );
   });
 
+  it("does not promise a generated image was attached if its asset was removed before draft creation", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        input: {
+          kind: "brief",
+          text: "Brief",
+          channelIds: [CHANNEL_A],
+          contentType: "expert_article",
+          generateInlineImages: true,
+        },
+        steps: {
+          editor: { status: "succeeded", output: { body: "One.\n\nTwo." } },
+          "inline_image:0": {
+            status: "succeeded",
+            output: { mediaId: "generated-asset", result: "generated" },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    const rows = await screen.findAllByRole("listitem");
+    const illustrations = rows.find((row) =>
+      row.textContent?.startsWith(en.Runs.step.inline_image),
+    );
+    expect(illustrations).toHaveTextContent(en.Runs.stepState.done);
+    expect(en.Runs.inlineImagesAttached).toContain("any attached images");
+    expect(illustrations).toHaveTextContent(en.Runs.inlineImagesAttached);
+  });
+
   it("derives each step's state from the run's checkpoints", async () => {
     installHandlers({
       current: makeRun({
