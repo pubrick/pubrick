@@ -41,6 +41,11 @@ const wallUploadResponse = z.object({
 const savedWallPhotoResponse = z
   .array(z.object({ owner_id: z.number().int(), id: z.number().int().positive() }))
   .min(1);
+const videoSaveResponse = z.object({
+  upload_url: z.string().url(),
+  owner_id: z.number().int(),
+  video_id: z.number().int().positive(),
+});
 const groupResponse = z.object({
   groups: z.array(
     z.object({
@@ -131,7 +136,7 @@ async function call(
 }
 
 /** Until wall.post starts, retrying cannot create a duplicate wall post. */
-async function preparePhotoCall(
+async function prepareMediaCall(
   method: string,
   credentials: VkCredentials,
   params: Record<string, string>,
@@ -141,18 +146,18 @@ async function preparePhotoCall(
     return await call(method, credentials, params, options);
   } catch (error) {
     if (error instanceof UnknownOutcomePublishError) {
-      throw new TransientPublishError(`VK photo preparation did not complete: ${error.message}`);
+      throw new TransientPublishError(`VK media preparation did not complete: ${error.message}`);
     }
     throw error;
   }
 }
 
-function trustedUploadUrl(raw: string): string {
+function trustedUploadUrl(raw: string, kind: "photo" | "video"): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new PermanentPublishError("VK returned an invalid photo upload URL");
+    throw new PermanentPublishError(`VK returned an invalid ${kind} upload URL`);
   }
   // VK supplies this URL, but it is still an external address used by our
   // worker. Never let a malformed/proxied API answer reach local services.
@@ -163,7 +168,7 @@ function trustedUploadUrl(raw: string): string {
     url.password ||
     url.port
   ) {
-    throw new PermanentPublishError("VK returned an untrusted photo upload URL");
+    throw new PermanentPublishError(`VK returned an untrusted ${kind} upload URL`);
   }
   return url.href;
 }
@@ -212,7 +217,7 @@ async function photoAttachment(
 ): Promise<string> {
   if (bytes.length === 0) throw new PermanentPublishError("Cover image is empty");
   const permissions = permissionsResponse.safeParse(
-    await preparePhotoCall("account.getAppPermissions", credentials, {}, options),
+    await prepareMediaCall("account.getAppPermissions", credentials, {}, options),
   );
   if (
     !permissions.success ||
@@ -224,7 +229,7 @@ async function photoAttachment(
     );
   }
   const server = wallUploadServerResponse.safeParse(
-    await preparePhotoCall(
+    await prepareMediaCall(
       "photos.getWallUploadServer",
       credentials,
       { group_id: credentials.groupId },
@@ -232,9 +237,13 @@ async function photoAttachment(
     ),
   );
   if (!server.success) throw new PermanentPublishError("VK did not return a photo upload server");
-  const upload = await uploadWallPhoto(trustedUploadUrl(server.data.upload_url), bytes, options);
+  const upload = await uploadWallPhoto(
+    trustedUploadUrl(server.data.upload_url, "photo"),
+    bytes,
+    options,
+  );
   const saved = savedWallPhotoResponse.safeParse(
-    await preparePhotoCall(
+    await prepareMediaCall(
       "photos.saveWallPhoto",
       credentials,
       {
@@ -253,21 +262,94 @@ async function photoAttachment(
   return `photo${photo.owner_id}_${photo.id}`;
 }
 
+/** `video.save` reserves an attachment; `wallpost=0` avoids an unreviewed wall post. */
+async function videoAttachment(
+  credentials: VkCredentials,
+  text: string,
+  bytes: Uint8Array,
+  options?: PublisherOptions,
+): Promise<string> {
+  if (bytes.length < 1024 || bytes.length > 20 * 1024 * 1024) {
+    throw new PermanentPublishError("VK video must be an MP4 between 1 KB and 20 MB");
+  }
+  const saved = videoSaveResponse.safeParse(
+    await prepareMediaCall(
+      "video.save",
+      credentials,
+      {
+        group_id: credentials.groupId,
+        name: text.split("\n")[0]?.trim().slice(0, 120) || "Video",
+        wallpost: "0",
+        auto_publish: "0",
+      },
+      options,
+    ),
+  );
+  if (!saved.success || saved.data.owner_id !== -Number(credentials.groupId)) {
+    throw new PermanentPublishError("VK did not reserve a video for this community");
+  }
+  const form = new FormData();
+  form.append("video_file", new Blob([new Uint8Array(bytes)], { type: "video/mp4" }), "video.mp4");
+  const uploadUrl = trustedUploadUrl(saved.data.upload_url, "video");
+  let response: Response;
+  try {
+    response = await (options?.fetchImpl ?? fetch)(uploadUrl, {
+      method: "POST",
+      body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch {
+    throw new TransientPublishError("VK video upload did not complete");
+  }
+  if (!response.ok) {
+    const message = `VK video upload returned HTTP ${response.status}`;
+    if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+      throw new PermanentPublishError(message, response.status);
+    }
+    throw new TransientPublishError(message, response.status);
+  }
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    throw new TransientPublishError("VK video upload returned an unreadable response");
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new TransientPublishError("VK video upload returned invalid details");
+  }
+  if ("error" in raw) throw new PermanentPublishError("VK rejected the uploaded video");
+  const uploaded =
+    "response" in raw && raw.response && typeof raw.response === "object" ? raw.response : raw;
+  if ("error" in uploaded) throw new PermanentPublishError("VK rejected the uploaded video");
+  if (
+    ("video_id" in uploaded && Number(uploaded.video_id) !== saved.data.video_id) ||
+    ("owner_id" in uploaded && Number(uploaded.owner_id) !== saved.data.owner_id)
+  ) {
+    throw new PermanentPublishError("VK video upload did not match the reserved community video");
+  }
+  return `video${saved.data.owner_id}_${saved.data.video_id}`;
+}
+
 export const vkPublisher: Publisher<VkCredentials> = {
   platform: "vk",
   maxTextLength: PLATFORM_MAX_TEXT_LENGTH.vk,
   credentialsSchema,
 
   async publish(credentials, input, options): Promise<PublishResult> {
-    if (input.video) throw new PermanentPublishError("VK video delivery is not available yet");
+    if (input.video && input.image) {
+      throw new PermanentPublishError("A VK post cannot attach both a cover and a video");
+    }
     if (input.text.length < 1 || input.text.length > this.maxTextLength) {
       throw new PermanentPublishError(
         `Text must be 1..${this.maxTextLength} characters, got ${input.text.length}`,
       );
     }
-    const attachment = input.image
-      ? await photoAttachment(credentials, input.image.bytes, options)
-      : undefined;
+    const attachment = input.video
+      ? await videoAttachment(credentials, input.text, input.video.bytes, options)
+      : input.image
+        ? await photoAttachment(credentials, input.image.bytes, options)
+        : undefined;
     const raw = await call(
       "wall.post",
       credentials,

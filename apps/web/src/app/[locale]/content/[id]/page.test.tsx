@@ -64,6 +64,7 @@ type ContentItem = {
   id: string;
   brandId: string;
   coverMediaId: string | null;
+  videoMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -120,6 +121,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     id: "c1",
     brandId: "b1",
     coverMediaId: null as string | null,
+    videoMediaId: null as string | null,
     title: "Launch post",
     body: "Hello world",
     status: "draft" as ContentStatus,
@@ -961,6 +963,26 @@ describe("per-channel override (Step 6)", () => {
     fireEvent.change(field, { target: { value: "a".repeat(1025) } });
     expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
     expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+  });
+
+  it("previews a VK video without applying Telegram's caption limit", async () => {
+    const served = {
+      current: makeItem({
+        videoMediaId: "video-1",
+        adaptations: [makeAdaptation({ body: "v".repeat(1200) })],
+      }),
+    };
+    installBaseHandlers(served, [], undefined, [{ ...channel, platform: "vk" }]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "VK · Main channel"),
+    });
+    expect(within(preview).getByLabelText(en.Publish.reviewPreviewVideoLabel)).toHaveAttribute(
+      "src",
+      "/api/media/video-1/file",
+    );
+    expect(within(preview).queryByRole("alert")).toBeNull();
   });
 
   it("keeps Telegram's 4096-character text limit without a cover and marks published copy as local", async () => {

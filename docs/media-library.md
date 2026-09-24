@@ -3,7 +3,7 @@
 Each brand has a reusable media library. A signed-in organization member can
 upload JPEG, PNG, or WebP files up to 10 MB from **Brand → Media library**, then
 choose a cover on an editable post. The library also accepts an MP4 video up
-to 20 MB for a Telegram post. A post has one attachment: choosing a video
+to 20 MB for a Telegram or VK post. A post has one attachment: choosing a video
 replaces its cover, and choosing a cover replaces its video. The editor and
 external client review offer a click-to-play video preview before approval.
 An asset can be removed after it is detached from every post.
@@ -21,8 +21,8 @@ and checks top-level MP4 box lengths for a complete `ftyp`, `mdat` and `moov`.
 It rejects a mismatched declared MIME type, truncated files and files outside
 1 KB–20 MB, and stores the original bytes with a server-generated `.mp4` name.
 It does **not** decode, transcode, inspect codecs or prove that the whole file
-will play in every Telegram client. Test the clip in the review preview before
-approving. A Telegram codec/container rejection becomes a failed delivery;
+will play in every Telegram or VK client. Test the clip in the review preview
+before approving. A provider codec/container rejection becomes a failed delivery;
 Pubrick does not claim video generation. The private file endpoint supports
 byte ranges for playback. External review ranges recheck the live, expiring
 capability on every request, enforce stored size and return `no-store` and
@@ -45,12 +45,17 @@ the brand deletion still succeeds and the server logs any removal failure.
 Telegram, VK, MAX, and Bluesky accept a single JPEG cover. Telegram uses one `sendPhoto`
 request with the reviewed text as its caption (maximum 1024 characters).
 Telegram video uses one `sendVideo` request with the reviewed MP4 and a caption
-of at most 1024 characters. This milestone supports **Telegram video only**;
-attaching a video to a post with VK, MAX, Bluesky, Mastodon or VC.ru targets is
+of at most 1024 characters. VK video uses `video.save` with wall auto-publishing
+disabled, uploads the MP4 in a `video_file` multipart field, and attaches the
+reserved community video ID to one `wall.post` request. VK processes uploaded
+videos asynchronously, so playback may appear after the wall post. Attaching a
+video to a post with MAX, Bluesky, Mastodon or VC.ru targets is
 refused before approval. The worker also checks the organization, brand, media
 kind and stored byte length before sending. An uncertain `sendVideo` result is
 terminal until reconciled, preventing an automatic duplicate. There is no
 provider call when a video is uploaded or previewed.
+See the official VK [video method schema](https://github.com/VKCOM/vk-api-schema/blob/master/video/methods.json)
+and [SDK upload example](https://github.com/VKCOM/vk-php-sdk#53-uploading-video-files).
 VK uses the official `photos.getWallUploadServer` → multipart upload →
 `photos.saveWallPhoto` → `wall.post` path and attaches the saved community photo
 to the reviewed text ([VK photo methods](https://github.com/VKCOM/vk-api-schema/blob/master/photos/methods.json),
@@ -68,7 +73,7 @@ and VK post. The worker refuses an unsupported channel or missing/mismatched
 image before a send and records an actionable failed delivery. VK photo
 preparation can be retried because no wall post has started. An uncertain
 `wall.post` or Telegram `sendPhoto` is never retried into a possible duplicate.
-VK upload URLs must use HTTPS on a `vk.com` host and cannot redirect. The
+VK photo and video upload URLs must use HTTPS on a `vk.com` host and cannot redirect. The
 temporary upload URL and its capability query are never logged.
 MAX uses `POST /uploads?type=image`, sends the JPEG in a multipart `data` field
 to the documented `iu.oneme.ru` image host, and sends one `POST /messages` with
