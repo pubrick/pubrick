@@ -208,6 +208,7 @@ export const commentAnalysisDtoSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("no_comments") }),
   z.object({ status: z.literal("no_key") }),
   z.object({ status: z.literal("limit_reached") }),
+  z.object({ status: z.literal("in_progress") }),
   z.object({ status: z.literal("timed_out") }),
   z.object({ status: z.literal("failed") }),
   z.object({ status: z.literal("not_analyzed") }),

@@ -1,6 +1,6 @@
 import type { AiCredential } from "@pubrick/ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommentAnalysisCaller } from "./comment-analysis.caller";
 
 const credential: AiCredential = {
@@ -97,5 +97,41 @@ describe("comment analysis provider boundary", () => {
     const outcome = await caller.run({ credential, title: "Post", comments: ["A comment"] });
     expect(outcome).toMatchObject({ ok: false, failure: "failed" });
     expect(JSON.stringify(outcome)).not.toContain("fixture-key-never-sent");
+  });
+
+  it("withholds successful analysis when durable usage recording fails", async () => {
+    const caller = new MockCaller(
+      model(
+        JSON.stringify({
+          summary: "Readers ask about pricing.",
+          sentiment: { positive: 0, neutral: 1, negative: 0 },
+          themes: [{ label: "Pricing", mentions: 1 }],
+          feedback: [],
+        }),
+      ),
+    );
+    const sink = vi.fn(async () => {
+      throw new Error("database unavailable");
+    });
+    const outcome = await caller.run({
+      credential,
+      title: "Post",
+      comments: ["A comment"],
+      onUsage: sink,
+    });
+    expect(sink).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ ok: false, failure: "failed" });
+  });
+
+  it("does not dispatch a paid repair request for invalid structured output", async () => {
+    let requests = 0;
+    const caller = new MockCaller(
+      model("not JSON", () => {
+        requests += 1;
+      }),
+    );
+    const outcome = await caller.run({ credential, title: "Post", comments: ["A comment"] });
+    expect(outcome).toMatchObject({ ok: false, failure: "failed" });
+    expect(requests).toBe(1);
   });
 });

@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { encryptJson, privateTelegramSourceCreateSchema } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
@@ -16,7 +18,10 @@ describe.skipIf(!url)("watched sources e2e", () => {
   let app: INestApplication;
   const analysisRun = vi.fn();
 
-  beforeEach(() => vi.mocked(resolveJoinedPrivateChannel).mockReset());
+  beforeEach(() => {
+    vi.mocked(resolveJoinedPrivateChannel).mockReset();
+    analysisRun.mockReset();
+  });
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url;
@@ -586,16 +591,9 @@ describe.skipIf(!url)("watched sources e2e", () => {
       })
       .expect(200);
     expect((await agent.get(route).expect(200)).body).toEqual({ status: "not_analyzed" });
-    analysisRun.mockResolvedValueOnce({
-      ok: true,
-      result: {
-        summary: "Readers want clearer prices for small teams.",
-        sentiment: { positive: 0, neutral: 1, negative: 0 },
-        themes: [{ label: "Pricing", mentions: 1 }],
-        feedback: ["Clarify the small-team pricing."],
-      },
-      usage: [
-        {
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        await args.onUsage({
           provider: "google",
           modelId: "gemini-test",
           attempt: 1,
@@ -608,9 +606,19 @@ describe.skipIf(!url)("watched sources e2e", () => {
           responseMs: 20,
           status: "ok",
           outcome: "completed",
-        },
-      ],
-    });
+        });
+        return {
+          ok: true,
+          result: {
+            summary: "Readers want clearer prices for small teams.",
+            sentiment: { positive: 0, neutral: 1, negative: 0 },
+            themes: [{ label: "Pricing", mentions: 1 }],
+            feedback: ["Clarify the small-team pricing."],
+          },
+          usage: [],
+        };
+      },
+    );
     const analyzed = (await agent.post(route).expect(201)).body;
     expect(analyzed).toMatchObject({
       status: "ready",
@@ -639,5 +647,123 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
       .where(eq(schema.newsItems.id, item.id));
     expect((await agent.get(route).expect(200)).body).toEqual({ status: "stale" });
+  });
+
+  it("admits one concurrent analysis per sample and counts source and publication requests together", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Metered brand" }).expect(201);
+    const source = await agent
+      .post("/api/sources")
+      .send({
+        brandId: brand.body.id,
+        name: "Channel",
+        kind: "telegram",
+        url: "https://t.me/metered",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const [item] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.body.id,
+        title: "Post",
+        url: "https://t.me/metered/7",
+        commentsStatus: "available",
+        commentsCheckedAt: checkedAt,
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("story fixture missing");
+    await db.insert(schema.newsComments).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      telegramMessageId: 10,
+      body: "What is the price?",
+      publishedAt: checkedAt,
+    });
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-never-used" })
+      .expect(200);
+    const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    analysisRun.mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return {
+        ok: true,
+        result: {
+          summary: "Pricing question.",
+          sentiment: { positive: 0, neutral: 1, negative: 0 },
+          themes: [{ label: "Price", mentions: 1 }],
+          feedback: [],
+        },
+        usage: [],
+      };
+    });
+    const first = agent.post(route).then((response) => response);
+    await entered;
+    expect((await agent.post(route).expect(201)).body).toEqual({ status: "in_progress" });
+    expect(analysisRun).toHaveBeenCalledTimes(1);
+    release();
+    expect((await first).body.status).toBe("ready");
+
+    await db
+      .update(schema.newsItems)
+      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .where(eq(schema.newsItems.id, item.id));
+    const { admitAnalysis, recordAnalysisUsage } = await import("../analysis-admission");
+    const extra = await Promise.all(
+      Array.from({ length: 9 }, (_, index) =>
+        admitAnalysis({
+          orgId,
+          targetKind: index % 2 === 0 ? "publication_comment" : "source_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: checkedAt,
+        }),
+      ),
+    );
+    expect(extra.every((admission) => admission.status === "admitted")).toBe(true);
+    expect((await agent.post(route).expect(201)).body).toEqual({ status: "limit_reached" });
+    expect(analysisRun).toHaveBeenCalledTimes(1);
+
+    const lossMarker = extra[0];
+    if (lossMarker?.status !== "admitted") throw new Error("expected admission fixture");
+    await expect(
+      recordAnalysisUsage({
+        admissionId: lossMarker.id,
+        orgId,
+        targetKind: "publication_comment",
+        record: {
+          provider: "invalid-provider" as UsageRecord["provider"],
+          modelId: "gemini-test",
+          attempt: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0.00001,
+          costSource: "price_table",
+          responseMs: 20,
+          status: "ok",
+          outcome: "completed",
+        },
+      }),
+    ).rejects.toThrow();
+    const [marked] = await db
+      .select({ unrecordedCalls: schema.analysisAdmissions.unrecordedCalls })
+      .from(schema.analysisAdmissions)
+      .where(eq(schema.analysisAdmissions.id, lossMarker.id));
+    expect(marked?.unrecordedCalls).toBe(1);
   });
 });

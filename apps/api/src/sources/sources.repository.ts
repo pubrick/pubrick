@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import type { AiCredential } from "@pubrick/ai";
@@ -16,11 +15,11 @@ import {
   type NewsSourceUpdate,
   newsSourceCreateSchema,
   type PrivateTelegramSourceCreate,
-  toLedgerCostUsd,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
+import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
@@ -66,8 +65,6 @@ const ITEM_COLUMNS = {
 
 @Injectable()
 export class SourcesRepository {
-  private readonly logger = new Logger(SourcesRepository.name);
-
   constructor(
     private readonly queue: QueueService,
     private readonly aiCredentials: AiCredentialsRepository,
@@ -501,18 +498,6 @@ export class SourcesRepository {
       current.status === "ready"
     )
       return current;
-    const recent = await db
-      .select({ id: schema.usageLedger.id })
-      .from(schema.usageLedger)
-      .where(
-        and(
-          eq(schema.usageLedger.orgId, orgId),
-          eq(schema.usageLedger.step, "comment_analysis"),
-          gt(schema.usageLedger.createdAt, new Date(Date.now() - 60 * 60_000)),
-        ),
-      )
-      .limit(10);
-    if (recent.length >= 10) return { status: "limit_reached" as const };
     const item = await this.requireTelegramItem(orgId, brandId, itemId);
     const sample = await this.analysisSample(orgId, brandId, itemId);
     if (!item.commentsCheckedAt || sample.length === 0) return { status: "no_comments" as const };
@@ -526,56 +511,49 @@ export class SourcesRepository {
       if (error instanceof NotFoundException) return { status: "no_key" as const };
       throw error;
     }
-    const outcome = await this.commentAnalysisCaller.run({
-      credential,
-      title: item.title,
-      comments: sample.map((row) => row.body),
+    const admission = await admitAnalysis({
+      orgId,
+      targetKind: "source_comment",
+      targetId: itemId,
+      sampleCheckedAt: item.commentsCheckedAt,
     });
-    if (outcome.usage.length) {
-      try {
-        await db.insert(schema.usageLedger).values(
-          outcome.usage.map((record) => ({
+    if (admission.status !== "admitted") return { status: admission.status };
+    try {
+      const outcome = await this.commentAnalysisCaller.run({
+        credential,
+        title: item.title,
+        comments: sample.map((row) => row.body),
+        onUsage: (record) =>
+          recordAnalysisUsage({
+            admissionId: admission.id,
             orgId,
-            step: "comment_analysis",
-            attempt: record.attempt,
-            provider: record.provider,
-            modelId: record.modelId,
-            inputTokens: record.inputTokens,
-            outputTokens: record.outputTokens,
-            cachedInputTokens: record.cachedInputTokens,
-            reasoningTokens: record.reasoningTokens,
-            costUsd: toLedgerCostUsd(record.costUsd),
-            costSource: record.costSource,
-            status: record.status,
-            outcome: record.outcome,
-            responseMs: record.responseMs,
-            keyOwnership: "byok" as const,
-          })),
-        );
-      } catch {
-        this.logger.error(`Usage recording failed for comment analysis in org ${orgId}`);
-      }
-    }
-    if (!outcome.ok) return { status: outcome.failure };
-    await db
-      .insert(schema.newsCommentAnalyses)
-      .values({
-        itemId,
-        orgId,
-        brandId,
-        sampleCheckedAt: item.commentsCheckedAt,
-        sampleSize: sample.length,
-        result: outcome.result,
-      })
-      .onConflictDoUpdate({
-        target: schema.newsCommentAnalyses.itemId,
-        set: {
+            targetKind: "source_comment",
+            record,
+          }),
+      });
+      if (!outcome.ok) return { status: outcome.failure };
+      await db
+        .insert(schema.newsCommentAnalyses)
+        .values({
+          itemId,
+          orgId,
+          brandId,
           sampleCheckedAt: item.commentsCheckedAt,
           sampleSize: sample.length,
           result: outcome.result,
-          createdAt: new Date(),
-        },
-      });
-    return this.commentAnalysis(orgId, brandId, itemId);
+        })
+        .onConflictDoUpdate({
+          target: schema.newsCommentAnalyses.itemId,
+          set: {
+            sampleCheckedAt: item.commentsCheckedAt,
+            sampleSize: sample.length,
+            result: outcome.result,
+            createdAt: new Date(),
+          },
+        });
+      return this.commentAnalysis(orgId, brandId, itemId);
+    } finally {
+      await finishAnalysisAdmission(admission.id, orgId);
+    }
   }
 }
