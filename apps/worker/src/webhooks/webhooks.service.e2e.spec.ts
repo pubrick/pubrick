@@ -91,7 +91,7 @@ describe.skipIf(!url)("webhook delivery state", () => {
     const id = await event();
     for (const [index, code] of [408, 429, 500, 503, 503].entries()) {
       mockPost.mockResolvedValueOnce(code);
-      await service.scan();
+      await service.scan(orgId);
       const row = await state(id);
       expect(row?.attempts).toBe(index + 1);
       expect(row?.lastHttpStatus).toBe(code);
@@ -105,7 +105,7 @@ describe.skipIf(!url)("webhook delivery state", () => {
         expect(row?.status).toBe("failed");
       }
     }
-    await service.scan();
+    await service.scan(orgId);
     expect(mockPost).toHaveBeenCalledTimes(5);
     expect(mockPost.mock.calls.every((call) => call[2].id === id)).toBe(true);
   });
@@ -113,8 +113,8 @@ describe.skipIf(!url)("webhook delivery state", () => {
   it("marks an ambiguous network failure unknown and never resends", async () => {
     const id = await event();
     mockPost.mockRejectedValueOnce(new Error("socket reset after POST"));
-    await service.scan();
-    await service.scan();
+    await service.scan(orgId);
+    await service.scan(orgId);
     expect(await state(id)).toMatchObject({ status: "unknown", attempts: 1, lastHttpStatus: null });
     expect(mockPost).toHaveBeenCalledTimes(1);
   });
@@ -129,7 +129,7 @@ describe.skipIf(!url)("webhook delivery state", () => {
         updatedAt: new Date(0),
       })
       .where(eq(schema.webhookDeliveries.id, id));
-    await service.scan();
+    await service.scan(orgId);
     expect(await state(id)).toMatchObject({ status: "unknown", attempts: 1 });
     expect(mockPost).not.toHaveBeenCalled();
   });
@@ -169,7 +169,7 @@ describe.skipIf(!url)("webhook delivery state", () => {
     ).deliver({ ...delivery, attempts: 1 });
     expect(mockPost).not.toHaveBeenCalled();
     expect((await state(id))?.status).toBe("failed");
-    await service.scan();
+    await service.scan(orgId);
     expect((await state(pendingId))?.status).toBe("failed");
     expect(mockPost).not.toHaveBeenCalled();
   });

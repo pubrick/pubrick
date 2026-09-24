@@ -12,7 +12,8 @@ import { postWebhook } from "./webhook-http";
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
 
-  async scan(): Promise<void> {
+  /** The optional org scope lets isolated maintenance and tests scan one tenant. */
+  async scan(onlyOrgId?: string): Promise<void> {
     // A publication and a revoke can race in separate transactions. If the
     // trigger saw the still-active subscription, make the pending row visible
     // as closed even when revoke committed before that insert became visible.
@@ -44,6 +45,7 @@ export class WebhooksService {
       .where(
         and(
           eq(schema.webhookDeliveries.status, "attempting"),
+          onlyOrgId ? eq(schema.webhookDeliveries.orgId, onlyOrgId) : undefined,
           sql`${schema.webhookDeliveries.updatedAt} < now() - interval '10 minutes'`,
         ),
       );
@@ -58,11 +60,13 @@ export class WebhooksService {
         .where(
           and(
             eq(schema.webhookDeliveries.status, "pending"),
+            onlyOrgId ? eq(schema.webhookDeliveries.orgId, onlyOrgId) : undefined,
             lte(schema.webhookDeliveries.nextAttemptAt, new Date()),
             sql`${schema.webhookDeliveries.id} = (
           select d.id from webhook_deliveries d
           join webhook_subscriptions s on s.id = d.subscription_id and s.org_id = d.org_id
           where d.status = 'pending' and d.next_attempt_at <= now() and s.revoked_at is null
+            ${onlyOrgId ? sql`and d.org_id = ${onlyOrgId}` : sql``}
           order by d.next_attempt_at, d.id for update of d skip locked limit 1
         )`,
           ),
