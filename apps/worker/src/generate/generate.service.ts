@@ -25,11 +25,11 @@ import {
   withRunFailure,
 } from "@pubrick/ai";
 import {
+  autoInlineImagePlacements,
   brandLinkPolicySchema,
   briefRunInputSchema,
   COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
-  MAX_AUTO_INLINE_IMAGES,
   PermanentError,
   type RunFailure,
   sourceRunInputSchema,
@@ -183,17 +183,6 @@ const coverOutputSchema = z.object({
 });
 
 const inlineImageOutputSchema = coverOutputSchema;
-/** Match the API's nonempty-paragraph placement rule, with a strict two-call ceiling. */
-function inlineImageParagraphs(body: string): Array<{ afterParagraph: number; text: string }> {
-  const paragraphs = body.split(/\n\s*\n/).filter((part) => part.trim());
-  if (paragraphs.length < 2) return [];
-  const count = paragraphs.length >= 4 ? MAX_AUTO_INLINE_IMAGES : 1;
-  return Array.from({ length: count }, (_, index) => {
-    const afterParagraph = Math.floor(((index + 1) * (paragraphs.length + 1)) / (count + 1)) - 1;
-    return { afterParagraph, text: paragraphs[afterParagraph] ?? "" };
-  });
-}
-
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -675,11 +664,8 @@ export class GenerateService {
     }
 
     const inlineImages: Array<NonNullable<TerminalPayload["inlineImages"]>[number]> = [];
-    if (
-      input.generateInlineImages &&
-      supportsInlineImages(input.contentType)
-    ) {
-      const paragraphs = inlineImageParagraphs(edited.body);
+    if (input.generateInlineImages && supportsInlineImages(input.contentType)) {
+      const paragraphs = autoInlineImagePlacements(edited.body);
       for (const { afterParagraph, text } of paragraphs) {
         const stepName = `inline_image:${afterParagraph}`;
         const image = await this.runStep(

@@ -17,7 +17,7 @@ import {
   RUN_STEP_BADGE_STATUS,
   type RunClaim,
   type RunDetail,
-  type RunStepKey,
+  type RunStepProgress,
   runClaims,
   runEditorChanges,
   runFailureMessage,
@@ -227,9 +227,9 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
    * nothing was checked, and the heading over the whole list says every one of
    * them is to be verified. The marker only says which ones to start with.
    */
-  function detailFor(key: RunStepKey): React.ReactNode {
+  function detailFor(step: RunStepProgress): React.ReactNode {
     if (run === null) return null;
-    switch (key) {
+    switch (step.key) {
       case "factcheck":
         return (
           <StepLines
@@ -272,6 +272,23 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               ? "coverSavedNoDraft"
               : "coverReady";
         return <p className="mt-2 text-sm text-fg-secondary">{t(message)}</p>;
+      }
+      case "inline_image": {
+        const message =
+          step.total === 0 && run.steps.editor?.status === "succeeded"
+            ? "inlineImagesShortDraft"
+            : step.state === "unavailable" && step.done === 0
+              ? "inlineImagesUnavailable"
+              : step.state === "unavailable"
+                ? "inlineImagesPartial"
+                : step.state === "done" && !run.contentItemId && isTerminalRunStatus(run.status)
+                  ? "inlineImagesSavedNoDraft"
+                  : step.state === "done" && !run.contentItemId
+                    ? "inlineImagesReady"
+                    : step.state === "done"
+                      ? "inlineImagesAttached"
+                      : null;
+        return message ? <p className="mt-2 text-sm text-fg-secondary">{t(message)}</p> : null;
       }
       // The other three steps produce the draft itself (or a per-channel copy
       // of it), and the draft belongs on the item screen where it can be
@@ -462,7 +479,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                     A separate section further down would put that phrase on the
                     screen twice.
                   */}
-                  {detailFor(step.key)}
+                  {detailFor(step)}
                 </li>
               ))}
             </ul>

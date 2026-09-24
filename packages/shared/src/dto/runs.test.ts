@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoInlineImagePlacements,
   briefRunInputSchema,
   contentTypeRequiresMaterial,
   DISMISSABLE_RUN_STATUSES,
@@ -14,6 +15,19 @@ import {
   runStepsSchema,
   sourceRunInputSchema,
 } from "./runs.js";
+
+describe("automatic article image placement", () => {
+  it("uses the same bounded paragraph positions for worker and receipt", () => {
+    expect(autoInlineImagePlacements("One.")).toEqual([]);
+    expect(autoInlineImagePlacements("One.\n\nTwo.")).toEqual([
+      { afterParagraph: 0, text: "One." },
+    ]);
+    expect(autoInlineImagePlacements("One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.")).toEqual([
+      { afterParagraph: 1, text: "Two." },
+      { afterParagraph: 3, text: "Four." },
+    ]);
+  });
+});
 
 /**
  * The set six call sites used to spell out for themselves — the brand delete's

@@ -13,6 +13,7 @@ import {
   runCreateSchema,
   type SourceExtractionResponse,
   sourceExtractionRequestSchema,
+  supportsInlineImages,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -36,12 +37,6 @@ type ContentItem = { id: string };
 
 const FORM_ID = "new-content-form";
 const SOURCE_HELP_ID = "source-help";
-const INLINE_IMAGE_TYPES: ReadonlySet<ContentType> = new Set([
-  "expert_article",
-  "comparison",
-  "case_study",
-  "educational",
-]);
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
@@ -118,7 +113,7 @@ export default function NewContentPage() {
    */
   const canGenerate = credentials !== null && credentials.length > 0;
   const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
-  const inlineImageTypeSupported = INLINE_IMAGE_TYPES.has(contentType);
+  const inlineImageTypeSupported = supportsInlineImages(contentType);
   const coverChannelsSupported = [...channelIds].every((id) =>
     (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
       channels.find((channel) => channel.id === id)?.platform ?? "",
@@ -459,7 +454,7 @@ export default function NewContentPage() {
                 onChange={(event) => {
                   const selected = event.target.value as ContentType;
                   setContentType(selected);
-                  if (!INLINE_IMAGE_TYPES.has(selected)) setGenerateInlineImages(false);
+                  if (!supportsInlineImages(selected)) setGenerateInlineImages(false);
                   if (contentTypeRequiresMaterial(selected)) setSourceOpen(true);
                 }}
                 className="min-h-11"

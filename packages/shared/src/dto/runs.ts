@@ -179,6 +179,19 @@ export function supportsInlineImages(contentType: ContentType | undefined): bool
   return INLINE_IMAGE_CONTENT_TYPES.some((type) => type === contentType);
 }
 
+/** Keep worker placement and run receipt counts on the same paragraph rule. */
+export function autoInlineImagePlacements(
+  body: string,
+): Array<{ afterParagraph: number; text: string }> {
+  const paragraphs = body.split(/\n\s*\n/).filter((part) => part.trim());
+  if (paragraphs.length < 2) return [];
+  const count = paragraphs.length >= 4 ? MAX_AUTO_INLINE_IMAGES : 1;
+  return Array.from({ length: count }, (_, index) => {
+    const afterParagraph = Math.floor(((index + 1) * (paragraphs.length + 1)) / (count + 1)) - 1;
+    return { afterParagraph, text: paragraphs[afterParagraph] ?? "" };
+  });
+}
+
 /** Formats that would invite invented facts if admitted without source text. */
 export function contentTypeRequiresMaterial(contentType: ContentType | undefined): boolean {
   return contentType === "repost" || contentType === "case_study";

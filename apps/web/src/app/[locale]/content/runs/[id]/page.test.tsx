@@ -97,6 +97,63 @@ describe("the step checklist", () => {
     );
   });
 
+  it("shows active article illustration generation", async () => {
+    installHandlers({
+      current: makeRun({
+        currentStep: "inline_image:0",
+        input: {
+          kind: "brief",
+          text: "Brief",
+          channelIds: [CHANNEL_A],
+          contentType: "expert_article",
+          generateInlineImages: true,
+        },
+        steps: { editor: { status: "succeeded", output: { body: "One.\n\nTwo." } } },
+      }),
+    });
+    await renderRun();
+    const rows = await screen.findAllByRole("listitem");
+    const illustrations = rows.find((row) =>
+      row.textContent?.startsWith(en.Runs.step.inline_image),
+    );
+    expect(illustrations).toHaveTextContent(en.Runs.stepState.active);
+  });
+
+  it("explains an unavailable article illustration and keeps the completed draft link", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: ITEM_ID,
+        input: {
+          kind: "brief",
+          text: "Brief",
+          channelIds: [CHANNEL_A],
+          contentType: "expert_article",
+          generateInlineImages: true,
+        },
+        steps: {
+          editor: { status: "succeeded", output: { body: "One.\n\nTwo." } },
+          "inline_image:0": {
+            status: "succeeded",
+            output: { mediaId: null, result: "unavailable" },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    const rows = await screen.findAllByRole("listitem");
+    const illustrations = rows.find((row) =>
+      row.textContent?.startsWith(en.Runs.step.inline_image),
+    );
+    expect(illustrations).toHaveTextContent(en.Runs.stepState.unavailable);
+    expect(illustrations).toHaveTextContent(en.Runs.inlineImagesUnavailable);
+    expect(screen.getByRole("link", { name: en.Runs.draftReady })).toHaveAttribute(
+      "href",
+      `/en/content/${ITEM_ID}`,
+    );
+  });
+
   it("derives each step's state from the run's checkpoints", async () => {
     installHandlers({
       current: makeRun({

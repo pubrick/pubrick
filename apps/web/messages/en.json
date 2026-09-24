@@ -930,12 +930,19 @@
       "editor": "Edit",
       "factcheck": "Claims to verify",
       "adapter": "Adapt for each channel",
-      "cover": "Cover image"
+      "cover": "Cover image",
+      "inline_image": "Article illustrations"
     },
     "coverUnavailable": "No usable cover was returned. If the draft finishes, you can add an image in the editor.",
     "coverReady": "Image generated. It will be attached when the draft is created.",
     "coverSavedNoDraft": "Image generated and saved in the brand media library, but no draft was created.",
     "coverAttached": "Attached to the draft for your review.",
+    "inlineImagesShortDraft": "The draft has fewer than two paragraphs, so no illustration was requested.",
+    "inlineImagesUnavailable": "No usable illustrations were returned. You can add images in the editor.",
+    "inlineImagesPartial": "Some illustrations were unavailable. Review the images attached to the draft.",
+    "inlineImagesSavedNoDraft": "Illustrations were saved in the brand media library, but no draft was created.",
+    "inlineImagesReady": "Illustrations were generated and will be attached when the draft is created.",
+    "inlineImagesAttached": "Illustrations are attached to the draft. Review each image, placement, and description before approval.",
     "stepState": {
       "done": "Done",
       "active": "In progress",

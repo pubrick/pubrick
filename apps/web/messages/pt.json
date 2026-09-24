@@ -930,12 +930,19 @@
       "editor": "Edição",
       "factcheck": "Afirmações a verificar",
       "adapter": "Adaptar para cada canal",
-      "cover": "Imagem de capa"
+      "cover": "Imagem de capa",
+      "inline_image": "Ilustrações do artigo"
     },
     "coverUnavailable": "Não foi recebida uma capa utilizável. Se o rascunho for criado, pode adicionar uma imagem no editor.",
     "coverReady": "Imagem gerada. Será anexada quando o rascunho for criado.",
     "coverSavedNoDraft": "A imagem foi guardada na biblioteca da marca, mas não foi criado um rascunho.",
     "coverAttached": "Anexada ao rascunho para sua revisão.",
+    "inlineImagesShortDraft": "O rascunho tem menos de dois parágrafos, por isso nenhuma ilustração foi solicitada.",
+    "inlineImagesUnavailable": "Nenhuma ilustração utilizável foi recebida. Pode adicionar imagens no editor.",
+    "inlineImagesPartial": "Algumas ilustrações não ficaram disponíveis. Reveja as imagens anexadas ao rascunho.",
+    "inlineImagesSavedNoDraft": "As ilustrações foram guardadas na biblioteca da marca, mas não foi criado um rascunho.",
+    "inlineImagesReady": "As ilustrações foram geradas e serão anexadas quando o rascunho for criado.",
+    "inlineImagesAttached": "As ilustrações estão anexadas ao rascunho. Reveja cada imagem, posição e descrição antes de aprovar.",
     "stepState": {
       "done": "Concluído",
       "active": "Em andamento",

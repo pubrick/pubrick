@@ -1,6 +1,8 @@
 import {
+  autoInlineImagePlacements,
   isLiveRunStatus,
   isRunFailure,
+  MAX_AUTO_INLINE_IMAGES,
   type RunDetailDto,
   type RunDto,
   type RunFailure,
@@ -152,7 +154,7 @@ export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 export type RunDetail = RunDetailDto;
 
 /**
- * The five text roles, followed by an optional cover. `adapter` is one row for
+ * The five text roles, followed by optional image steps. `adapter` is one row for
  * the whole fan-out even though its checkpoints are keyed `adapter:<channelId>`
  * — the human is watching one pipeline, not N of them, and the per-channel
  * progress rides along as a count.
@@ -164,6 +166,7 @@ export const RUN_STEP_KEYS = [
   "factcheck",
   "adapter",
   "cover",
+  "inline_image",
 ] as const;
 export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
 
@@ -183,6 +186,7 @@ export type RunStepProgress = {
 };
 
 const ADAPTER_PREFIX = "adapter:";
+const INLINE_IMAGE_PREFIX = "inline_image:";
 
 /**
  * The live checklist, derived from the run row alone.
@@ -197,42 +201,84 @@ const ADAPTER_PREFIX = "adapter:";
 export function runStepStates(run: RunDetail): RunStepProgress[] {
   const channelIds = run.input?.channelIds ?? [];
 
-  return RUN_STEP_KEYS.filter((key) => key !== "cover" || run.input.generateCover === true).map(
-    (key) => {
-      if (key === "adapter") {
-        const checkpoints = channelIds.map(
-          (channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`],
-        );
-        const done = checkpoints.filter((c) => c?.status === "succeeded").length;
-        const total = channelIds.length;
-        const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
-        const state =
-          total > 0 && done === total
-            ? "done"
-            : stepState(
-                run,
-                checkpoints.find((c) => c?.status === "failed"),
-                isCurrent,
-              );
-        return { key, state, done, total };
-      }
+  return RUN_STEP_KEYS.filter(
+    (key) =>
+      (key !== "cover" || run.input.generateCover === true) &&
+      (key !== "inline_image" || run.input.generateInlineImages === true),
+  ).map((key) => {
+    if (key === "adapter") {
+      const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);
+      const done = checkpoints.filter((c) => c?.status === "succeeded").length;
+      const total = channelIds.length;
+      const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
+      const state =
+        total > 0 && done === total
+          ? "done"
+          : stepState(
+              run,
+              checkpoints.find((c) => c?.status === "failed"),
+              isCurrent,
+            );
+      return { key, state, done, total };
+    }
 
-      const checkpoint = run.steps[key];
-      const isCurrent = run.currentStep === key;
-      if (key === "cover" && checkpoint?.status === "succeeded") {
-        const output = checkpoint.output;
-        if (
-          typeof output === "object" &&
-          output !== null &&
-          "result" in output &&
-          output.result === "unavailable"
-        ) {
-          return { key, state: "unavailable", done: 0, total: 0 };
-        }
+    if (key === "inline_image") {
+      const editorOutput = succeededOutput(run, "editor");
+      const body =
+        isRecord(editorOutput) && typeof editorOutput.body === "string" ? editorOutput.body : null;
+      const placements = body === null ? null : autoInlineImagePlacements(body);
+      const total = placements?.length ?? MAX_AUTO_INLINE_IMAGES;
+      const checkpoints =
+        placements?.map(
+          (placement) => run.steps[`${INLINE_IMAGE_PREFIX}${placement.afterParagraph}`],
+        ) ??
+        Object.entries(run.steps)
+          .filter(([name]) => name.startsWith(INLINE_IMAGE_PREFIX))
+          .map(([, checkpoint]) => checkpoint);
+      const finished = checkpoints.filter(
+        (checkpoint) => checkpoint?.status === "succeeded",
+      ).length;
+      const done = checkpoints.filter((checkpoint) => {
+        const output = checkpoint?.output;
+        return (
+          checkpoint?.status === "succeeded" &&
+          isRecord(output) &&
+          output.result === "generated" &&
+          typeof output.mediaId === "string"
+        );
+      }).length;
+      if (placements?.length === 0) return { key, state: "skipped", done: 0, total: 0 };
+      if (finished === total) {
+        return { key, state: done === total ? "done" : "unavailable", done, total };
       }
-      return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
-    },
-  );
+      const isCurrent = run.currentStep?.startsWith(INLINE_IMAGE_PREFIX) ?? false;
+      return {
+        key,
+        state: stepState(
+          run,
+          checkpoints.find((checkpoint) => checkpoint?.status === "failed"),
+          isCurrent,
+        ),
+        done,
+        total,
+      };
+    }
+
+    const checkpoint = run.steps[key];
+    const isCurrent = run.currentStep === key;
+    if (key === "cover" && checkpoint?.status === "succeeded") {
+      const output = checkpoint.output;
+      if (
+        typeof output === "object" &&
+        output !== null &&
+        "result" in output &&
+        output.result === "unavailable"
+      ) {
+        return { key, state: "unavailable", done: 0, total: 0 };
+      }
+    }
+    return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
+  });
 }
 
 function stepState(
