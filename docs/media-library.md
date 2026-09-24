@@ -1,23 +1,40 @@
 # Media library
 
-Each brand has a reusable image library. A signed-in organization member can
+Each brand has a reusable media library. A signed-in organization member can
 upload JPEG, PNG, or WebP files up to 10 MB from **Brand → Media library**, then
-choose a cover on an editable post. An image can be removed from the library
-after it is detached from every post.
+choose a cover on an editable post. The library also accepts an MP4 video up
+to 20 MB for a Telegram post. A post has one attachment: choosing a video
+replaces its cover, and choosing a cover replaces its video. The editor and
+external client review offer a click-to-play video preview before approval.
+An asset can be removed after it is detached from every post.
 
 The API decodes images with `sharp` (a maintained libvips binding), applies EXIF
 orientation, resizes within 2400 × 2400 pixels, and writes a new JPEG without
 source metadata. This keeps uploaded files from being served as executable
 formats and strips camera/location metadata. Decode is limited to 40 million
 input pixels. Files have server-generated UUID names; the database records
-organization, brand, dimensions, size, and the original display name. The
+organization, brand, kind, dimensions (for images), size, and the original display name. The
 authenticated file endpoint checks organization ownership before reading bytes.
+
+Video upload uses the maintained `file-type` library to detect the MP4 signature
+and checks top-level MP4 box lengths for a complete `ftyp`, `mdat` and `moov`.
+It rejects a mismatched declared MIME type, truncated files and files outside
+1 KB–20 MB, and stores the original bytes with a server-generated `.mp4` name.
+It does **not** decode, transcode, inspect codecs or prove that the whole file
+will play in every Telegram client. Test the clip in the review preview before
+approving. A Telegram codec/container rejection becomes a failed delivery;
+Pubrick does not claim video generation. The private file endpoint supports
+byte ranges for playback. External review ranges recheck the live, expiring
+capability on every request, enforce stored size and return `no-store` and
+`no-referrer` headers. Replacing or removing video invalidates the review snapshot.
+The current library has no caption-file sidecar for video audio; provide an
+accessible text description in the post body when sharing a clip.
 
 `MEDIA_STORAGE_DIR` points to a directory shared by the API and worker. Docker
 Compose mounts the named `media` volume into both services; `init.sh` sets it to
 `./.data/media`. Back up this directory **together with Postgres**. Copying only
-the database preserves post references but loses their image bytes. Uploaded
-images remain local to the self-hosted instance.
+the database preserves post references but loses their media bytes. Uploaded
+media remains local to the self-hosted instance.
 
 Deleting a brand removes its asset rows and then deletes their files. If the
 process stops between those two steps, an unreferenced file can remain on disk;
@@ -27,6 +44,13 @@ the brand deletion still succeeds and the server logs any removal failure.
 
 Telegram, VK, MAX, and Bluesky accept a single JPEG cover. Telegram uses one `sendPhoto`
 request with the reviewed text as its caption (maximum 1024 characters).
+Telegram video uses one `sendVideo` request with the reviewed MP4 and a caption
+of at most 1024 characters. This milestone supports **Telegram video only**;
+attaching a video to a post with VK, MAX, Bluesky, Mastodon or VC.ru targets is
+refused before approval. The worker also checks the organization, brand, media
+kind and stored byte length before sending. An uncertain `sendVideo` result is
+terminal until reconciled, preventing an automatic duplicate. There is no
+provider call when a video is uploaded or previewed.
 VK uses the official `photos.getWallUploadServer` → multipart upload →
 `photos.saveWallPhoto` → `wall.post` path and attaches the saved community photo
 to the reviewed text ([VK photo methods](https://github.com/VKCOM/vk-api-schema/blob/master/photos/methods.json),

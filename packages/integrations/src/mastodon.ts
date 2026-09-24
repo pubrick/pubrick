@@ -205,6 +205,8 @@ export const mastodonPublisher: Publisher<MastodonCredentials> = {
   },
 
   async publish(credentials, input, options): Promise<PublishResult> {
+    if (input.video)
+      throw new PermanentPublishError("Mastodon video delivery is not available yet");
     const origin = instanceOrigin(credentials, options);
     if (input.image) {
       throw new PermanentPublishError("Mastodon cover publishing is unavailable; remove the cover");

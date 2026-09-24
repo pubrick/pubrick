@@ -257,6 +257,7 @@ export const blueskyPublisher: Publisher<BlueskyCredentials> = {
   },
 
   async publish(credentials, input, options): Promise<PublishResult> {
+    if (input.video) throw new PermanentPublishError("Bluesky video delivery is not available yet");
     const richText = new RichText({ text: input.text });
     const length = richText.graphemeLength;
     if (length < 1 || length > MAX_GRAPHEMES) {

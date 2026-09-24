@@ -13,6 +13,7 @@ export function MediaLibrary({
   brandId,
   itemId,
   selectedId,
+  selectedKind,
   editable = false,
   onChange,
   uploadInputId = "media-upload",
@@ -21,6 +22,7 @@ export function MediaLibrary({
   brandId: string;
   itemId?: string;
   selectedId?: string | null;
+  selectedKind?: "image" | "video";
   editable?: boolean;
   onChange?: () => void;
   uploadInputId?: string;
@@ -113,11 +115,11 @@ export function MediaLibrary({
     }
   }
 
-  async function attach(mediaId: string | null) {
+  async function attach(mediaId: string | null, kind: "image" | "video") {
     if (!itemId || !editable) return;
     setBusy(true);
     try {
-      await api(`/api/media/posts/${itemId}/cover`, {
+      await api(`/api/media/posts/${itemId}/${kind === "video" ? "video" : "cover"}`, {
         method: "PATCH",
         body: JSON.stringify({ mediaId }),
       });
@@ -161,7 +163,7 @@ export function MediaLibrary({
       <input
         id={uploadInputId}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/jpeg,image/png,image/webp,video/mp4"
         className="sr-only"
         disabled={busy}
         onChange={(event) => {
@@ -233,13 +235,25 @@ export function MediaLibrary({
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {assets.map((asset) => (
             <li key={asset.id} className="overflow-hidden rounded-control border border-border">
-              {/* Authenticated, tenant-scoped file endpoint. */}
-              {/* biome-ignore lint/performance/noImgElement: this endpoint requires the signed-in session */}
-              <img
-                src={`/api/media/${asset.id}/file`}
-                alt={asset.name}
-                className="aspect-square w-full object-cover"
-              />
+              {asset.kind === "video" ? (
+                // biome-ignore lint/a11y/useMediaCaption: The library stores the original MP4 without an optional caption sidecar.
+                <video
+                  src={`/api/media/${asset.id}/file`}
+                  controls
+                  preload="none"
+                  playsInline
+                  aria-label={asset.name}
+                  className="aspect-square w-full bg-black object-contain"
+                />
+              ) : (
+                // Authenticated, tenant-scoped file endpoint.
+                // biome-ignore lint/performance/noImgElement: this endpoint requires the signed-in session
+                <img
+                  src={`/api/media/${asset.id}/file`}
+                  alt={asset.name}
+                  className="aspect-square w-full object-cover"
+                />
+              )}
               <div className="space-y-2 p-2">
                 <p className="truncate text-xs text-fg-secondary" title={asset.name}>
                   {asset.name}
@@ -257,12 +271,12 @@ export function MediaLibrary({
                       size="sm"
                       variant="secondary"
                       disabled={!editable || busy}
-                      onClick={() => void attach(asset.id)}
+                      onClick={() => void attach(asset.id, asset.kind)}
                     >
                       {t("use")}
                     </Button>
                   ))}
-                {hasGoogleKey && (
+                {hasGoogleKey && asset.kind === "image" && (
                   <Button
                     size="sm"
                     variant="secondary"
@@ -305,7 +319,7 @@ export function MediaLibrary({
           size="sm"
           variant="secondary"
           disabled={!editable || busy}
-          onClick={() => void attach(null)}
+          onClick={() => void attach(null, selectedKind ?? "image")}
           className="mt-3"
         >
           {t("detach")}

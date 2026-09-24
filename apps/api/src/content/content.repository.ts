@@ -1377,6 +1377,7 @@ export class ContentRepository {
       db
         .select({
           coverMediaId: schema.contentItems.coverMediaId,
+          videoMediaId: schema.contentItems.videoMediaId,
           linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
         })
         .from(schema.contentItems)
@@ -1405,6 +1406,7 @@ export class ContentRepository {
     return {
       ...item,
       coverMediaId: cover[0]?.coverMediaId ?? null,
+      videoMediaId: cover[0]?.videoMediaId ?? null,
       linkPolicyWebsite: cover[0]?.linkPolicyWebsite ?? null,
       adaptations,
       /**
@@ -3891,11 +3893,18 @@ export class ContentRepository {
             )
         : [];
       const cover = await tx
-        .select({ id: schema.contentItems.coverMediaId, body: schema.contentItems.body })
+        .select({
+          id: schema.contentItems.coverMediaId,
+          videoId: schema.contentItems.videoMediaId,
+          body: schema.contentItems.body,
+        })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
         .limit(1);
       const coveredItem = cover[0];
+      if (coveredItem?.id && coveredItem.videoId) {
+        throw conflict("content_media_invalid", "A post cannot publish both a cover and a video");
+      }
       if (coveredItem?.id) {
         if (
           platforms.some(
@@ -3928,6 +3937,32 @@ export class ContentRepository {
           throw conflict(
             "content_media_caption_too_long",
             "Telegram photo captions must be 1024 characters or fewer",
+          );
+        }
+      }
+      if (coveredItem?.videoId) {
+        if (platforms.some((channel) => channel.platform !== "telegram") || manualReady.length) {
+          throw conflict(
+            "content_media_unsupported",
+            "Videos currently publish only to Telegram channels",
+          );
+        }
+        const overrideBodies = await tx
+          .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
+          .from(schema.adaptations)
+          .where(
+            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
+          );
+        const telegramChannelIds = new Set(platforms.map((channel) => channel.id));
+        if (
+          overrideBodies.some(
+            (row) =>
+              telegramChannelIds.has(row.channelId) && (row.body ?? coveredItem.body).length > 1024,
+          )
+        ) {
+          throw conflict(
+            "content_media_caption_too_long",
+            "Telegram video captions must be 1024 characters or fewer",
           );
         }
       }

@@ -5,7 +5,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
 import { mediaAssetDtoSchema } from "@pubrick/shared";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import sharp from "sharp";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ describe.skipIf(!url)("media library e2e", () => {
   let mediaDir: string;
   let direct: ReturnType<typeof createDb>;
   let generatedPng: Buffer;
+  let tinyMp4: Buffer;
   const modelCall = vi.fn<GeminiImageCaller["call"]>(async (_key, _prompt, _source) => ({
     bytes: generatedPng,
     mimeType: "image/png",
@@ -42,6 +43,8 @@ describe.skipIf(!url)("media library e2e", () => {
     })
       .png()
       .toBuffer();
+    // A 16x16, ten-frame H.264 MP4 generated locally with AVFoundation.
+    tinyMp4 = await readFile(path.resolve(process.cwd(), "src/media/fixtures/tiny-h264.mp4"));
     const { AppModule } = await import("../app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(GeminiImageCaller)
@@ -127,6 +130,182 @@ describe.skipIf(!url)("media library e2e", () => {
       })
       .expect(400);
     expect((await owner.get(`/api/media?brandId=${brand.body.id}`).expect(200)).body).toEqual([]);
+  });
+
+  it("accepts a scoped MP4, streams ranges, and protects a Telegram attachment", async () => {
+    const owner = await agent();
+    const stranger = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Video brand" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other brand" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Video updates",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const item = await owner
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "Video caption",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const foreign = await owner
+      .post(`/api/media?brandId=${otherBrand.body.id}`)
+      .attach("file", tinyMp4, { filename: "foreign.mp4", contentType: "video/mp4" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/video`)
+      .send({ mediaId: foreign.body.id })
+      .expect(404);
+    const uploaded = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "clip.mp4", contentType: "video/mp4" })
+      .expect(201);
+    expect(uploaded.body).toMatchObject({
+      kind: "video",
+      mimeType: "video/mp4",
+      width: null,
+      height: null,
+      byteSize: tinyMp4.length,
+    });
+    expect(mediaAssetDtoSchema.safeParse(uploaded.body).success).toBe(true);
+    expect(await readFile(path.join(mediaDir, `${uploaded.body.id}.mp4`))).toEqual(tinyMp4);
+    await stranger.get(`/api/media/${uploaded.body.id}/file`).expect(404);
+    const range = await owner
+      .get(`/api/media/${uploaded.body.id}/file`)
+      .set("Range", "bytes=0-15")
+      .expect(206);
+    expect(range.headers["content-type"]).toMatch(/video\/mp4/);
+    expect(range.headers["content-range"]).toBe(`bytes 0-15/${tinyMp4.length}`);
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/video`)
+      .send({ mediaId: uploaded.body.id })
+      .expect(200);
+    expect((await owner.get(`/api/content/${item.body.id}`).expect(200)).body).toMatchObject({
+      videoMediaId: uploaded.body.id,
+      coverMediaId: null,
+    });
+    const cover = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "cover.png", contentType: "image/png" })
+      .expect(201);
+    await expect(
+      direct.db
+        .update(schema.contentItems)
+        .set({ coverMediaId: cover.body.id })
+        .where(eq(schema.contentItems.id, item.body.id)),
+    ).rejects.toThrow();
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/cover`)
+      .send({ mediaId: cover.body.id })
+      .expect(200);
+    expect((await owner.get(`/api/content/${item.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: cover.body.id,
+      videoMediaId: null,
+    });
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/video`)
+      .send({ mediaId: uploaded.body.id })
+      .expect(200);
+    expect((await owner.get(`/api/content/${item.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: null,
+      videoMediaId: uploaded.body.id,
+    });
+    await owner.delete(`/api/media/${uploaded.body.id}`).expect(409);
+    const approved = await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(200);
+    expect(approved.body.adaptations).toMatchObject([{ status: "queued" }]);
+    await owner.patch(`/api/media/posts/${item.body.id}/video`).send({ mediaId: null }).expect(409);
+  });
+
+  it("rejects spoofed and truncated MP4 uploads and a video on non-Telegram posts", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Video validation" }).expect(201);
+    for (const bad of [
+      { bytes: Buffer.from("not an mp4"), filename: "fake.mp4", mime: "video/mp4" },
+      { bytes: tinyMp4.subarray(0, 64), filename: "cut.mp4", mime: "video/mp4" },
+      { bytes: tinyMp4.subarray(0, -12), filename: "tail-cut.mp4", mime: "video/mp4" },
+      {
+        bytes: Buffer.concat([tinyMp4.subarray(0, 28), Buffer.alloc(1000)]),
+        filename: "ftyp-only.mp4",
+        mime: "video/mp4",
+      },
+      { bytes: tinyMp4, filename: "wrong.mp4", mime: "image/png" },
+      { bytes: Buffer.alloc(20 * 1024 * 1024 + 1), filename: "huge.mp4", mime: "video/mp4" },
+    ]) {
+      await owner
+        .post(`/api/media?brandId=${brand.body.id}`)
+        .attach("file", bad.bytes, { filename: bad.filename, contentType: bad.mime })
+        .expect(bad.filename === "huge.mp4" ? 413 : 400);
+    }
+    expect((await owner.get(`/api/media?brandId=${brand.body.id}`).expect(200)).body).toEqual([]);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "vk",
+        name: "VK",
+        credentials: { accessToken: "test-user-token", groupId: "12345" },
+      })
+      .expect(201);
+    const item = await owner
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "Text",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "real.mp4", contentType: "video/mp4" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(409);
+    const telegram = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Telegram",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const telegramPost = await owner
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "Video",
+        channelIds: [telegram.body.id],
+      })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${telegramPost.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    // A channel changed after attachment is still rejected by the approval gate.
+    await direct.db
+      .update(schema.adaptations)
+      .set({ channelId: channel.body.id })
+      .where(eq(schema.adaptations.id, telegramPost.body.adaptations[0].id));
+    await owner.post(`/api/content/${telegramPost.body.id}/approve`).send({}).expect(409);
+    // The database rejects an image record with absent dimensions even for direct writers.
+    const [storedBrand] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id))
+      .limit(1);
+    if (!storedBrand) throw new Error("Test brand was not persisted");
+    await expect(
+      direct.db.execute(sql`INSERT INTO media_assets (org_id, brand_id, name, kind, mime_type, width, height, byte_size)
+      VALUES (${storedBrand.orgId}, ${brand.body.id}, 'bad image', 'image', 'image/jpeg', NULL, 2, 100)`),
+    ).rejects.toThrow();
   });
 
   it("removes an uploaded file when its brand is deleted", async () => {

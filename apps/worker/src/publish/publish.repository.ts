@@ -13,6 +13,7 @@ import {
   type PublishFailureReason,
 } from "@pubrick/shared";
 import { and, eq, inArray, isNull, type SQLWrapper, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
@@ -28,6 +29,9 @@ export type LoadedAdaptation = {
   channelBrandId: string;
   coverMediaId: string | null;
   coverAuthorizedId: string | null;
+  videoMediaId?: string | null;
+  videoAuthorizedId?: string | null;
+  videoByteSize?: number | null;
   /** Parent content item's status: `rejected` means do not deliver. */
   itemStatus: ContentStatus;
   platform: PlatformId;
@@ -516,6 +520,7 @@ export class PublishRepository {
    * published yesterday's post with nothing in the record to say it was late.
    */
   async load(orgId: string, adaptationId: string): Promise<LoadedAdaptation | undefined> {
+    const videoAsset = alias(schema.mediaAssets, "video_asset");
     const rows = await db
       .select({
         id: schema.adaptations.id,
@@ -528,6 +533,9 @@ export class PublishRepository {
         channelBrandId: schema.channels.brandId,
         coverMediaId: schema.contentItems.coverMediaId,
         coverAuthorizedId: schema.mediaAssets.id,
+        videoMediaId: schema.contentItems.videoMediaId,
+        videoAuthorizedId: videoAsset.id,
+        videoByteSize: videoAsset.byteSize,
         itemStatus: schema.contentItems.status,
         platform: schema.channels.platform,
         attemptCount: schema.adaptations.attemptCount,
@@ -548,6 +556,16 @@ export class PublishRepository {
           eq(schema.mediaAssets.id, schema.contentItems.coverMediaId),
           eq(schema.mediaAssets.orgId, schema.contentItems.orgId),
           eq(schema.mediaAssets.brandId, schema.contentItems.brandId),
+          eq(schema.mediaAssets.kind, "image"),
+        ),
+      )
+      .leftJoin(
+        videoAsset,
+        and(
+          eq(videoAsset.id, schema.contentItems.videoMediaId),
+          eq(videoAsset.orgId, schema.contentItems.orgId),
+          eq(videoAsset.brandId, schema.contentItems.brandId),
+          eq(videoAsset.kind, "video"),
         ),
       )
       .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))

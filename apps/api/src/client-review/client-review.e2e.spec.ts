@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { INestApplication } from "@nestjs/common";
@@ -211,5 +211,38 @@ describe.skipIf(!url)("client approval links", () => {
     await owner.patch(`/api/content/${itemId}`).send({ body: "Changed" }).expect(200);
     const closed = await guest.get(preview.body.preview.coverUrl).expect(410);
     expect(closed.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("streams a bounded video through the live capability and makes replacement stale", async () => {
+    const owner = await orgAgent();
+    const { itemId, brandId } = await draft(owner);
+    const bytes = await readFile(path.resolve(process.cwd(), "src/media/fixtures/tiny-h264.mp4"));
+    const uploaded = await owner
+      .post(`/api/media?brandId=${brandId}`)
+      .attach("file", bytes, { filename: "review.mp4", contentType: "video/mp4" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${itemId}/video`)
+      .send({ mediaId: uploaded.body.id })
+      .expect(200);
+    const created = await owner
+      .post(`/api/content/${itemId}/client-review-link`)
+      .send({})
+      .expect(201);
+    const guest = request(app.getHttpServer());
+    const url = `/api/client-review/${created.body.token}/video`;
+    const preview = await guest.get(`/api/client-review/${created.body.token}`).expect(200);
+    expect(preview.body.preview.videoUrl).toBe(url);
+    expect(preview.body.preview.coverUrl).toBeNull();
+    const range = await guest.get(url).set("Range", "bytes=0-15").expect(206);
+    expect(range.headers["content-type"]).toMatch(/^video\/mp4/);
+    expect(range.headers["content-range"]).toBe(`bytes 0-15/${bytes.length}`);
+    expect(range.headers["cache-control"]).toContain("no-store");
+    expect(range.headers["referrer-policy"]).toBe("no-referrer");
+    await owner.patch(`/api/media/posts/${itemId}/video`).send({ mediaId: null }).expect(200);
+    await guest.get(url).set("Range", "bytes=16-31").expect(410);
+    expect(
+      (await owner.get(`/api/content/${itemId}/client-review-link`).expect(200)).body.status,
+    ).toBe("stale");
   });
 });

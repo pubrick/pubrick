@@ -16,6 +16,7 @@ type GuestReview = {
     body: string;
     channels: { name: string; platform: string; body: string }[];
     coverUrl: string | null;
+    videoUrl: string | null;
   };
   comment: string | null;
   reviewedAt: string | null;
@@ -128,6 +129,17 @@ export default function ClientReviewPage({ token }: { token: string }) {
                 alt={t("coverAlt")}
                 referrerPolicy="no-referrer"
                 className="mt-4 h-auto max-h-96 w-full rounded-control object-contain"
+              />
+            )}
+            {review.preview.videoUrl && (
+              // biome-ignore lint/a11y/useMediaCaption: Uploaded clips have no caption track in this milestone; the written draft remains visible above.
+              <video
+                src={`${endpoint}/video`}
+                controls
+                preload="none"
+                playsInline
+                aria-label={t("videoLabel")}
+                className="mt-4 max-h-96 w-full rounded-control bg-black"
               />
             )}
           </Card>

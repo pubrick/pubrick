@@ -401,6 +401,29 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       );
     }
 
+    if (input.video) {
+      if (
+        input.image ||
+        input.text.length > 1024 ||
+        input.video.bytes.length < 1024 ||
+        input.video.bytes.length > 20 * 1024 * 1024 ||
+        input.video.mimeType !== "video/mp4"
+      ) {
+        throw new PermanentPublishError(
+          "Telegram video requires one MP4 under 20 MB and a caption of at most 1024 characters",
+        );
+      }
+      const payload = new FormData();
+      payload.append("chat_id", credentials.chatId);
+      payload.append("caption", input.text);
+      payload.append(
+        "video",
+        new Blob([new Uint8Array(input.video.bytes)], { type: "video/mp4" }),
+        "video.mp4",
+      );
+      return messageLink(await call<unknown>("sendVideo", credentials, payload, options));
+    }
+
     if (input.image) {
       if (
         input.text.length > 1024 ||

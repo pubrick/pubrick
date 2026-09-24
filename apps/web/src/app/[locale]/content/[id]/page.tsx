@@ -100,6 +100,7 @@ type ContentItem = {
   id: string;
   brandId: string;
   coverMediaId: string | null;
+  videoMediaId: string | null;
   title: string | null;
   body: string;
   status: ContentStatus;
@@ -983,7 +984,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function previewLimit(channelId: string): number {
     const ch = channels.find((c) => c.id === channelId);
-    return ch?.platform === "telegram" && item?.coverMediaId ? 1024 : overrideLimit(channelId);
+    return ch?.platform === "telegram" && (item?.coverMediaId || item?.videoMediaId)
+      ? 1024
+      : overrideLimit(channelId);
   }
 
   function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
@@ -994,6 +997,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     const unsaved =
       override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const telegramVideo = channel?.platform === "telegram" && currentItem.videoMediaId !== null;
     const limit = previewLimit(adaptation.channelId);
 
     return (
@@ -1021,11 +1025,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             className="mb-3 max-h-64 w-full rounded-control object-contain"
           />
         )}
+        {telegramVideo && (
+          // biome-ignore lint/a11y/useMediaCaption: Uploaded clips have no caption track in this milestone; the written post remains visible below.
+          <video
+            src={`/api/media/${currentItem.videoMediaId}/file`}
+            controls
+            preload="none"
+            playsInline
+            aria-label={t("reviewPreviewVideoLabel")}
+            className="mb-3 max-h-64 w-full rounded-control bg-black"
+          />
+        )}
         {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
         <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
         {previewText.length > limit && (
           <p role="alert" className="mt-3 text-sm text-danger">
-            {telegramCover
+            {telegramCover || telegramVideo
               ? t("reviewPreviewCaptionTooLong", { limit })
               : t("reviewPreviewTooLong", { limit })}
           </p>
@@ -1662,6 +1677,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         revision={JSON.stringify([
           item.updatedAt,
           item.coverMediaId,
+          item.videoMediaId,
           item.adaptations.map((adaptation) => [adaptation.id, adaptation.body]),
         ])}
       />
@@ -1990,14 +2006,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       </ul>
       <div className="mt-6">
         <Button variant="secondary" onClick={() => setShowMedia((current) => !current)}>
-          {item.coverMediaId ? tm("selected") : tm("title")}
+          {item.coverMediaId || item.videoMediaId ? tm("selected") : tm("title")}
         </Button>
       </div>
       {showMedia && (
         <MediaLibrary
           brandId={item.brandId}
           itemId={item.id}
-          selectedId={item.coverMediaId}
+          selectedId={item.videoMediaId ?? item.coverMediaId}
+          selectedKind={item.videoMediaId ? "video" : "image"}
           editable={["draft", "rejected", "failed"].includes(item.status)}
           onChange={() => void reload()}
         />

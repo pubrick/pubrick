@@ -259,6 +259,7 @@ export const vkPublisher: Publisher<VkCredentials> = {
   credentialsSchema,
 
   async publish(credentials, input, options): Promise<PublishResult> {
+    if (input.video) throw new PermanentPublishError("VK video delivery is not available yet");
     if (input.text.length < 1 || input.text.length > this.maxTextLength) {
       throw new PermanentPublishError(
         `Text must be 1..${this.maxTextLength} characters, got ${input.text.length}`,

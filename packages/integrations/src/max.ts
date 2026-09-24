@@ -211,6 +211,7 @@ export const maxPublisher: Publisher<MaxCredentials> = {
   credentialsSchema,
 
   async publish(credentials, input, options): Promise<PublishResult> {
+    if (input.video) throw new PermanentPublishError("MAX video delivery is not available yet");
     if (input.text.length < 1 || input.text.length > PLATFORM_MAX_TEXT_LENGTH.max) {
       throw new PermanentPublishError(
         `Text must be 1..${PLATFORM_MAX_TEXT_LENGTH.max} characters, got ${input.text.length}`,

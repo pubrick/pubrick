@@ -167,7 +167,7 @@ export class BrandsRepository {
         .for("update");
       if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
       const assets = await tx
-        .select({ id: schema.mediaAssets.id })
+        .select({ id: schema.mediaAssets.id, kind: schema.mediaAssets.kind })
         .from(schema.mediaAssets)
         .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.brandId, id)));
 
@@ -232,19 +232,19 @@ export class BrandsRepository {
       await tx
         .delete(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)));
-      return assets.map((asset) => asset.id);
+      return assets;
     });
     // The database is authoritative. A filesystem failure after commit cannot
     // turn a successful brand deletion into a retryable 500, so report an
     // orphaned file for operator cleanup without reversing the result.
     await Promise.all(
-      mediaIds.map(async (mediaId) => {
+      mediaIds.map(async (asset) => {
         try {
-          await unlink(mediaPath(mediaId));
+          await unlink(mediaPath(asset.id, asset.kind));
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
             this.logger.warn(
-              `Could not remove media file after brand deletion: mediaId=${mediaId} error=${String(error)}`,
+              `Could not remove media file after brand deletion: mediaId=${asset.id} error=${String(error)}`,
             );
           }
         }

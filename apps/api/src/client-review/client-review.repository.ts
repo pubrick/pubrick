@@ -22,6 +22,7 @@ type ReviewSnapshot = {
   title: string;
   body: string;
   coverMediaId: string | null;
+  videoMediaId: string | null;
   status: string;
   channels: Array<{
     adaptationId: string;
@@ -57,6 +58,8 @@ function snapshotHash(snapshot: ReviewSnapshot): string {
       title: snapshot.title,
       body: snapshot.body,
       coverMediaId: snapshot.coverMediaId,
+      // Preserve hashes for existing image/text links issued before video support.
+      ...(snapshot.videoMediaId ? { videoMediaId: snapshot.videoMediaId } : {}),
       channels: snapshot.channels.map(({ adaptationId, channelId, name, platform, body }) => ({
         adaptationId,
         channelId,
@@ -80,6 +83,7 @@ async function snapshotFor(
       title: schema.contentItems.title,
       body: schema.contentItems.body,
       coverMediaId: schema.contentItems.coverMediaId,
+      videoMediaId: schema.contentItems.videoMediaId,
       status: schema.contentItems.status,
     })
     .from(schema.contentItems)
@@ -108,6 +112,7 @@ async function snapshotFor(
     title: item.title ?? "",
     body: item.body,
     coverMediaId: item.coverMediaId,
+    videoMediaId: item.videoMediaId,
     status: item.status,
     channels: channels.map((row) => ({ ...row, body: row.body ?? item.body })),
   };
@@ -298,6 +303,7 @@ export class ClientReviewRepository {
         body: snapshot.body,
         channels: snapshot.channels.map(({ name, platform, body }) => ({ name, platform, body })),
         coverUrl: snapshot.coverMediaId ? `/api/client-review/${token}/cover` : null,
+        videoUrl: snapshot.videoMediaId ? `/api/client-review/${token}/video` : null,
       },
       comment: link.comment,
       reviewedAt: link.reviewedAt?.toISOString() ?? null,
@@ -320,6 +326,12 @@ export class ClientReviewRepository {
       .limit(1);
     if (!asset) throw notFound("client_review_link_invalid", "Cover not found");
     return this.media.file(snapshot.orgId, asset.id);
+  }
+
+  async video(token: string): Promise<string> {
+    const { snapshot } = await this.livePreview(token);
+    if (!snapshot.videoMediaId) throw notFound("client_review_link_invalid", "Video not found");
+    return this.media.videoForReview(snapshot.orgId, snapshot.brandId, snapshot.videoMediaId);
   }
 
   async verdict(token: string, input: ClientReviewVerdictInput) {

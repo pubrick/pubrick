@@ -97,6 +97,60 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PublishService.handle", () => {
+  it("loads the reviewed MP4 bytes for Telegram and records publication", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-video-"));
+    const previous = process.env.MEDIA_STORAGE_DIR;
+    process.env.MEDIA_STORAGE_DIR = directory;
+    const videoMediaId = "00000000-0000-4000-8000-000000000010";
+    const bytes = Buffer.alloc(1232, 1);
+    try {
+      await writeFile(path.join(directory, `${videoMediaId}.mp4`), bytes);
+      const { repo } = fixture({
+        videoMediaId,
+        videoAuthorizedId: videoMediaId,
+        videoByteSize: bytes.length,
+      });
+      const publish = vi
+        .fn()
+        .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(publish).toHaveBeenCalledWith(
+        { botToken: "1:a", chatId: "-100" },
+        { text: "Hello", video: { bytes, mimeType: "video/mp4" } },
+        expect.anything(),
+      );
+      expect(repo.markPublished).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
+      else process.env.MEDIA_STORAGE_DIR = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an unsupported or unscoped video before calling a publisher", async () => {
+    const id = "00000000-0000-4000-8000-000000000010";
+    for (const overrides of [
+      { videoMediaId: id, videoAuthorizedId: id, videoByteSize: 1232, platform: "vk" },
+      { videoMediaId: id, videoAuthorizedId: null, videoByteSize: 1232 },
+      { videoMediaId: id, videoAuthorizedId: id, videoByteSize: 1232, coverMediaId: id },
+    ]) {
+      const { repo } = fixture(overrides);
+      const publish = vi.fn();
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(publish).not.toHaveBeenCalled();
+      expect(repo.markFailed).toHaveBeenCalledOnce();
+    }
+  });
   it("loads a stored cover and passes its bytes to the Telegram publisher", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-cover-"));
     const previous = process.env.MEDIA_STORAGE_DIR;
