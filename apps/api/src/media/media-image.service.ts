@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { type MediaGenerate, toLedgerCostUsd } from "@pubrick/shared";
+import {
+  IMAGE_CALL_STEPS,
+  MAX_IMAGE_CALLS_PER_HOUR,
+  type MediaGenerate,
+  toLedgerCostUsd,
+} from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { conflict } from "../api-error";
@@ -12,9 +17,6 @@ import {
   imageCostUsd,
 } from "./gemini-image.caller";
 import { MediaRepository } from "./media.repository";
-
-const IMAGE_STEPS = ["image_generate", "image_regenerate"];
-const MAX_IMAGE_CALLS_PER_HOUR = 12;
 
 @Injectable()
 export class MediaImageService {
@@ -37,7 +39,7 @@ export class MediaImageService {
       .where(
         and(
           eq(schema.usageLedger.orgId, orgId),
-          inArray(schema.usageLedger.step, IMAGE_STEPS),
+          inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
           sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
         ),
       );

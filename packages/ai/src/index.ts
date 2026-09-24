@@ -6,6 +6,13 @@ export {
   withRunFailure,
 } from "./classify.js";
 export {
+  GeminiImageCaller,
+  IMAGE_MODEL,
+  type ImageCall,
+  type ImageUsage,
+  imageCostUsd,
+} from "./gemini-image.js";
+export {
   type GenerateStructuredArgs,
   generateStructured,
   type ModelCallOptions,

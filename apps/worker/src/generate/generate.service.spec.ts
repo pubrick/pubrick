@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Logger } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { channelOf, type ScriptedUsage, scriptedModel } from "../test/scripted-model";
 
@@ -54,8 +58,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   let Repository: GenerateRepositoryCtor;
   let Service: GenerateServiceCtor;
   let seq = 0;
+  let mediaDir: string;
 
   beforeAll(async () => {
+    mediaDir = await mkdtemp(path.join(tmpdir(), "pubrick-cover-test-"));
+    process.env.MEDIA_STORAGE_DIR = mediaDir;
     process.env.DATABASE_URL = url as string;
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
 
@@ -72,6 +79,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   afterAll(async () => {
     await pool?.end();
     await workerPool?.end();
+    delete process.env.MEDIA_STORAGE_DIR;
+    if (mediaDir) await rm(mediaDir, { recursive: true, force: true });
   });
 
   type Seeded = {
@@ -90,6 +99,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     defaultModel?: string;
     /** Distinct per org where a test has to see WHOSE brand was read. */
     brandName?: string;
+    generateCover?: boolean;
   };
 
   async function seed(options: SeedOptions = {}): Promise<Seeded> {
@@ -149,7 +159,16 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
     const [run] = await db
       .insert(schema.pipelineRuns)
-      .values({ orgId, brandId, input: { kind: "brief", text: BRIEF, channelIds } })
+      .values({
+        orgId,
+        brandId,
+        input: {
+          kind: "brief",
+          text: BRIEF,
+          channelIds,
+          ...(options.generateCover && { generateCover: true }),
+        },
+      })
       .returning({ id: schema.pipelineRuns.id });
 
     return { orgId, brandId, runId: run?.id as string, channelIds, channelNames };
@@ -159,8 +178,11 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   function serviceFor(
     model: ReturnType<typeof scriptedModel>,
     repo: GenerateRepository = new Repository(),
+    imageCaller?: {
+      call: (key: string, prompt: string) => Promise<import("@pubrick/ai").ImageCall>;
+    },
   ): GenerateService {
-    return new Service(repo, () => model.model as never, 0);
+    return new Service(repo, () => model.model as never, 0, imageCaller);
   }
 
   async function runRow(runId: string) {
@@ -178,6 +200,129 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   async function ledgerOf(orgId: string) {
     return db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId));
   }
+
+  describe("opt-in draft covers", () => {
+    it("does not call the image provider unless the run requested a cover", async () => {
+      const seeded = await seed();
+      const imageCaller = { call: vi.fn() };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-off",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(imageCaller.call).not.toHaveBeenCalled();
+      expect((await itemsOf(seeded.orgId))[0]?.coverMediaId).toBeNull();
+    });
+
+    it("attaches a normalized image only to its new draft and records its cost", async () => {
+      const seeded = await seed({ generateCover: true });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 50,
+          usage: {
+            promptTokenCount: 100,
+            candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 1120 }],
+          },
+        })),
+      };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-success",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const [item] = await itemsOf(seeded.orgId);
+      expect(item?.status).toBe("draft");
+      expect(item?.coverMediaId).toBeTruthy();
+      expect(item?.firstOpenedAt).toBeNull();
+      const [asset] = await db
+        .select()
+        .from(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.id, item?.coverMediaId as string));
+      expect(asset).toMatchObject({
+        orgId: seeded.orgId,
+        brandId: seeded.brandId,
+        mimeType: "image/jpeg",
+      });
+      expect(
+        (await readFile(path.join(mediaDir, `${item?.coverMediaId}.jpg`))).length,
+      ).toBeGreaterThan(0);
+      const coverCall = (await ledgerOf(seeded.orgId)).find((row) => row.step === "cover");
+      expect(coverCall).toMatchObject({
+        outcome: "completed",
+        costSource: "price_table",
+        provider: "google",
+      });
+      expect((await runRow(seeded.runId))?.steps.cover?.output).toMatchObject({
+        mediaId: item?.coverMediaId,
+        result: "generated",
+      });
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the text draft when the image outcome and cost are unknown", async () => {
+      const seeded = await seed({ generateCover: true });
+      const imageCaller = {
+        call: vi.fn(async () => ({ outcome: "unknown" as const, responseMs: 120_000 })),
+      };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "cover-unknown",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect((await itemsOf(seeded.orgId))[0]).toMatchObject({
+        status: "draft",
+        coverMediaId: null,
+      });
+      expect((await runRow(seeded.runId))?.steps.cover?.output).toEqual({
+        mediaId: null,
+        result: "unavailable",
+      });
+      expect((await ledgerOf(seeded.orgId)).find((row) => row.step === "cover")).toMatchObject({
+        outcome: "unknown",
+        costSource: "unknown",
+        status: "errored",
+      });
+    });
+
+    it("resumes from the cover checkpoint without buying another image", async () => {
+      const seeded = await seed({ generateCover: true });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 5,
+        })),
+      };
+      const repo = new Repository();
+      const finish = vi
+        .spyOn(repo, "finish")
+        .mockRejectedValue(new Error("temporary database failure"));
+      const service = serviceFor(scriptedModel(), repo, imageCaller);
+      const job = { id: "cover-resume", data: { runId: seeded.runId, orgId: seeded.orgId } };
+      await expect(service.handle(job)).rejects.toThrow("temporary database failure");
+      expect((await runRow(seeded.runId))?.steps.cover?.status).toBe("succeeded");
+      finish.mockRestore();
+      await service.handle(job);
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+      const checkpoint = (await runRow(seeded.runId))?.steps.cover?.output as { mediaId: string };
+      expect((await itemsOf(seeded.orgId))[0]).toMatchObject({
+        status: "draft",
+        coverMediaId: checkpoint.mediaId,
+      });
+      expect((await ledgerOf(seeded.orgId)).filter((row) => row.step === "cover")).toHaveLength(1);
+    });
+  });
 
   /**
    * Waits until some backend is parked on a row lock held by `pid`.

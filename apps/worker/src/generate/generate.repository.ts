@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
@@ -11,9 +14,11 @@ import { schema } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
+  IMAGE_CALL_STEPS,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   LIVE_RUN_STATUSES,
+  MAX_IMAGE_CALLS_PER_HOUR,
   PermanentError,
   type PlatformId,
   type PromptRole,
@@ -35,6 +40,7 @@ import {
   type SQLWrapper,
   sql,
 } from "drizzle-orm";
+import sharp from "sharp";
 import { db } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
@@ -163,6 +169,7 @@ export type TerminalPayload = {
   body: string;
   adaptations: ReadonlyArray<{ channelId: string; body: string }>;
   linkPolicyWebsite?: string | null;
+  coverMediaId?: string | null;
 };
 
 /**
@@ -752,6 +759,62 @@ export class GenerateRepository {
     }
   }
 
+  /** Save a generated cover in the same shared media volume the API serves. */
+  async saveGeneratedCover(orgId: string, brandId: string, bytes: Buffer): Promise<string> {
+    if (bytes.length === 0 || bytes.length > 10 * 1024 * 1024) {
+      throw new Error("Gemini returned an image outside the 10 MB media limit");
+    }
+    const source = sharp(bytes, { limitInputPixels: 40_000_000, failOn: "error" });
+    const metadata = await source.metadata();
+    if (!["jpeg", "png", "webp"].includes(metadata.format ?? "")) {
+      throw new Error("Gemini returned an unsupported image format");
+    }
+    const output = await source
+      .rotate()
+      .resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+    if (output.data.length > 10 * 1024 * 1024) {
+      throw new Error("Normalized cover exceeded the 10 MB media limit");
+    }
+    const id = randomUUID();
+    const directory = process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media");
+    const target = path.join(directory, `${id}.jpg`);
+    await mkdir(directory, { recursive: true });
+    await writeFile(target, output.data, { flag: "wx", mode: 0o600 });
+    try {
+      await db.insert(schema.mediaAssets).values({
+        id,
+        orgId,
+        brandId,
+        name: "Generated draft cover",
+        mimeType: "image/jpeg",
+        width: output.info.width,
+        height: output.info.height,
+        byteSize: output.data.length,
+      });
+    } catch (error) {
+      await unlink(target).catch(() => undefined);
+      throw error;
+    }
+    return id;
+  }
+
+  /** Recheck the shared image budget after a run has waited in the queue. */
+  async mayCallImageModel(orgId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+          sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+        ),
+      );
+    return (row?.count ?? 0) < MAX_IMAGE_CALLS_PER_HOUR;
+  }
+
   async similarKnowledge(orgId: string, brandId: string, embedding: number[]) {
     return db
       .select({
@@ -971,6 +1034,7 @@ export class GenerateRepository {
             body: payload.body,
             status: "draft",
             origin: "ai",
+            coverMediaId: payload.coverMediaId ?? null,
             linkPolicyWebsite: payload.linkPolicyWebsite ?? null,
           })
           .returning({ id: schema.contentItems.id });

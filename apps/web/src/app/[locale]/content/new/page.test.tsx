@@ -396,6 +396,46 @@ describe("Generate (Task 10)", () => {
     expect(runCreateSchema.parse(parsedBody(post))).toEqual(parsedBody(post));
   });
 
+  it("adds a paid cover only after an explicit choice with a Google key", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        method === "POST" && path === "/api/runs" ? { id: "cover-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "A new product launch");
+    expect(screen.getByText(en.ContentNew.generateCoverHint)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: en.ContentNew.generateCover }));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/cover-run"));
+    const posted = parsedBody(
+      calls.find((call) => call.path === "/api/runs" && call.method === "POST"),
+    );
+    expect(posted).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      brief: "A new product launch",
+      generateCover: true,
+    });
+    expect(runCreateSchema.parse(posted)).toEqual(posted);
+  });
+
+  it("keeps the cover control disabled without a Google key", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, [
+      { provider: "openrouter", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+    ]);
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    expect(screen.getByRole("checkbox", { name: en.ContentNew.generateCover })).toBeDisabled();
+    expect(screen.getByText(en.ContentNew.generateCoverNeedsGoogle)).toBeInTheDocument();
+  });
+
   it.each([
     ["product_update", "Announce our supported update"],
     ["comparison", "Compare the two ways to order supplies"],

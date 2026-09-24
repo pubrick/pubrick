@@ -68,6 +68,7 @@ export const RUN_STEP_BADGE_STATUS: Record<RunStepState, StatusBadgeStatus> = {
   failed: "failed",
   pending: "draft",
   skipped: "draft",
+  unavailable: "failed",
 };
 
 /**
@@ -151,12 +152,19 @@ export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 export type RunDetail = RunDetailDto;
 
 /**
- * The five roles, in the order the worker runs them. `adapter` is one row for
+ * The five text roles, followed by an optional cover. `adapter` is one row for
  * the whole fan-out even though its checkpoints are keyed `adapter:<channelId>`
  * — the human is watching one pipeline, not N of them, and the per-channel
  * progress rides along as a count.
  */
-export const RUN_STEP_KEYS = ["researcher", "writer", "editor", "factcheck", "adapter"] as const;
+export const RUN_STEP_KEYS = [
+  "researcher",
+  "writer",
+  "editor",
+  "factcheck",
+  "adapter",
+  "cover",
+] as const;
 export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
 
 /**
@@ -164,7 +172,7 @@ export type RunStepKey = (typeof RUN_STEP_KEYS)[number];
  * the step is still going to run, and on a run that is over that is a lie.
  * A failed or cancelled run's un-reached steps read "not run" instead.
  */
-export type RunStepState = "done" | "active" | "failed" | "pending" | "skipped";
+export type RunStepState = "done" | "active" | "failed" | "pending" | "skipped" | "unavailable";
 
 export type RunStepProgress = {
   key: RunStepKey;
@@ -189,27 +197,42 @@ const ADAPTER_PREFIX = "adapter:";
 export function runStepStates(run: RunDetail): RunStepProgress[] {
   const channelIds = run.input?.channelIds ?? [];
 
-  return RUN_STEP_KEYS.map((key) => {
-    if (key === "adapter") {
-      const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);
-      const done = checkpoints.filter((c) => c?.status === "succeeded").length;
-      const total = channelIds.length;
-      const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
-      const state =
-        total > 0 && done === total
-          ? "done"
-          : stepState(
-              run,
-              checkpoints.find((c) => c?.status === "failed"),
-              isCurrent,
-            );
-      return { key, state, done, total };
-    }
+  return RUN_STEP_KEYS.filter((key) => key !== "cover" || run.input.generateCover === true).map(
+    (key) => {
+      if (key === "adapter") {
+        const checkpoints = channelIds.map(
+          (channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`],
+        );
+        const done = checkpoints.filter((c) => c?.status === "succeeded").length;
+        const total = channelIds.length;
+        const isCurrent = run.currentStep?.startsWith(ADAPTER_PREFIX) ?? false;
+        const state =
+          total > 0 && done === total
+            ? "done"
+            : stepState(
+                run,
+                checkpoints.find((c) => c?.status === "failed"),
+                isCurrent,
+              );
+        return { key, state, done, total };
+      }
 
-    const checkpoint = run.steps[key];
-    const isCurrent = run.currentStep === key;
-    return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
-  });
+      const checkpoint = run.steps[key];
+      const isCurrent = run.currentStep === key;
+      if (key === "cover" && checkpoint?.status === "succeeded") {
+        const output = checkpoint.output;
+        if (
+          typeof output === "object" &&
+          output !== null &&
+          "result" in output &&
+          output.result === "unavailable"
+        ) {
+          return { key, state: "unavailable", done: 0, total: 0 };
+        }
+      }
+      return { key, state: stepState(run, checkpoint, isCurrent), done: 0, total: 0 };
+    },
+  );
 }
 
 function stepState(

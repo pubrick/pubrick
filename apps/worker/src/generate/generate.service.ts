@@ -9,6 +9,9 @@ import {
   embedKnowledgeText,
   FACTCHECK,
   factcheckSources,
+  GeminiImageCaller,
+  IMAGE_MODEL,
+  imageCostUsd,
   KNOWLEDGE_EMBEDDING_MODEL,
   RESEARCHER,
   type RunStepContext,
@@ -24,6 +27,7 @@ import {
 import {
   brandLinkPolicySchema,
   briefRunInputSchema,
+  COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
   PermanentError,
   type RunFailure,
@@ -171,6 +175,11 @@ const knowledgeContextSchema = z.object({
     .max(5),
 });
 
+const coverOutputSchema = z.object({
+  mediaId: z.string().uuid().nullable(),
+  result: z.enum(["generated", "unavailable"]),
+});
+
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -186,6 +195,8 @@ export class GenerateService {
     @Optional() private readonly buildModel: ModelFactory = resolveModel,
     /** Backoff unit between terminal-write attempts; 0 in tests for determinism. */
     @Optional() private readonly terminalRetryDelayMs: number = 200,
+    @Optional()
+    private readonly imageCaller: Pick<GeminiImageCaller, "call"> = new GeminiImageCaller(),
   ) {}
 
   /**
@@ -553,9 +564,96 @@ export class GenerateService {
       });
     }
 
+    let coverMediaId: string | null = null;
+    if (input.generateCover) {
+      const cover = await this.runStep(
+        state,
+        {
+          name: "cover",
+          schema: coverOutputSchema,
+          run: async (ctx) => {
+            if (
+              context.channels.some(
+                (channel) =>
+                  !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+              ) ||
+              adaptations.some(
+                (adaptation) =>
+                  context.channels.find((channel) => channel.id === adaptation.channelId)
+                    ?.platform === "telegram" && adaptation.body.length > 1024,
+              )
+            ) {
+              this.logger.warn(`Run ${run.id}: cover skipped because a channel cannot accept it`);
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            const googleKey = await this.repo.googleKnowledgeKey(run.orgId);
+            if (!googleKey) {
+              this.logger.warn(
+                `Run ${run.id}: cover skipped because the Google key is unavailable`,
+              );
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            if (!(await this.repo.mayCallImageModel(run.orgId))) {
+              this.logger.warn(`Run ${run.id}: cover skipped because the image budget is full`);
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            // One opt-in image call. Its text is data about the draft, never
+            // instructions to modify the publishing or review workflow.
+            const prompt =
+              `Create one 1K editorial cover image for ${context.brand.name}. ` +
+              "The image should illustrate this draft without text, logos, or watermarks. " +
+              `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
+            const result = await this.imageCaller.call(googleKey, prompt);
+            const cost = imageCostUsd(result.usage);
+            const record: UsageRecord = {
+              provider: "google",
+              modelId: IMAGE_MODEL,
+              attempt: 1,
+              inputTokens: result.usage?.promptTokenCount ?? 0,
+              outputTokens:
+                (result.usage?.candidatesTokenCount ?? 0) + (result.usage?.thoughtsTokenCount ?? 0),
+              cachedInputTokens: 0,
+              reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
+              costUsd: cost,
+              costSource: cost === null ? "unknown" : "price_table",
+              responseMs: result.responseMs,
+              status: result.bytes ? "ok" : "errored",
+              outcome: result.outcome,
+            };
+            try {
+              await ctx.onUsage(record, { step: "cover" });
+            } catch (error) {
+              await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+            }
+            if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
+              this.logger.warn(`Run ${run.id}: cover image was unavailable`);
+              return { mediaId: null, result: "unavailable" as const };
+            }
+            try {
+              const mediaId = await this.repo.saveGeneratedCover(
+                run.orgId,
+                run.brandId,
+                result.bytes,
+              );
+              return { mediaId, result: "generated" as const };
+            } catch (error) {
+              this.logger.warn(
+                `Run ${run.id}: generated cover could not be saved: ${messageOf(error)}`,
+              );
+              return { mediaId: null, result: "unavailable" as const };
+            }
+          },
+        },
+        undefined,
+      );
+      if (cover === STOPPED) return STOPPED;
+      coverMediaId = cover.mediaId;
+    }
+
     return {
       body: edited.body,
       adaptations,
+      coverMediaId,
       linkPolicyWebsite: linkPolicy?.website ?? null,
     };
   }

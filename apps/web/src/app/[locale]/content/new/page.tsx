@@ -3,6 +3,7 @@
 import {
   type AiCredentialPublic,
   CONTENT_TYPES,
+  COVER_SUPPORTED_PLATFORMS,
   type ContentType,
   contentTypeRequiresMaterial,
   MAX_BODY_LENGTH,
@@ -52,6 +53,7 @@ export default function NewContentPage() {
   const [body, setBody] = useState("");
   const [brief, setBrief] = useState("");
   const [contentType, setContentType] = useState<ContentType>("social_post");
+  const [generateCover, setGenerateCover] = useState(false);
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
@@ -107,6 +109,12 @@ export default function NewContentPage() {
    * at the render site.
    */
   const canGenerate = credentials !== null && credentials.length > 0;
+  const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
+  const coverChannelsSupported = [...channelIds].every((id) =>
+    (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
+      channels.find((channel) => channel.id === id)?.platform ?? "",
+    ),
+  );
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -148,6 +156,15 @@ export default function NewContentPage() {
   }, [brandId, handleError]);
 
   function toggleChannel(id: string) {
+    const added = !channelIds.has(id);
+    if (
+      added &&
+      !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
+        channels.find((channel) => channel.id === id)?.platform ?? "",
+      )
+    ) {
+      setGenerateCover(false);
+    }
     setChannelIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -261,6 +278,10 @@ export default function NewContentPage() {
       setError(t("noChannelsSelected"));
       return;
     }
+    if (generateCover && !coverChannelsSupported) {
+      setError(t("generateCoverUnsupported"));
+      return;
+    }
     if (sourcePreview) {
       setError(t("sourcePreviewNeedsUse"));
       setSourceOpen(true);
@@ -317,6 +338,7 @@ export default function NewContentPage() {
           brandId,
           channelIds: [...channelIds],
           ...(contentType !== "social_post" && { contentType }),
+          ...(generateCover && { generateCover: true }),
           ...(hasBrief && { brief }),
           ...(hasMaterial && { material }),
           ...(hasSourceUrl && { sourceUrl }),
@@ -432,6 +454,31 @@ export default function NewContentPage() {
                   </option>
                 ))}
               </Select>
+            )}
+            {canGenerate && (
+              <div className="rounded-control border border-border px-3 py-3">
+                <label className="flex items-start gap-3 text-sm text-fg">
+                  <input
+                    type="checkbox"
+                    checked={generateCover}
+                    onChange={(event) => setGenerateCover(event.target.checked)}
+                    disabled={!hasGoogleKey || !coverChannelsSupported}
+                    className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+                  />
+                  <span>{t("generateCover")}</span>
+                </label>
+                <p className="mt-1 pl-8 text-sm text-fg-tertiary">{t("generateCoverHint")}</p>
+                {!hasGoogleKey && (
+                  <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                    {t("generateCoverNeedsGoogle")}
+                  </p>
+                )}
+                {!coverChannelsSupported && (
+                  <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                    {t("generateCoverUnsupported")}
+                  </p>
+                )}
+              </div>
             )}
             {credentials !== null &&
               (canGenerate ? (
