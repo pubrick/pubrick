@@ -29,9 +29,11 @@ import {
   briefRunInputSchema,
   COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
+  MAX_AUTO_INLINE_IMAGES,
   PermanentError,
   type RunFailure,
   sourceRunInputSchema,
+  supportsInlineImages,
 } from "@pubrick/shared";
 import { z } from "zod";
 import {
@@ -179,6 +181,18 @@ const coverOutputSchema = z.object({
   mediaId: z.string().uuid().nullable(),
   result: z.enum(["generated", "unavailable"]),
 });
+
+const inlineImageOutputSchema = coverOutputSchema;
+/** Match the API's nonempty-paragraph placement rule, with a strict two-call ceiling. */
+function inlineImageParagraphs(body: string): Array<{ afterParagraph: number; text: string }> {
+  const paragraphs = body.split(/\n\s*\n/).filter((part) => part.trim());
+  if (paragraphs.length < 2) return [];
+  const count = paragraphs.length >= 4 ? MAX_AUTO_INLINE_IMAGES : 1;
+  return Array.from({ length: count }, (_, index) => {
+    const afterParagraph = Math.floor(((index + 1) * (paragraphs.length + 1)) / (count + 1)) - 1;
+    return { afterParagraph, text: paragraphs[afterParagraph] ?? "" };
+  });
+}
 
 @Injectable()
 export class GenerateService {
@@ -639,10 +653,11 @@ export class GenerateService {
               return { mediaId: null, result: "unavailable" as const };
             }
             try {
-              const mediaId = await this.repo.saveGeneratedCover(
+              const mediaId = await this.repo.saveGeneratedImage(
                 run.orgId,
                 run.brandId,
                 result.bytes,
+                "cover",
               );
               return { mediaId, result: "generated" as const };
             } catch (error) {
@@ -659,10 +674,107 @@ export class GenerateService {
       coverMediaId = cover.mediaId;
     }
 
+    const inlineImages: Array<NonNullable<TerminalPayload["inlineImages"]>[number]> = [];
+    if (
+      input.generateInlineImages &&
+      supportsInlineImages(input.contentType)
+    ) {
+      const paragraphs = inlineImageParagraphs(edited.body);
+      for (const { afterParagraph, text } of paragraphs) {
+        const stepName = `inline_image:${afterParagraph}`;
+        const image = await this.runStep(
+          state,
+          {
+            name: stepName,
+            schema: inlineImageOutputSchema,
+            run: async (ctx) => {
+              const googleKey = await this.repo.googleKnowledgeKey(run.orgId);
+              if (!googleKey) {
+                this.logger.warn(
+                  `Run ${run.id}: inline image skipped because the Google key is unavailable`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              const locked = await this.repo.withImageCallLock(run.orgId, async () => {
+                if (!(await this.repo.mayCallImageModel(run.orgId))) return null;
+                const prompt =
+                  `Create one 1K editorial illustration for ${context.brand.name}. ` +
+                  "The image should depict the passage below without text, logos, or watermarks. " +
+                  `Article context:\n<draft>\n${edited.body.slice(0, 1000)}\n</draft>\n` +
+                  `Passage to illustrate:\n<passage>\n${text.slice(0, 1000)}\n</passage>`;
+                const result = await this.imageCaller.call(googleKey, prompt);
+                const cost = imageCostUsd(result.usage);
+                const record: UsageRecord = {
+                  provider: "google",
+                  modelId: IMAGE_MODEL,
+                  attempt: 1,
+                  inputTokens: result.usage?.promptTokenCount ?? 0,
+                  outputTokens:
+                    (result.usage?.candidatesTokenCount ?? 0) +
+                    (result.usage?.thoughtsTokenCount ?? 0),
+                  cachedInputTokens: 0,
+                  reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
+                  costUsd: cost,
+                  costSource: cost === null ? "unknown" : "price_table",
+                  responseMs: result.responseMs,
+                  status: result.bytes ? "ok" : "errored",
+                  outcome: result.outcome,
+                };
+                // The ledger uses one bounded image category; each slot retains
+                // its own call in the checkpoint for accurate per-step display.
+                state.usage.set(stepName, [record]);
+                try {
+                  await ctx.onUsage(record, { step: "inline_image" });
+                } catch (error) {
+                  await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+                }
+                return result;
+              });
+              if (!locked.acquired || !locked.value) {
+                this.logger.warn(
+                  `Run ${run.id}: inline image skipped because the image budget is busy or full`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              const result = locked.value;
+              if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
+                this.logger.warn(`Run ${run.id}: inline image was unavailable`);
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              try {
+                const mediaId = await this.repo.saveGeneratedImage(
+                  run.orgId,
+                  run.brandId,
+                  result.bytes,
+                  "inline",
+                );
+                return { mediaId, result: "generated" as const };
+              } catch (error) {
+                this.logger.warn(
+                  `Run ${run.id}: generated inline image could not be saved: ${messageOf(error)}`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+            },
+          },
+          undefined,
+        );
+        if (image === STOPPED) return STOPPED;
+        if (image.mediaId) {
+          inlineImages.push({
+            mediaId: image.mediaId,
+            afterParagraph,
+            alt: `Generated illustration for paragraph ${afterParagraph + 1}; review before publishing`,
+          });
+        }
+      }
+    }
+
     return {
       body: edited.body,
       adaptations,
       coverMediaId,
+      inlineImages,
       linkPolicyWebsite: linkPolicy?.website ?? null,
     };
   }

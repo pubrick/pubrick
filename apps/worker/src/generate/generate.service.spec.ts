@@ -100,6 +100,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     /** Distinct per org where a test has to see WHOSE brand was read. */
     brandName?: string;
     generateCover?: boolean;
+    generateInlineImages?: boolean;
+    contentType?: import("@pubrick/shared").ContentType;
   };
 
   async function seed(options: SeedOptions = {}): Promise<Seeded> {
@@ -167,6 +169,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           text: BRIEF,
           channelIds,
           ...(options.generateCover && { generateCover: true }),
+          ...(options.generateInlineImages && { generateInlineImages: true }),
+          ...(options.contentType && { contentType: options.contentType }),
         },
       })
       .returning({ id: schema.pipelineRuns.id });
@@ -340,6 +344,156 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         coverMediaId: checkpoint.mediaId,
       });
       expect((await ledgerOf(seeded.orgId)).filter((row) => row.step === "cover")).toHaveLength(1);
+    });
+  });
+
+  describe("opt-in inline article images", () => {
+    const body = [
+      "The bakery opens on Monday.",
+      "A second oven doubles the daily loaf capacity.",
+      "The team will test recipes with local flour.",
+      "Customers can collect orders in the morning.",
+      "The first menu includes five kinds of bread.",
+    ].join("\n\n");
+
+    async function png() {
+      return sharp({ create: { width: 2, height: 2, channels: 3, background: "#e66142" } })
+        .png()
+        .toBuffer();
+    }
+
+    it("attaches two normalized, review-required slots and meters each physical call", async () => {
+      const seeded = await seed({ generateInlineImages: true, contentType: "expert_article" });
+      const bytes = await png();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 12,
+          usage: {
+            promptTokenCount: 50,
+            candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 1120 }],
+          },
+        })),
+      };
+      await serviceFor(
+        scriptedModel({ editor: () => ({ body, changes: [] }) }),
+        new Repository(),
+        imageCaller,
+      ).handle({
+        id: "inline-success",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const [item] = await itemsOf(seeded.orgId);
+      const slots = await db
+        .select()
+        .from(schema.contentImageSlots)
+        .where(eq(schema.contentImageSlots.contentItemId, item?.id as string));
+      expect(slots.map((slot) => slot.afterParagraph).sort()).toEqual([1, 3]);
+      expect(slots).toHaveLength(2);
+      for (const slot of slots) {
+        expect(slot).toMatchObject({
+          orgId: seeded.orgId,
+          brandId: seeded.brandId,
+          needsReview: true,
+        });
+        expect(slot.alt.length).toBeGreaterThan(0);
+        expect((await readFile(path.join(mediaDir, `${slot.mediaId}.jpg`))).length).toBeGreaterThan(
+          0,
+        );
+      }
+      const calls = (await ledgerOf(seeded.orgId)).filter((row) => row.step === "inline_image");
+      expect(calls).toHaveLength(2);
+      expect(
+        calls.every((row) => row.costSource === "price_table" && row.runId === seeded.runId),
+      ).toBe(true);
+      expect(imageCaller.call).toHaveBeenCalledTimes(2);
+      expect((await runRow(seeded.runId))?.steps["inline_image:1"]?.status).toBe("succeeded");
+      expect((await runRow(seeded.runId))?.steps["inline_image:3"]?.status).toBe("succeeded");
+    });
+
+    it("resumes from both slot checkpoints without paying for another image", async () => {
+      const seeded = await seed({ generateInlineImages: true, contentType: "expert_article" });
+      const bytes = await png();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 8,
+        })),
+      };
+      const repo = new Repository();
+      const finish = vi
+        .spyOn(repo, "finish")
+        .mockRejectedValue(new Error("temporary database failure"));
+      const service = serviceFor(
+        scriptedModel({ editor: () => ({ body, changes: [] }) }),
+        repo,
+        imageCaller,
+      );
+      const job = { id: "inline-resume", data: { runId: seeded.runId, orgId: seeded.orgId } };
+      await expect(service.handle(job)).rejects.toThrow("temporary database failure");
+      expect(
+        (await ledgerOf(seeded.orgId)).filter((row) => row.step === "inline_image"),
+      ).toHaveLength(2);
+      finish.mockRestore();
+      await service.handle(job);
+      expect(imageCaller.call).toHaveBeenCalledTimes(2);
+      expect(
+        (await ledgerOf(seeded.orgId)).filter((row) => row.step === "inline_image"),
+      ).toHaveLength(2);
+      expect((await itemsOf(seeded.orgId))[0]?.status).toBe("draft");
+    });
+
+    it("uses only remaining hourly image budget and keeps the text draft", async () => {
+      const seeded = await seed({ generateInlineImages: true, contentType: "expert_article" });
+      await db.insert(schema.usageLedger).values(
+        Array.from({ length: 11 }, () => ({
+          orgId: seeded.orgId,
+          step: "image_generate",
+          provider: "google" as const,
+          modelId: "gemini-3.1-flash-image",
+          costSource: "unknown" as const,
+          status: "ok" as const,
+          outcome: "completed" as const,
+        })),
+      );
+      const bytes = await png();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 8,
+        })),
+      };
+      await serviceFor(
+        scriptedModel({ editor: () => ({ body, changes: [] }) }),
+        new Repository(),
+        imageCaller,
+      ).handle({
+        id: "inline-budget",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+      expect((await itemsOf(seeded.orgId))[0]?.status).toBe("draft");
+      expect((await runRow(seeded.runId))?.steps["inline_image:3"]?.output).toEqual({
+        mediaId: null,
+        result: "unavailable",
+      });
+    });
+
+    it("skips image calls for a one-paragraph draft", async () => {
+      const seeded = await seed({ generateInlineImages: true, contentType: "expert_article" });
+      const imageCaller = { call: vi.fn() };
+      await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+        id: "inline-short",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(imageCaller.call).not.toHaveBeenCalled();
+      expect((await itemsOf(seeded.orgId))[0]?.status).toBe("draft");
     });
   });
 
