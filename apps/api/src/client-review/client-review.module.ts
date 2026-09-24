@@ -1,7 +1,8 @@
 import { Module } from "@nestjs/common";
 import { MediaModule } from "../media/media.module";
-import { ClientReviewController, GuestClientReviewController } from "./client-review.controller";
+import { ClientReviewController } from "./client-review.controller";
 import { ClientReviewRepository } from "./client-review.repository";
+import { GuestClientReviewController } from "./guest-client-review.controller";
 
 @Module({
   imports: [MediaModule],

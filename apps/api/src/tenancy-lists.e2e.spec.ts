@@ -54,6 +54,8 @@ const NOT_A_TENANT_LIST: Record<string, string> = {
     "one brand-scoped feed resource, not an array collection; feeds.e2e.spec.ts proves another org cannot read its URL or entries",
   "brands/:brandId/autopilot":
     "one brand-scoped settings resource, not an array collection; autopilot.e2e.spec.ts proves another org cannot read its URL or history",
+  "client-review/:token":
+    "one bearer-capability preview, not a collection; client-review.e2e.spec.ts proves invalid and changed links close and status remains org-scoped",
 };
 
 async function orgAgent(app: INestApplication): Promise<request.Agent> {
