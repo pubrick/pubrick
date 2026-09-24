@@ -25,7 +25,10 @@ afterEach(() => {
 
 describe("stdio MCP entry", () => {
   it("fails closed without a key and writes no non-protocol stdout", async () => {
-    const env = { ...process.env, PUBRICK_API_BASE_URL: "https://pubrick.example" };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PUBRICK_API_BASE_URL: "https://pubrick.example",
+    };
     delete env.PUBRICK_API_KEY;
     const child = spawn(process.execPath, ["dist/cli.js"], {
       cwd: process.cwd(),
