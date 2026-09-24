@@ -7,11 +7,14 @@ existing metered Gemini image action. Images require alternative text and can
 have a caption. Placement uses the zero-based index of a nonempty paragraph;
 if the text changes, review image positions before publishing.
 
-For an `expert_article`, `comparison`, `case_study`, or `educational` generation
-run, the editor can opt in to automatic illustrations. The worker creates up to
-two images for a draft with at least two nonempty paragraphs. Each physical
-Gemini image call is metered against the organization's shared 12-calls-per-hour
-image limit; the run reserves the maximum of two calls before it is queued.
+For an `expert_article`, `comparison`, `case_study`, or `educational` direct
+generation run, the editor can opt in to automatic illustrations. Calendar
+slots can use `expert_article`, `comparison`, and `educational`; formats that
+need pasted source material cannot be scheduled from a brief alone. The worker
+creates up to two images for a draft with at least two nonempty paragraphs.
+Each physical Gemini image call is metered against the organization's shared
+12-calls-per-hour image limit; the run reserves the maximum of two calls before
+it is queued.
 Generated slots are saved with the draft as placements, never as inline markup.
 They require an editor to inspect the image, placement, and alternative text,
 then explicitly acknowledge each generated slot and save before approval.
@@ -51,6 +54,6 @@ even if the editable slot is later detached.
 The current text publishers do not transmit these inline images. VC.ru's
 manual copy flow copies plain text; the downloadable article package includes
 the saved inline images. Automatic generation is opt-in for direct article
-runs; planned calendar slots still use the existing cover-only option. An
+runs and scheduled article slots. An
 automatic per-slot regeneration action from an existing draft remains future
 work; editors can generate a variation manually today.

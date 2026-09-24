@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ContentType } from "@pubrick/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -54,7 +55,12 @@ describe.skipIf(!url)("planned calendar generation", () => {
     await pool?.end();
   });
 
-  async function seed(channelIds = [channelId], generateCover = false) {
+  async function seed(
+    channelIds = [channelId],
+    generateCover = false,
+    generateInlineImages = false,
+    contentType: ContentType = "social_post",
+  ) {
     const [slot] = await db
       .insert(schema.calendarSlots)
       .values({
@@ -64,6 +70,8 @@ describe.skipIf(!url)("planned calendar generation", () => {
         brief: "A useful topic",
         channelIds,
         generateCover,
+        generateInlineImages,
+        contentType,
       })
       .returning({ id: schema.calendarSlots.id });
     return slot?.id as string;
@@ -253,6 +261,57 @@ describe.skipIf(!url)("planned calendar generation", () => {
       channelIds: [channelId],
       generateCover: true,
     });
+  });
+
+  it("carries an illustrated article format into the queued run", async () => {
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.pipelineRuns)
+      .set({ status: "succeeded" })
+      .where(eq(schema.pipelineRuns.orgId, orgId));
+    const slotId = await seed([channelId], false, true, "expert_article");
+    await service.trigger(boss, orgId, slotId);
+    const [slot] = await db
+      .select({ runId: schema.calendarSlots.runId })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slotId));
+    const [run] = await db
+      .select({ input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, slot?.runId as string));
+    expect(run?.input).toEqual({
+      kind: "brief",
+      text: "A useful topic",
+      channelIds: [channelId],
+      contentType: "expert_article",
+      generateInlineImages: true,
+    });
+  });
+
+  it("defers an illustrated article when fewer than two hourly image calls remain", async () => {
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.pipelineRuns)
+      .set({ status: "succeeded" })
+      .where(eq(schema.pipelineRuns.orgId, orgId));
+    await db.insert(schema.usageLedger).values(
+      Array.from({ length: 11 }, () => ({
+        orgId,
+        step: "image_generate",
+        provider: "google" as const,
+        modelId: "test-image-model",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+      })),
+    );
+    const slotId = await seed([channelId], false, true, "educational");
+    await service.trigger(boss, orgId, slotId);
+    const [slot] = await db
+      .select({ runId: schema.calendarSlots.runId, retryAfter: schema.calendarSlots.retryAfter })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slotId));
+    expect(slot?.runId).toBeNull();
+    expect(slot?.retryAfter?.getTime()).toBeGreaterThan(Date.now());
   });
 
   it("defers a planned cover while the hourly image budget is full", async () => {

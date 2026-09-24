@@ -2,14 +2,17 @@ import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   COVER_SUPPORTED_PLATFORMS,
+  contentTypeRequiresMaterial,
   GENERATE_QUEUE,
   IMAGE_CALL_STEPS,
   LIVE_RUN_STATUSES,
+  MAX_AUTO_INLINE_IMAGES,
   MAX_CONCURRENT_RUNS,
   MAX_IMAGE_CALLS_PER_HOUR,
   RUN_ADMISSION_LOCK_NAMESPACE,
   type RunInput,
   runInputSchema,
+  supportsInlineImages,
 } from "@pubrick/shared";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
@@ -67,6 +70,8 @@ export class CalendarService {
           topicRevision: schema.calendarSlots.topicRevision,
           channelIds: schema.calendarSlots.channelIds,
           generateCover: schema.calendarSlots.generateCover,
+          generateInlineImages: schema.calendarSlots.generateInlineImages,
+          contentType: schema.calendarSlots.contentType,
         })
         .from(schema.calendarSlots)
         .where(
@@ -167,7 +172,19 @@ export class CalendarService {
           .where(eq(schema.calendarSlots.id, slotId));
         return;
       }
-      if (slot.generateCover) {
+      if (
+        contentTypeRequiresMaterial(slot.contentType) ||
+        (slot.generateInlineImages && !supportsInlineImages(slot.contentType))
+      ) {
+        await tx
+          .update(schema.calendarSlots)
+          .set({ errorCode: "invalid_input" })
+          .where(eq(schema.calendarSlots.id, slotId));
+        return;
+      }
+      const requestedImageCalls =
+        Number(slot.generateCover) + (slot.generateInlineImages ? MAX_AUTO_INLINE_IMAGES : 0);
+      if (requestedImageCalls > 0) {
         const [spent] = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(schema.usageLedger)
@@ -179,16 +196,20 @@ export class CalendarService {
             ),
           );
         const [reserved] = await tx
-          .select({ count: sql<number>`count(*)::int` })
+          .select({
+            count: sql<number>`coalesce(sum((case when ${schema.pipelineRuns.input}->>'generateCover' = 'true' then 1 else 0 end) + (case when ${schema.pipelineRuns.input}->>'generateInlineImages' = 'true' then ${MAX_AUTO_INLINE_IMAGES} else 0 end)), 0)::int`,
+          })
           .from(schema.pipelineRuns)
           .where(
             and(
               eq(schema.pipelineRuns.orgId, orgId),
               inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
-              sql`${schema.pipelineRuns.input}->>'generateCover' = 'true'`,
             ),
           );
-        if ((spent?.count ?? 0) + (reserved?.count ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
+        if (
+          (spent?.count ?? 0) + (reserved?.count ?? 0) + requestedImageCalls >
+          MAX_IMAGE_CALLS_PER_HOUR
+        ) {
           await tx
             .update(schema.calendarSlots)
             .set({ retryAfter: new Date(Date.now() + 5 * 60_000) })
@@ -205,12 +226,16 @@ export class CalendarService {
               material: slot.brief,
               channelIds: slot.channelIds,
               ...(slot.generateCover && { generateCover: true }),
+              ...(slot.generateInlineImages && { generateInlineImages: true }),
+              ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
             }
           : {
               kind: "brief",
               text: slot.brief,
               channelIds: slot.channelIds,
               ...(slot.generateCover && { generateCover: true }),
+              ...(slot.generateInlineImages && { generateInlineImages: true }),
+              ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
             };
       if (!runInputSchema.safeParse(input).success) {
         await tx

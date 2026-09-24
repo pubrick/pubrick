@@ -1,0 +1,3 @@
+ALTER TABLE "calendar_slots" ADD COLUMN "content_type" text DEFAULT 'social_post' NOT NULL;--> statement-breakpoint
+ALTER TABLE "calendar_slots" ADD COLUMN "generate_inline_images" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "calendar_slots" ADD CONSTRAINT "calendar_slots_content_type_check" CHECK ("calendar_slots"."content_type" in ('social_post', 'news_digest', 'repost', 'product_update', 'expert_article', 'comparison', 'case_study', 'educational'));

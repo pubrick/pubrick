@@ -1,4 +1,4 @@
-import { CALENDAR_SLOT_ERRORS } from "@pubrick/shared";
+import { CALENDAR_SLOT_ERRORS, CONTENT_TYPES } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -30,6 +30,7 @@ export const calendarSlots = pgTable(
       .references(() => brands.id, { onDelete: "cascade" }),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     brief: text("brief").notNull(),
+    contentType: text("content_type", { enum: CONTENT_TYPES }).default("social_post").notNull(),
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "no action" }),
     topicTitle: text("topic_title"),
     topicDescription: text("topic_description"),
@@ -38,6 +39,7 @@ export const calendarSlots = pgTable(
     topicRevision: integer("topic_revision"),
     channelIds: jsonb("channel_ids").$type<string[]>().notNull(),
     generateCover: boolean("generate_cover").default(false).notNull(),
+    generateInlineImages: boolean("generate_inline_images").default(false).notNull(),
     notes: text("notes"),
     runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
     errorCode: text("error_code", { enum: CALENDAR_SLOT_ERRORS }),
@@ -60,5 +62,6 @@ export const calendarSlots = pgTable(
       sql`(${t.topicId} is null and ${t.topicTitle} is null and ${t.topicDescription} is null and ${t.topicSourceUrl} is null and ${t.topicUpdatedAt} is null and ${t.topicRevision} is null) or (${t.topicId} is not null and ${t.topicTitle} is not null and ${t.topicDescription} is not null and ${t.topicUpdatedAt} is not null and ${t.topicRevision} is not null)`,
     ),
     enumCheck("calendar_slots_error_code_check", t.errorCode, CALENDAR_SLOT_ERRORS),
+    enumCheck("calendar_slots_content_type_check", t.contentType, CONTENT_TYPES),
   ],
 );

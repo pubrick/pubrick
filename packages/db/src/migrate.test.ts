@@ -346,6 +346,7 @@ const NON_ENUM_CHECKS = [
   // schema-invariants.test.ts verifies the schema declaration; this count
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
+  "calendar_slots_content_type_check",
   "calendar_slots_topic_snapshot_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.

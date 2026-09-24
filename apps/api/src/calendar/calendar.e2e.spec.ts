@@ -477,6 +477,43 @@ describe.skipIf(!url)("calendar API", () => {
     expect(disabled.body.generateCover).toBe(false);
   });
 
+  it("stores a scheduled article's inline image choice and validates edits", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const payload = {
+      brandId,
+      scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+      brief: "Explain the new collection",
+      channelIds: [channelId],
+      contentType: "expert_article",
+      generateInlineImages: true,
+    };
+    expect((await owner.post("/api/calendar/slots").send(payload).expect(400)).body.code).toBe(
+      "inline_images_require_google_key",
+    );
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-only-google-key-0123456789" })
+      .expect(200);
+    const created = await owner.post("/api/calendar/slots").send(payload).expect(201);
+    expect(created.body).toMatchObject({
+      contentType: "expert_article",
+      generateInlineImages: true,
+    });
+    const slotUrl = `/api/calendar/slots/${created.body.id}?brandId=${brandId}`;
+    expect(
+      (await owner.patch(slotUrl).send({ contentType: "news_digest" }).expect(400)).body.code,
+    ).toBe("invalid_request");
+    expect(
+      (await owner.patch(slotUrl).send({ contentType: "case_study" }).expect(400)).body.code,
+    ).toBe("invalid_request");
+    const changed = await owner
+      .patch(slotUrl)
+      .send({ contentType: "news_digest", generateInlineImages: false })
+      .expect(200);
+    expect(changed.body).toMatchObject({ contentType: "news_digest", generateInlineImages: false });
+  });
+
   it("snapshots only an approved topic in the same organization and brand and protects its deletion", async () => {
     const owner = await agent();
     const outsider = await agent();
