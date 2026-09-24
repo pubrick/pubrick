@@ -39,6 +39,8 @@ type Seeded = {
   id: string;
   /** Every list URL that must contain it — one per branch of the query. */
   paths: string[];
+  /** Public routes have no cookie authority; seed supplies their bearer key. */
+  bearer?: string;
 };
 
 /**
@@ -107,6 +109,41 @@ function justAfter(createdAt: string): string {
 }
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
+  {
+    controller: "api-keys",
+    identify: id,
+    seed: async (agent) => {
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "List ratchet", scope: "content:read" })
+        .expect(201);
+      return { id: key.body.id as string, paths: ["/api/api-keys"] };
+    },
+  },
+  {
+    controller: "v1/content",
+    identify: id,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Public read.", channelIds: [channelId] })
+        .expect(201);
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "List ratchet", scope: "content:read" })
+        .expect(201);
+      return {
+        id: item.body.id as string,
+        bearer: key.body.key as string,
+        paths: [
+          "/api/v1/content",
+          "/api/v1/content?status=draft",
+          `/api/v1/content?cursor=${encodeURIComponent(justAfter(item.body.createdAt as string))}`,
+        ],
+      };
+    },
+  },
   {
     controller: "calendar/memorable-dates",
     identify: id,
@@ -352,7 +389,9 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // so an endpoint that answered `[]` to everything — a broken query, a
       // filter on the wrong column — cannot pass for correct scoping.
       for (const path of mine.paths) {
-        const body = (await stranger.get(path).expect(200)).body as unknown;
+        const query = stranger.get(path);
+        if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
+        const body = (await query.expect(200)).body as unknown;
         const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
         expect(listed.map(endpoint.identify)).toEqual([mine.id]);
       }
@@ -366,7 +405,9 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
         if (endpoint.foreignBrandNotFound) {
           await stranger.get(path).expect(404);
         } else {
-          const body = (await stranger.get(path).expect(200)).body as unknown;
+          const query = stranger.get(path);
+          if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
+          const body = (await query.expect(200)).body as unknown;
           const listed = endpoint.rows ? endpoint.rows(body) : (body as Record<string, unknown>[]);
           expect(listed.map(endpoint.identify)).not.toContain(theirs.id);
         }

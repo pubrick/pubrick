@@ -16,6 +16,7 @@ import { MediaModule } from "./media/media.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { OrgModule } from "./org/org.module";
 import { PromptsModule } from "./prompts/prompts.module";
+import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
 import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
@@ -40,6 +41,7 @@ import { TopicsModule } from "./topics/topics.module";
     FeedsModule,
     OrgModule,
     PromptsModule,
+    PublicApiModule,
     AiCredentialsModule,
     RunsModule,
     SourceExtractionModule,

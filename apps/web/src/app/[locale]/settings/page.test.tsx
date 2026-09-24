@@ -1019,3 +1019,25 @@ describe("Settings — People", () => {
     expect(mockAuthClient.organization.cancelInvitation).not.toHaveBeenCalled();
   });
 });
+
+describe("Settings — public API management", () => {
+  it("links an owner to API key management", async () => {
+    await renderSettings();
+    expect(screen.getByRole("link", { name: en.SettingsPage.publicApiOpen })).toHaveAttribute(
+      "href",
+      "/en/settings/api-keys",
+    );
+  });
+
+  it("does not offer API key management to a regular member", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "member", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+      ],
+    });
+    await renderSettings();
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.publicApiOpen }),
+    ).not.toBeInTheDocument();
+  });
+});
