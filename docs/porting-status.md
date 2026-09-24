@@ -25,7 +25,7 @@ documents when they disagree.
 | Prompt management | Built-in role prompts plus versioned organization guidance, pinned to each generation run at first claim | Controlled prompt experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |
 | Notifications | Org-scoped Telegram bot and chat, encrypted at rest, opt-in draft alerts, delivery failure/unknown alerts, per-brand daily digest, Test action, durable at-most-once outbox | Richer event preferences and delivery history UI |
-| Public API | Owner/admin-managed hashed organization keys, one-time secret reveal, documented Bearer-only read endpoints for scoped content list/detail and tenant-safe pagination | OpenAPI schema, outgoing webhooks, MCP and additional read scopes |
+| Public API | Owner/admin-managed hashed organization keys, one-time secret reveal, documented Bearer-only read endpoints for scoped content list/detail and tenant-safe pagination, OpenAPI 3.1 contract | Outgoing webhooks, MCP and additional read scopes |
 | Additional reference utilities | Uploads, safe homepage link tagging and one-cover propagation across Telegram/VK/MAX/Bluesky | Multiple media attachments and format-specific reuse |
 
 News scores and AI topic suggestions remain advisory; an editor chooses and

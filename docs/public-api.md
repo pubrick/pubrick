@@ -2,6 +2,9 @@
 
 Pubrick exposes a small, read-only API for tools you run. This first version reads content only. It cannot create, edit, approve, or publish a post, and a read never records the editor's “opened” signal.
 
+The machine-readable contract is [OpenAPI 3.1](openapi-v1.json). It describes
+the existing Bearer-only read routes and their public response fields.
+
 ## Create a key
 
 An organization owner or admin opens **Settings → Public API → Manage API keys** and selects **Add**. Give the key a name that identifies its consumer. Pubrick displays the secret once; copy it into your tool's secret store before closing the dialog. At most 20 active keys are allowed per organization. Revoking a key stops subsequent requests immediately.

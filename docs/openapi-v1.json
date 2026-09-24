@@ -1,0 +1,167 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Pubrick public read API",
+    "version": "1.0.0",
+    "description": "Organization-scoped content reads. A human review remains required before publication. See docs/public-api.md for key management and pagination.",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "url": "https://github.com/pubrick/pubrick/blob/main/LICENSE"
+    }
+  },
+  "servers": [{ "url": "/" }],
+  "tags": [
+    {
+      "name": "Content",
+      "description": "Read content in the organization that owns the Bearer key."
+    }
+  ],
+  "security": [{ "organizationKey": [] }],
+  "paths": {
+    "/api/v1/content": {
+      "get": {
+        "tags": ["Content"],
+        "operationId": "listContent",
+        "summary": "List organization content",
+        "description": "Requires a non-revoked key with the content:read scope. Reading does not mark content as opened by an editor.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": { "$ref": "#/components/schemas/ContentStatus" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque value returned in X-Next-Cursor. Use it with the same filters.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest items first, ordered by creation time and ID.",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Present only when another page exists.",
+                "schema": { "type": "string" }
+              },
+              "Cache-Control": {
+                "schema": { "type": "string", "const": "private, no-store" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ContentSummary" }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/v1/content/{id}": {
+      "get": {
+        "tags": ["Content"],
+        "operationId": "getContent",
+        "summary": "Read one organization content item",
+        "description": "Returns 404 for an absent item and for an item in another organization. Reading does not mark it as opened by an editor.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The public content projection.",
+            "headers": {
+              "Cache-Control": {
+                "schema": { "type": "string", "const": "private, no-store" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContentDetail" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "organizationKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A one-time organization API key with content:read scope. Browser cookies are not accepted."
+      }
+    },
+    "schemas": {
+      "ContentStatus": {
+        "type": "string",
+        "enum": ["draft", "approved", "partially_published", "rejected", "published", "failed"]
+      },
+      "ContentSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "brandId", "title", "status", "origin", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "brandId": { "type": "string", "format": "uuid" },
+          "title": { "type": ["string", "null"] },
+          "status": { "$ref": "#/components/schemas/ContentStatus" },
+          "origin": { "type": "string", "enum": ["ai", "human"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ContentDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "brandId",
+          "title",
+          "status",
+          "origin",
+          "createdAt",
+          "updatedAt",
+          "body"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "brandId": { "type": "string", "format": "uuid" },
+          "title": { "type": ["string", "null"] },
+          "status": { "$ref": "#/components/schemas/ContentStatus" },
+          "origin": { "type": "string", "enum": ["ai", "human"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "body": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": { "description": "Invalid status, limit, cursor, or item ID." },
+      "Unauthorized": { "description": "Missing, invalid, or revoked Bearer key." },
+      "NotFound": { "description": "Item absent from this key's organization." }
+    }
+  }
+}
