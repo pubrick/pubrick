@@ -3,6 +3,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  ADAPTATION_STATUSES,
   type AdaptationProposal,
   type AdaptationStatus,
   type AdaptationUpdate,
@@ -41,7 +42,7 @@ import {
   type RunInput,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -160,6 +161,7 @@ type PinnedItemStatus = Exclude<ContentStatus, EditableItemStatus>;
 const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
   approved: "Approved content cannot be edited; reject it first",
   published: "This content has already been published and can no longer be edited",
+  archived: "Restore this archived content before editing it",
 };
 
 /**
@@ -178,7 +180,16 @@ const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
 const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
   approved: "content_pinned_approved",
   published: "content_pinned_published",
+  archived: "content_archived",
 };
+
+/** States in which a channel can still send without another approval. */
+const ACTIVE_ARCHIVE_DELIVERY_STATUSES = [
+  "manual_ready",
+  "scheduled",
+  "queued",
+  "publishing",
+] as const satisfies readonly AdaptationStatus[];
 
 /**
  * HOW FAR "already published" reaches, for the one gate both decisions go
@@ -1179,7 +1190,9 @@ export class ContentRepository {
       eq(schema.contentItems.orgId, orgId),
       // Safe: membership just verified above, so the widened `string` really is one
       // of the literal statuses drizzle's column type expects.
-      status ? eq(schema.contentItems.status, status as ContentStatus) : undefined,
+      status
+        ? eq(schema.contentItems.status, status as ContentStatus)
+        : ne(schema.contentItems.status, "archived"),
       cursor ? afterCursor(cursor) : undefined,
     );
     const page = await db
@@ -2067,12 +2080,15 @@ export class ContentRepository {
     const proposal = normalizeNewlines(outcome.text);
     return db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ id: schema.contentItems.id })
+        .select({ id: schema.contentItems.id, status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
         .limit(1)
         .for("update");
       if (!existing) throw notFound("content_not_found", "Content item not found");
+      if (existing.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.draftRevisionProposals)
         .where(eq(schema.draftRevisionProposals.contentItemId, id));
@@ -2586,8 +2602,8 @@ export class ContentRepository {
     reason: string;
   }): Promise<RefineProposal | undefined> {
     return db.transaction(async (tx) => {
-      await tx
-        .select({ id: schema.contentItems.id })
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(
           and(
@@ -2597,6 +2613,9 @@ export class ContentRepository {
         )
         .limit(1)
         .for("no key update");
+      if (item?.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.refineProposals)
         .where(eq(schema.refineProposals.contentItemId, row.contentItemId));
@@ -2965,12 +2984,15 @@ export class ContentRepository {
         .for("no key update");
       if (!locked) throw notFound("adaptation_not_found", "Adaptation not found");
       const [parent] = await tx
-        .select({ id: schema.contentItems.id })
+        .select({ status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
         .limit(1)
         .for("no key update");
       if (!parent) throw notFound("content_not_found", "Content item not found");
+      if (parent.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.adaptationProposals)
         .where(eq(schema.adaptationProposals.adaptationId, adaptationId));
@@ -3375,6 +3397,9 @@ export class ContentRepository {
         "This content has already been published; it can no longer be approved or rejected",
       );
     }
+    if (rows[0]?.status === "archived") {
+      throw conflict("content_archived", "Restore this archived content before changing it");
+    }
     if (reach.of === "the item") return false;
     // NO LOCK ON THE ADAPTATIONS, and no new one anywhere: `reject` has
     // already taken `lockAdaptations` over its own outstanding rows, and this
@@ -3768,6 +3793,76 @@ export class ContentRepository {
       )
       .orderBy(schema.adaptations.id)
       .for("update");
+  }
+
+  /**
+   * Hide a finished or still-unapproved item while keeping its adaptations,
+   * versions and publication receipts intact. A queued, scheduled, manual or
+   * in-flight delivery must be stopped explicitly with Reject first.
+   *
+   * Lock every adaptation before the parent, in the same order as publishing
+   * and approval. The status check therefore observes a worker's committed
+   * claim and holds that verdict steady until the archive write commits.
+   */
+  async archive(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status === "archived") return;
+      if (
+        adaptations.some((adaptation) =>
+          (ACTIVE_ARCHIVE_DELIVERY_STATUSES as readonly AdaptationStatus[]).includes(
+            adaptation.status,
+          ),
+        )
+      ) {
+        throw conflict(
+          "content_archive_delivery_active",
+          "Stop every active delivery before archiving this content",
+        );
+      }
+      await tx
+        .update(schema.contentItems)
+        .set({ status: "archived", archivedFromStatus: item.status })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    });
+    return this.get(orgId, id);
+  }
+
+  /** Restore the archived status without scheduling or enqueueing a delivery. */
+  async restore(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "archived") return;
+      if (!item.archivedFromStatus || item.archivedFromStatus === "archived") {
+        throw conflict("content_archived", "The archived status could not be restored");
+      }
+      await tx
+        .update(schema.contentItems)
+        .set({ status: item.archivedFromStatus, archivedFromStatus: null })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    });
+    return this.get(orgId, id);
   }
 
   /**
@@ -4199,6 +4294,19 @@ export class ContentRepository {
           .limit(1)
       )[0];
       if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // Archive locks this adaptation before changing the parent. This read is
+      // stable for the rest of the transaction while our adaptation lock is
+      // held, without moving content_items ahead of the publication's channel
+      // foreign-key lock in the global lock order.
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1);
+      if (item?.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
 
       // The in-flight statuses first, and the records that answer them are the
       // ones `updateAdaptation` uses: one reading of "this delivery is not

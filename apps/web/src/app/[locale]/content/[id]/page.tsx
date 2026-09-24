@@ -244,6 +244,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   /**
    * The lens, off by default (provenance-lens design §5).
    *
@@ -445,13 +446,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const refineBlockedReason =
     refineBusy !== null
       ? t(REFINE_BUSY_MESSAGE[refineBusy])
-      : item !== null && item.origin !== "ai"
-        ? te("refine_needs_ai_draft")
-        : draftMoved
-          ? t("refineUnsaved")
-          : selection === null
-            ? t("refineNoSelection")
-            : null;
+      : item?.status === "archived"
+        ? te("content_archived")
+        : item !== null && item.origin !== "ai"
+          ? te("refine_needs_ai_draft")
+          : draftMoved
+            ? t("refineUnsaved")
+            : selection === null
+              ? t("refineNoSelection")
+              : null;
   const canRefine = item !== null && refineBlockedReason === null;
 
   /**
@@ -738,6 +741,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        */
       handleError(err);
       await reload();
+    }
+  }
+
+  async function changeArchiveState(action: "archive" | "restore") {
+    setArchiveBusy(true);
+    setActionError(null);
+    try {
+      await api(`/api/content/${id}/${action}`, { method: "POST" });
+      await reload();
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setArchiveBusy(false);
     }
   }
 
@@ -1081,6 +1098,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   const isPublished = item.status === "published";
+  const isArchived = item.status === "archived";
   /**
    * THE THREE FACTS A PARTLY DELIVERED POST'S CONTROLS ARE DRAWN FROM, derived
    * from `item.adaptations` rather than from `item.status` — because the state
@@ -1179,12 +1197,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        * card, next to the other approval path.
        */
       primaryAction={
-        <Button
-          variant="primary"
-          onClick={() => approve(false)}
-          disabled={isPublished || manualReadyWithoutApprovalTargets}
-        >
-          {/*
+        isArchived ? (
+          <Button
+            variant="primary"
+            onClick={() => changeArchiveState("restore")}
+            disabled={archiveBusy}
+          >
+            {t("restore")}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => approve(false)}
+            disabled={isPublished || manualReadyWithoutApprovalTargets || archiveBusy}
+          >
+            {/*
             The same button, saying what it will do to THIS post. "Publish now"
             on a post that is already live in one channel reads as "publish it
             again", which is the one thing approve cannot do — and the reader
@@ -1195,14 +1222,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             send to no channels: an item whose only remaining half ended
             `unknown` has nothing approve will target, and the api refuses it.
           */}
-          {manualReadyWithoutApprovalTargets
-            ? t("manualReadyAction")
-            : hasManualApprovalTarget
-              ? t("approveManual")
-              : partialSendCount > 0
-                ? t("approveNowPartial", { count: partialSendCount })
-                : t("approveNow")}
-        </Button>
+            {manualReadyWithoutApprovalTargets
+              ? t("manualReadyAction")
+              : hasManualApprovalTarget
+                ? t("approveManual")
+                : partialSendCount > 0
+                  ? t("approveNowPartial", { count: partialSendCount })
+                  : t("approveNow")}
+          </Button>
+        )
       }
     >
       <p className="mb-3">
@@ -1396,6 +1424,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             label={t("bodyLabel")}
             value={bodyDraft}
             onChange={setBodyDraft}
+            disabled={isArchived}
             onSelectionChange={setSelection}
             aiVersions={item.aiVersionBodies.item}
             dimmed={lens}
@@ -1404,7 +1433,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             rows={10}
           />
           <div className="mt-3">
-            <Button variant="secondary" onClick={saveBody}>
+            <Button variant="secondary" onClick={saveBody} disabled={isArchived}>
               {t("saveBody")}
             </Button>
           </div>
@@ -1496,7 +1525,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="secondary"
               size="sm"
               onClick={() => acceptProposal(proposal)}
-              disabled={refineBusy !== null || draftMoved}
+              disabled={isArchived || refineBusy !== null || draftMoved}
               aria-describedby={draftMoved ? refineStaleId : undefined}
             >
               {t("refineAccept")}
@@ -1513,7 +1542,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => propose(proposal.verb, proposal)}
-              disabled={refineBusy !== null || proposalStale}
+              disabled={isArchived || refineBusy !== null || proposalStale}
               aria-describedby={proposalStale ? refineStaleId : undefined}
             >
               {t("refineRetry")}
@@ -1522,7 +1551,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => discardProposal(proposal)}
-              disabled={refineBusy !== null}
+              disabled={isArchived || refineBusy !== null}
             >
               {t("refineDiscard")}
             </Button>
@@ -1552,6 +1581,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               aria-label={t("overrideLabel", { channel: channelLabel(a.channelId) })}
               value={overrideDrafts[a.id] ?? ""}
               onChange={(value) => setOverrideDrafts({ ...overrideDrafts, [a.id]: value })}
+              disabled={isArchived}
               /*
                * This adaptation's OWN `ai` versions. Not the item's, and not
                * every adaptation's joined together: a human who wrote the same
@@ -1575,7 +1605,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             />
             {reviewPreview(a, item)}
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => saveOverride(a.id)}
+                disabled={isArchived}
+              >
                 {t("saveOverride")}
               </Button>
               <Button
@@ -1648,7 +1683,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                         variant="ghost"
                         size="sm"
                         onClick={() => discardReadapt(a.id, p.id)}
-                        disabled={readaptBusy !== null}
+                        disabled={isArchived || readaptBusy !== null}
                       >
                         {t("refineDiscard")}
                       </Button>
@@ -1686,17 +1721,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <EditorialNotes itemId={id} currentBody={item.body} draftBody={bodyDraft} />
 
-      <DraftRevision
-        itemId={id}
-        currentBody={item.body}
-        draftBody={bodyDraft}
-        eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
-        staged={item.draftRevisionProposal}
-        onAccepted={async (updatedBody) => {
-          setBodyDraft(updatedBody);
-          await reload();
-        }}
-      />
+      {!isArchived && (
+        <DraftRevision
+          itemId={id}
+          currentBody={item.body}
+          draftBody={bodyDraft}
+          eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
+          staged={item.draftRevisionProposal}
+          onAccepted={async (updatedBody) => {
+            setBodyDraft(updatedBody);
+            await reload();
+          }}
+        />
+      )}
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
@@ -1721,42 +1758,58 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
-      <Card className="mb-6">
-        {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
-        {partlyLive && !hasOutstanding && (
-          <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
-        )}
-        <div className="flex flex-wrap items-end gap-3">
-          <Input
-            id="scheduledAt"
-            type="datetime-local"
-            label={t("scheduleLabel")}
-            value={scheduledAt}
-            onChange={(e) => setScheduledAt(e.target.value)}
-            disabled={isPublished}
-            min={nowLocal}
-          />
-          <Button
-            variant="secondary"
-            onClick={() => approve(true)}
-            disabled={
-              isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
-            }
-          >
-            {t("approveScheduled")}
-          </Button>
-          {manualAdaptations.length > 0 && (
-            <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+      {isArchived ? (
+        <Card className="mb-6">
+          <p className="text-sm text-fg-secondary">{t("archivedHint")}</p>
+        </Card>
+      ) : (
+        <Card className="mb-6">
+          {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
+          {partlyLive && !hasOutstanding && (
+            <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
           )}
-          <Button
-            variant="danger"
-            onClick={reject}
-            disabled={isPublished || (partlyLive && !hasOutstanding)}
-          >
-            {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
-          </Button>
-        </div>
-      </Card>
+          <div className="flex flex-wrap items-end gap-3">
+            <Input
+              id="scheduledAt"
+              type="datetime-local"
+              label={t("scheduleLabel")}
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              disabled={isPublished}
+              min={nowLocal}
+            />
+            <Button
+              variant="secondary"
+              onClick={() => approve(true)}
+              disabled={
+                isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+              }
+            >
+              {t("approveScheduled")}
+            </Button>
+            {manualAdaptations.length > 0 && (
+              <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+            )}
+            <Button
+              variant="danger"
+              onClick={reject}
+              disabled={isPublished || (partlyLive && !hasOutstanding) || archiveBusy}
+            >
+              {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => changeArchiveState("archive")}
+              disabled={hasOutstanding || archiveBusy}
+            >
+              {t("archive")}
+            </Button>
+          </div>
+          {hasOutstanding && (
+            <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
+          )}
+        </Card>
+      )}
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>
@@ -1805,6 +1858,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     label={t("vcUrlLabel")}
                     placeholder="https://vc.ru/..."
                     value={manualUrlDrafts[a.id] ?? ""}
+                    disabled={isArchived}
                     onChange={(event) =>
                       setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
                     }
@@ -1813,7 +1867,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     <Button
                       variant="secondary"
                       size="sm"
-                      disabled={!manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
+                      disabled={isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
                       onClick={() => confirmManualPublication(a.id)}
                     >
                       {t("recordManualPublication")}
@@ -1923,14 +1977,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   <Button
                     variant="secondary"
                     onClick={() => assertDelivery(a.id, true)}
-                    disabled={deliveryBusy === a.id}
+                    disabled={isArchived || deliveryBusy === a.id}
                   >
                     {t("markDelivered")}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => assertDelivery(a.id, false)}
-                    disabled={deliveryBusy === a.id}
+                    disabled={isArchived || deliveryBusy === a.id}
                   >
                     {t("markNotDelivered")}
                   </Button>

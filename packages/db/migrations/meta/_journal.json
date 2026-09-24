@@ -407,6 +407,13 @@
       "when": 1790275906688,
       "tag": "0058_handy_katie_power",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790277333771,
+      "tag": "0059_early_sentinels",
+      "breakpoints": true
     }
   ]
 }

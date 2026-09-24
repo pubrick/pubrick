@@ -124,6 +124,7 @@ describe("the draft and delivery lifecycles keep every status they had", () => {
       "rejected",
       "published",
       "failed",
+      "archived",
     ]);
   });
 

@@ -743,6 +743,17 @@ describe("PublishService.handle", () => {
     expect(repo.recordTransient).not.toHaveBeenCalled();
   });
 
+  it("does NOT send a stale job when the parent content item was archived", async () => {
+    const { repo } = fixture({ itemStatus: "archived", status: "queued" });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markPublishing).not.toHaveBeenCalled();
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
+
   it("does NOT send when a published publications row already exists, even if the adaptation status says otherwise", async () => {
     const { repo } = fixture({ status: "queued" });
     repo.hasPublished = vi.fn().mockResolvedValue(true);

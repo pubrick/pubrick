@@ -3933,6 +3933,130 @@ describe.skipIf(!url)("content e2e", () => {
     });
   });
 
+  describe("archiving content", () => {
+    it("keeps a rejected post and its history, hides it from the queue, and restores its exact status", async () => {
+      const agent = await orgAgent();
+      const otherOrg = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Saved post", body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Edited before filing." })
+        .expect(200);
+      await agent.post(`/api/content/${itemId}/reject`).expect(200);
+      const historyBefore = await versionRows(itemId);
+
+      await otherOrg.post(`/api/content/${itemId}/archive`).expect(404);
+      const archived = await agent.post(`/api/content/${itemId}/archive`).expect(200);
+      expect(archived.body.status).toBe("archived");
+      expect(archived.body.body).toBe("Edited before filing.");
+      expect(archived.body.adaptations[0].status).toBe("pending");
+      const delivery = await agent
+        .post(`/api/content/${itemId}/adaptations/${created.body.adaptations[0].id}/delivery`)
+        .send({ delivered: true })
+        .expect(409);
+      expect(delivery.body.code).toBe("content_archived");
+      expect((await agent.get("/api/content").expect(200)).body).toHaveLength(0);
+      const archive = await agent.get("/api/content?status=archived").expect(200);
+      expect(archive.body.map((item: { id: string }) => item.id)).toEqual([itemId]);
+      await agent.post(`/api/content/${itemId}/archive`).expect(200);
+
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Changed" }).expect(409);
+      const approve = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(approve.body.code).toBe("content_archived");
+      const reject = await agent.post(`/api/content/${itemId}/reject`).expect(409);
+      expect(reject.body.code).toBe("content_archived");
+      await otherOrg.post(`/api/content/${itemId}/restore`).expect(404);
+
+      const restored = await agent.post(`/api/content/${itemId}/restore`).expect(200);
+      expect(restored.body.status).toBe("rejected");
+      expect(restored.body.body).toBe("Edited before filing.");
+      expect(await versionRows(itemId)).toEqual(historyBefore);
+      await agent.post(`/api/content/${itemId}/restore`).expect(200);
+      expect((await agent.get("/api/content").expect(200)).body).toHaveLength(1);
+      expect((await agent.get("/api/content?status=archived").expect(200)).body).toHaveLength(0);
+    });
+
+    it("refuses active deliveries until they are explicitly rejected", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      // Each delivery state that can still send is guarded by the same archive
+      // decision. The fixture changes only this row's status, never a job.
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        for (const status of ["queued", "scheduled", "publishing", "manual_ready"] as const) {
+          await db
+            .update(schema.adaptations)
+            .set({ status })
+            .where(eq(schema.adaptations.id, adaptationId));
+          const refused = await agent.post(`/api/content/${itemId}/archive`).expect(409);
+          expect(refused.body.code).toBe("content_archive_delivery_active");
+        }
+      } finally {
+        await pool.end();
+      }
+      await agent.post(`/api/content/${itemId}/reject`).expect(200);
+      expect((await agent.post(`/api/content/${itemId}/archive`).expect(200)).body.status).toBe(
+        "archived",
+      );
+    });
+
+    it("preserves published receipts and restores a published post without another send", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.adaptations)
+          .set({ status: "published" })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await db
+          .update(schema.contentItems)
+          .set({ status: "published" })
+          .where(eq(schema.contentItems.id, itemId));
+        await db.insert(schema.publications).values({
+          orgId,
+          adaptationId,
+          channelId,
+          status: "published",
+          externalUrl: "https://example.com/published-post",
+        });
+
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const restored = await agent.post(`/api/content/${itemId}/restore`).expect(200);
+        expect(restored.body.status).toBe("published");
+        expect(restored.body.adaptations[0].externalUrl).toBe("https://example.com/published-post");
+        expect(
+          await db
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(eq(schema.publications.adaptationId, adaptationId)),
+        ).toHaveLength(1);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
   /**
    * WHAT A QUEUE CARD IS, AND IN WHAT ORDER THE CARDS ARRIVE — the two halves
    * of design 0009's first commit that a caller can see.

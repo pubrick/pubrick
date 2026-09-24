@@ -424,6 +424,7 @@
     "title": "Cola",
     "newAction": "Nueva publicación",
     "empty": "Todavía no hay publicaciones.",
+    "archiveEmpty": "Todavía no hay publicaciones archivadas.",
     "emptyCreateAction": "Crear tu primera publicación",
     "filterLabel": "Estado",
     "filterAll": "Todos",
@@ -434,7 +435,8 @@
       "partially_published": "Publicado en parte",
       "rejected": "Rechazado",
       "published": "Publicado",
-      "failed": "Fallido"
+      "failed": "Fallido",
+      "archived": "Archivado"
     },
     "adaptationStatus": {
       "pending": "Pendiente",
@@ -601,6 +603,10 @@
     "scheduleLabel": "O programar para",
     "approveScheduled": "Aprobar con horario",
     "reject": "Rechazar",
+    "archive": "Archivar",
+    "restore": "Restaurar",
+    "archivedHint": "Esta publicación está archivada. Se conservan el texto y el historial de publicación. Restáurala antes de editarla o volver a publicarla.",
+    "archiveActiveHint": "Termina o cancela las entregas pendientes antes de archivar esta publicación.",
     "alreadyPublished": "Esta publicación ya se ha publicado; ya no se puede aprobar ni rechazar.",
     "approveNowPartial": "Enviar a {count, plural, one {# canal que no salió} other {# canales que no salieron}}",
     "rejectCancelOutstanding": "Cancelar lo que aún no ha salido",
@@ -972,6 +978,8 @@
     "version_changed": "El texto guardado cambió desde que abriste el historial. Actualiza la página antes de restaurarlo.",
     "content_pinned_approved": "Una publicación aprobada no se puede editar. Recházala primero.",
     "content_pinned_published": "Esta publicación ya se ha publicado y no se puede editar.",
+    "content_archived": "Esta publicación está archivada. Restáurala antes de hacer cambios.",
+    "content_archive_delivery_active": "Esta publicación tiene una entrega pendiente. Termínala o cancélala antes de archivarla.",
     "adaptation_pinned_scheduled": "Una publicación programada no se puede editar. Rechaza la publicación primero.",
     "adaptation_pinned_queued": "Esta publicación ya está en la cola de publicación y no se puede editar. Recházala primero.",
     "adaptation_pinned_publishing": "Esta publicación se está publicando ahora mismo y no se puede editar. Recházala primero.",

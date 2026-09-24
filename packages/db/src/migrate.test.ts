@@ -258,6 +258,10 @@ const NON_ENUM_CHECKS = [
   "media_assets_shape_check",
   "media_assets_byte_size_check",
   "content_items_one_media_check",
+  // 0059: archive is a reversible state; its previous status must be present
+  // exactly while archived. The dedicated test below proves both directions.
+  "content_items_archived_from_status_check",
+  "content_items_archive_pair_check",
   // Guest approval capabilities are new after the historical seed. Their
   // format and verdict relationship are exercised by client-review e2e tests.
   "client_review_links_token_hash_check",
@@ -1307,6 +1311,70 @@ describe.skipIf(!url)("runMigrations", () => {
         );
         expect(await refusal(pool, "UPDATE channels SET platform = 'vc_ru'")).toBe(CHECK_VIOLATION);
         await pool.query("UPDATE channels SET platform = 'vc_ru', credentials_encrypted = NULL");
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  it("preserves old items and enforces reversible archive state", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const { itemId } = await seedEveryTable(pool, "org_archive");
+        const read = async () =>
+          (
+            await pool.query(
+              "SELECT status, archived_from_status FROM content_items WHERE id = $1",
+              [itemId],
+            )
+          ).rows[0];
+
+        expect(await read()).toEqual({ status: "draft", archived_from_status: null });
+        expect(
+          await refusal(pool, "UPDATE content_items SET status = 'archived' WHERE id = $1", [
+            itemId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET archived_from_status = 'draft' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET status = 'archived', archived_from_status = 'archived' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET status = 'archived', archived_from_status = 'draft_typo' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+
+        await pool.query(
+          "UPDATE content_items SET status = 'archived', archived_from_status = 'draft' WHERE id = $1",
+          [itemId],
+        );
+        expect(await read()).toEqual({ status: "archived", archived_from_status: "draft" });
+        expect(
+          await refusal(pool, "UPDATE content_items SET status = 'draft' WHERE id = $1", [itemId]),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "UPDATE content_items SET status = archived_from_status, archived_from_status = NULL WHERE id = $1",
+          [itemId],
+        );
+        expect(await read()).toEqual({ status: "draft", archived_from_status: null });
       } finally {
         await pool.end();
       }

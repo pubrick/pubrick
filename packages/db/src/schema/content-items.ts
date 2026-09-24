@@ -48,6 +48,8 @@ export const contentItems = pgTable(
     videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
+    /** Original status while archived; cleared when the item is restored. */
+    archivedFromStatus: text("archived_from_status", { enum: CONTENT_STATUSES }),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
     /** Website used by the generation-time link policy; null means none ran. */
@@ -115,6 +117,12 @@ export const contentItems = pgTable(
      * outside this set makes that lookup return `undefined` at runtime.
      */
     enumCheck("content_items_status_check", t.status, CONTENT_STATUSES),
+    enumCheck("content_items_archived_from_status_check", t.archivedFromStatus, CONTENT_STATUSES),
+    check(
+      "content_items_archive_pair_check",
+      sql`(${t.status} = 'archived') = (${t.archivedFromStatus} IS NOT NULL)
+        AND (${t.archivedFromStatus} IS NULL OR ${t.archivedFromStatus} <> 'archived')`,
+    ),
     enumCheck("content_items_origin_check", t.origin, CONTENT_ORIGINS),
     check(
       "content_items_one_media_check",

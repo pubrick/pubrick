@@ -424,6 +424,7 @@
     "title": "Queue",
     "newAction": "New post",
     "empty": "No posts yet.",
+    "archiveEmpty": "No archived posts yet.",
     "emptyCreateAction": "Create your first post",
     "filterLabel": "Status",
     "filterAll": "All",
@@ -434,7 +435,8 @@
       "partially_published": "Partly published",
       "rejected": "Rejected",
       "published": "Published",
-      "failed": "Failed"
+      "failed": "Failed",
+      "archived": "Archived"
     },
     "adaptationStatus": {
       "pending": "Pending",
@@ -601,6 +603,10 @@
     "scheduleLabel": "Or schedule for",
     "approveScheduled": "Approve with schedule",
     "reject": "Reject",
+    "archive": "Archive",
+    "restore": "Restore",
+    "archivedHint": "This post is archived. Its text and publication history are preserved. Restore it before editing or publishing again.",
+    "archiveActiveHint": "Finish or cancel pending deliveries before archiving this post.",
     "alreadyPublished": "This post has already been published; it can no longer be approved or rejected.",
     "approveNowPartial": "Send to {count, plural, one {the # channel that did not go out} other {the # channels that did not go out}}",
     "rejectCancelOutstanding": "Cancel what has not gone out",
@@ -972,6 +978,8 @@
     "version_changed": "The saved text changed since you opened its history. Reload before restoring.",
     "content_pinned_approved": "An approved post cannot be edited. Reject it first.",
     "content_pinned_published": "This post has already been published and can no longer be edited.",
+    "content_archived": "This post is archived. Restore it before making changes.",
+    "content_archive_delivery_active": "This post has a pending delivery. Finish or cancel it before archiving.",
     "adaptation_pinned_scheduled": "A scheduled post cannot be edited. Reject the post first.",
     "adaptation_pinned_queued": "This post is already queued for publishing and cannot be edited. Reject it first.",
     "adaptation_pinned_publishing": "This post is being published right now and cannot be edited. Reject it first.",

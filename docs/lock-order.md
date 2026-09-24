@@ -11,6 +11,13 @@ Every transaction that takes row locks on more than one of these tables takes
 them in that order. A transaction that needs only some of them skips the rest;
 it never goes backwards.
 
+Content archive and restore lock all of an item's adaptations by ID before
+locking `content_items`, then change only the parent status. Archive refuses
+active delivery rows. The publish worker's `markPublishing` locks its adaptation
+before reading and locking the parent, so a job fetched before archive cannot
+claim a send after archive has committed. Worker status recomputation keeps an
+archived parent unchanged.
+
 Daily topic suggestions also serialize admission on `brands`. Both the manual
 `TopicsRepository.requestSuggestions` path and the automatic
 `SuggestionsScanService.trigger` path take that brand row `FOR UPDATE` before

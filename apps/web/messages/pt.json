@@ -424,6 +424,7 @@
     "title": "Fila",
     "newAction": "Nova publicação",
     "empty": "Ainda não há publicações.",
+    "archiveEmpty": "Ainda não há publicações arquivadas.",
     "emptyCreateAction": "Criar sua primeira publicação",
     "filterLabel": "Status",
     "filterAll": "Todos",
@@ -434,7 +435,8 @@
       "partially_published": "Publicado em parte",
       "rejected": "Rejeitado",
       "published": "Publicado",
-      "failed": "Falhou"
+      "failed": "Falhou",
+      "archived": "Arquivado"
     },
     "adaptationStatus": {
       "pending": "Pendente",
@@ -601,6 +603,10 @@
     "scheduleLabel": "Ou agendar para",
     "approveScheduled": "Aprovar com agendamento",
     "reject": "Rejeitar",
+    "archive": "Arquivar",
+    "restore": "Restaurar",
+    "archivedHint": "Esta publicação está arquivada. O texto e o histórico de publicação foram preservados. Restaure-a antes de editar ou publicar novamente.",
+    "archiveActiveHint": "Conclua ou cancele as entregas pendentes antes de arquivar esta publicação.",
     "alreadyPublished": "Esta publicação já foi publicada; não pode mais ser aprovada ou rejeitada.",
     "approveNowPartial": "Enviar {count, plural, one {para # canal que não saiu} other {para # canais que não saíram}}",
     "rejectCancelOutstanding": "Cancelar o que ainda não saiu",
@@ -972,6 +978,8 @@
     "version_changed": "O texto salvo mudou desde que você abriu o histórico. Atualize a página antes de restaurá-lo.",
     "content_pinned_approved": "Uma publicação aprovada não pode ser editada. Rejeite-a primeiro.",
     "content_pinned_published": "Esta publicação já foi publicada e não pode mais ser editada.",
+    "content_archived": "Esta publicação está arquivada. Restaure-a antes de fazer alterações.",
+    "content_archive_delivery_active": "Esta publicação tem uma entrega pendente. Conclua ou cancele antes de arquivar.",
     "adaptation_pinned_scheduled": "Uma publicação agendada não pode ser editada. Rejeite a publicação primeiro.",
     "adaptation_pinned_queued": "Esta publicação já está na fila de publicação e não pode ser editada. Rejeite-a primeiro.",
     "adaptation_pinned_publishing": "Esta publicação está sendo publicada agora e não pode ser editada. Rejeite-a primeiro.",

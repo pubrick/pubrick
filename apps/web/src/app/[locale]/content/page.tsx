@@ -915,15 +915,17 @@ export default function ContentQueuePage() {
       {isEmpty && (
         <Card padded={false}>
           <EmptyState
-            title={t("empty")}
+            title={status === "archived" ? t("archiveEmpty") : t("empty")}
             action={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => router.push(`/${locale}/content/new`)}
-              >
-                {t("emptyCreateAction")}
-              </Button>
+              status === "archived" ? undefined : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => router.push(`/${locale}/content/new`)}
+                >
+                  {t("emptyCreateAction")}
+                </Button>
+              )
             }
           />
         </Card>

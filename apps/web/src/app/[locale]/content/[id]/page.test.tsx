@@ -820,6 +820,94 @@ describe("reject (Step 4)", () => {
   });
 });
 
+describe("archive and restore", () => {
+  it("archives a quiet draft and restores its editing controls", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation()] }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/archive") {
+        served.current = { ...served.current, status: "archived" };
+        return served.current;
+      }
+      if (method === "POST" && path === "/api/content/c1/restore") {
+        served.current = { ...served.current, status: "draft" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.archive }));
+    await screen.findByText(en.Content.status.archived);
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(en.Publish.bodyLabel)).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.saveOverride })).toBeDisabled();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.restore }));
+    await screen.findByText(en.Content.status.draft);
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
+    expect(
+      calls.filter((call) => call.path.endsWith("/archive") || call.path.endsWith("/restore")),
+    ).toMatchObject([
+      { path: "/api/content/c1/archive", method: "POST" },
+      { path: "/api/content/c1/restore", method: "POST" },
+    ]);
+  });
+
+  it("does not offer archive while a delivery is queued", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.archive })).toBeDisabled();
+    screen.getByText(en.Publish.archiveActiveHint);
+    expect(calls.some((call) => call.path.endsWith("/archive"))).toBe(false);
+  });
+
+  it("keeps AI proposals and unknown delivery verdicts read-only in the archive", async () => {
+    const body = "AI wrote this draft.";
+    const proposal: RefineProposal = {
+      id: "99999999-9999-4999-8999-999999999999",
+      verb: "shorten",
+      proposal: "A short draft.",
+      reason: "Shorter copy.",
+      start: 0,
+      end: body.length,
+      selectedText: body,
+    };
+    const item = makeItem({
+      status: "archived",
+      origin: "ai",
+      body,
+      aiVersionBodies: { item: [body], adaptations: {} },
+      refineProposal: proposal,
+      adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
+    });
+    const calls: Call[] = [];
+    installBaseHandlers({ current: item }, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Publish.archivedHint);
+    expect(screen.getByRole("button", { name: en.Publish.refine })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineRetry })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineDiscard })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+  });
+});
+
 describe("buttons disabled when published (Step 5)", () => {
   it("disables approve/reject and issues no request when clicked", async () => {
     const served = { current: makeItem({ status: "published" }) };

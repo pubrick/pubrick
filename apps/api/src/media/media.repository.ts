@@ -278,6 +278,9 @@ export class MediaRepository {
         .limit(1);
       const item = items[0];
       if (!item) throw notFound("content_not_found", "Post not found");
+      if (item.status === "archived") {
+        throw conflict("content_archived", "Restore this archived post before changing its cover");
+      }
       if (!["draft", "rejected", "failed"].includes(item.status)) {
         throw conflict(
           "media_cover_pinned",
@@ -359,6 +362,9 @@ export class MediaRepository {
         .for("update")
         .limit(1);
       if (!item) throw notFound("content_not_found", "Post not found");
+      if (item.status === "archived") {
+        throw conflict("content_archived", "Restore this archived post before changing its video");
+      }
       if (!["draft", "rejected", "failed"].includes(item.status)) {
         throw conflict(
           "media_video_pinned",

@@ -437,6 +437,28 @@ describe.skipIf(!url)("media library e2e", () => {
     await owner.delete(`/api/media/${image.body.id}`).expect(204);
   });
 
+  it("keeps archived post attachments read-only until restore", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Archive media brand" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({ brandId: brand.body.id, platform: "vc_ru", name: "Manual" })
+      .expect(201);
+    const item = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "Saved", channelIds: [channel.body.id] })
+      .expect(201);
+    await owner.post(`/api/content/${item.body.id}/archive`).expect(200);
+
+    for (const kind of ["cover", "video"] as const) {
+      const response = await owner
+        .patch(`/api/media/posts/${item.body.id}/${kind}`)
+        .send({ mediaId: null })
+        .expect(409);
+      expect(response.body.code).toBe("content_archived");
+    }
+  });
+
   it("accepts a VK cover with text beyond Telegram's caption limit", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "VK brand" }).expect(201);

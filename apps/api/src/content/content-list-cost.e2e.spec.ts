@@ -478,9 +478,10 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     // Not `toContain("Index Scan")`: what is being asserted is the ABSENCE of
     // the sort, which is the whole of what the index buys.
     expect(plan).not.toMatch(/\bSort\b/);
-    // ...and the absence of a re-check: a keyset predicate the index cannot
-    // carry comes back as a `Filter` over rows the scan had to visit anyway,
-    // which is the disjunction spelling passing for the row comparison.
-    expect(plan).not.toMatch(/\bFilter\b/);
+    // The keyset predicate must remain in Index Cond. The default Queue now
+    // excludes archived items, so a status Filter is expected; only a residual
+    // keyset Filter would mean the index stopped carrying the cursor seek.
+    expect(plan).toMatch(/Index Cond:.*ROW\(created_at, id\)/);
+    expect(plan).not.toMatch(/Filter:.*ROW\(created_at, id\)/);
   });
 });

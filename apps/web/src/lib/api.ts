@@ -123,6 +123,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   version_changed: "version_changed",
   content_pinned_approved: "content_pinned_approved",
   content_pinned_published: "content_pinned_published",
+  content_archived: "content_archived",
+  content_archive_delivery_active: "content_archive_delivery_active",
   adaptation_pinned_scheduled: "adaptation_pinned_scheduled",
   adaptation_pinned_manual_ready: "adaptation_pinned_manual_ready",
   adaptation_pinned_queued: "adaptation_pinned_queued",

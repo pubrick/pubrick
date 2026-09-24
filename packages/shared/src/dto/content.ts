@@ -45,6 +45,7 @@ export const CONTENT_STATUSES = [
   "rejected",
   "published",
   "failed",
+  "archived",
 ] as const;
 export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 

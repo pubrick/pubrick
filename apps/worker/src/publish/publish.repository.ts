@@ -32,7 +32,7 @@ export type LoadedAdaptation = {
   videoMediaId?: string | null;
   videoAuthorizedId?: string | null;
   videoByteSize?: number | null;
-  /** Parent content item's status: `rejected` means do not deliver. */
+  /** Parent content item's status: `rejected` and `archived` mean do not deliver. */
   itemStatus: ContentStatus;
   platform: PlatformId;
   attemptCount: number;
@@ -697,29 +697,54 @@ export class PublishRepository {
     adaptationId: string,
     scheduledAt: Date | null,
   ): Promise<number | null> {
-    const rows = await db
-      .update(schema.adaptations)
-      .set({
-        status: "publishing",
-        attemptCount: sql`${schema.adaptations.attemptCount} + 1`,
-        // A new attempt is under way, so the PREVIOUS attempt's verdict is not
-        // this row's verdict any more. Cleared for the reason the column is
-        // nullable at all: a code left standing beside a status it does not
-        // describe is the stale flag `apps/web/src/lib/adaptations.ts` was
-        // burned by, one column over.
-        failureReason: null,
-        updatedAt: nowSql(),
-      })
-      .where(
-        and(
-          eq(schema.adaptations.orgId, orgId),
-          eq(schema.adaptations.id, adaptationId),
-          inArray(schema.adaptations.status, [...CLAIMABLE_STATUSES]),
-          sql`date_trunc('milliseconds', ${schema.adaptations.scheduledAt}) is not distinct from ${scheduledAt}`,
-        ),
-      )
-      .returning({ attemptCount: schema.adaptations.attemptCount });
-    return rows[0]?.attemptCount ?? null;
+    // Archive takes adaptation locks before the parent lock. Take the same
+    // order here and read the parent AFTER acquiring the adaptation lock: a
+    // stale job cannot claim a row from a snapshot taken before archive won.
+    // FOR SHARE also prevents the parent changing between this read and claim.
+    return db.transaction(async (tx) => {
+      const [adaptation] = await tx
+        .select({ contentItemId: schema.adaptations.contentItemId })
+        .from(schema.adaptations)
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .limit(1)
+        .for("update");
+      if (!adaptation) return null;
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
+        .from(schema.contentItems)
+        .where(
+          and(
+            eq(schema.contentItems.orgId, orgId),
+            eq(schema.contentItems.id, adaptation.contentItemId),
+          ),
+        )
+        .limit(1)
+        .for("share");
+      if (!item || item.status === "archived" || item.status === "rejected") return null;
+      const rows = await tx
+        .update(schema.adaptations)
+        .set({
+          status: "publishing",
+          attemptCount: sql`${schema.adaptations.attemptCount} + 1`,
+          // A new attempt is under way, so the PREVIOUS attempt's verdict is not
+          // this row's verdict any more. Cleared for the reason the column is
+          // nullable at all: a code left standing beside a status it does not
+          // describe is the stale flag `apps/web/src/lib/adaptations.ts` was
+          // burned by, one column over.
+          failureReason: null,
+          updatedAt: nowSql(),
+        })
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.id, adaptationId),
+            inArray(schema.adaptations.status, [...CLAIMABLE_STATUSES]),
+            sql`date_trunc('milliseconds', ${schema.adaptations.scheduledAt}) is not distinct from ${scheduledAt}`,
+          ),
+        )
+        .returning({ attemptCount: schema.adaptations.attemptCount });
+      return rows[0]?.attemptCount ?? null;
+    });
   }
 
   /**
@@ -1550,7 +1575,7 @@ export class PublishRepository {
    */
   private async recomputeItemStatus(tx: Tx, orgId: string, contentItemId: string): Promise<void> {
     const locked = await tx
-      .select({ id: schema.contentItems.id })
+      .select({ id: schema.contentItems.id, status: schema.contentItems.status })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
       .limit(1)
@@ -1558,6 +1583,9 @@ export class PublishRepository {
     // Gone (a deleted brand cascades), or another org's: nothing to promote,
     // and the UPDATE below would match no rows anyway.
     if (locked.length === 0) return;
+    // Archive records the previous status and keeps publication receipts. A
+    // late worker verdict must never turn the archived item visible again.
+    if (locked[0]?.status === "archived") return;
 
     const rows = await tx
       .select({ status: schema.adaptations.status })

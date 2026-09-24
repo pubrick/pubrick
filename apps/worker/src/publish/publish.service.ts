@@ -227,9 +227,9 @@ export class PublishService {
     // still not go out: the parent item's status is the user's decision and
     // this handler is the last place that can honour it. Returning normally
     // completes the job — there is nothing to retry, the user said no.
-    if (adaptation.itemStatus === "rejected") {
+    if (adaptation.itemStatus === "rejected" || adaptation.itemStatus === "archived") {
       this.logger.log(
-        `Skipping publish for adaptation ${job.adaptationId}: content item was rejected`,
+        `Skipping publish for adaptation ${job.adaptationId}: content item was ${adaptation.itemStatus}`,
       );
       return;
     }

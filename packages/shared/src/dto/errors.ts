@@ -126,6 +126,8 @@ export const API_ERROR_CODES = [
   // the first place.
   "content_pinned_approved",
   "content_pinned_published",
+  "content_archived",
+  "content_archive_delivery_active",
   "adaptation_pinned_scheduled",
   "adaptation_pinned_manual_ready",
   "adaptation_pinned_queued",

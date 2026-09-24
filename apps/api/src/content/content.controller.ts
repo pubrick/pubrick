@@ -378,6 +378,18 @@ export class ContentController {
     return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
   }
 
+  @Post(":id/archive")
+  @HttpCode(200)
+  archive(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.archive(orgId, id);
+  }
+
+  @Post(":id/restore")
+  @HttpCode(200)
+  restore(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.restore(orgId, id);
+  }
+
   @Post(":id/reject")
   @HttpCode(200)
   reject(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
