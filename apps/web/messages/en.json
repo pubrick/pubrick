@@ -232,7 +232,8 @@
     "analysis_stale": "The comment sample changed. Analyze it again for an up-to-date summary.",
     "analysis_limit_reached": "The hourly allowance for comment analysis is used. Try again later.",
     "analysis_timed_out": "Analysis timed out. Try again.",
-    "analysis_failed": "Analysis failed. Check your Google AI key in Settings or try again."
+    "analysis_failed": "Analysis failed. Check your Google AI key in Settings or try again.",
+    "analysis_in_progress": "Analysis is in progress. Check the result shortly."
   },
   "Knowledge": {
     "title": "Brand knowledge",
@@ -1410,7 +1411,30 @@
     "checkReplyResult": "Check result",
     "collectReplies": "Collect replies",
     "replyCollecting": "Starting check…",
-    "replyCooldown": "You can collect again 15 minutes after the last check."
+    "replyCooldown": "You can collect again 15 minutes after the last check.",
+    "analysisTitle": "AI analysis of replies",
+    "analyzeSample": "Analyze sample",
+    "analysisWorking": "Analyzing…",
+    "checkAnalysisResult": "Check analysis result",
+    "analysisLoadError": "Could not load the saved analysis. Try again.",
+    "analysisRunError": "Could not analyze the sample. Try again.",
+    "analysisSample": "Based on {count} sampled replies, not the total comment count.",
+    "analysisSentiment": "Sentiment: {positive}% positive · {neutral}% neutral · {negative}% negative",
+    "analysisThemes": "Recurring themes",
+    "analysisFeedback": "Audience feedback",
+    "analysisChecked": "Analyzed {date}",
+    "analysisDisclosure": "AI summarizes up to 50 saved replies using your workspace's Google AI key. This action adds to your usage costs. Review the replies before acting on the summary.",
+    "analysis_unavailable": "Analysis is unavailable for this discussion.",
+    "analysis_not_collected": "Collect replies before analyzing them.",
+    "analysis_no_comments": "There are no readable replies to analyze.",
+    "analysis_no_key": "Add a Google AI key in Settings to analyze replies.",
+    "analysisSetupKey": "Open AI settings",
+    "analysis_limit_reached": "The hourly analysis allowance is used. Try again later.",
+    "analysis_not_analyzed": "This reply sample has not been analyzed yet.",
+    "analysis_stale": "The reply sample changed. Analyze it again for an up-to-date summary.",
+    "analysis_failed": "Analysis failed. Check your Google AI key in Settings or try again.",
+    "analysis_timed_out": "Analysis timed out. Try again.",
+    "analysis_in_progress": "Analysis is in progress. Check the result here shortly."
   },
   "Notifications": {
     "title": "Notifications",

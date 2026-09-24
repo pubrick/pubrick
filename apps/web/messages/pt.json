@@ -232,7 +232,8 @@
     "analysis_stale": "A amostra de comentários mudou. Analise-a novamente.",
     "analysis_limit_reached": "O limite horário de análise de comentários foi atingido. Tente mais tarde.",
     "analysis_timed_out": "O tempo da análise esgotou. Tente novamente.",
-    "analysis_failed": "A análise falhou. Verifique sua chave Google AI nas Configurações ou tente novamente."
+    "analysis_failed": "A análise falhou. Verifique sua chave Google AI nas Configurações ou tente novamente.",
+    "analysis_in_progress": "A análise está em curso. Verifique o resultado em breve."
   },
   "Knowledge": {
     "title": "Conhecimento da marca",
@@ -1410,7 +1411,30 @@
     "checkReplyResult": "Consultar resultado",
     "collectReplies": "Recolher respostas",
     "replyCollecting": "A iniciar verificação…",
-    "replyCooldown": "Pode recolher novamente 15 minutos após a última verificação."
+    "replyCooldown": "Pode recolher novamente 15 minutos após a última verificação.",
+    "analysisTitle": "Análise de respostas com IA",
+    "analyzeSample": "Analisar amostra",
+    "analysisWorking": "A analisar…",
+    "checkAnalysisResult": "Verificar análise",
+    "analysisLoadError": "Não foi possível carregar a análise guardada. Tente novamente.",
+    "analysisRunError": "Não foi possível analisar a amostra. Tente novamente.",
+    "analysisSample": "Com base em {count} respostas da amostra, não no total de comentários.",
+    "analysisSentiment": "Sentimento: {positive}% positivo · {neutral}% neutro · {negative}% negativo",
+    "analysisThemes": "Temas recorrentes",
+    "analysisFeedback": "Opiniões do público",
+    "analysisChecked": "Analisado em {date}",
+    "analysisDisclosure": "A IA resume até 50 respostas guardadas com a chave Google AI do seu espaço de trabalho. Esta ação acrescenta custos de utilização. Leia as respostas antes de agir com base no resumo.",
+    "analysis_unavailable": "A análise desta discussão não está disponível.",
+    "analysis_not_collected": "Recolha respostas antes de as analisar.",
+    "analysis_no_comments": "Não há respostas legíveis para analisar.",
+    "analysis_no_key": "Adicione uma chave Google AI nas Configurações para analisar respostas.",
+    "analysisSetupKey": "Abrir definições de IA",
+    "analysis_limit_reached": "O limite horário de análise foi atingido. Tente mais tarde.",
+    "analysis_not_analyzed": "Esta amostra de respostas ainda não foi analisada.",
+    "analysis_stale": "A amostra de respostas mudou. Analise-a novamente.",
+    "analysis_failed": "A análise falhou. Verifique a sua chave Google AI nas Configurações ou tente novamente.",
+    "analysis_timed_out": "O tempo da análise esgotou. Tente novamente.",
+    "analysis_in_progress": "A análise está em curso. Verifique o resultado aqui em breve."
   },
   "Notifications": {
     "title": "Notificações",

@@ -1,6 +1,6 @@
 "use client";
 
-import type { AnalyticsDto, PublicationCommentsDto } from "@pubrick/shared";
+import type { AnalyticsDto, CommentAnalysisDto, PublicationCommentsDto } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -17,6 +17,7 @@ import { ApiError, api, errorMessage } from "@/lib/api";
 const PERIODS = [7, 30, 90] as const;
 type Period = (typeof PERIODS)[number];
 const COMMENT_REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
+type PublicationCommentAnalysisDto = CommentAnalysisDto | { status: "in_progress" };
 
 export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -37,6 +38,10 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
   const [commentRequestedAt, setCommentRequestedAt] = useState<number | null>(null);
   const [commentClock, setCommentClock] = useState(() => Date.now());
   const commentRequestVersion = useRef(0);
+  const [analysisState, setAnalysisState] = useState<PublicationCommentAnalysisDto | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const describeError = useCallback(
     (cause: unknown, fallback?: string): string | null => {
@@ -93,11 +98,50 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
       if (version !== commentRequestVersion.current) return;
       setCommentState(next);
       setCommentError(null);
+      void readAnalysis(publicationId, version);
     } catch (cause) {
       if (version !== commentRequestVersion.current) return;
       setCommentError(describeError(cause, t("replyLoadError")));
     } finally {
       if (version === commentRequestVersion.current) setCommentLoading(false);
+    }
+  }
+
+  async function readAnalysis(publicationId: string, version: number) {
+    setAnalysisLoading(true);
+    try {
+      const next = await api<PublicationCommentAnalysisDto>(
+        `/api/analytics/brands/${id}/publications/${publicationId}/comment-analysis`,
+        { cache: "no-store" },
+      );
+      if (version !== commentRequestVersion.current) return;
+      setAnalysisState(next);
+      setAnalysisError(null);
+    } catch (cause) {
+      if (version !== commentRequestVersion.current) return;
+      setAnalysisError(describeError(cause, t("analysisLoadError")));
+    } finally {
+      if (version === commentRequestVersion.current) setAnalysisLoading(false);
+    }
+  }
+
+  async function analyzeSample() {
+    if (!commentTarget || analysisBusy || analysisLoading) return;
+    const version = commentRequestVersion.current;
+    setAnalysisBusy(true);
+    setAnalysisError(null);
+    try {
+      const next = await api<PublicationCommentAnalysisDto>(
+        `/api/analytics/brands/${id}/publications/${commentTarget.id}/comment-analysis`,
+        { method: "POST" },
+      );
+      if (version !== commentRequestVersion.current) return;
+      setAnalysisState(next);
+    } catch (cause) {
+      if (version === commentRequestVersion.current)
+        setAnalysisError(describeError(cause, t("analysisRunError")));
+    } finally {
+      if (version === commentRequestVersion.current) setAnalysisBusy(false);
     }
   }
 
@@ -108,6 +152,10 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
     setCommentError(null);
     setCommentRequestedAt(null);
     setCommentClock(Date.now());
+    setAnalysisState(null);
+    setAnalysisError(null);
+    setAnalysisLoading(false);
+    setAnalysisBusy(false);
     void readComments(post.id, version);
   }
 
@@ -118,6 +166,10 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
     setCommentError(null);
     setCommentLoading(false);
     setCommentBusy(false);
+    setAnalysisState(null);
+    setAnalysisError(null);
+    setAnalysisLoading(false);
+    setAnalysisBusy(false);
   }
 
   async function collectComments() {
@@ -389,7 +441,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                 <Button
                   variant="secondary"
                   className="min-h-11"
-                  disabled={commentLoading || commentBusy}
+                  disabled={commentLoading || commentBusy || analysisBusy}
                   onClick={() =>
                     void readComments(commentTarget?.id ?? "", commentRequestVersion.current)
                   }
@@ -400,7 +452,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                 <Button
                   variant="secondary"
                   className="min-h-11"
-                  disabled={commentLoading || commentBusy || commentsCoolingDown}
+                  disabled={commentLoading || commentBusy || analysisBusy || commentsCoolingDown}
                   onClick={collectComments}
                 >
                   {commentBusy ? t("replyCollecting") : t("collectReplies")}
@@ -424,6 +476,107 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
             >
               {t("retry")}
             </Button>
+          )}
+          {commentState && (
+            <section aria-label={t("analysisTitle")} className="border-t border-border-soft pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
+                {analysisState &&
+                  ["not_analyzed", "stale", "failed", "timed_out"].includes(
+                    analysisState.status,
+                  ) && (
+                    <Button
+                      variant="secondary"
+                      className="min-h-11"
+                      disabled={analysisBusy || analysisLoading || commentBusy}
+                      onClick={analyzeSample}
+                    >
+                      {analysisBusy ? t("analysisWorking") : t("analyzeSample")}
+                    </Button>
+                  )}
+                {analysisState?.status === "in_progress" && (
+                  <Button
+                    variant="secondary"
+                    className="min-h-11"
+                    disabled={analysisBusy || analysisLoading}
+                    onClick={() => {
+                      if (commentTarget)
+                        void readAnalysis(commentTarget.id, commentRequestVersion.current);
+                    }}
+                  >
+                    {t("checkAnalysisResult")}
+                  </Button>
+                )}
+              </div>
+              {analysisError && (
+                <p role="alert" className="mt-2 text-sm text-danger">
+                  {analysisError}
+                </p>
+              )}
+              {analysisLoading && !analysisState && <Skeleton lines={2} />}
+              {analysisState?.status === "ready" ? (
+                <div className="mt-3 space-y-3 text-sm text-fg">
+                  <p>{analysisState.result.summary}</p>
+                  <p className="text-fg-secondary">
+                    {t("analysisSample", { count: analysisState.sampleSize })}
+                  </p>
+                  <p className="text-fg-secondary">
+                    {t("analysisSentiment", {
+                      positive: Math.round(analysisState.result.sentiment.positive * 100),
+                      neutral: Math.round(analysisState.result.sentiment.neutral * 100),
+                      negative: Math.round(analysisState.result.sentiment.negative * 100),
+                    })}
+                  </p>
+                  {analysisState.result.themes.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold">{t("analysisThemes")}</h4>
+                      <ul className="mt-1 list-inside list-disc">
+                        {analysisState.result.themes.map((theme) => (
+                          <li key={theme.label}>
+                            {theme.label} ({theme.mentions})
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {analysisState.result.feedback.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold">{t("analysisFeedback")}</h4>
+                      <ul className="mt-1 list-inside list-disc">
+                        {analysisState.result.feedback.map((entry) => (
+                          <li key={entry}>{entry}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <p className="text-xs text-fg-tertiary">
+                    {t("analysisChecked", { date: dateTime(analysisState.analyzedAt) })}
+                  </p>
+                </div>
+              ) : analysisState ? (
+                <p role="status" className="mt-2 text-sm text-fg-secondary">
+                  {t(`analysis_${analysisState.status}`)}
+                </p>
+              ) : null}
+              {analysisState?.status === "no_key" && (
+                <Link
+                  href={`/${locale}/settings`}
+                  className="mt-2 inline-block text-sm text-accent underline"
+                >
+                  {t("analysisSetupKey")}
+                </Link>
+              )}
+              {!analysisState && analysisError && commentTarget && (
+                <Button
+                  variant="secondary"
+                  className="mt-2 min-h-11"
+                  onClick={() => void readAnalysis(commentTarget.id, commentRequestVersion.current)}
+                >
+                  {t("retry")}
+                </Button>
+              )}
+              <p className="mt-3 text-xs text-fg-secondary">{t("analysisDisclosure")}</p>
+            </section>
           )}
         </div>
       </Modal>

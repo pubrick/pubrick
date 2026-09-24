@@ -92,6 +92,7 @@ describe("brand publication results", () => {
     let checked = false;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/refresh")) {
@@ -198,6 +199,7 @@ describe("brand publication results", () => {
     const requestedAt = new Date().toISOString();
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments/refresh")) return response({ queued: true });
@@ -254,6 +256,138 @@ describe("brand publication results", () => {
     ).toHaveLength(1);
   });
 
+  it("runs paid analysis only after an explicit click and labels its bounded sample", async () => {
+    const calls: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/comment-analysis"))
+        return response(
+          init?.method === "POST"
+            ? {
+                status: "ready",
+                sampleSize: 1,
+                analyzedAt: timestamp,
+                result: {
+                  summary: "Readers want more examples.",
+                  sentiment: { positive: 0.5, neutral: 0.5, negative: 0 },
+                  themes: [{ label: "Examples", mentions: 1 }],
+                  feedback: ["Show a walkthrough."],
+                },
+              }
+            : { status: "not_analyzed" },
+        );
+      if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+      if (url.endsWith("/comments"))
+        return response({
+          status: "available",
+          requestedAt: timestamp,
+          checkedAt: timestamp,
+          canCollect: true,
+          errorCode: null,
+          comments: [{ id: TG_ID, body: "Show examples please", publishedAt: timestamp }],
+        });
+      return response(telegramResults());
+    });
+    await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await screen.findByText("Telegram story");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Analytics.viewReplySample }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(await dialog.findByText(en.Analytics.analysis_not_analyzed)).toBeInTheDocument();
+    expect(dialog.getByText(en.Analytics.analysisDisclosure)).toBeInTheDocument();
+    expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+    await userEvent.setup().click(dialog.getByRole("button", { name: en.Analytics.analyzeSample }));
+    expect(await dialog.findByText("Readers want more examples.")).toBeInTheDocument();
+    expect(
+      dialog.getByText(en.Analytics.analysisSample.replace("{count}", "1")),
+    ).toBeInTheDocument();
+    expect(dialog.getByText("Show a walkthrough.")).toBeInTheDocument();
+    expect(calls.filter((call) => call.startsWith("POST "))).toEqual([
+      `POST /api/analytics/brands/${BRAND_ID}/publications/${TG_ID}/comment-analysis`,
+    ]);
+  });
+
+  it("checks an in-progress analysis without starting another paid call", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/comment-analysis")) {
+        reads++;
+        return response({ status: reads === 1 ? "in_progress" : "not_analyzed" });
+      }
+      if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+      if (url.endsWith("/comments"))
+        return response({
+          status: "available",
+          requestedAt: timestamp,
+          checkedAt: timestamp,
+          canCollect: true,
+          errorCode: null,
+          comments: [{ id: TG_ID, body: "More examples", publishedAt: timestamp }],
+        });
+      return response(telegramResults());
+    });
+    await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await screen.findByText("Telegram story");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Analytics.viewReplySample }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(await dialog.findByText(en.Analytics.analysis_in_progress)).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(dialog.getByRole("button", { name: en.Analytics.checkAnalysisResult }));
+    expect(await dialog.findByText(en.Analytics.analysis_not_analyzed)).toBeInTheDocument();
+    expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+  });
+
+  it.each([
+    ["stale", "analysis_stale", true],
+    ["no_key", "analysis_no_key", false],
+    ["limit_reached", "analysis_limit_reached", false],
+  ] as const)(
+    "explains %s analysis without automatically retrying",
+    async (status, key, canRun) => {
+      const calls: string[] = [];
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const url = String(input);
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        if (url.endsWith("/comment-analysis")) return response({ status });
+        if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+        if (url.endsWith("/comments"))
+          return response({
+            status: "available",
+            requestedAt: timestamp,
+            checkedAt: timestamp,
+            canCollect: true,
+            errorCode: null,
+            comments: [{ id: TG_ID, body: "More examples", publishedAt: timestamp }],
+          });
+        return response(telegramResults());
+      });
+      await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+      await screen.findByText("Telegram story");
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: en.Analytics.viewReplySample }));
+      const dialog = within(await screen.findByRole("dialog"));
+      expect(await dialog.findByText(en.Analytics[key])).toBeInTheDocument();
+      expect(Boolean(dialog.queryByRole("button", { name: en.Analytics.analyzeSample }))).toBe(
+        canRun,
+      );
+      if (status === "no_key")
+        expect(dialog.getByRole("link", { name: en.Analytics.analysisSetupKey })).toHaveAttribute(
+          "href",
+          "/en/settings",
+        );
+      expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+    },
+  );
+
   it.each([
     ["no_comments", "replyNoComments"],
     ["unavailable", "replyUnavailable"],
@@ -261,6 +395,7 @@ describe("brand publication results", () => {
   ] as const)("explains a Telegram reply %s result", async (status, messageKey) => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments"))
         return response({
@@ -286,6 +421,7 @@ describe("brand publication results", () => {
   it("does not offer collection for an unsupported Telegram publication link", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments"))
         return response({
@@ -311,6 +447,7 @@ describe("brand publication results", () => {
   it("offers a new collection after the server reports an aged pending check as an error", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments"))
         return response({
@@ -339,6 +476,7 @@ describe("brand publication results", () => {
   ] as const)("explains the %s setup failure", async (errorCode, messageKey) => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments"))
         return response({
@@ -365,6 +503,7 @@ describe("brand publication results", () => {
     let reads = 0;
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments/refresh")) return response({ queued: true });
       if (url.endsWith("/comments")) {
@@ -397,6 +536,7 @@ describe("brand publication results", () => {
   it("redirects a signed-in user with no active organization when the reply read is refused", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments"))
         return {
@@ -419,6 +559,7 @@ describe("brand publication results", () => {
   it("localizes a refused reply read in Spanish", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments")) return refusal(403, "forbidden");
       return response(telegramResults());
@@ -438,6 +579,7 @@ describe("brand publication results", () => {
   it("localizes the reply collection cooldown refusal in Spanish", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
+      if (url.endsWith("/comment-analysis")) return response({ status: "not_collected" });
       if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
       if (url.endsWith("/comments/refresh"))
         return refusal(409, "publication_comments_refresh_cooldown");

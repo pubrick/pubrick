@@ -232,7 +232,8 @@
     "analysis_stale": "La muestra de comentarios cambió. Vuelve a analizarla.",
     "analysis_limit_reached": "Se agotó el límite horario de análisis de comentarios. Inténtalo más tarde.",
     "analysis_timed_out": "Se agotó el tiempo del análisis. Inténtalo de nuevo.",
-    "analysis_failed": "Falló el análisis. Revisa tu clave de Google AI en Ajustes o inténtalo de nuevo."
+    "analysis_failed": "Falló el análisis. Revisa tu clave de Google AI en Ajustes o inténtalo de nuevo.",
+    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado en breve."
   },
   "Knowledge": {
     "title": "Conocimiento de marca",
@@ -1410,7 +1411,30 @@
     "checkReplyResult": "Consultar resultado",
     "collectReplies": "Recopilar respuestas",
     "replyCollecting": "Iniciando comprobación…",
-    "replyCooldown": "Puedes recopilar de nuevo 15 minutos después de la última comprobación."
+    "replyCooldown": "Puedes recopilar de nuevo 15 minutos después de la última comprobación.",
+    "analysisTitle": "Análisis de respuestas con IA",
+    "analyzeSample": "Analizar muestra",
+    "analysisWorking": "Analizando…",
+    "checkAnalysisResult": "Comprobar análisis",
+    "analysisLoadError": "No se pudo cargar el análisis guardado. Inténtalo de nuevo.",
+    "analysisRunError": "No se pudo analizar la muestra. Inténtalo de nuevo.",
+    "analysisSample": "Basado en {count} respuestas de la muestra, no en el total de comentarios.",
+    "analysisSentiment": "Sentimiento: {positive}% positivo · {neutral}% neutro · {negative}% negativo",
+    "analysisThemes": "Temas recurrentes",
+    "analysisFeedback": "Opiniones de la audiencia",
+    "analysisChecked": "Analizado el {date}",
+    "analysisDisclosure": "La IA resume hasta 50 respuestas guardadas con la clave de Google AI de tu espacio de trabajo. Esta acción añade costes de uso. Revisa las respuestas antes de actuar según el resumen.",
+    "analysis_unavailable": "El análisis de este debate no está disponible.",
+    "analysis_not_collected": "Recopila respuestas antes de analizarlas.",
+    "analysis_no_comments": "No hay respuestas legibles para analizar.",
+    "analysis_no_key": "Añade una clave de Google AI en Ajustes para analizar respuestas.",
+    "analysisSetupKey": "Abrir ajustes de IA",
+    "analysis_limit_reached": "Se agotó el límite horario de análisis. Inténtalo más tarde.",
+    "analysis_not_analyzed": "Esta muestra de respuestas aún no se ha analizado.",
+    "analysis_stale": "La muestra de respuestas cambió. Vuelve a analizarla.",
+    "analysis_failed": "Falló el análisis. Revisa tu clave de Google AI en Ajustes o inténtalo de nuevo.",
+    "analysis_timed_out": "Se agotó el tiempo del análisis. Inténtalo de nuevo.",
+    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado aquí en breve."
   },
   "Notifications": {
     "title": "Notificaciones",
