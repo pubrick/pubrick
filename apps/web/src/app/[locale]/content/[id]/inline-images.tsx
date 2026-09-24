@@ -17,6 +17,7 @@ type ImageSlot = {
   afterParagraph: number;
   alt: string;
   caption: string | null;
+  needsReview?: boolean;
 };
 
 type ImageState = { images: ImageSlot[]; revision: number };
@@ -61,6 +62,7 @@ export function InlineImages({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [reviewedSlots, setReviewedSlots] = useState<Set<string>>(new Set());
   const [bodyChangedWhileEditing, setBodyChangedWhileEditing] = useState(false);
   const [chooser, setChooser] = useState<{ replaceIndex: number | null } | null>(null);
   const [assets, setAssets] = useState<MediaAssetDto[]>([]);
@@ -85,6 +87,7 @@ export function InlineImages({
       setSlots(state.images);
       setRevision(state.revision);
       setDirty(false);
+      setReviewedSlots(new Set());
       setStale(false);
       setError(null);
       setBodyChangedWhileEditing(false);
@@ -138,6 +141,14 @@ export function InlineImages({
   }, [chooser, loadAssets]);
 
   function changeSlot(index: number, update: Partial<ImageSlot>) {
+    const id = slots[index]?.id;
+    if (id && slots[index]?.needsReview) {
+      setReviewedSlots((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
     setSlots((current) =>
       current.map((slot, at) => (at === index ? { ...slot, ...update } : slot)),
     );
@@ -231,7 +242,17 @@ export function InlineImages({
   }
 
   async function save() {
-    if (!editable || bodyHasUnsavedChanges || !dirty || busy) return;
+    if (
+      !editable ||
+      bodyHasUnsavedChanges ||
+      (!dirty && !pendingReview) ||
+      busy ||
+      stale ||
+      invalidAlt ||
+      invalidPosition ||
+      unacknowledgedReview
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
@@ -239,6 +260,7 @@ export function InlineImages({
         method: "PUT",
         body: JSON.stringify({
           expectedRevision: revision,
+          ...(pendingReview && { reviewGeneratedImages: true }),
           images: slots.map(({ mediaId, afterParagraph, alt, caption }) => ({
             mediaId,
             afterParagraph,
@@ -250,6 +272,7 @@ export function InlineImages({
       setSlots(saved.images);
       setRevision(saved.revision);
       setDirty(false);
+      setReviewedSlots(new Set());
       setStale(false);
       setBodyChangedWhileEditing(false);
     } catch (cause) {
@@ -267,6 +290,10 @@ export function InlineImages({
     slots.length < Math.min(MAX_IMAGES, paragraphs.length);
   const invalidAlt = slots.some((slot) => slot.alt.trim().length === 0);
   const invalidPosition = slots.some((slot) => slot.afterParagraph >= paragraphs.length);
+  const pendingReview = slots.some((slot) => slot.needsReview);
+  const unacknowledgedReview = slots.some(
+    (slot) => slot.needsReview && (!slot.id || !reviewedSlots.has(slot.id)),
+  );
 
   return (
     <Card className="mb-6" aria-label={t("title")}>
@@ -294,7 +321,13 @@ export function InlineImages({
             <Button
               size="sm"
               disabled={
-                !dirty || busy || stale || bodyHasUnsavedChanges || invalidAlt || invalidPosition
+                (!dirty && !pendingReview) ||
+                busy ||
+                stale ||
+                bodyHasUnsavedChanges ||
+                invalidAlt ||
+                invalidPosition ||
+                unacknowledgedReview
               }
               onClick={() => void save()}
             >
@@ -316,6 +349,11 @@ export function InlineImages({
       {invalidPosition && (
         <p className="mb-3 text-sm text-danger" role="alert">
           {t("invalidPosition")}
+        </p>
+      )}
+      {pendingReview && (
+        <p className="mb-3 text-sm text-fg-secondary" role="status">
+          {t("generatedReviewHint")}
         </p>
       )}
       {loadError && (
@@ -347,6 +385,11 @@ export function InlineImages({
                       className="aspect-square w-full rounded-control bg-bg-sunken object-cover"
                     />
                     <div className="space-y-3">
+                      {slot.needsReview && (
+                        <p className="text-sm font-medium text-accent">
+                          {t("generatedReviewBadge")}
+                        </p>
+                      )}
                       <Select
                         label={t("position")}
                         value={slot.afterParagraph}
@@ -391,6 +434,27 @@ export function InlineImages({
                           changeSlot(index, { caption: event.target.value || null })
                         }
                       />
+                      {slot.needsReview && slot.id && (
+                        <label className="flex items-start gap-2 text-sm text-fg-secondary">
+                          <input
+                            type="checkbox"
+                            checked={reviewedSlots.has(slot.id)}
+                            disabled={busy || bodyHasUnsavedChanges}
+                            onChange={(event) => {
+                              const slotId = slot.id;
+                              if (!slotId) return;
+                              setReviewedSlots((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(slotId);
+                                else next.delete(slotId);
+                                return next;
+                              });
+                            }}
+                            className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+                          />
+                          <span>{t("confirmGeneratedReview")}</span>
+                        </label>
+                      )}
                       <div className="flex flex-wrap gap-2">
                         <Button
                           size="sm"

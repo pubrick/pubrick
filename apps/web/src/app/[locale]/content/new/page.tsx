@@ -36,6 +36,12 @@ type ContentItem = { id: string };
 
 const FORM_ID = "new-content-form";
 const SOURCE_HELP_ID = "source-help";
+const INLINE_IMAGE_TYPES: ReadonlySet<ContentType> = new Set([
+  "expert_article",
+  "comparison",
+  "case_study",
+  "educational",
+]);
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
@@ -54,6 +60,7 @@ export default function NewContentPage() {
   const [brief, setBrief] = useState("");
   const [contentType, setContentType] = useState<ContentType>("social_post");
   const [generateCover, setGenerateCover] = useState(false);
+  const [generateInlineImages, setGenerateInlineImages] = useState(false);
   const [useEditorialFeedback, setUseEditorialFeedback] = useState(false);
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
@@ -111,6 +118,7 @@ export default function NewContentPage() {
    */
   const canGenerate = credentials !== null && credentials.length > 0;
   const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
+  const inlineImageTypeSupported = INLINE_IMAGE_TYPES.has(contentType);
   const coverChannelsSupported = [...channelIds].every((id) =>
     (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
       channels.find((channel) => channel.id === id)?.platform ?? "",
@@ -283,6 +291,10 @@ export default function NewContentPage() {
       setError(t("generateCoverUnsupported"));
       return;
     }
+    if (generateInlineImages && !inlineImageTypeSupported) {
+      setError(t("generateInlineImagesUnsupported"));
+      return;
+    }
     if (sourcePreview) {
       setError(t("sourcePreviewNeedsUse"));
       setSourceOpen(true);
@@ -340,6 +352,7 @@ export default function NewContentPage() {
           channelIds: [...channelIds],
           ...(contentType !== "social_post" && { contentType }),
           ...(generateCover && { generateCover: true }),
+          ...(generateInlineImages && { generateInlineImages: true }),
           ...(useEditorialFeedback && { useEditorialFeedback: true }),
           ...(hasBrief && { brief }),
           ...(hasMaterial && { material }),
@@ -446,6 +459,7 @@ export default function NewContentPage() {
                 onChange={(event) => {
                   const selected = event.target.value as ContentType;
                   setContentType(selected);
+                  if (!INLINE_IMAGE_TYPES.has(selected)) setGenerateInlineImages(false);
                   if (contentTypeRequiresMaterial(selected)) setSourceOpen(true);
                 }}
                 className="min-h-11"
@@ -472,6 +486,34 @@ export default function NewContentPage() {
                 <p id="editorial-feedback-hint" className="mt-1 pl-8 text-sm text-fg-tertiary">
                   {t("useEditorialFeedbackHint")}
                 </p>
+              </div>
+            )}
+            {canGenerate && (
+              <div className="rounded-control border border-border px-3 py-3">
+                <label className="flex items-start gap-3 text-sm text-fg">
+                  <input
+                    type="checkbox"
+                    checked={generateInlineImages}
+                    onChange={(event) => setGenerateInlineImages(event.target.checked)}
+                    disabled={!hasGoogleKey || !inlineImageTypeSupported}
+                    aria-describedby="inline-images-hint"
+                    className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+                  />
+                  <span>{t("generateInlineImages")}</span>
+                </label>
+                <p id="inline-images-hint" className="mt-1 pl-8 text-sm text-fg-tertiary">
+                  {t("generateInlineImagesHint")}
+                </p>
+                {!hasGoogleKey && (
+                  <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                    {t("generateInlineImagesNeedsGoogle")}
+                  </p>
+                )}
+                {!inlineImageTypeSupported && (
+                  <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                    {t("generateInlineImagesUnsupported")}
+                  </p>
+                )}
               </div>
             )}
             {canGenerate && (

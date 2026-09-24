@@ -132,6 +132,53 @@ describe("article image slots", () => {
     expect(within(preview).getByRole("img", { name: "A helpful diagram" })).toBeVisible();
   });
 
+  it("requires explicit review of generated slots and resets consent after description edits", async () => {
+    const slot = {
+      id: "generated-slot-1",
+      mediaId: image.id,
+      afterParagraph: 0,
+      alt: "Generated landscape",
+      caption: null,
+      needsReview: true,
+    };
+    const puts: Record<string, unknown>[] = [];
+    mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      if (path !== "/api/content/post-1/images") throw new Error(`Unexpected request: ${path}`);
+      if (init?.method === "PUT") {
+        puts.push(JSON.parse(init.body as string));
+        return Promise.resolve({ images: [{ ...slot, needsReview: false }], revision: 2 });
+      }
+      return Promise.resolve({ images: [slot], revision: 1 });
+    });
+    render(<InlineImages {...props} />);
+    expect(await screen.findByText("Generated image — review required")).toBeVisible();
+    expect(screen.getByText(/Review every generated image/)).toBeVisible();
+    const review = screen.getByRole("checkbox", {
+      name: "I reviewed this image, its placement, and description",
+    });
+    const save = screen.getByRole("button", { name: "Save images" });
+    expect(save).toBeDisabled();
+    await userEvent.setup().click(review);
+    expect(save).toBeEnabled();
+    await userEvent.setup().clear(screen.getByRole("textbox", { name: "Image description" }));
+    expect(review).not.toBeChecked();
+    expect(save).toBeDisabled();
+    await userEvent
+      .setup()
+      .type(screen.getByRole("textbox", { name: "Image description" }), "Green landscape");
+    await userEvent.setup().click(review);
+    await userEvent.setup().click(save);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({
+      expectedRevision: 1,
+      reviewGeneratedImages: true,
+      images: [{ mediaId: image.id, afterParagraph: 0, alt: "Green landscape" }],
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("Generated image — review required")).not.toBeInTheDocument(),
+    );
+  });
+
   it("requires the text to be saved before changing image positions", async () => {
     render(<InlineImages {...props} bodyHasUnsavedChanges />);
     await screen.findByText("No inline images yet.");

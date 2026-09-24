@@ -10,6 +10,7 @@ const images: ContentImageDto[] = [
     afterParagraph: 0,
     alt: 'A "sample" <photo> & details',
     caption: "O'Brien <said> hello",
+    needsReview: false,
   },
 ];
 
