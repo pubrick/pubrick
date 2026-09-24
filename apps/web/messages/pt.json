@@ -1007,6 +1007,7 @@
     "media_cover_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar a capa.",
     "media_video_pinned": "Esta publicação já foi aprovada ou publicada. Rejeite-a antes de alterar o vídeo.",
     "media_generation_limit": "O limite de geração de imagens por hora foi atingido. Tente mais tarde.",
+    "media_generation_busy": "Outra imagem está sendo gerada para este espaço de trabalho. Tente novamente quando terminar.",
     "media_generation_failed": "O Gemini não retornou uma imagem utilizável. Tente outra descrição.",
     "cover_requires_google_key": "Adicione uma chave Google AI nas Definições antes de pedir uma capa.",
     "topic_suggestions_cooldown": "Pode pedir mais ideias daqui a 30 minutos.",

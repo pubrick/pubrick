@@ -694,4 +694,37 @@ describe.skipIf(!url)("media library e2e", () => {
     expect(response.body.code).toBe("media_generation_limit");
     expect(modelCall).not.toHaveBeenCalled();
   });
+
+  it("refuses a concurrent image call before it can exceed the shared budget", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Parallel images" }).expect(201);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    let entered!: () => void;
+    let release!: () => void;
+    const providerEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const providerMayFinish = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    modelCall.mockImplementationOnce(async () => {
+      entered();
+      await providerMayFinish;
+      return { bytes: generatedPng, mimeType: "image/png", outcome: "completed", responseMs: 1 };
+    });
+    const body = { brandId: brand.body.id, prompt: "An editorial image of a seaside cafe" };
+    const first = owner
+      .post("/api/media/generate")
+      .send(body)
+      .then((response) => response);
+    await providerEntered;
+    const competing = await owner.post("/api/media/generate").send(body).expect(409);
+    expect(competing.body.code).toBe("media_generation_busy");
+    expect(modelCall).toHaveBeenCalledTimes(1);
+    release();
+    expect((await first).status).toBe(201);
+  });
 });

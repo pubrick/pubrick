@@ -119,10 +119,14 @@ failed and uncertain outcomes. Where Gemini returns modality token counts,
 Pubrick estimates the standard tier cost using the published input, image
 output, text output and thinking rates. Missing details remain `unknown` rather
 than claiming a zero cost. Pubrick checks a shared nominal limit of 12 image
-calls per organization per hour, including cover calls. Concurrent manual and
-background requests can exceed that limit because dispatches do not reserve a
-slot atomically; the limit is best effort until those paths share a durable
-reservation. Each cover step attempt makes at most one provider request, and one
+calls per organization per hour, including cover calls. Manual and background
+requests take the same PostgreSQL session lock while checking the limit,
+calling Gemini, and recording usage. A competing manual request returns an
+actionable busy response; a competing draft cover is skipped without discarding
+its text draft. This prevents ordinary concurrent requests from exceeding the
+limit. A process crash after Gemini accepts a request but before the ledger
+write can still leave an uncounted call; the limit is not a billing guarantee.
+Each cover step attempt makes at most one provider request, and one
 manual click makes one request; neither retries the provider within that
 attempt. Provider error bodies and keys never reach the browser. The image
 model and rates should be reviewed as

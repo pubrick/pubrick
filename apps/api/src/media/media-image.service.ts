@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { schema, withImageCallLock } from "@pubrick/db";
 import {
   IMAGE_CALL_STEPS,
   MAX_IMAGE_CALLS_PER_HOUR,
@@ -9,7 +9,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { conflict } from "../api-error";
-import { db } from "../db";
+import { db, pool } from "../db";
 import {
   GeminiImageCaller,
   IMAGE_MODEL,
@@ -33,22 +33,29 @@ export class MediaImageService {
     const source = request.sourceMediaId
       ? await this.media.source(orgId, request.brandId, request.sourceMediaId)
       : undefined;
-    const count = await db
-      .select({ calls: sql<string>`count(*)` })
-      .from(schema.usageLedger)
-      .where(
-        and(
-          eq(schema.usageLedger.orgId, orgId),
-          inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
-          sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
-        ),
-      );
-    if (Number(count[0]?.calls ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
-      throw conflict("media_generation_limit", "The hourly image generation limit is reached");
-    }
     const credential = await this.credentials.getDecrypted(orgId, "google");
-    const result = await this.caller.call(credential.apiKey, request.prompt, source);
-    await this.record(orgId, result, !!source);
+    const locked = await withImageCallLock(pool, orgId, async () => {
+      const count = await db
+        .select({ calls: sql<string>`count(*)` })
+        .from(schema.usageLedger)
+        .where(
+          and(
+            eq(schema.usageLedger.orgId, orgId),
+            inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+            sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+          ),
+        );
+      if (Number(count[0]?.calls ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
+        throw conflict("media_generation_limit", "The hourly image generation limit is reached");
+      }
+      const result = await this.caller.call(credential.apiKey, request.prompt, source);
+      await this.record(orgId, result, !!source);
+      return result;
+    });
+    if (!locked.acquired) {
+      throw conflict("media_generation_busy", "Another image is being generated; try again soon");
+    }
+    const result = locked.value;
     if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
       throw conflict(
         "media_generation_failed",

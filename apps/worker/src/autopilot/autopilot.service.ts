@@ -141,7 +141,7 @@ export class AutopilotService {
             eq(schema.pipelineRuns.orgId, orgId),
             eq(schema.pipelineRuns.brandId, brandId),
             sql`${schema.pipelineRuns.unrecordedCalls} > 0`,
-            sql`(timezone(${config.timezone}, ${schema.pipelineRuns.createdAt})::date)::text = ${day}`,
+            sql`(timezone(${config.timezone}, ${schema.pipelineRuns.createdAt} at time zone 'UTC')::date)::text = ${day}`,
           ),
         );
       if ((uncertain[0]?.count ?? 0) > 0) return "unpriced_spend";

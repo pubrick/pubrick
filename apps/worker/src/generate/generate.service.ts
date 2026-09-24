@@ -593,38 +593,46 @@ export class GenerateService {
               );
               return { mediaId: null, result: "unavailable" as const };
             }
-            if (!(await this.repo.mayCallImageModel(run.orgId))) {
-              this.logger.warn(`Run ${run.id}: cover skipped because the image budget is full`);
+            const locked = await this.repo.withImageCallLock(run.orgId, async () => {
+              if (!(await this.repo.mayCallImageModel(run.orgId))) return null;
+              // One opt-in image call. Its text is data about the draft, never
+              // instructions to modify the publishing or review workflow.
+              const prompt =
+                `Create one 1K editorial cover image for ${context.brand.name}. ` +
+                "The image should illustrate this draft without text, logos, or watermarks. " +
+                `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
+              const result = await this.imageCaller.call(googleKey, prompt);
+              const cost = imageCostUsd(result.usage);
+              const record: UsageRecord = {
+                provider: "google",
+                modelId: IMAGE_MODEL,
+                attempt: 1,
+                inputTokens: result.usage?.promptTokenCount ?? 0,
+                outputTokens:
+                  (result.usage?.candidatesTokenCount ?? 0) +
+                  (result.usage?.thoughtsTokenCount ?? 0),
+                cachedInputTokens: 0,
+                reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
+                costUsd: cost,
+                costSource: cost === null ? "unknown" : "price_table",
+                responseMs: result.responseMs,
+                status: result.bytes ? "ok" : "errored",
+                outcome: result.outcome,
+              };
+              try {
+                await ctx.onUsage(record, { step: "cover" });
+              } catch (error) {
+                await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+              }
+              return result;
+            });
+            if (!locked.acquired || !locked.value) {
+              this.logger.warn(
+                `Run ${run.id}: cover skipped because the image budget is busy or full`,
+              );
               return { mediaId: null, result: "unavailable" as const };
             }
-            // One opt-in image call. Its text is data about the draft, never
-            // instructions to modify the publishing or review workflow.
-            const prompt =
-              `Create one 1K editorial cover image for ${context.brand.name}. ` +
-              "The image should illustrate this draft without text, logos, or watermarks. " +
-              `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
-            const result = await this.imageCaller.call(googleKey, prompt);
-            const cost = imageCostUsd(result.usage);
-            const record: UsageRecord = {
-              provider: "google",
-              modelId: IMAGE_MODEL,
-              attempt: 1,
-              inputTokens: result.usage?.promptTokenCount ?? 0,
-              outputTokens:
-                (result.usage?.candidatesTokenCount ?? 0) + (result.usage?.thoughtsTokenCount ?? 0),
-              cachedInputTokens: 0,
-              reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
-              costUsd: cost,
-              costSource: cost === null ? "unknown" : "price_table",
-              responseMs: result.responseMs,
-              status: result.bytes ? "ok" : "errored",
-              outcome: result.outcome,
-            };
-            try {
-              await ctx.onUsage(record, { step: "cover" });
-            } catch (error) {
-              await this.recordUnrecordedCall(run.orgId, run.id, error, record);
-            }
+            const result = locked.value;
             if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
               this.logger.warn(`Run ${run.id}: cover image was unavailable`);
               return { mediaId: null, result: "unavailable" as const };

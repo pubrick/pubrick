@@ -102,6 +102,7 @@ export const API_ERROR_CODES = [
   "media_video_pinned",
   "media_cover_pinned",
   "media_generation_limit",
+  "media_generation_busy",
   "media_generation_failed",
   "cover_requires_google_key",
   /** Public syndication is opt-in; the feed may have been disabled. */

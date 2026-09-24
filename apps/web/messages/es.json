@@ -1007,6 +1007,7 @@
     "media_cover_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar la portada.",
     "media_video_pinned": "Esta publicación ya está aprobada o publicada. Recházala antes de cambiar el vídeo.",
     "media_generation_limit": "Se alcanzó el límite de generación de imágenes por hora. Inténtalo más tarde.",
+    "media_generation_busy": "Se está generando otra imagen para este espacio de trabajo. Inténtalo cuando termine.",
     "media_generation_failed": "Gemini no devolvió una imagen válida. Prueba otra descripción.",
     "cover_requires_google_key": "Añade una clave de Google AI en Ajustes antes de solicitar una portada.",
     "topic_suggestions_cooldown": "Podrás pedir más ideas en 30 minutos.",

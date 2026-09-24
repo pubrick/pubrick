@@ -289,6 +289,25 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       });
     });
 
+    it("skips a cover while another process owns the organization's image call lock", async () => {
+      const seeded = await seed({ generateCover: true });
+      const holder = await workerPool.connect();
+      const key = `image-call-budget:${seeded.orgId}`;
+      try {
+        await holder.query("select pg_advisory_lock(hashtextextended($1, 0))", [key]);
+        const imageCaller = { call: vi.fn() };
+        await serviceFor(scriptedModel(), new Repository(), imageCaller).handle({
+          id: "cover-busy",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
+        expect(imageCaller.call).not.toHaveBeenCalled();
+        expect((await itemsOf(seeded.orgId))[0]?.coverMediaId).toBeNull();
+      } finally {
+        await holder.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+        holder.release();
+      }
+    });
+
     it("resumes from the cover checkpoint without buying another image", async () => {
       const seeded = await seed({ generateCover: true });
       const png = await sharp({

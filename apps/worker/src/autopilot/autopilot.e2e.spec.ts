@@ -157,6 +157,18 @@ describe.skipIf(!url)("autopilot dispatch e2e", () => {
       .set({ timezone: "Asia/Tokyo" })
       .where(eq(schema.autopilotConfigs.brandId, brandId));
     expect(await service.trigger(boss, orgId, brandId)).toBe("budget_full");
+    await db
+      .update(schema.usageLedger)
+      .set({ costUsd: "0.100000" })
+      .where(and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.runId, firstRunId)));
+    await db
+      .update(schema.pipelineRuns)
+      .set({
+        unrecordedCalls: 1,
+        createdAt: sql`((timezone('Asia/Tokyo', now())::date + time '00:30') AT TIME ZONE 'Asia/Tokyo') AT TIME ZONE 'UTC'`,
+      })
+      .where(eq(schema.pipelineRuns.id, firstRunId));
+    expect(await service.trigger(boss, orgId, brandId)).toBe("unpriced_spend");
     const timezone = "Europe/Moscow";
     const currentHour = Number(
       new Intl.DateTimeFormat("en-GB", {

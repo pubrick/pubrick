@@ -10,7 +10,7 @@ import {
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import { schema, withImageCallLock } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
@@ -41,7 +41,7 @@ import {
   sql,
 } from "drizzle-orm";
 import sharp from "sharp";
-import { db } from "../db";
+import { db, pool } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
 
@@ -801,6 +801,11 @@ export class GenerateRepository {
   }
 
   /** Recheck the shared image budget after a run has waited in the queue. */
+  withImageCallLock<T>(orgId: string, call: () => Promise<T>) {
+    return withImageCallLock(pool, orgId, call);
+  }
+
+  /** Recheck the shared image budget while holding the per-org image call lock. */
   async mayCallImageModel(orgId: string): Promise<boolean> {
     const [row] = await db
       .select({ count: sql<number>`count(*)::int` })
