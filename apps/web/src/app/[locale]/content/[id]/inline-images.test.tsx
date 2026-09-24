@@ -143,6 +143,7 @@ describe("article image slots", () => {
     };
     const puts: Record<string, unknown>[] = [];
     mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/ai-credentials") return Promise.resolve([]);
       if (path !== "/api/content/post-1/images") throw new Error(`Unexpected request: ${path}`);
       if (init?.method === "PUT") {
         puts.push(JSON.parse(init.body as string));
@@ -177,6 +178,99 @@ describe("article image slots", () => {
     await waitFor(() =>
       expect(screen.queryByText("Generated image — review required")).not.toBeInTheDocument(),
     );
+  });
+
+  it("regenerates one saved slot and requires review of the returned image", async () => {
+    const original = {
+      id: "slot-1",
+      mediaId: image.id,
+      afterParagraph: 0,
+      alt: "Original illustration",
+      caption: "Old caption",
+      needsReview: false,
+    };
+    const regenerated = {
+      ...original,
+      mediaId: "image-2",
+      alt: "New illustration to review",
+      caption: null,
+      needsReview: true,
+    };
+    const calls: Array<{ path: string; method: string; body?: string }> = [];
+    mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({ path, method, body: init?.body as string | undefined });
+      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/content/post-1/images" && method === "GET")
+        return Promise.resolve({ images: [original], revision: 4 });
+      if (path === "/api/content/post-1/images/slot-1/regenerate" && method === "POST")
+        return Promise.resolve({ images: [regenerated], revision: 5 });
+      if (path === "/api/content/post-1/images" && method === "PUT")
+        return Promise.resolve({ images: [{ ...regenerated, needsReview: false }], revision: 6 });
+      throw new Error(`Unexpected request: ${method} ${path}`);
+    });
+    render(<InlineImages {...props} />);
+    const user = userEvent.setup();
+    const regenerate = await screen.findByRole("button", { name: "Regenerate image" });
+    await waitFor(() => expect(regenerate).toBeEnabled());
+    expect(screen.getByText(/Uses one Gemini image call/)).toBeVisible();
+    await user.click(regenerate);
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.path.endsWith("/regenerate") && call.method === "POST"),
+      ).toBe(true),
+    );
+    expect(calls.find((call) => call.path.endsWith("/regenerate"))).toEqual({
+      path: "/api/content/post-1/images/slot-1/regenerate",
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 4 }),
+    });
+    expect(await screen.findByText("Generated image — review required")).toBeVisible();
+    expect(screen.getAllByRole("img", { name: "New illustration to review" })[0]).toHaveAttribute(
+      "src",
+      "/api/media/image-2/file",
+    );
+    const save = screen.getByRole("button", { name: "Save images" });
+    expect(save).toBeDisabled();
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "I reviewed this image, its placement, and description",
+      }),
+    );
+    await user.click(save);
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(JSON.parse(calls.find((call) => call.method === "PUT")?.body ?? "")).toEqual({
+      expectedRevision: 5,
+      reviewGeneratedImages: true,
+      images: [{ mediaId: "image-2", afterParagraph: 0, alt: "New illustration to review" }],
+    });
+  });
+
+  it("keeps the current image and offers reload after regeneration finds a stale revision", async () => {
+    const original = {
+      id: "slot-1",
+      mediaId: image.id,
+      afterParagraph: 0,
+      alt: "Original illustration",
+      caption: null,
+      needsReview: false,
+    };
+    mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/content/post-1/images/slot-1/regenerate" && init?.method === "POST")
+        return Promise.reject(new ApiError(409, "changed", false, "content_images_changed"));
+      if (path === "/api/content/post-1/images")
+        return Promise.resolve({ images: [original], revision: 4 });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<InlineImages {...props} />);
+    const user = userEvent.setup();
+    const regenerate = await screen.findByRole("button", { name: "Regenerate image" });
+    await waitFor(() => expect(regenerate).toBeEnabled());
+    await user.click(regenerate);
+    expect(await screen.findByRole("button", { name: "Reload latest images" })).toBeVisible();
+    expect(screen.getAllByRole("img", { name: "Original illustration" })).toHaveLength(2);
+    expect(regenerate).toBeDisabled();
   });
 
   it("requires the text to be saved before changing image positions", async () => {

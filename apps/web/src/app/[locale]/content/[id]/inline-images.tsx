@@ -70,6 +70,8 @@ export function InlineImages({
   const [hasMore, setHasMore] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [hasGoogleKey, setHasGoogleKey] = useState(false);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
+  const [regeneratingSlotId, setRegeneratingSlotId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [sourceMediaId, setSourceMediaId] = useState<string | null>(null);
   const [newMediaId, setNewMediaId] = useState<string | null>(null);
@@ -133,11 +135,15 @@ export function InlineImages({
   }, [brandId, t, te]);
 
   useEffect(() => {
-    if (!chooser) return;
-    void loadAssets();
+    if (!editable) return;
     void api<{ provider: string }[]>("/api/ai-credentials")
       .then((keys) => setHasGoogleKey(keys.some((key) => key.provider === "google")))
-      .catch(() => setHasGoogleKey(false));
+      .catch(() => setHasGoogleKey(false))
+      .finally(() => setCredentialsLoaded(true));
+  }, [editable]);
+
+  useEffect(() => {
+    if (chooser) void loadAssets();
   }, [chooser, loadAssets]);
 
   function changeSlot(index: number, update: Partial<ImageSlot>) {
@@ -222,6 +228,31 @@ export function InlineImages({
       setError(errorMessage(cause, t("generateFailed"), te));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function regenerate(slotId: string) {
+    if (busy || dirty || stale || bodyHasUnsavedChanges || !hasGoogleKey) return;
+    setBusy(true);
+    setRegeneratingSlotId(slotId);
+    setError(null);
+    try {
+      const saved = await api<ImageState>(`/api/content/${itemId}/images/${slotId}/regenerate`, {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: revision }),
+      });
+      setSlots(saved.images);
+      setRevision(saved.revision);
+      setDirty(false);
+      setReviewedSlots(new Set());
+      setStale(false);
+      setBodyChangedWhileEditing(false);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "content_images_changed") setStale(true);
+      setError(errorMessage(cause, t("regenerateFailed"), te));
+    } finally {
+      setBusy(false);
+      setRegeneratingSlotId(null);
     }
   }
 
@@ -331,7 +362,7 @@ export function InlineImages({
               }
               onClick={() => void save()}
             >
-              {busy ? t("saving") : t("save")}
+              {busy && !regeneratingSlotId ? t("saving") : t("save")}
             </Button>
           </div>
         )}
@@ -456,6 +487,18 @@ export function InlineImages({
                         </label>
                       )}
                       <div className="flex flex-wrap gap-2">
+                        {slot.id && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={
+                              busy || dirty || stale || bodyHasUnsavedChanges || !hasGoogleKey
+                            }
+                            onClick={() => void regenerate(slot.id as string)}
+                          >
+                            {regeneratingSlotId === slot.id ? t("regenerating") : t("regenerate")}
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="secondary"
@@ -476,6 +519,13 @@ export function InlineImages({
                           {t("remove")}
                         </Button>
                       </div>
+                      {slot.id && (
+                        <p className="text-xs text-fg-tertiary">
+                          {!hasGoogleKey && credentialsLoaded
+                            ? t("regenerateNeedsGoogle")
+                            : t("regenerateHint")}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </li>
