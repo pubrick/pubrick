@@ -42,6 +42,7 @@ import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { WebhooksService } from "./webhooks/webhooks.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
 
@@ -135,6 +136,7 @@ export class QueueService {
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
+    @Optional() private readonly webhooks?: WebhooksService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -164,6 +166,12 @@ export class QueueService {
       await boss.work("notification-digest-scan", { batchSize: 1 }, async () =>
         this.notifications?.scanDigests(),
       );
+    }
+
+    if (this.webhooks && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("webhook-scan");
+      await boss.schedule("webhook-scan", "* * * * *");
+      await boss.work("webhook-scan", { batchSize: 1 }, async () => this.webhooks?.scan());
     }
 
     if (this.knowledgeAutoIndex && names === DEFAULT_QUEUE_NAMES) {

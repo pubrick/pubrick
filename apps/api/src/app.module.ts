@@ -22,6 +22,7 @@ import { RunsModule } from "./runs/runs.module";
 import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
 import { SourcesModule } from "./sources/sources.module";
 import { TopicsModule } from "./topics/topics.module";
+import { WebhooksModule } from "./webhooks/webhooks.module";
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { TopicsModule } from "./topics/topics.module";
     SourceExtractionModule,
     SourcesModule,
     TopicsModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}

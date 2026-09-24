@@ -628,6 +628,19 @@ export default function SettingsPage() {
           </Card>
         )}
 
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("webhooksTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("webhooksHint")}</p>
+            <Link
+              href={`/${locale}/settings/webhooks`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("webhooksOpen")}
+            </Link>
+          </Card>
+        )}
+
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>
           <p className="mb-3 text-sm text-fg-secondary">{session?.user?.email}</p>

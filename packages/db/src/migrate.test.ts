@@ -160,6 +160,11 @@ const ZONED_COLUMNS = [
   "topic_suggestion_requests.updated_at",
   "topics.created_at",
   "topics.updated_at",
+  "webhook_deliveries.created_at",
+  "webhook_deliveries.next_attempt_at",
+  "webhook_deliveries.updated_at",
+  "webhook_subscriptions.created_at",
+  "webhook_subscriptions.revoked_at",
 ];
 
 /**
@@ -234,6 +239,12 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // Webhook payload and subscription shape are checked on late-created tables.
+  "webhook_deliveries_event_check",
+  "webhook_deliveries_status_check",
+  "webhook_deliveries_attempts_check",
+  "webhook_subscriptions_name_check",
+  "webhook_subscriptions_endpoint_check",
   // API key name and scope are pinned at the database boundary too.
   "organization_api_keys_scope_check",
   "organization_api_keys_name_check",
