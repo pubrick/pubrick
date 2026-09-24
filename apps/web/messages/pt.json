@@ -97,7 +97,28 @@
     "knowledgeHint": "Guarde detalhes de produtos, exemplos e notas para futuros rascunhos.",
     "knowledgeOpen": "Abrir conhecimento",
     "mediaLink": "Biblioteca de mídia",
-    "analyticsLink": "Resultados"
+    "analyticsLink": "Resultados",
+    "accessLink": "Acesso da equipe"
+  },
+  "BrandAccess": {
+    "title": "Acesso da equipe",
+    "back": "Voltar à marca",
+    "heading": "Quem pode trabalhar nesta marca",
+    "hint": "Escolha os membros do espaço de trabalho que podem ver e gerenciar esta marca. Novos membros começam sem acesso.",
+    "managerHint": "Proprietários e administradores do espaço de trabalho sempre têm acesso.",
+    "membersLabel": "Membros do espaço de trabalho",
+    "alwaysAccess": "Sempre tem acesso",
+    "save": "Salvar acesso",
+    "saving": "Salvando…",
+    "saved": "Acesso salvo.",
+    "discard": "Descartar alterações",
+    "ownerOnly": "Somente proprietários e administradores do espaço de trabalho podem gerenciar o acesso à marca.",
+    "missing": "Esta marca não está disponível.",
+    "empty": "Ainda não há membros no espaço de trabalho.",
+    "inviteHint": "Convide colegas nas configurações do espaço de trabalho.",
+    "openSettings": "Abrir configurações",
+    "retry": "Tentar novamente",
+    "genericError": "Não foi possível salvar o acesso. Tente novamente."
   },
   "Sources": {
     "kind": "Tipo de fonte",

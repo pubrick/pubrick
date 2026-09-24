@@ -97,7 +97,28 @@
     "knowledgeHint": "Store product details, examples and brand notes for future drafts.",
     "knowledgeOpen": "Open knowledge",
     "mediaLink": "Media library",
-    "analyticsLink": "Results"
+    "analyticsLink": "Results",
+    "accessLink": "Team access"
+  },
+  "BrandAccess": {
+    "title": "Team access",
+    "back": "Back to brand",
+    "heading": "Who can work on this brand",
+    "hint": "Choose which workspace members can see and work on this brand. New members start without access.",
+    "managerHint": "Workspace owners and admins always have access.",
+    "membersLabel": "Workspace members",
+    "alwaysAccess": "Always has access",
+    "save": "Save access",
+    "saving": "Saving…",
+    "saved": "Access saved.",
+    "discard": "Discard changes",
+    "ownerOnly": "Only workspace owners and admins can manage brand access.",
+    "missing": "This brand is unavailable.",
+    "empty": "No workspace members yet.",
+    "inviteHint": "Invite teammates from workspace settings.",
+    "openSettings": "Open settings",
+    "retry": "Try again",
+    "genericError": "Access could not be saved. Please try again."
   },
   "Sources": {
     "kind": "Source type",
