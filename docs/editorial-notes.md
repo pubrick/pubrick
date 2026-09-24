@@ -17,6 +17,17 @@ field is evidence for the authorship lens and the publication gate. The API
 requires an active workspace organization for both `GET` and `POST
 /api/content/:id/editorial-notes`; every query is scoped to that organization.
 
+## Reuse in a new draft
+
+On **Create content**, you can opt in to using recent notes for the selected
+brand as style guidance. The switch is off by default. At run creation, Pubrick
+copies up to five of the latest notes (at most 500 characters each) into that
+run's input. This keeps a queued or resumed run stable even when more notes are
+added later; a retry starts a new run with a fresh snapshot. The notes are
+shown to the writer as untrusted material, separate from the system prompt,
+brief, source, brand knowledge, and plan. They do not become factual sources,
+alter the original notes, or add a model call.
+
 ## Whole-draft AI revision
 
 For an editable AI draft, **Revise draft with AI** accepts either a freeform

@@ -533,7 +533,7 @@ export class PublishService {
       }
       let video: { bytes: Uint8Array; mimeType: "video/mp4" } | undefined;
       if (adaptation.videoMediaId) {
-        if (adaptation.platform !== "telegram" || image) {
+        if (!["telegram", "vk"].includes(adaptation.platform) || image) {
           throw new ClassifiedPermanentError(
             "This channel cannot publish the attached video",
             "rejected_before_send",
@@ -552,10 +552,10 @@ export class PublishService {
           !adaptation.videoByteSize ||
           adaptation.videoByteSize < 1024 ||
           adaptation.videoByteSize > 20 * 1024 * 1024 ||
-          text.length > 1024
+          (adaptation.platform === "telegram" && text.length > 1024)
         ) {
           throw new ClassifiedPermanentError(
-            "Telegram video must be under 20 MB with a caption of at most 1024 characters",
+            "Video must be under 20 MB; Telegram captions must be at most 1024 characters",
             "rejected_before_send",
           );
         }

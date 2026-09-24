@@ -184,6 +184,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   calendar_slot_not_found: "calendar_slot_not_found",
   memorable_date_not_found: "memorable_date_not_found",
   calendar_slot_started: "calendar_slot_started",
+  calendar_topic_already_planned: "calendar_topic_already_planned",
+  calendar_topic_changed: "calendar_topic_changed",
   calendar_time_in_past: "calendar_time_in_past",
   calendar_topic_linked: "calendar_topic_linked",
   topic_has_calendar_slots: "topic_has_calendar_slots",

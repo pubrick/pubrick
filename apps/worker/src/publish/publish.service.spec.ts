@@ -97,7 +97,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PublishService.handle", () => {
-  it("loads the reviewed MP4 bytes for Telegram and records publication", async () => {
+  it("loads reviewed MP4 bytes for Telegram and VK and records publication", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-video-"));
     const previous = process.env.MEDIA_STORAGE_DIR;
     process.env.MEDIA_STORAGE_DIR = directory;
@@ -105,26 +105,31 @@ describe("PublishService.handle", () => {
     const bytes = Buffer.alloc(1232, 1);
     try {
       await writeFile(path.join(directory, `${videoMediaId}.mp4`), bytes);
-      const { repo } = fixture({
-        videoMediaId,
-        videoAuthorizedId: videoMediaId,
-        videoByteSize: bytes.length,
-      });
-      const publish = vi
-        .fn()
-        .mockResolvedValue({ externalId: "77", externalUrl: "https://t.me/x/77" });
-      const service = new PublishService(
-        repo as never,
-        () => publisherStub(publish),
-        "https://api",
-      );
-      await service.handle({ adaptationId: "a1", orgId: "o1" });
-      expect(publish).toHaveBeenCalledWith(
-        { botToken: "1:a", chatId: "-100" },
-        { text: "Hello", video: { bytes, mimeType: "video/mp4" } },
-        expect.anything(),
-      );
-      expect(repo.markPublished).toHaveBeenCalledOnce();
+      for (const platform of ["telegram", "vk"] as const) {
+        const text = platform === "vk" ? "x".repeat(1200) : "Hello";
+        const { repo } = fixture({
+          platform,
+          itemBody: text,
+          videoMediaId,
+          videoAuthorizedId: videoMediaId,
+          videoByteSize: bytes.length,
+        });
+        const publish = vi
+          .fn()
+          .mockResolvedValue({ externalId: "77", externalUrl: "https://example.com/77" });
+        const service = new PublishService(
+          repo as never,
+          () => publisherStub(publish),
+          "https://api",
+        );
+        await service.handle({ adaptationId: "a1", orgId: "o1" });
+        expect(publish).toHaveBeenCalledWith(
+          { botToken: "1:a", chatId: "-100" },
+          { text, video: { bytes, mimeType: "video/mp4" } },
+          expect.anything(),
+        );
+        expect(repo.markPublished).toHaveBeenCalledOnce();
+      }
     } finally {
       if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
       else process.env.MEDIA_STORAGE_DIR = previous;
@@ -135,7 +140,7 @@ describe("PublishService.handle", () => {
   it("refuses an unsupported or unscoped video before calling a publisher", async () => {
     const id = "00000000-0000-4000-8000-000000000010";
     for (const overrides of [
-      { videoMediaId: id, videoAuthorizedId: id, videoByteSize: 1232, platform: "vk" },
+      { videoMediaId: id, videoAuthorizedId: id, videoByteSize: 1232, platform: "max" },
       { videoMediaId: id, videoAuthorizedId: null, videoByteSize: 1232 },
       { videoMediaId: id, videoAuthorizedId: id, videoByteSize: 1232, coverMediaId: id },
     ]) {

@@ -25,6 +25,7 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
   });
 
   it("claims only the owning brand, stores a true zero score, and meters the call independently", async () => {
+    const embedding = [1, ...Array(767).fill(0)] as number[];
     const stamp = `rel-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     await db
       .insert(schema.organization)
@@ -82,6 +83,9 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
         title: "Matching editorial choice",
         url: "https://example.com/marked-positive",
         editorSignal: "relevant",
+        embedding,
+        embeddingModel: "gemini-embedding-001",
+        embeddingDimensions: 768,
       },
       {
         orgId: stamp,
@@ -142,16 +146,60 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       url: "https://other.example/marked",
       editorSignal: "relevant",
     });
+    expect(await repo.googleKey(stamp)).toBeUndefined();
+    const { encryptJson } = await import("@pubrick/shared");
+    await db.insert(schema.aiCredentials).values({
+      orgId: stamp,
+      provider: "google",
+      credentialsEncrypted: encryptJson(
+        { apiKey: "scoped-google-key" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+    });
+    expect(await repo.googleKey(stamp)).toBe("scoped-google-key");
+    expect(await repo.googleKey(otherOrg)).toBeUndefined();
     expect(await repo.recentFeedback(stamp, brand.id, item.id)).toEqual({
-      relevant: [{ title: "Matching editorial choice", summary: "" }],
-      irrelevant: [{ title: "Rejected editorial choice", summary: "" }],
+      relevant: [
+        {
+          title: "Matching editorial choice",
+          summary: "",
+          embedding,
+          embeddingModel: "gemini-embedding-001",
+          embeddingDimensions: 768,
+        },
+      ],
+      irrelevant: [
+        {
+          title: "Rejected editorial choice",
+          summary: "",
+          embedding: null,
+          embeddingModel: null,
+          embeddingDimensions: null,
+        },
+      ],
     });
     expect(await repo.recentFeedback(otherOrg, otherBrand.id, item.id)).toEqual({
-      relevant: [{ title: "Other organization's feedback", summary: "" }],
+      relevant: [
+        {
+          title: "Other organization's feedback",
+          summary: "",
+          embedding: null,
+          embeddingModel: null,
+          embeddingDimensions: null,
+        },
+      ],
       irrelevant: [],
     });
     expect(await repo.recentFeedback(stamp, siblingBrand.id, item.id)).toEqual({
-      relevant: [{ title: "Sibling brand feedback", summary: "" }],
+      relevant: [
+        {
+          title: "Sibling brand feedback",
+          summary: "",
+          embedding: null,
+          embeddingModel: null,
+          embeddingDimensions: null,
+        },
+      ],
       irrelevant: [],
     });
     expect((await repo.unscored()).some((candidate) => candidate.itemId === privateItem.id)).toBe(
@@ -178,11 +226,13 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       status: "ok",
       outcome: "completed",
     });
+    await repo.recordEmbeddingUsage(stamp, 12, 31, "ok", "completed");
     await repo.scored(job.orgId, job.brandId, job.itemId, {
       score: 0,
       feedbackDelta: 0.12,
       reason: "No fit",
       urgency: "evergreen",
+      embedding,
     });
     expect(await repo.claim(stamp, brand.id, item.id)).toBeNull();
     const { eq, sql } = await import("drizzle-orm");
@@ -193,6 +243,9 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
         feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
         reason: schema.newsItems.relevanceReason,
         attempts: schema.newsItems.relevanceAttempts,
+        embedding: schema.newsItems.embedding,
+        embeddingModel: schema.newsItems.embeddingModel,
+        embeddingDimensions: schema.newsItems.embeddingDimensions,
       })
       .from(schema.newsItems)
       .where(eq(schema.newsItems.id, item.id));
@@ -202,6 +255,9 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       feedbackDelta: 0.12,
       reason: "No fit",
       attempts: 1,
+      embedding,
+      embeddingModel: "gemini-embedding-001",
+      embeddingDimensions: 768,
     });
     await expect(
       db.execute(sql`UPDATE news_items SET relevance_feedback_delta = 0.21 WHERE id = ${item.id}`),
@@ -214,7 +270,12 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       })
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.orgId, stamp));
-    expect(spend).toEqual([{ step: "news_relevance", cost: "0.000052", inputTokens: 20 }]);
+    expect(spend).toEqual(
+      expect.arrayContaining([
+        { step: "news_relevance", cost: "0.000052", inputTokens: 20 },
+        { step: "news_feedback_embedding", cost: null, inputTokens: 12 },
+      ]),
+    );
 
     const [stuck] = await db
       .insert(schema.newsItems)

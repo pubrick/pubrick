@@ -12,6 +12,120 @@ const options = (fetchImpl: typeof fetch) => ({ fetchImpl, baseUrl: "https://vk.
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe("VK publishing", () => {
+  it("uploads a reviewed MP4 to the community and attaches it to one wall post", async () => {
+    const bytes = new Uint8Array(1232).fill(7);
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith("video.save")) {
+        const body = new URLSearchParams(String(init?.body));
+        expect(Object.fromEntries(body)).toMatchObject({
+          group_id: "12345",
+          name: "Launch clip",
+          wallpost: "0",
+          auto_publish: "0",
+        });
+        return answer({
+          response: {
+            upload_url: "https://pu.vk.com/upload.php?key=capability",
+            owner_id: -12345,
+            video_id: 27,
+          },
+        });
+      }
+      if (target.startsWith("https://pu.vk.com/")) {
+        expect(init?.redirect).toBe("error");
+        expect(init?.body).toBeInstanceOf(FormData);
+        if (!(init?.body instanceof FormData)) throw new Error("Expected multipart upload");
+        const file = init.body.get("video_file") as File;
+        expect(file.type).toBe("video/mp4");
+        expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
+        return answer({ video_id: 27, owner_id: -12345 });
+      }
+      expect(target).toBe("https://vk.test/method/wall.post");
+      expect(new URLSearchParams(String(init?.body)).get("attachments")).toBe("video-12345_27");
+      return answer({ response: { post_id: 89 } });
+    }) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Launch clip\nReviewed description", video: { bytes, mimeType: "video/mp4" } },
+        options(fetchImpl),
+      ),
+    ).resolves.toEqual({ externalId: "89", externalUrl: "https://vk.com/wall-12345_89" });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("never uploads a video to an untrusted URL or a different community", async () => {
+    const bytes = new Uint8Array(1232);
+    for (const response of [
+      { upload_url: "http://127.0.0.1/internal", owner_id: -12345, video_id: 27 },
+      { upload_url: "https://pu.vk.com/upload.php", owner_id: -999, video_id: 27 },
+    ]) {
+      const fetchImpl = vi.fn(async () => answer({ response })) as unknown as typeof fetch;
+      await expect(
+        vkPublisher.publish(
+          credentials,
+          { text: "Clip", video: { bytes, mimeType: "video/mp4" } },
+          options(fetchImpl),
+        ),
+      ).rejects.toBeInstanceOf(PermanentPublishError);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("retries an uncertain video upload but never an uncertain wall post", async () => {
+    const bytes = new Uint8Array(1232);
+    for (const failAt of ["upload", "post"] as const) {
+      const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+        const target = String(url);
+        if (target.endsWith("video.save")) {
+          return answer({
+            response: {
+              upload_url: "https://pu.vk.com/upload.php",
+              owner_id: -12345,
+              video_id: 27,
+            },
+          });
+        }
+        if (target.startsWith("https://pu.vk.com/") && failAt === "post") {
+          return answer({ video_id: 27 });
+        }
+        throw new Error("socket closed");
+      }) as unknown as typeof fetch;
+      await expect(
+        vkPublisher.publish(
+          credentials,
+          { text: "Clip", video: { bytes, mimeType: "video/mp4" } },
+          options(fetchImpl),
+        ),
+      ).rejects.toBeInstanceOf(
+        failAt === "upload" ? TransientPublishError : UnknownOutcomePublishError,
+      );
+    }
+  });
+
+  it("does not post a video when the upload server returns a different video ID", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("video.save")
+        ? answer({
+            response: {
+              upload_url: "https://pu.vk.com/upload.php",
+              owner_id: -12345,
+              video_id: 27,
+            },
+          })
+        : answer({ video_id: 28, owner_id: -12345 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      vkPublisher.publish(
+        credentials,
+        { text: "Clip", video: { bytes: new Uint8Array(1232), mimeType: "video/mp4" } },
+        options(fetchImpl),
+      ),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("uploads one JPEG to the community wall and attaches the saved photo to the post", async () => {
     const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

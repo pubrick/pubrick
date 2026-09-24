@@ -379,6 +379,20 @@
       "when": 1790259089060,
       "tag": "0054_cool_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790267213232,
+      "tag": "0055_calendar_cover_opt_in",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790271043499,
+      "tag": "0056_free_phantom_reporter",
+      "breakpoints": true
     }
   ]
 }

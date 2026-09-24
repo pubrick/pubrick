@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { feedbackAdjustment, headlineSimilarity } from "./feedback-adjustment";
+import { feedbackAdjustment, headlineSimilarity, semanticSimilarity } from "./feedback-adjustment";
 
 const candidate = {
   title: "Battery recycling rules for European manufacturers",
@@ -13,6 +13,13 @@ const unrelated = {
   title: "Coffee roasters announce cafe equipment sale",
   summary: "A seasonal promotion for espresso grinders.",
 };
+const vector = (first: number, second: number) => [first, second, ...Array(766).fill(0)];
+const embedded = (article: typeof candidate, first: number, second: number) => ({
+  ...article,
+  embedding: vector(first, second),
+  embeddingModel: "gemini-embedding-001",
+  embeddingDimensions: 768,
+});
 
 describe("headline feedback adjustment", () => {
   it("requires several shared headline words and ignores unrelated feedback", () => {
@@ -60,5 +67,65 @@ describe("headline feedback adjustment", () => {
         { title: "Правила маркировки товаров опубликованы", summary: "" },
       ),
     ).toBeGreaterThan(0.6);
+  });
+
+  it("recognizes a paraphrase using a comparable semantic vector", () => {
+    const paraphrase = embedded(unrelated, 1, 0);
+    const semanticCandidate = embedded(candidate, 1, 0);
+    expect(headlineSimilarity(semanticCandidate, paraphrase)).toBe(0);
+    expect(semanticSimilarity(semanticCandidate, paraphrase)).toBe(1);
+    expect(feedbackAdjustment(semanticCandidate, { relevant: [paraphrase], irrelevant: [] })).toBe(
+      0.2,
+    );
+  });
+
+  it("balances the strongest positive and negative semantic examples", () => {
+    const semanticCandidate = embedded(candidate, 1, 0);
+    const opposite = embedded(unrelated, -1, 0);
+    expect(
+      feedbackAdjustment(semanticCandidate, {
+        relevant: [opposite],
+        irrelevant: [semanticCandidate],
+      }),
+    ).toBe(-0.2);
+    expect(
+      feedbackAdjustment(semanticCandidate, {
+        relevant: [semanticCandidate],
+        irrelevant: [semanticCandidate],
+      }),
+    ).toBe(0);
+  });
+
+  it("preserves a strong headline match when comparable vectors are weak", () => {
+    const semanticCandidate = embedded(candidate, 1, 0);
+    const weakVectorReference = embedded(similar, 0, 1);
+    expect(semanticSimilarity(semanticCandidate, weakVectorReference)).toBe(0);
+    expect(
+      feedbackAdjustment(semanticCandidate, {
+        relevant: [weakVectorReference],
+        irrelevant: [],
+      }),
+    ).toBeGreaterThan(0);
+  });
+
+  it("uses lexical matching for old, incompatible, zero, and malformed vectors", () => {
+    const semanticCandidate = embedded(candidate, 1, 0);
+    expect(semanticSimilarity(semanticCandidate, { ...similar, embedding: null })).toBeNull();
+    expect(
+      semanticSimilarity(semanticCandidate, {
+        ...embedded(similar, 1, 0),
+        embeddingModel: "other-model",
+      }),
+    ).toBeNull();
+    expect(semanticSimilarity(semanticCandidate, embedded(similar, 0, 0))).toBeNull();
+    expect(
+      semanticSimilarity(semanticCandidate, {
+        ...embedded(similar, 1, 0),
+        embedding: [1, Number.NaN],
+      }),
+    ).toBeNull();
+    expect(
+      feedbackAdjustment(semanticCandidate, { relevant: [similar], irrelevant: [] }),
+    ).toBeGreaterThan(0);
   });
 });

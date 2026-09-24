@@ -2,8 +2,8 @@
 
 The calendar is a brand-scoped plan for **draft generation**. A slot contains a
 future local date and time (stored as an absolute timestamp), a custom brief or
-an approved topic from the same brand, one or more of the brand's channels, and
-optional team notes. The month grid shows the
+an approved topic from the same brand, one or more of the brand's channels,
+an optional Gemini cover image, and optional team notes. The month grid shows the
 plan; the selected day's list allows edits or removal until generation starts.
 On narrow screens a date picker replaces the seven-column grid so every date
 target remains large enough to tap. The brand page links to its calendar.
@@ -19,6 +19,17 @@ sets an explicit error on the slot; editing it with a valid channel clears the
 error. A database or queue outage rolls back the transaction and the next tick
 can retry.
 
+Cover generation is unchecked by default and requires a saved Google AI key
+and channels that support image covers. The slot keeps this choice through
+edits and shows it in the calendar. At the due time, the scheduler counts
+image calls in the last hour and live runs already reserving covers under the
+same organization admission lock as manual runs. If the 12-call budget is full,
+it retries the slot five minutes later. The worker rechecks the budget before
+calling Gemini; a missing key, full budget, or image failure leaves the text
+draft available for review. A successful cover is attached to that draft, not
+published automatically. A dispatched image call is billed to the user's key;
+see [media library](media-library.md) for accounting and retry limitations.
+
 The topic bank's **Schedule** action opens the calendar with that approved
 topic selected. The calendar form can also pick any approved topic. The API
 reads and locks the topic in the slot transaction, checks its organization,
@@ -30,6 +41,15 @@ matches the complete snapshot. An archived, edited, or missing topic sets
 `topic_changed` on the slot and spends no model tokens. An editor can reselect
 an approved topic to refresh the snapshot, or explicitly unlink it and write a
 custom brief. Editing a linked slot's brief without unlinking is refused.
+
+For a larger plan, editors can select up to 20 approved topics, set a future
+date and time for each, review the proposed rows, and confirm one bulk request.
+Every row uses channels from the same brand. The API validates the full batch
+and creates all slots in one transaction, so a conflict or stale topic leaves
+the calendar unchanged. A topic can appear only once in a batch. The bulk
+action also refuses a topic that already has a calendar slot; existing
+single-slot actions keep their current rules. This action creates planned draft
+generation slots; it does not start a run or approve publication.
 
 Deleting a topic with any linked calendar slot is refused, including after a
 slot starts. This preserves the original approval trail; remove unstarted
@@ -68,11 +88,18 @@ primary Add action still plans a generation slot.
 - `GET /api/calendar/slots?brandId=<uuid>&from=<ISO>&to=<ISO>`: up to 93 days,
   half-open interval.
 - `POST /api/calendar/slots`: `brandId`, `scheduledAt`, `channelIds`, optional
-  `notes`, and either `brief` or an approved `topicId` in that brand. The API
-  rejects a request containing both `topicId` and `brief`.
+  `notes`, `generateCover` (defaults to false), and either `brief` or an approved
+  `topicId` in that brand. The API rejects a request containing both `topicId`
+  and `brief`.
+- `POST /api/calendar/slots/bulk`: `brandId` and `slots` (1–20 entries with
+  `topicId`, the approved topic's `expectedTopicRevision`, `scheduledAt`, and
+  `channelIds`). All topics must be distinct, approved, unchanged since the
+  confirmation preview, and part of that brand. A failed row rejects the
+  entire batch; successful responses return the created slots.
 - `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
   `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
-  snapshots the currently approved topic again.
+  snapshots the currently approved topic again. `generateCover` can be changed
+  until generation starts.
 - `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
 
 Every route requires an active organization. The repository scopes all reads

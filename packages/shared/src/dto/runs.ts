@@ -220,6 +220,8 @@ export const runCreateSchema = z
     contentType: z.enum(CONTENT_TYPES).optional(),
     /** One additional BYOK Gemini image call, only when explicitly requested. */
     generateCover: z.boolean().optional(),
+    /** Copy this brand's recent editorial notes into the run only when requested. */
+    useEditorialFeedback: z.boolean().optional(),
     /**
      * No longer `.min(1)`: a run asked for from pasted material has nothing to
      * put here, and the brief keeps its own meaning beside one — what to do
@@ -419,20 +421,31 @@ export function isRunFailure(value: unknown): value is RunFailure {
  * `kind` is discriminated from the start so a second kind can be added
  * without a migration.
  */
-export const briefRunInputSchema = z
-  .object({
-    kind: z.literal("brief"),
-    /** Optional for runs created before content types were introduced. */
-    contentType: z.enum(CONTENT_TYPES).optional(),
-    /** Optional so runs created before cover generation remain executable. */
-    generateCover: z.boolean().optional(),
-    text: z.string().min(1),
-    channelIds: z.array(z.string().uuid()).min(1),
-  })
-  .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
+/** Bounded, by-value notes captured when an opted-in run is admitted. */
+export const runEditorialFeedbackSchema = z
+  .array(z.object({ id: z.string().uuid(), note: z.string().min(1).max(500) }))
+  .max(5);
+
+const briefRunInputBaseSchema = z.object({
+  kind: z.literal("brief"),
+  /** Optional for runs created before content types were introduced. */
+  contentType: z.enum(CONTENT_TYPES).optional(),
+  /** Optional so runs created before cover generation remain executable. */
+  generateCover: z.boolean().optional(),
+  /** Optional for rows created before editorial feedback was available. */
+  useEditorialFeedback: z.boolean().optional(),
+  editorialFeedback: runEditorialFeedbackSchema.optional(),
+  text: z.string().min(1),
+  channelIds: z.array(z.string().uuid()).min(1),
+});
+
+export const briefRunInputSchema = briefRunInputBaseSchema.refine(
+  (v) => !contentTypeRequiresMaterial(v.contentType),
+  {
     message: "this format requires source material",
     path: ["contentType"],
-  });
+  },
+);
 export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
 
 /**
@@ -450,6 +463,9 @@ export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
   contentType: z.enum(CONTENT_TYPES).optional(),
   generateCover: z.boolean().optional(),
+  /** Optional for rows created before editorial feedback was available. */
+  useEditorialFeedback: z.boolean().optional(),
+  editorialFeedback: runEditorialFeedbackSchema.optional(),
   /**
    * What the person typed, if anything — instructions about the material, not a
    * second thing to work from.
@@ -520,8 +536,9 @@ export type RunInput = z.infer<typeof runInputSchema>;
  *
  * The queue strip polls that list every five seconds and reads three things
  * off it: the brief, the kind and the host (`stripLabel`, `sourceHost`). The
- * material it never reads — and it used to arrive anyway, all 8 000 characters
- * of it, for every open run. `MAX_CONCURRENT_RUNS` does not bound that set:
+ * material and editorial note snapshot it never reads stay in the detail
+ * receipt. The material used to arrive anyway, all 8 000 characters of it,
+ * for every open run. `MAX_CONCURRENT_RUNS` does not bound that set:
  * the cap counts `queued | running`, while a failed or cancelled run stays
  * OPEN until a human dismisses it. Measured on the real route: eight open
  * source runs = 122 265 bytes per response, ~85 MB/hour per tab, with no
@@ -529,18 +546,27 @@ export type RunInput = z.infer<typeof runInputSchema>;
  *
  * `.omit()` rather than a second object literal, so the two shapes cannot
  * drift: every other field — `text`'s `.min(1).nullable()`, `sourceUrl`'s
- * scheme and bound — is the one declaration above, and a field added to a
- * stored source run appears here unless somebody says it should not.
+ * scheme and bound — is the one declaration above. Editorial feedback is
+ * explicitly omitted from both arms so list polling never carries note text.
  *
  * The DETAIL dto keeps the whole input, because the receipt and the draft's
  * source strip both render the material. The one screen that shows an article
  * asks for one run.
  */
-export const sourceRunListInputSchema = sourceRunInputSchema.omit({ material: true });
+export const briefRunListInputSchema = briefRunInputBaseSchema
+  .omit({ editorialFeedback: true })
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
+    message: "this format requires source material",
+    path: ["contentType"],
+  });
+export const sourceRunListInputSchema = sourceRunInputSchema.omit({
+  material: true,
+  editorialFeedback: true,
+});
 export type SourceRunListInput = z.infer<typeof sourceRunListInputSchema>;
 
 export const runListInputSchema = z.discriminatedUnion("kind", [
-  briefRunInputSchema,
+  briefRunListInputSchema,
   sourceRunListInputSchema,
 ]);
 export type RunListInput = z.infer<typeof runListInputSchema>;

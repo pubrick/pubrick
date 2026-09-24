@@ -1,6 +1,16 @@
 import { CALENDAR_SLOT_ERRORS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
 import { enumCheck } from "./enum-check.js";
@@ -27,6 +37,7 @@ export const calendarSlots = pgTable(
     topicUpdatedAt: timestamp("topic_updated_at", { withTimezone: true }),
     topicRevision: integer("topic_revision"),
     channelIds: jsonb("channel_ids").$type<string[]>().notNull(),
+    generateCover: boolean("generate_cover").default(false).notNull(),
     notes: text("notes"),
     runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
     errorCode: text("error_code", { enum: CALENDAR_SLOT_ERRORS }),

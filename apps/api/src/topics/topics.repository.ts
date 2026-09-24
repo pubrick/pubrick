@@ -22,6 +22,7 @@ const COLUMNS = {
   sourceUrl: schema.topics.sourceUrl,
   status: schema.topics.status,
   origin: schema.topics.origin,
+  revision: schema.topics.revision,
   createdAt: schema.topics.createdAt,
   updatedAt: schema.topics.updatedAt,
 };

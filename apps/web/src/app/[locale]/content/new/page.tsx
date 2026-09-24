@@ -54,6 +54,7 @@ export default function NewContentPage() {
   const [brief, setBrief] = useState("");
   const [contentType, setContentType] = useState<ContentType>("social_post");
   const [generateCover, setGenerateCover] = useState(false);
+  const [useEditorialFeedback, setUseEditorialFeedback] = useState(false);
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
@@ -339,6 +340,7 @@ export default function NewContentPage() {
           channelIds: [...channelIds],
           ...(contentType !== "social_post" && { contentType }),
           ...(generateCover && { generateCover: true }),
+          ...(useEditorialFeedback && { useEditorialFeedback: true }),
           ...(hasBrief && { brief }),
           ...(hasMaterial && { material }),
           ...(hasSourceUrl && { sourceUrl }),
@@ -454,6 +456,23 @@ export default function NewContentPage() {
                   </option>
                 ))}
               </Select>
+            )}
+            {canGenerate && (
+              <div className="rounded-control border border-border px-3 py-3">
+                <label className="flex items-start gap-3 text-sm text-fg">
+                  <input
+                    type="checkbox"
+                    checked={useEditorialFeedback}
+                    onChange={(event) => setUseEditorialFeedback(event.target.checked)}
+                    aria-describedby="editorial-feedback-hint"
+                    className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+                  />
+                  <span>{t("useEditorialFeedback")}</span>
+                </label>
+                <p id="editorial-feedback-hint" className="mt-1 pl-8 text-sm text-fg-tertiary">
+                  {t("useEditorialFeedbackHint")}
+                </p>
+              </div>
             )}
             {canGenerate && (
               <div className="rounded-control border border-border px-3 py-3">

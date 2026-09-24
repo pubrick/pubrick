@@ -1,9 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  COVER_SUPPORTED_PLATFORMS,
   GENERATE_QUEUE,
+  IMAGE_CALL_STEPS,
   LIVE_RUN_STATUSES,
   MAX_CONCURRENT_RUNS,
+  MAX_IMAGE_CALLS_PER_HOUR,
   RUN_ADMISSION_LOCK_NAMESPACE,
   type RunInput,
   runInputSchema,
@@ -63,6 +66,7 @@ export class CalendarService {
           topicUpdatedAt: schema.calendarSlots.topicUpdatedAt,
           topicRevision: schema.calendarSlots.topicRevision,
           channelIds: schema.calendarSlots.channelIds,
+          generateCover: schema.calendarSlots.generateCover,
         })
         .from(schema.calendarSlots)
         .where(
@@ -135,7 +139,7 @@ export class CalendarService {
         return;
       }
       const channels = await tx
-        .select({ id: schema.channels.id })
+        .select({ id: schema.channels.id, platform: schema.channels.platform })
         .from(schema.channels)
         .where(
           and(
@@ -151,6 +155,47 @@ export class CalendarService {
           .where(eq(schema.calendarSlots.id, slotId));
         return;
       }
+      if (
+        slot.generateCover &&
+        channels.some(
+          (channel) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+        )
+      ) {
+        await tx
+          .update(schema.calendarSlots)
+          .set({ errorCode: "invalid_input" })
+          .where(eq(schema.calendarSlots.id, slotId));
+        return;
+      }
+      if (slot.generateCover) {
+        const [spent] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(schema.usageLedger)
+          .where(
+            and(
+              eq(schema.usageLedger.orgId, orgId),
+              inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+              sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+            ),
+          );
+        const [reserved] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(schema.pipelineRuns)
+          .where(
+            and(
+              eq(schema.pipelineRuns.orgId, orgId),
+              inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
+              sql`${schema.pipelineRuns.input}->>'generateCover' = 'true'`,
+            ),
+          );
+        if ((spent?.count ?? 0) + (reserved?.count ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
+          await tx
+            .update(schema.calendarSlots)
+            .set({ retryAfter: new Date(Date.now() + 5 * 60_000) })
+            .where(eq(schema.calendarSlots.id, slotId));
+          return;
+        }
+      }
       const input: RunInput =
         slot.topicId && slot.topicSourceUrl
           ? {
@@ -159,8 +204,14 @@ export class CalendarService {
               sourceUrl: slot.topicSourceUrl,
               material: slot.brief,
               channelIds: slot.channelIds,
+              ...(slot.generateCover && { generateCover: true }),
             }
-          : { kind: "brief", text: slot.brief, channelIds: slot.channelIds };
+          : {
+              kind: "brief",
+              text: slot.brief,
+              channelIds: slot.channelIds,
+              ...(slot.generateCover && { generateCover: true }),
+            };
       if (!runInputSchema.safeParse(input).success) {
         await tx
           .update(schema.calendarSlots)
