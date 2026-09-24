@@ -92,9 +92,10 @@ primary Add action still plans a generation slot.
   `topicId` in that brand. The API rejects a request containing both `topicId`
   and `brief`.
 - `POST /api/calendar/slots/bulk`: `brandId` and `slots` (1–20 entries with
-  `topicId`, `scheduledAt`, and `channelIds`). All topics must be distinct,
-  approved, and part of that brand. A failed row rejects the entire batch;
-  successful responses return the created slots.
+  `topicId`, the approved topic's `expectedTopicRevision`, `scheduledAt`, and
+  `channelIds`). All topics must be distinct, approved, unchanged since the
+  confirmation preview, and part of that brand. A failed row rejects the
+  entire batch; successful responses return the created slots.
 - `PATCH /api/calendar/slots/:id?brandId=<uuid>`: change a planned slot.
   `topicId: null` plus `brief` explicitly unlinks a topic; a new `topicId`
   snapshots the currently approved topic again. `generateCover` can be changed

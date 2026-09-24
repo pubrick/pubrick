@@ -78,6 +78,7 @@ export const topicDtoSchema = z.object({
   sourceUrl: z.string().nullable(),
   status: z.enum(TOPIC_STATUSES),
   origin: z.enum(TOPIC_ORIGINS),
+  revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

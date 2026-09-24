@@ -392,6 +392,7 @@ export const API_ERROR_CODES = [
   "calendar_time_in_past",
   "calendar_topic_linked",
   "calendar_topic_already_planned",
+  "calendar_topic_changed",
   "topic_has_calendar_slots",
 
   // ── the session's organization ────────────────────────────────────────────

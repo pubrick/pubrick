@@ -991,6 +991,7 @@
     "memorable_date_not_found": "This memorable date no longer exists.",
     "calendar_slot_started": "Generation already started for this slot. Open its run to see progress.",
     "calendar_topic_already_planned": "One of these topics is already planned. Remove its existing slot or choose another topic.",
+    "calendar_topic_changed": "A topic changed since you reviewed this plan. Review its latest details and try again.",
     "calendar_topic_linked": "Unlink the topic to write a custom brief.",
     "topic_has_calendar_slots": "Remove linked calendar slots before deleting this topic.",
     "calendar_time_in_past": "Choose a future time for draft generation.",

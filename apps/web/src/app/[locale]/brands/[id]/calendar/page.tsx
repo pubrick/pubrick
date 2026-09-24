@@ -32,6 +32,12 @@ type Slot = {
   retryAfter: string | null;
 };
 type BulkRow = { topicId: string; dateInput: string };
+type BulkPreviewRow = BulkRow & {
+  expectedTopicRevision: number;
+  title: string;
+  description: string;
+  sourceUrl: string | null;
+};
 const FORM_ID = "calendar-add-slot";
 const EDIT_FORM_ID = "calendar-edit-slot";
 const BULK_FORM_ID = "calendar-bulk-slots";
@@ -81,6 +87,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [generateCover, setGenerateCover] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [bulkPreviewRows, setBulkPreviewRows] = useState<BulkPreviewRow[]>([]);
   const [bulkChannels, setBulkChannels] = useState<string[]>([]);
   const [bulkPreview, setBulkPreview] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
@@ -302,10 +309,27 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       setBulkError(t("bulkInvalidDate"));
       return;
     }
+    const reviewed = bulkRows.map((row) => {
+      const topic = topics.find((item) => item.id === row.topicId);
+      return topic
+        ? {
+            ...row,
+            expectedTopicRevision: topic.revision,
+            title: topic.title,
+            description: topic.description,
+            sourceUrl: topic.sourceUrl,
+          }
+        : null;
+    });
+    if (!reviewed.every((row): row is BulkPreviewRow => row !== null)) {
+      setBulkError(t("bulkChooseTopic"));
+      return;
+    }
+    setBulkPreviewRows(reviewed);
     setBulkPreview(true);
   }
   async function confirmBulk() {
-    if (busy || bulkRows.length === 0 || bulkChannels.length === 0) return;
+    if (busy || bulkPreviewRows.length === 0 || bulkChannels.length === 0) return;
     setBusy(true);
     setBulkError(null);
     try {
@@ -313,17 +337,19 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         method: "POST",
         body: JSON.stringify({
           brandId,
-          slots: bulkRows.map((row) => ({
+          slots: bulkPreviewRows.map((row) => ({
             topicId: row.topicId,
+            expectedTopicRevision: row.expectedTopicRevision,
             scheduledAt: new Date(row.dateInput).toISOString(),
             channelIds: bulkChannels,
           })),
         }),
       });
       const firstDate = new Date(
-        Math.min(...bulkRows.map((row) => new Date(row.dateInput).getTime())),
+        Math.min(...bulkPreviewRows.map((row) => new Date(row.dateInput).getTime())),
       );
       setBulkPreview(false);
+      setBulkPreviewRows([]);
       setBulkRows([]);
       setBulkChannels([]);
       setBulkSuccess(created.length);
@@ -335,6 +361,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       )
         await load();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "calendar_topic_changed") {
+        setBulkPreview(false);
+        setBulkPreviewRows([]);
+        await load();
+      }
       setBulkError(describe(err));
     } finally {
       setBusy(false);
@@ -757,18 +788,20 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               {t("cancel")}
             </Button>
             <Button onClick={confirmBulk} disabled={busy}>
-              {t("bulkConfirm", { count: bulkRows.length })}
+              {t("bulkConfirm", { count: bulkPreviewRows.length })}
             </Button>
           </>
         }
       >
         <p className="mb-3 text-sm text-fg-secondary">{t("bulkPreviewIntro")}</p>
         <ol className="space-y-2">
-          {bulkRows.map((row) => (
+          {bulkPreviewRows.map((row) => (
             <li key={row.topicId} className="rounded-card border border-border p-3 text-sm">
-              <p className="font-medium text-fg">
-                {topics.find((topic) => topic.id === row.topicId)?.title ?? row.topicId}
-              </p>
+              <p className="font-medium text-fg">{row.title}</p>
+              {row.description && <p className="mt-1 text-fg-secondary">{row.description}</p>}
+              {row.sourceUrl && (
+                <p className="mt-1 break-all text-xs text-fg-tertiary">{row.sourceUrl}</p>
+              )}
               <p className="mt-1 text-fg-secondary">
                 {new Intl.DateTimeFormat(locale, {
                   dateStyle: "medium",

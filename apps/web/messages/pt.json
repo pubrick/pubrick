@@ -991,6 +991,7 @@
     "memorable_date_not_found": "Esta data comemorativa já não existe.",
     "calendar_slot_started": "A geração deste espaço já começou. Abra a execução para ver o progresso.",
     "calendar_topic_already_planned": "Um destes temas já foi planejado. Remova o espaço existente ou escolha outro tema.",
+    "calendar_topic_changed": "Um tópico mudou desde que você revisou este plano. Confira os dados atualizados e tente novamente.",
     "calendar_topic_linked": "Desvincule o tema para escrever instruções próprias.",
     "topic_has_calendar_slots": "Remova os espaços vinculados do calendário antes de excluir este tema.",
     "calendar_time_in_past": "Escolha um horário futuro para gerar o rascunho.",

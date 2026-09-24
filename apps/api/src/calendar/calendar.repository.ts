@@ -202,6 +202,14 @@ export class CalendarRepository {
       if (topics.length !== topicIds.length) throw notFound("topic_not_found", "Topic not found");
       if (topics.some((topic) => topic.status !== "approved"))
         throw conflict("topic_not_approved", "Approve every topic before scheduling");
+      const expectedRevisions = new Map(
+        data.slots.map((slot) => [slot.topicId, slot.expectedTopicRevision]),
+      );
+      if (topics.some((topic) => topic.revision !== expectedRevisions.get(topic.id)))
+        throw conflict(
+          "calendar_topic_changed",
+          "One or more topics changed after review. Refresh and review the plan again",
+        );
 
       const [planned] = await tx
         .select({ id: schema.calendarSlots.id })

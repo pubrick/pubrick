@@ -45,6 +45,8 @@ export const calendarSlotsBulkCreateSchema = z.object({
     .array(
       z.object({
         topicId: z.uuid(),
+        /** Revision of the approved topic shown in the confirmation preview. */
+        expectedTopicRevision: z.number().int().positive(),
         scheduledAt: z.iso.datetime({ offset: true }),
         channelIds: slotFields.shape.channelIds,
       }),

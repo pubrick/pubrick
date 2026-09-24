@@ -77,8 +77,8 @@ describe.skipIf(!url)("calendar API", () => {
     const second = await approvedTopic(owner, brandId, "Second launch");
     const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
     const slots = [
-      { topicId: second, scheduledAt, channelIds: [channelId] },
-      { topicId: first, scheduledAt, channelIds: [channelId] },
+      { topicId: second, expectedTopicRevision: 2, scheduledAt, channelIds: [channelId] },
+      { topicId: first, expectedTopicRevision: 2, scheduledAt, channelIds: [channelId] },
     ];
     const created = await owner
       .post("/api/calendar/slots/bulk")
@@ -111,8 +111,18 @@ describe.skipIf(!url)("calendar API", () => {
       .send({ brandId, title: "Needs approval" })
       .expect(201);
     const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
-    const valid = { topicId: first, scheduledAt, channelIds: [channelId] };
-    const unapproved = { topicId: pending.body.id, scheduledAt, channelIds: [channelId] };
+    const valid = {
+      topicId: first,
+      expectedTopicRevision: 2,
+      scheduledAt,
+      channelIds: [channelId],
+    };
+    const unapproved = {
+      topicId: pending.body.id,
+      expectedTopicRevision: 1,
+      scheduledAt,
+      channelIds: [channelId],
+    };
     expect(
       (
         await owner
@@ -185,6 +195,54 @@ describe.skipIf(!url)("calendar API", () => {
     expect(listed.body).toEqual([]);
   });
 
+  it("rejects an approved topic edited after preview without creating any batch slots", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const first = await approvedTopic(owner, brandId, "Original title");
+    const second = await approvedTopic(owner, brandId, "Other topic");
+    const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
+    const slots = [first, second].map((topicId) => ({
+      topicId,
+      expectedTopicRevision: 2,
+      scheduledAt,
+      channelIds: [channelId],
+    }));
+    expect(
+      (
+        await owner
+          .post("/api/calendar/slots/bulk")
+          .send({ brandId, slots: [{ ...slots[0], expectedTopicRevision: undefined }] })
+          .expect(400)
+      ).body.code,
+    ).toBe("invalid_request");
+
+    await owner
+      .patch(`/api/topics/${first}?brandId=${brandId}`)
+      .send({ title: "Revised title", description: "Revised source details" })
+      .expect(200);
+    const revised = await owner
+      .patch(`/api/topics/${first}?brandId=${brandId}`)
+      .send({ status: "approved" })
+      .expect(200);
+    expect(revised.body.revision).toBe(4);
+    expect(
+      (await owner.post("/api/calendar/slots/bulk").send({ brandId, slots }).expect(409)).body.code,
+    ).toBe("calendar_topic_changed");
+    const range = `/api/calendar/slots?brandId=${brandId}&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 2 * 86_400_000).toISOString())}`;
+    expect((await owner.get(range).expect(200)).body).toEqual([]);
+
+    const created = await owner
+      .post("/api/calendar/slots/bulk")
+      .send({ brandId, slots: [{ ...slots[0], expectedTopicRevision: 4 }, slots[1]] })
+      .expect(201);
+    expect(created.body).toHaveLength(2);
+    expect(created.body[0]).toMatchObject({
+      topicTitle: "Revised title",
+      topicDescription: "Revised source details",
+      topicRevision: 4,
+    });
+  });
+
   it("rejects already planned topics and serializes competing bulk requests", async () => {
     const owner = await agent();
     const { brandId, channelId } = await brandChannel(owner);
@@ -196,11 +254,13 @@ describe.skipIf(!url)("calendar API", () => {
       slots: [
         {
           topicId,
+          expectedTopicRevision: 2,
           scheduledAt,
           channelIds: [channelId],
         },
         {
           topicId: otherTopicId,
+          expectedTopicRevision: 2,
           scheduledAt,
           channelIds: [channelId],
         },
@@ -230,6 +290,7 @@ describe.skipIf(!url)("calendar API", () => {
               body.slots[0],
               {
                 topicId: await approvedTopic(owner, brandId, "Fresh plan"),
+                expectedTopicRevision: 2,
                 scheduledAt,
                 channelIds: [channelId],
               },

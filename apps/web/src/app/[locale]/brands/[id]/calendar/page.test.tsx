@@ -1,4 +1,4 @@
-import { calendarSlotCreateSchema } from "@pubrick/shared";
+import { calendarSlotCreateSchema, calendarSlotsBulkCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -83,7 +83,7 @@ describe("brand calendar", () => {
       expect(screen.getByRole("checkbox", { name: en.ContentNew.generateCover })).toBeEnabled(),
     );
     await user.type(screen.getByLabelText(en.Calendar.brief), "Launch story");
-    await user.click(screen.getByLabelText("Main"));
+    await user.click(screen.getByRole("checkbox", { name: /^Main$/ }));
     await user.click(screen.getByRole("checkbox", { name: en.ContentNew.generateCover }));
     await user.click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
     await waitFor(() => expect(calls.some((call) => call.init?.method === "POST")).toBe(true));
@@ -142,17 +142,35 @@ describe("brand calendar", () => {
   });
 
   it("reviews each approved topic's time and channels before creating bulk slots", async () => {
+    const brandId = "33333333-3333-4333-8333-333333333333";
+    const channelId = "44444444-4444-4444-8444-444444444444";
+    const firstTopicId = "55555555-5555-4555-8555-555555555555";
+    const secondTopicId = "66666666-6666-4666-8666-666666666666";
     const calls: { url: string; init?: RequestInit }[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       calls.push({ url, init });
       if (url.includes("/api/channels"))
-        return jsonResponse([{ id: "channel-1", name: "Main", platform: "telegram" }]);
+        return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
       if (url.includes("/api/topics?"))
         return jsonResponse([
-          { id: "topic-1", title: "Launch story", status: "approved" },
-          { id: "topic-2", title: "Founder interview", status: "approved" },
-          { id: "topic-3", title: "Unreviewed story", status: "draft" },
+          {
+            id: firstTopicId,
+            title: "Launch story",
+            description: "The launch details",
+            sourceUrl: "https://example.com/launch",
+            revision: 2,
+            status: "approved",
+          },
+          {
+            id: secondTopicId,
+            title: "Founder interview",
+            description: "Interview notes",
+            sourceUrl: null,
+            revision: 3,
+            status: "approved",
+          },
+          { id: "topic-3", title: "Unreviewed story", revision: 1, status: "idea" },
         ]);
       if (url.endsWith("/api/calendar/slots/bulk") && init?.method === "POST")
         return jsonResponse([{ id: "slot-1" }, { id: "slot-2" }]);
@@ -160,7 +178,7 @@ describe("brand calendar", () => {
         return jsonResponse({ timezone: "UTC", dates: [] });
       return jsonResponse([]);
     });
-    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
     await waitFor(() => expect(screen.getByLabelText("Launch story")).toBeInTheDocument());
     expect(screen.queryByLabelText("Unreviewed story")).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByLabelText("Launch story"));
@@ -184,6 +202,8 @@ describe("brand calendar", () => {
     expect(calls.some((call) => call.url.endsWith("/api/calendar/slots/bulk"))).toBe(false);
     const dialog = screen.getByRole("dialog", { name: en.Calendar.bulkPreviewTitle });
     expect(dialog).toHaveTextContent("Launch story");
+    expect(dialog).toHaveTextContent("The launch details");
+    expect(dialog).toHaveTextContent("https://example.com/launch");
     expect(dialog).toHaveTextContent("Founder interview");
     expect(dialog).toHaveTextContent("Main");
     await userEvent
@@ -193,25 +213,104 @@ describe("brand calendar", () => {
       expect(calls.some((call) => call.url.endsWith("/api/calendar/slots/bulk"))).toBe(true),
     );
     const posted = calls.find((call) => call.url.endsWith("/api/calendar/slots/bulk"));
-    expect(JSON.parse(String(posted?.init?.body))).toEqual({
-      brandId: "brand-1",
+    const sent = JSON.parse(String(posted?.init?.body));
+    expect(sent).toEqual({
+      brandId,
       slots: [
         {
-          topicId: "topic-1",
+          topicId: firstTopicId,
+          expectedTopicRevision: 2,
           scheduledAt: new Date(local(first)).toISOString(),
-          channelIds: ["channel-1"],
+          channelIds: [channelId],
         },
         {
-          topicId: "topic-2",
+          topicId: secondTopicId,
+          expectedTopicRevision: 3,
           scheduledAt: new Date(local(second)).toISOString(),
-          channelIds: ["channel-1"],
+          channelIds: [channelId],
         },
       ],
     });
+    expect(calendarSlotsBulkCreateSchema.parse(sent)).toEqual(sent);
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
         en.Calendar.bulkSuccess.replace("{count}", "2"),
       ),
+    );
+  });
+
+  it("reopens review with refreshed topic details after a stale preview conflict", async () => {
+    const brandId = "77777777-7777-4777-8777-777777777777";
+    const topicId = "88888888-8888-4888-8888-888888888888";
+    const channelId = "99999999-9999-4999-8999-999999999999";
+    const posts: unknown[] = [];
+    let topicChanged = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/topics?"))
+        return jsonResponse([
+          {
+            id: topicId,
+            title: topicChanged ? "Updated title" : "Original title",
+            description: topicChanged ? "Updated details" : "Original details",
+            sourceUrl: null,
+            revision: topicChanged ? 4 : 2,
+            status: "approved",
+          },
+        ]);
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
+      if (url.endsWith("/api/calendar/slots/bulk") && init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)));
+        topicChanged = true;
+        return {
+          ok: false,
+          status: 409,
+          statusText: "Conflict",
+          text: async () => JSON.stringify({ code: "calendar_topic_changed" }),
+        } as Response;
+      }
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByLabelText("Original title")).toBeInTheDocument());
+    await user.click(screen.getByLabelText("Original title"));
+    await user.click(
+      screen.getByLabelText(en.Calendar.bulkChannelLabel.replace("{channel}", "Main")),
+    );
+    await user.click(screen.getByRole("button", { name: en.Calendar.bulkReview }));
+    expect(screen.getByRole("dialog", { name: en.Calendar.bulkPreviewTitle })).toHaveTextContent(
+      "Original details",
+    );
+    await user.click(
+      screen.getByRole("button", { name: en.Calendar.bulkConfirm.replace("{count}", "1") }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(en.Errors.calendar_topic_changed),
+    );
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toEqual({
+      brandId,
+      slots: [
+        {
+          topicId,
+          expectedTopicRevision: 2,
+          scheduledAt: expect.any(String),
+          channelIds: [channelId],
+        },
+      ],
+    });
+    expect(calendarSlotsBulkCreateSchema.parse(posts[0])).toEqual(posts[0]);
+    expect(
+      screen.queryByRole("dialog", { name: en.Calendar.bulkPreviewTitle }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Updated title")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: en.Calendar.bulkReview }));
+    expect(screen.getByRole("dialog", { name: en.Calendar.bulkPreviewTitle })).toHaveTextContent(
+      "Updated details",
     );
   });
 

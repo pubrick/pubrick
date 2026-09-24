@@ -991,6 +991,7 @@
     "memorable_date_not_found": "Esta fecha señalada ya no existe.",
     "calendar_slot_started": "La generación de este espacio ya comenzó. Abre su ejecución para ver el progreso.",
     "calendar_topic_already_planned": "Uno de estos temas ya está planificado. Elimina su espacio existente o elige otro tema.",
+    "calendar_topic_changed": "Un tema cambió desde que revisaste este plan. Revisa sus datos actualizados e inténtalo de nuevo.",
     "calendar_topic_linked": "Desvincula el tema para escribir instrucciones propias.",
     "topic_has_calendar_slots": "Elimina los espacios del calendario vinculados antes de borrar este tema.",
     "calendar_time_in_past": "Elige una fecha futura para generar el borrador.",
