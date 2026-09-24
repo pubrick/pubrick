@@ -31,6 +31,8 @@ publication action.
 The guest route sends no workspace credentials. Its HTML and API responses are
 not cached or indexed, and the page uses a no-referrer policy. Treat the URL as
 sensitive: do not put it in public documents, analytics events, or issue reports.
+Self-hosters should redact review paths in reverse-proxy access logs, since the
+capability appears in the URL.
 
 See [the product design](specs/0001-product-design.md) for the overall human
 approval gate and [self-hosting](self-hosting.md) for the deployment setup.
