@@ -20,7 +20,7 @@ documents when they disagree.
 | Publishing | Telegram, VK, MAX, Bluesky and text-only Mastodon delivery with retry and outcome reconciliation; VC.ru copy and self-reported URL; opt-in public RSS syndication | Verify VC.ru native delivery and Dzen ingestion before claiming either succeeded |
 | Analytics | Usage and cost ledger; brand results, on-demand VK post metrics and opt-in background VK collection | Other-channel metrics and performance feedback |
 | Comment analysis | On-demand public Telegram reply sample and metered Google BYOK aggregate summary, sentiment and themes | Private or inaccessible discussions and analytics feedback |
-| Knowledge base / RAG | Brand notes, portable CSV import/export preserving paused state and literal tags, optional single or batch Gemini indexing, embedding-model provenance, hybrid retrieval, selected-note links and validated source excerpts in run receipts | Automatic indexing and independent claim verification |
+| Knowledge base / RAG | Brand notes, portable CSV import/export preserving paused state and literal tags, manual Gemini indexing plus opt-in bounded hourly vector backfill, embedding-model provenance, hybrid retrieval, selected-note links and validated source excerpts in run receipts | Independent claim verification and relevance evaluation |
 | Autopilot | Owner-controlled scheduled draft generation from approved topics, with per-brand quota and spend admission threshold | Richer planning and review signals |
 | Prompt management | Built-in role prompts plus versioned organization guidance, pinned to each generation run at first claim | Controlled prompt experiments |
 | Admin and settings | Basic organization and BYOK settings present | Runtime flags and operational controls |

@@ -124,6 +124,8 @@ const ZONED_COLUMNS = [
   "draft_revision_proposals.created_at",
   "editorial_notes.created_at",
   "feed_entries.published_at",
+  "knowledge_auto_index.last_attempt_at",
+  "knowledge_auto_index.updated_at",
   "knowledge_entries.created_at",
   "knowledge_entries.updated_at",
   "media_assets.created_at",
