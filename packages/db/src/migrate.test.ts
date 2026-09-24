@@ -147,6 +147,8 @@ const ZONED_COLUMNS = [
   "notification_events.created_at",
   "notification_events.updated_at",
   "notification_settings.updated_at",
+  "organization_api_keys.created_at",
+  "organization_api_keys.revoked_at",
   "prompt_revisions.created_at",
   "publication_metrics.checked_at",
   "publications.asserted_at",
@@ -232,6 +234,9 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // API key name and scope are pinned at the database boundary too.
+  "organization_api_keys_scope_check",
+  "organization_api_keys_name_check",
   // Video media carries a distinct shape and content items may attach one medium.
   "media_assets_kind_check",
   "media_assets_shape_check",

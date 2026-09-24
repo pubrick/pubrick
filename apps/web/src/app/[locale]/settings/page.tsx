@@ -450,6 +450,10 @@ export default function SettingsPage() {
   // there is no second round trip and no way for the two to disagree about
   // which organization they describe.
   const members = organization?.members ?? [];
+  const canManageApiKeys = members.some(
+    (member) =>
+      member.user.id === session?.user?.id && (member.role === "owner" || member.role === "admin"),
+  );
   const invitations = (organization?.invitations ?? []).filter(isLiveInvitation);
 
   const themeOptions = [
@@ -610,6 +614,19 @@ export default function SettingsPage() {
             {t("notificationsOpen")}
           </Link>
         </Card>
+
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("publicApiTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("publicApiHint")}</p>
+            <Link
+              href={`/${locale}/settings/api-keys`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("publicApiOpen")}
+            </Link>
+          </Card>
+        )}
 
         <Card>
           <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>
