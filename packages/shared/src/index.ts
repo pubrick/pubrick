@@ -112,6 +112,7 @@ export {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
   telegramCommentsJobOptions,
+  telegramPublicationCommentsJobOptions,
   VK_METRICS_OPTIONS,
   VK_METRICS_QUEUE,
   VK_METRICS_SCAN_QUEUE,
@@ -142,3 +143,4 @@ export {
   type RefineAcceptArgs,
   type RefineAcceptPlan,
 } from "./refine-merge.js";
+export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

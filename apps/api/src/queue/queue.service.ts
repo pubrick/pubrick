@@ -31,6 +31,7 @@ import {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
   telegramCommentsJobOptions,
+  telegramPublicationCommentsJobOptions,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
@@ -157,7 +158,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueTelegramComments(tx: Tx, payload: TelegramCommentsJob): Promise<boolean> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(TELEGRAM_COMMENTS_QUEUE, payload, {
-      ...telegramCommentsJobOptions(payload.itemId, payload.orgId),
+      ...(payload.kind === "publication"
+        ? telegramPublicationCommentsJobOptions(payload.publicationId, payload.orgId)
+        : telegramCommentsJobOptions(payload.itemId, payload.orgId)),
       db: fromDrizzle(tx, sql),
     });
     return id !== null;

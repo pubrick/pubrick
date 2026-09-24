@@ -483,6 +483,7 @@ export const publications = pgTable(
   },
   (t) => [
     index("publications_org_id_idx").on(t.orgId),
+    uniqueIndex("publications_org_id_id_idx").on(t.orgId, t.id),
     index("publications_adaptation_id_idx").on(t.adaptationId),
     /**
      * Postgres does not index a referencing column for you, and TWO things now

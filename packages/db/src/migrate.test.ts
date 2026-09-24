@@ -151,6 +151,9 @@ const ZONED_COLUMNS = [
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
   "prompt_revisions.created_at",
+  "publication_comment_samples.checked_at",
+  "publication_comment_samples.requested_at",
+  "publication_comments.published_at",
   "publication_metrics.checked_at",
   "publications.asserted_at",
   "publications.created_at",
@@ -370,6 +373,11 @@ const NON_ENUM_CHECKS = [
   // measured zero and missing values; these checks pin the stored shape.
   "publication_metrics_status_check",
   "publication_metrics_counts_check",
+  // 0065: bounded Telegram publication discussion samples, distinct from news.
+  "publication_comment_samples_status_check",
+  "publication_comment_samples_error_check",
+  "publication_comments_message_id_check",
+  "publication_comments_body_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

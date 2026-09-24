@@ -3,7 +3,11 @@ import { createServer, type Server } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { analyticsDtoSchema, publicationMetricsDtoSchema } from "@pubrick/shared";
+import {
+  analyticsDtoSchema,
+  publicationCommentsDtoSchema,
+  publicationMetricsDtoSchema,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -86,6 +90,119 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("collects only an owned public Telegram publication and recovers an abandoned request", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Discussion" }).expect(201);
+    const unrelatedBrand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Unrelated" })
+      .expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Public Telegram",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        title: "Discussion post",
+        body: "Body",
+        status: "published",
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!item) throw new Error("No item");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.body.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("No adaptation");
+    const [publication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId: owner.orgId,
+        adaptationId: adaptation.id,
+        channelId: channel.body.id,
+        status: "published",
+        externalId: "42",
+        externalUrl: "https://t.me/pubrick_public/42",
+      })
+      .returning({ id: schema.publications.id });
+    if (!publication) throw new Error("No publication");
+    const path = `/api/analytics/brands/${brand.body.id}/publications/${publication.id}/comments`;
+    expect(
+      publicationCommentsDtoSchema.parse((await owner.agent.get(path).expect(200)).body),
+    ).toMatchObject({ status: "not_collected", requestedAt: null, canCollect: true, comments: [] });
+    await other.agent.get(path).expect(404);
+    await other.agent.post(`${path}/refresh`).expect(404);
+    const unrelatedPath = `/api/analytics/brands/${unrelatedBrand.body.id}/publications/${publication.id}/comments`;
+    await owner.agent.get(unrelatedPath).expect(404);
+    await owner.agent.post(`${unrelatedPath}/refresh`).expect(404);
+    expect((await owner.agent.post(`${path}/refresh`).expect(200)).body).toEqual({ queued: true });
+    const pending = publicationCommentsDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(pending).toMatchObject({ status: "pending", canCollect: true, comments: [] });
+    expect(pending.requestedAt).toBeTruthy();
+    expect((await owner.agent.post(`${path}/refresh`).expect(409)).body.code).toBe(
+      "publication_comments_refresh_cooldown",
+    );
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ requestedAt: new Date(Date.now() - 16 * 60 * 1000) })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    const abandoned = publicationCommentsDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(abandoned).toMatchObject({
+      status: "error",
+      errorCode: "telegram_collection_failed",
+      canCollect: true,
+    });
+    const [privateAdaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.body.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!privateAdaptation) throw new Error("No private adaptation");
+    const [privatePublication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId: owner.orgId,
+        adaptationId: privateAdaptation.id,
+        channelId: channel.body.id,
+        status: "published",
+        externalId: "43",
+        externalUrl: "https://t.me/c/123456/43",
+      })
+      .returning({ id: schema.publications.id });
+    if (!privatePublication) throw new Error("No private publication");
+    const privatePath = `/api/analytics/brands/${brand.body.id}/publications/${privatePublication.id}/comments`;
+    expect(
+      publicationCommentsDtoSchema.parse((await owner.agent.get(privatePath).expect(200)).body),
+    ).toMatchObject({ status: "unavailable", canCollect: false, comments: [] });
+    expect((await owner.agent.post(`${privatePath}/refresh`).expect(409)).body.code).toBe(
+      "publication_comments_unavailable",
+    );
+    await db.delete(schema.adaptations).where(eq(schema.adaptations.id, adaptation.id));
+    await owner.agent.get(path).expect(404);
+  });
 
   it("isolates brands and orgs, preserves unknown values, reads VK once and honors cooldown", async () => {
     const owner = await orgAgent();

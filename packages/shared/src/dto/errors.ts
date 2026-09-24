@@ -95,6 +95,8 @@ export const API_ERROR_CODES = [
   "draft_revision_failed",
   "draft_revision_proposal_not_found",
   "publication_not_found",
+  "publication_comments_unavailable",
+  "publication_comments_refresh_cooldown",
   "metrics_refresh_cooldown",
   "metrics_unavailable",
   "content_media_unsupported",

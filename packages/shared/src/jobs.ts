@@ -73,7 +73,16 @@ export const VK_METRICS_OPTIONS = {
 export function vkMetricsJobOptions(publicationId: string, channelId: string) {
   return { singletonKey: publicationId, singletonSeconds: 3600, group: { id: channelId } } as const;
 }
-export type TelegramCommentsJob = { orgId: string; itemId: string };
+/** Legacy news jobs omit `kind`; keep them readable until the queue drains. */
+export type TelegramCommentsJob =
+  | { kind?: "news"; orgId: string; itemId: string }
+  | {
+      kind: "publication";
+      orgId: string;
+      brandId: string;
+      publicationId: string;
+      requestedAt: string;
+    };
 export const TELEGRAM_COMMENTS_OPTIONS = {
   retryLimit: 1,
   retryDelay: 60,
@@ -81,6 +90,9 @@ export const TELEGRAM_COMMENTS_OPTIONS = {
 } as const;
 export function telegramCommentsJobOptions(itemId: string, orgId: string) {
   return { singletonKey: itemId, singletonSeconds: 900, group: { id: orgId } } as const;
+}
+export function telegramPublicationCommentsJobOptions(publicationId: string, orgId: string) {
+  return telegramCommentsJobOptions(`publication:${publicationId}`, orgId);
 }
 export const RSS_POLL_OPTIONS = {
   retryLimit: 2,

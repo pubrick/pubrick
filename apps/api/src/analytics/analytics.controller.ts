@@ -39,4 +39,23 @@ export class AnalyticsController {
   ) {
     return this.analytics.refresh(orgId, brandId, publicationId);
   }
+
+  @Get("brands/:brandId/publications/:publicationId/comments")
+  comments(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("publicationId", ParseUUIDPipe) publicationId: string,
+  ) {
+    return this.analytics.comments(orgId, brandId, publicationId);
+  }
+
+  @Post("brands/:brandId/publications/:publicationId/comments/refresh")
+  @HttpCode(200)
+  refreshComments(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("publicationId", ParseUUIDPipe) publicationId: string,
+  ) {
+    return this.analytics.refreshComments(orgId, brandId, publicationId);
+  }
 }

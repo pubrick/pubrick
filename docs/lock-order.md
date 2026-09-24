@@ -91,6 +91,20 @@ snapshot or slot from arriving after cleanup; the subsequent brand cascade can
 delete its media while direct media deletion remains blocked by the
 slot-to-media `NO ACTION` foreign keys.
 
+Telegram publication comment refresh takes an organization `FOR KEY SHARE`
+lock, then a brand `FOR KEY SHARE` lock before the live adaptation, channel,
+content item, and publication receipt in that order. It then claims its sample
+row and enqueues the workspace-serialized Telegram comments job in one
+transaction. The worker uses the same order before
+locking the sample `FOR UPDATE` and replacing its bounded reply rows. This
+keeps organization and brand deletion cascades from waiting on a sample while
+the worker waits for either parent. It also makes a concurrent channel delete
+finish before the live check or wait for the short sample write. Public Telegram reads happen
+outside the transaction; the worker rechecks the live publication before
+writing and matches the job's request timestamp, so a stale read cannot
+overwrite a later sample. The receipt lock follows the channel lock because
+channel deletion stamps that receipt in a trigger.
+
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
 `apps/api/src/ai-credentials/ai-credentials.repository.ts`,
@@ -162,11 +176,14 @@ an implicit `FOR KEY SHARE` on a row nothing else holds while asking for
 anything, conflicting only with a delete of the account itself.
 
 **`organization`** sits above everything (a tenant delete cascades into all of
-it). Application code never takes it EXPLICITLY together with anything else;
-it is taken implicitly, `FOR KEY SHARE`, by every insert carrying an `org_id`
-foreign key (a version row, a ledger row, a proposal). That mode conflicts only
-with a delete or a key update of the organization row itself — the tenant
-delete — which holds nothing else first, so the edge cannot close a cycle.
+it). Most inserts carrying an `org_id` foreign key acquire an implicit
+`FOR KEY SHARE` lock on that row. Inline image replacement and Telegram
+publication comment refresh/worker writes also take it explicitly, before
+`brands` or any other row they lock. This order matters: taking a brand or
+sample first and then reaching the organization through a foreign key could
+deadlock with a tenant delete, which locks the organization before cascading
+to either child. `FOR KEY SHARE` conflicts with the tenant delete but allows
+independent writers in the same organization to proceed concurrently.
 
 **`ai_credentials`** IS taken together with a table in the order, and is named
 here rather than left silent. `AiCredentialsRepository.delete` locks the key rows

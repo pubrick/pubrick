@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import type { TelegramCommentsJob } from "@pubrick/shared";
+import type { ChannelComments } from "@pubrick/telegram";
 import { TelegramReader, TelegramSourceError } from "../rss/telegram.reader";
 import { CommentsRepository } from "./comments.repository";
 
@@ -13,6 +14,26 @@ export class CommentsService {
   ) {}
 
   async handle(job: TelegramCommentsJob): Promise<void> {
+    if (job.kind === "publication") {
+      const publication = await this.comments.publication(
+        job.orgId,
+        job.brandId,
+        job.publicationId,
+      );
+      if (!publication) return;
+      const session = await this.comments.session(job.orgId);
+      let result: ChannelComments;
+      try {
+        result = await this.telegram.comments(publication.url, session);
+      } catch (error) {
+        if (!(error instanceof TelegramSourceError)) throw error;
+        this.logger.warn(`Comment check failed for publication ${publication.id}: ${error.code}`);
+        await this.comments.failPublication(job, publication.url, error.code);
+        return;
+      }
+      await this.comments.savePublication(job, publication.url, result);
+      return;
+    }
     const item = await this.comments.item(job.orgId, job.itemId);
     if (!item) return;
     try {
