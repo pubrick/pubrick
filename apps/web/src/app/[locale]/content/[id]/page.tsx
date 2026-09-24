@@ -1033,7 +1033,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             preload="none"
             playsInline
             aria-label={t("reviewPreviewVideoLabel")}
-            className="mb-3 max-h-64 w-full rounded-control bg-black"
+            className="mb-3 max-h-64 w-full rounded-control bg-surface"
           />
         )}
         {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}

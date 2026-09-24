@@ -243,7 +243,7 @@ export function MediaLibrary({
                   preload="none"
                   playsInline
                   aria-label={asset.name}
-                  className="aspect-square w-full bg-black object-contain"
+                  className="aspect-square w-full bg-surface object-contain"
                 />
               ) : (
                 // Authenticated, tenant-scoped file endpoint.

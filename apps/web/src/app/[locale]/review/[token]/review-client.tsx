@@ -139,7 +139,7 @@ export default function ClientReviewPage({ token }: { token: string }) {
                 preload="none"
                 playsInline
                 aria-label={t("videoLabel")}
-                className="mt-4 max-h-96 w-full rounded-control bg-black"
+                className="mt-4 max-h-96 w-full rounded-control bg-surface"
               />
             )}
           </Card>
