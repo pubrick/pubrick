@@ -508,13 +508,21 @@ describe("every enum CHECK reaches the database through a migration", () => {
     .filter((f) => f.endsWith(".sql"))
     .sort()) {
     const sql = readFileSync(path.join(migrationsDir, file), "utf8");
-    for (const [, name, list] of sql.matchAll(
-      /CONSTRAINT "([^"]+)" CHECK \([^)]*\bin\s*\(([^)]*)\)/gi,
+    // Follow drops as well as enum additions. A later migration can replace an
+    // enum pin with a different CHECK (for example, custom knowledge categories).
+    // Scanning additions alone would mistake the historical enum for live SQL.
+    for (const match of sql.matchAll(
+      /\bDROP CONSTRAINT "([^"]+)"|\bCONSTRAINT "([^"]+)" CHECK \([^)]*\bin\s*\(([^)]*)\)/gi,
     )) {
-      inMigrations.set(
-        name as string,
-        [...(list as string).matchAll(/'([^']*)'/g)].map((m) => m[1] as string).sort(),
-      );
+      const [, dropped, added, list] = match;
+      if (dropped) {
+        inMigrations.delete(dropped);
+      } else if (added && list) {
+        inMigrations.set(
+          added,
+          [...list.matchAll(/'([^']*)'/g)].map((value) => value[1] as string).sort(),
+        );
+      }
     }
   }
 
