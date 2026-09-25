@@ -296,10 +296,13 @@ const NON_ENUM_CHECKS = [
   "content_image_slots_paragraph_check",
   "content_image_slots_alt_check",
   "content_image_slots_caption_check",
+  // 0085 pins both saved image alignment and its immutable public snapshot.
+  "content_image_slots_alignment_check",
   "feed_entry_images_paragraph_check",
   "feed_entry_images_position_check",
   "feed_entry_images_alt_check",
   "feed_entry_images_caption_check",
+  "feed_entry_images_alignment_check",
   // 0059: archive is a reversible state; its previous status must be present
   // exactly while archived. The dedicated test below proves both directions.
   "content_items_archived_from_status_check",
@@ -3019,6 +3022,129 @@ describe.skipIf(!url)("runMigrations", () => {
         expect(
           await refusal(after, "UPDATE topics SET blocked_at = now() WHERE id = $1", [topicId]),
         ).toBe(CHECK_VIOLATION);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("preserves existing image slots and feed snapshots with centered alignment", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0085_fixed_blob");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let itemId!: string;
+      let entryId!: string;
+      let brandId!: string;
+      let mediaId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const missing = await pool.query(
+          "SELECT table_name FROM information_schema.columns WHERE table_name IN ('content_image_slots', 'feed_entry_images') AND column_name = 'alignment'",
+        );
+        expect(missing.rows).toHaveLength(0);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('alignment_old', 'Alignment old', 'alignment-old')",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('alignment_old', 'Legacy brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        itemId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, title, body) VALUES ('alignment_old', $1, 'Legacy article', 'First paragraph\n\nSecond paragraph') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        mediaId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO media_assets (org_id, brand_id, name, width, height, byte_size) VALUES ('alignment_old', $1, 'Legacy image', 10, 10, 200) RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        const feedId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brand_feeds (org_id, brand_id, public_token) VALUES ('alignment_old', $1, 'alignment-old-token') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        entryId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO feed_entries (org_id, brand_id, feed_id, content_item_id, title, body) VALUES ('alignment_old', $1, $2, $3, 'Legacy article', 'First paragraph\n\nSecond paragraph') RETURNING id",
+            [brandId, feedId, itemId],
+          )
+        ).rows[0]?.id as string;
+        await pool.query(
+          "INSERT INTO content_image_slots (org_id, brand_id, content_item_id, media_id, after_paragraph, alt) VALUES ('alignment_old', $1, $2, $3, 0, 'Legacy image')",
+          [brandId, itemId, mediaId],
+        );
+        await pool.query(
+          "INSERT INTO feed_entry_images (org_id, brand_id, feed_entry_id, media_id, after_paragraph, alt, position) VALUES ('alignment_old', $1, $2, $3, 0, 'Legacy image', 0)",
+          [brandId, entryId, mediaId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const slots = await after.query<{ after_paragraph: number; alignment: string }>(
+          "SELECT after_paragraph, alignment FROM content_image_slots WHERE content_item_id = $1 ORDER BY after_paragraph",
+          [itemId],
+        );
+        const snapshots = await after.query<{ after_paragraph: number; alignment: string }>(
+          "SELECT after_paragraph, alignment FROM feed_entry_images WHERE feed_entry_id = $1 ORDER BY after_paragraph",
+          [entryId],
+        );
+        expect(slots.rows).toEqual([{ after_paragraph: 0, alignment: "center" }]);
+        expect(snapshots.rows).toEqual([{ after_paragraph: 0, alignment: "center" }]);
+        await after.query(
+          "INSERT INTO content_image_slots (org_id, brand_id, content_item_id, media_id, after_paragraph, alt) VALUES ('alignment_old', $1, $2, $3, 1, 'New image')",
+          [brandId, itemId, mediaId],
+        );
+        await after.query(
+          "INSERT INTO feed_entry_images (org_id, brand_id, feed_entry_id, media_id, after_paragraph, alt, position) VALUES ('alignment_old', $1, $2, $3, 1, 'New image', 1)",
+          [brandId, entryId, mediaId],
+        );
+        expect(
+          (
+            await after.query<{ alignment: string }>(
+              "SELECT alignment FROM content_image_slots WHERE content_item_id = $1 ORDER BY after_paragraph",
+              [itemId],
+            )
+          ).rows.map((row) => row.alignment),
+        ).toEqual(["center", "center"]);
+        expect(
+          (
+            await after.query<{ alignment: string }>(
+              "SELECT alignment FROM feed_entry_images WHERE feed_entry_id = $1 ORDER BY after_paragraph",
+              [entryId],
+            )
+          ).rows.map((row) => row.alignment),
+        ).toEqual(["center", "center"]);
+        expect(
+          await refusal(
+            after,
+            "UPDATE content_image_slots SET alignment = 'diagonal' WHERE content_item_id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE feed_entry_images SET alignment = 'diagonal' WHERE feed_entry_id = $1",
+            [entryId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const checks = await after.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname IN ('content_image_slots_alignment_check', 'feed_entry_images_alignment_check') ORDER BY conname",
+        );
+        expect(checks.rows).toEqual([{ convalidated: false }, { convalidated: false }]);
       } finally {
         await after.end();
       }

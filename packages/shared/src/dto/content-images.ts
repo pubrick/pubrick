@@ -3,7 +3,8 @@ import { MAX_BODY_LENGTH } from "./content.js";
 
 export const MAX_CONTENT_IMAGES = 5;
 
-export const contentImageAlignmentSchema = z.enum(["left", "center", "right"]);
+export const CONTENT_IMAGE_ALIGNMENTS = ["left", "center", "right"] as const;
+export const contentImageAlignmentSchema = z.enum(CONTENT_IMAGE_ALIGNMENTS);
 export type ContentImageAlignment = z.infer<typeof contentImageAlignmentSchema>;
 
 /** `afterParagraph: 0` places the image after the first nonempty paragraph. */
