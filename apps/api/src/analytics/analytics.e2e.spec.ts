@@ -211,6 +211,16 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       },
       {
         orgId: owner.orgId,
+        runId: current.id,
+        step: "image-without-usage",
+        provider: "google",
+        modelId: "image-test",
+        costSource: "unknown",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
         runId: legacy.id,
         step: "timeout",
         provider: "google",
@@ -242,6 +252,15 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         costSource: "provider_reported",
         status: "ok",
         outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: expert.id,
+        step: "legacy-no-outcome",
+        provider: "google",
+        modelId: "test",
+        costSource: "unknown",
+        status: "errored",
       },
       {
         orgId: owner.orgId,
@@ -292,7 +311,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         meanKnownUsdPerRun: 0.1,
         pricedCalls: 2,
         estimatedCalls: 1,
-        unknownCostCalls: 1,
+        unknownCostCalls: 2,
         unrecordedCalls: 2,
         legacyRuns: 1,
       },
@@ -303,7 +322,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         meanKnownUsdPerRun: 0.3,
         pricedCalls: 1,
         estimatedCalls: 0,
-        unknownCostCalls: 0,
+        unknownCostCalls: 1,
         unrecordedCalls: 0,
         legacyRuns: 0,
       },
@@ -326,9 +345,27 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       runCount: 1,
       knownUsd: 0.2,
       meanKnownUsdPerRun: 0.2,
-      unknownCostCalls: 0,
+      unknownCostCalls: 1,
       legacyRuns: 0,
     });
+    const history = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${brand.body.id}/spend-history`).expect(200))
+        .body,
+    );
+    expect(history.calls.find((call) => call.step === "image-without-usage")?.costState).toBe(
+      "unknown",
+    );
+    expect(history.calls.find((call) => call.step === "legacy-no-outcome")?.costState).toBe(
+      "unknown",
+    );
+    expect(history.calls.find((call) => call.step === "refused-before-use")?.costState).toBe(
+      "no_recorded_charge",
+    );
+    const overview = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${brand.body.id}/overview?days=30`).expect(200))
+        .body,
+    );
+    expect(overview.spend.unpricedCalls).toBe(3);
   });
 
   it("counts brand activity by event window without multiplying linked costs or leaking tenants", async () => {

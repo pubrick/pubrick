@@ -161,13 +161,17 @@ export class AnalyticsRepository {
     // Each ledger row joins at most one run/item/channel. Run attribution wins
     // when several links are present, so one call never belongs to two brands.
     const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
+    // Image calls can complete with no token usage metadata. Only an explicit
+    // zero-token refusal proves a provider call was not billed; legacy null
+    // outcomes remain uncertain.
+    const potentiallyBillable = sql`${l.outcome} is distinct from 'refused' or ${l.inputTokens} + ${l.outputTokens} > 0`;
     const attributedBrand = sql`coalesce(${r.brandId}, ${d.brandId}, ${c.brandId})`;
     const [ledger] = await db
       .select({
         knownUsd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
         pricedCalls: sql<string>`count(*) filter (where ${priced})`,
         estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${l.costSource} = 'price_table')`,
-        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${l.inputTokens} + ${l.outputTokens} > 0 or ${l.outcome} is not distinct from 'unknown'))`,
+        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${potentiallyBillable}))`,
       })
       .from(l)
       .leftJoin(r, and(eq(r.id, l.runId), eq(r.orgId, orgId)))
@@ -295,7 +299,7 @@ export class AnalyticsRepository {
             ? row.costSource === "price_table"
               ? "estimated"
               : "reported"
-            : row.inputTokens + row.outputTokens > 0 || row.outcome === "unknown"
+            : row.outcome !== "refused" || row.inputTokens + row.outputTokens > 0
               ? "unknown"
               : "no_recorded_charge",
           runId: row.runBrandId === brandId ? row.runId : null,
@@ -346,13 +350,14 @@ export class AnalyticsRepository {
       // so PostgreSQL sees the same values rather than a second bind set.
       .groupBy(sql`1`);
     const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
+    const potentiallyBillable = sql`${l.outcome} is distinct from 'refused' or ${l.inputTokens} + ${l.outputTokens} > 0`;
     const calls = await db
       .select({
         contentType: format,
         knownUsd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
         pricedCalls: sql<string>`count(*) filter (where ${priced})`,
         estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${l.costSource} = 'price_table')`,
-        unknownCostCalls: sql<string>`count(*) filter (where not (${priced}) and (${l.inputTokens} + ${l.outputTokens} > 0 or ${l.outcome} is not distinct from 'unknown'))`,
+        unknownCostCalls: sql<string>`count(*) filter (where not (${priced}) and (${potentiallyBillable}))`,
       })
       .from(r)
       .innerJoin(l, and(eq(l.runId, r.id), eq(l.orgId, orgId)))
