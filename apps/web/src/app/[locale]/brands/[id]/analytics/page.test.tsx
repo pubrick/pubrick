@@ -350,6 +350,61 @@ describe("brand publication results", () => {
     expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
   });
 
+  it("keeps an earlier aggregate visible beside an unknown current attempt and checks read-only", async () => {
+    const calls: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/comment-analysis"))
+        return response({
+          status: "unknown",
+          current: { status: "unknown", sampleVersion: "new-version" },
+          earlierAnalysis: {
+            sampleVersion: "old-version",
+            sampleSize: 2,
+            analyzedAt: timestamp,
+            result: {
+              summary: "Readers requested more examples.",
+              sentiment: { positive: 0.5, neutral: 0.5, negative: 0 },
+              themes: [{ label: "Examples", mentions: 2 }],
+              feedback: ["Show a walkthrough."],
+            },
+          },
+        });
+      if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+      if (url.endsWith("/comments"))
+        return response({
+          status: "available",
+          requestedAt: timestamp,
+          checkedAt: timestamp,
+          canCollect: true,
+          errorCode: null,
+          comments: [{ id: TG_ID, body: "More examples", publishedAt: timestamp }],
+        });
+      return response(telegramResults());
+    });
+    await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await screen.findByText("Telegram story");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Analytics.viewReplySample }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(await dialog.findByText(en.Analytics.analysis_unknown)).toBeInTheDocument();
+    expect(dialog.getByText(en.Analytics.earlierAnalysis)).toBeInTheDocument();
+    expect(dialog.getByText("Readers requested more examples.")).toBeInTheDocument();
+    expect(dialog.queryByRole("button", { name: en.Analytics.analyzeSample })).toBeNull();
+    const reads = calls.filter((call) => call.endsWith("/comment-analysis")).length;
+    await userEvent
+      .setup()
+      .click(dialog.getByRole("button", { name: en.Analytics.checkAnalysisResult }));
+    await waitFor(() =>
+      expect(calls.filter((call) => call.endsWith("/comment-analysis")).length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+  });
+
   it.each([
     ["stale", "analysis_stale", true],
     ["no_key", "analysis_no_key", false],

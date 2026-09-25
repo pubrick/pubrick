@@ -1,6 +1,11 @@
 "use client";
 
-import type { AnalyticsDto, CommentAnalysisDto, PublicationCommentsDto } from "@pubrick/shared";
+import type {
+  AnalyticsDto,
+  CommentAnalysisDto,
+  CommentAnalysisResult,
+  PublicationCommentsDto,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -20,7 +25,7 @@ import { BrandOverview } from "./brand-overview";
 const PERIODS = [7, 30, 90] as const;
 type Period = (typeof PERIODS)[number];
 const COMMENT_REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
-type PublicationCommentAnalysisDto = CommentAnalysisDto | { status: "in_progress" };
+type PublicationCommentAnalysisDto = CommentAnalysisDto;
 
 export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -226,6 +231,51 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
     new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
       new Date(value),
     );
+
+  function analysisResult(analysis: {
+    result: CommentAnalysisResult;
+    sampleSize: number;
+    analyzedAt: string;
+  }) {
+    return (
+      <div className="mt-3 space-y-3 text-sm text-fg">
+        <p>{analysis.result.summary}</p>
+        <p className="text-fg-secondary">{t("analysisSample", { count: analysis.sampleSize })}</p>
+        <p className="text-fg-secondary">
+          {t("analysisSentiment", {
+            positive: Math.round(analysis.result.sentiment.positive * 100),
+            neutral: Math.round(analysis.result.sentiment.neutral * 100),
+            negative: Math.round(analysis.result.sentiment.negative * 100),
+          })}
+        </p>
+        {analysis.result.themes.length > 0 && (
+          <div>
+            <h4 className="font-semibold">{t("analysisThemes")}</h4>
+            <ul className="mt-1 list-inside list-disc">
+              {analysis.result.themes.map((theme) => (
+                <li key={theme.label}>
+                  {theme.label} ({theme.mentions})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {analysis.result.feedback.length > 0 && (
+          <div>
+            <h4 className="font-semibold">{t("analysisFeedback")}</h4>
+            <ul className="mt-1 list-inside list-disc">
+              {analysis.result.feedback.map((entry) => (
+                <li key={entry}>{entry}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="text-xs text-fg-tertiary">
+          {t("analysisChecked", { date: dateTime(analysis.analyzedAt) })}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <AppShell
@@ -488,8 +538,8 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
                 {analysisState &&
-                  ["not_analyzed", "stale", "failed", "timed_out"].includes(
-                    analysisState.status,
+                  ["not_analyzed", "stale"].includes(
+                    analysisState.current?.status ?? analysisState.status,
                   ) && (
                     <Button
                       variant="secondary"
@@ -500,7 +550,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                       {analysisBusy ? t("analysisWorking") : t("analyzeSample")}
                     </Button>
                   )}
-                {analysisState?.status === "in_progress" && (
+                {analysisState && (
                   <Button
                     variant="secondary"
                     className="min-h-11"
@@ -520,50 +570,27 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                 </p>
               )}
               {analysisLoading && !analysisState && <Skeleton lines={2} />}
-              {analysisState?.status === "ready" ? (
-                <div className="mt-3 space-y-3 text-sm text-fg">
-                  <p>{analysisState.result.summary}</p>
-                  <p className="text-fg-secondary">
-                    {t("analysisSample", { count: analysisState.sampleSize })}
-                  </p>
-                  <p className="text-fg-secondary">
-                    {t("analysisSentiment", {
-                      positive: Math.round(analysisState.result.sentiment.positive * 100),
-                      neutral: Math.round(analysisState.result.sentiment.neutral * 100),
-                      negative: Math.round(analysisState.result.sentiment.negative * 100),
-                    })}
-                  </p>
-                  {analysisState.result.themes.length > 0 && (
-                    <div>
-                      <h4 className="font-semibold">{t("analysisThemes")}</h4>
-                      <ul className="mt-1 list-inside list-disc">
-                        {analysisState.result.themes.map((theme) => (
-                          <li key={theme.label}>
-                            {theme.label} ({theme.mentions})
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {analysisState.result.feedback.length > 0 && (
-                    <div>
-                      <h4 className="font-semibold">{t("analysisFeedback")}</h4>
-                      <ul className="mt-1 list-inside list-disc">
-                        {analysisState.result.feedback.map((entry) => (
-                          <li key={entry}>{entry}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <p className="text-xs text-fg-tertiary">
-                    {t("analysisChecked", { date: dateTime(analysisState.analyzedAt) })}
-                  </p>
-                </div>
+              {analysisState?.status === "ready" &&
+              (analysisState.current?.status ?? analysisState.status) === "ready" ? (
+                analysisResult(analysisState)
               ) : analysisState ? (
                 <p role="status" className="mt-2 text-sm text-fg-secondary">
-                  {t(`analysis_${analysisState.status}`)}
+                  {t(`analysis_${analysisState.current?.status ?? analysisState.status}`)}
                 </p>
               ) : null}
+              {analysisState?.current?.collectionStatus &&
+                ["error", "failed", "unavailable"].includes(
+                  analysisState.current.collectionStatus,
+                ) &&
+                analysisState.current.status === "ready" && (
+                  <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
+                )}
+              {analysisState?.earlierAnalysis && (
+                <div className="mt-4 border-t border-border-soft pt-4">
+                  <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
+                  {analysisResult(analysisState.earlierAnalysis)}
+                </div>
+              )}
               {analysisState?.status === "no_key" && (
                 <Link
                   href={`/${locale}/settings`}

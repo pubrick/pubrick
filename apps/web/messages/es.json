@@ -329,9 +329,16 @@
     "analysis_not_analyzed": "Esta muestra aún no se ha analizado.",
     "analysis_stale": "La muestra de comentarios cambió. Vuelve a analizarla.",
     "analysis_limit_reached": "Se agotó el límite horario de análisis de comentarios. Inténtalo más tarde.",
-    "analysis_timed_out": "Se agotó el tiempo del análisis. Inténtalo de nuevo.",
-    "analysis_failed": "Falló el análisis. Revisa tu clave de Google AI en Ajustes o inténtalo de nuevo.",
-    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado en breve."
+    "analysis_timed_out": "Se agotó el tiempo del análisis. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_failed": "Falló el análisis de esta muestra. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado en breve.",
+    "checkAnalysisResult": "Comprobar el análisis",
+    "earlierAnalysis": "Análisis de una muestra anterior",
+    "analysisCollectionFailed": "Falló la última consulta de comentarios; este análisis aún corresponde a la muestra guardada.",
+    "analysis_queued": "El análisis está en cola. Comprueba el resultado en breve.",
+    "analysis_analyzing": "El análisis está en curso. Comprueba el resultado en breve.",
+    "analysis_blocked": "Un límite de seguridad o un cambio de configuración bloqueó el análisis. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_unknown": "Es posible que el proveedor haya procesado la solicitud. Recoge una muestra nueva para volver a intentarlo."
   },
   "Knowledge": {
     "title": "Conocimiento de marca",
@@ -2032,9 +2039,15 @@
     "analysis_limit_reached": "Se agotó el límite horario de análisis. Inténtalo más tarde.",
     "analysis_not_analyzed": "Esta muestra de respuestas aún no se ha analizado.",
     "analysis_stale": "La muestra de respuestas cambió. Vuelve a analizarla.",
-    "analysis_failed": "Falló el análisis. Revisa tu clave de Google AI en Ajustes o inténtalo de nuevo.",
-    "analysis_timed_out": "Se agotó el tiempo del análisis. Inténtalo de nuevo.",
-    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado aquí en breve."
+    "analysis_failed": "Falló el análisis de esta muestra. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_timed_out": "Se agotó el tiempo del análisis. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_in_progress": "El análisis está en curso. Comprueba el resultado aquí en breve.",
+    "earlierAnalysis": "Análisis de una muestra anterior",
+    "analysisCollectionFailed": "Falló la última consulta de respuestas; este análisis aún corresponde a la muestra guardada.",
+    "analysis_queued": "El análisis está en cola. Comprueba el resultado en breve.",
+    "analysis_analyzing": "El análisis está en curso. Comprueba el resultado en breve.",
+    "analysis_blocked": "Un límite de seguridad o un cambio de configuración bloqueó el análisis. Recoge una muestra nueva para volver a intentarlo.",
+    "analysis_unknown": "Es posible que el proveedor haya procesado la solicitud. Recoge una muestra nueva para volver a intentarlo."
   },
   "Notifications": {
     "title": "Notificaciones",

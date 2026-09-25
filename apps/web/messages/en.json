@@ -329,9 +329,16 @@
     "analysis_not_analyzed": "This sample has not been analyzed yet.",
     "analysis_stale": "The comment sample changed. Analyze it again for an up-to-date summary.",
     "analysis_limit_reached": "The hourly allowance for comment analysis is used. Try again later.",
-    "analysis_timed_out": "Analysis timed out. Try again.",
-    "analysis_failed": "Analysis failed. Check your Google AI key in Settings or try again.",
-    "analysis_in_progress": "Analysis is in progress. Check the result shortly."
+    "analysis_timed_out": "Analysis timed out. Collect a new sample before trying again.",
+    "analysis_failed": "Analysis failed for this sample. Collect a new sample before trying again.",
+    "analysis_in_progress": "Analysis is in progress. Check the result shortly.",
+    "checkAnalysisResult": "Check analysis result",
+    "earlierAnalysis": "Earlier sample analysis",
+    "analysisCollectionFailed": "The latest comment check failed; this analysis still matches the saved sample.",
+    "analysis_queued": "Analysis is queued. Check the result shortly.",
+    "analysis_analyzing": "Analysis is in progress. Check the result shortly.",
+    "analysis_blocked": "Analysis was blocked by a safety limit or changed settings. Collect a new sample before trying again.",
+    "analysis_unknown": "The provider may have processed this request. Collect a new sample before trying again."
   },
   "Knowledge": {
     "title": "Brand knowledge",
@@ -2032,9 +2039,15 @@
     "analysis_limit_reached": "The hourly analysis allowance is used. Try again later.",
     "analysis_not_analyzed": "This reply sample has not been analyzed yet.",
     "analysis_stale": "The reply sample changed. Analyze it again for an up-to-date summary.",
-    "analysis_failed": "Analysis failed. Check your Google AI key in Settings or try again.",
-    "analysis_timed_out": "Analysis timed out. Try again.",
-    "analysis_in_progress": "Analysis is in progress. Check the result here shortly."
+    "analysis_failed": "Analysis failed for this sample. Collect a new sample before trying again.",
+    "analysis_timed_out": "Analysis timed out. Collect a new sample before trying again.",
+    "analysis_in_progress": "Analysis is in progress. Check the result here shortly.",
+    "earlierAnalysis": "Earlier sample analysis",
+    "analysisCollectionFailed": "The latest reply check failed; this analysis still matches the saved sample.",
+    "analysis_queued": "Analysis is queued. Check the result shortly.",
+    "analysis_analyzing": "Analysis is in progress. Check the result shortly.",
+    "analysis_blocked": "Analysis was blocked by a safety limit or changed settings. Collect a new sample before trying again.",
+    "analysis_unknown": "The provider may have processed this request. Collect a new sample before trying again."
   },
   "Notifications": {
     "title": "Notifications",

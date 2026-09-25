@@ -2,6 +2,7 @@
 
 import {
   type CommentAnalysisDto,
+  type CommentAnalysisResult,
   MAX_SOURCE_TEXT_LENGTH,
   type NewsCommentDto,
   type NewsItemDto,
@@ -448,6 +449,48 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     } finally {
       setAnalysisBusy(false);
     }
+  }
+
+  function analysisResult(analysis: {
+    result: CommentAnalysisResult;
+    sampleSize: number;
+    analyzedAt: string;
+  }) {
+    return (
+      <div className="mt-3 space-y-3 text-sm text-fg">
+        <p>{analysis.result.summary}</p>
+        <p className="text-fg-secondary">{t("analysisSample", { count: analysis.sampleSize })}</p>
+        <p className="text-fg-secondary">
+          {t("analysisSentiment", {
+            positive: Math.round(analysis.result.sentiment.positive * 100),
+            neutral: Math.round(analysis.result.sentiment.neutral * 100),
+            negative: Math.round(analysis.result.sentiment.negative * 100),
+          })}
+        </p>
+        {analysis.result.themes.length > 0 && (
+          <div>
+            <h4 className="font-semibold">{t("analysisThemes")}</h4>
+            <ul className="mt-1 list-inside list-disc">
+              {analysis.result.themes.map((theme) => (
+                <li key={theme.label}>
+                  {theme.label} ({theme.mentions})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {analysis.result.feedback.length > 0 && (
+          <div>
+            <h4 className="font-semibold">{t("analysisFeedback")}</h4>
+            <ul className="mt-1 list-inside list-disc">
+              {analysis.result.feedback.map((entry) => (
+                <li key={entry}>{entry}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
   }
 
   async function refreshComments(item: NewsItemDto) {
@@ -1124,19 +1167,30 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         <section aria-label={t("analysisTitle")} className="mt-6 border-t border-line pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
-            {activeCommentsItem &&
-              commentAnalysis &&
-              ["not_analyzed", "stale", "failed", "timed_out", "limit_reached"].includes(
-                commentAnalysis.status,
-              ) && (
+            <div className="flex flex-wrap gap-2">
+              {activeCommentsItem &&
+                commentAnalysis &&
+                ["not_analyzed", "stale"].includes(
+                  commentAnalysis.current?.status ?? commentAnalysis.status,
+                ) && (
+                  <Button
+                    size="sm"
+                    disabled={analysisBusy}
+                    onClick={() => analyzeComments(activeCommentsItem.id)}
+                  >
+                    {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
+                  </Button>
+                )}
+              {activeCommentsItem && commentAnalysis && (
                 <Button
                   size="sm"
-                  disabled={analysisBusy || commentAnalysis.status === "limit_reached"}
-                  onClick={() => analyzeComments(activeCommentsItem.id)}
+                  variant="secondary"
+                  onClick={() => loadCommentAnalysis(activeCommentsItem.id)}
                 >
-                  {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
+                  {t("checkAnalysisResult")}
                 </Button>
               )}
+            </div>
           </div>
           {analysisError && (
             <p role="alert" className="mt-2 text-sm text-danger">
@@ -1145,46 +1199,24 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           )}
           {!commentAnalysis ? (
             <Skeleton lines={2} />
-          ) : commentAnalysis.status === "ready" ? (
-            <div className="mt-3 space-y-3 text-sm text-fg">
-              <p>{commentAnalysis.result.summary}</p>
-              <p className="text-fg-secondary">
-                {t("analysisSample", { count: commentAnalysis.sampleSize })}
-              </p>
-              <p className="text-fg-secondary">
-                {t("analysisSentiment", {
-                  positive: Math.round(commentAnalysis.result.sentiment.positive * 100),
-                  neutral: Math.round(commentAnalysis.result.sentiment.neutral * 100),
-                  negative: Math.round(commentAnalysis.result.sentiment.negative * 100),
-                })}
-              </p>
-              {commentAnalysis.result.themes.length > 0 && (
-                <div>
-                  <h4 className="font-semibold">{t("analysisThemes")}</h4>
-                  <ul className="mt-1 list-inside list-disc">
-                    {commentAnalysis.result.themes.map((theme) => (
-                      <li key={theme.label}>
-                        {theme.label} ({theme.mentions})
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {commentAnalysis.result.feedback.length > 0 && (
-                <div>
-                  <h4 className="font-semibold">{t("analysisFeedback")}</h4>
-                  <ul className="mt-1 list-inside list-disc">
-                    {commentAnalysis.result.feedback.map((entry) => (
-                      <li key={entry}>{entry}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+          ) : commentAnalysis.status === "ready" &&
+            (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
+            analysisResult(commentAnalysis)
           ) : (
             <p role="status" className="mt-2 text-sm text-fg-secondary">
-              {t(`analysis_${commentAnalysis.status}`)}
+              {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
             </p>
+          )}
+          {commentAnalysis?.current?.collectionStatus &&
+            ["error", "failed", "unavailable"].includes(commentAnalysis.current.collectionStatus) &&
+            commentAnalysis.current.status === "ready" && (
+              <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
+            )}
+          {commentAnalysis?.earlierAnalysis && (
+            <div className="mt-4 border-t border-line pt-4">
+              <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
+              {analysisResult(commentAnalysis.earlierAnalysis)}
+            </div>
           )}
           {commentAnalysis?.status === "no_key" && (
             <Link
