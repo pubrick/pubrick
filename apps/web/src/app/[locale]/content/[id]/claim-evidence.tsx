@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  type AcceptedClaimCorrectionDto,
+  type AcceptedClaimCorrectionListDto,
   type ClaimCorrectionProposalDto,
   type ClaimReviewDto,
   claimCorrectionRequestSchema,
@@ -9,6 +11,7 @@ import {
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -21,6 +24,7 @@ type Props = {
   savedBody: string;
   draftBody: string;
   editable: boolean;
+  aiDraftEligible?: boolean;
   hasRichFormatting?: boolean;
   unsavedFormatting?: boolean;
   onAccepted?: (body: string) => Promise<void>;
@@ -31,6 +35,7 @@ export function ClaimEvidence({
   savedBody,
   draftBody,
   editable,
+  aiDraftEligible = true,
   hasRichFormatting = false,
   unsavedFormatting = false,
   onAccepted,
@@ -50,12 +55,20 @@ export function ClaimEvidence({
   const [error, setError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [missingKey, setMissingKey] = useState<"search" | "ai" | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyRows, setHistoryRows] = useState<AcceptedClaimCorrectionDto[]>([]);
+  const [historyNext, setHistoryNext] = useState<string | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
   const proposalGeneration = useRef(0);
+  const historyGeneration = useRef(0);
   const proposalHeading = useRef<HTMLHeadingElement>(null);
   const focusProposal = useRef(false);
   const endpoint = `/api/content/${itemId}/claim-review`;
   const correctionEndpoint = `/api/content/${itemId}/claim-correction`;
+  const historyEndpoint = `/api/content/${itemId}/claim-corrections`;
   const hasUnsavedText = draftBody !== savedBody || unsavedFormatting;
 
   const load = useCallback(async () => {
@@ -84,6 +97,31 @@ export function ClaimEvidence({
     }
   }, [correctionEndpoint, t, te]);
 
+  const loadHistory = useCallback(
+    async (cursor?: string) => {
+      const generation = ++historyGeneration.current;
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const page = await api<AcceptedClaimCorrectionListDto>(
+          `${historyEndpoint}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        if (generation !== historyGeneration.current) return;
+        setHistoryRows((previous) => (cursor ? [...previous, ...page.rows] : page.rows));
+        setHistoryNext(page.nextCursor);
+      } catch (err) {
+        if (generation !== historyGeneration.current) return;
+        setHistoryError(errorMessage(err, t("historyError"), te));
+      } finally {
+        if (generation === historyGeneration.current) {
+          setHistoryLoaded(true);
+          setHistoryLoading(false);
+        }
+      }
+    },
+    [historyEndpoint, t, te],
+  );
+
   // The server computes staleness against the persisted body, so saving an edit
   // must refresh even if the endpoint and load callback have not changed.
   // biome-ignore lint/correctness/useExhaustiveDependencies: savedBody is a deliberate refresh trigger.
@@ -99,6 +137,11 @@ export function ClaimEvidence({
     focusProposal.current = false;
     proposalHeading.current?.focus();
   }, [proposal]);
+
+  useEffect(() => {
+    if (!historyOpen || historyLoaded || historyLoading) return;
+    void loadHistory();
+  }, [historyOpen, historyLoaded, historyLoading, loadHistory]);
 
   useEffect(() => {
     if (review?.status !== "queued" && review?.status !== "running") return;
@@ -138,6 +181,7 @@ export function ClaimEvidence({
     if (
       correctionBusy ||
       !editable ||
+      !aiDraftEligible ||
       hasUnsavedText ||
       review?.status !== "ready" ||
       review.stale ||
@@ -179,7 +223,15 @@ export function ClaimEvidence({
   }
 
   async function accept() {
-    if (!proposal || correctionBusy || !editable || hasUnsavedText || proposalStale) return;
+    if (
+      !proposal ||
+      correctionBusy ||
+      !editable ||
+      !aiDraftEligible ||
+      hasUnsavedText ||
+      proposalStale
+    )
+      return;
     setCorrectionBusy("accept");
     setProposalError(null);
     setNotice(null);
@@ -190,6 +242,11 @@ export function ClaimEvidence({
       });
       setProposal(null);
       setNotice(t("accepted"));
+      historyGeneration.current += 1;
+      setHistoryRows([]);
+      setHistoryNext(null);
+      setHistoryLoaded(false);
+      setHistoryLoading(false);
       await onAccepted?.(updated.body);
       await load();
     } catch (err) {
@@ -297,7 +354,9 @@ export function ClaimEvidence({
           <Button
             variant="secondary"
             size="sm"
-            disabled={!!correctionBusy || !editable || hasUnsavedText || proposalStale}
+            disabled={
+              !!correctionBusy || !editable || !aiDraftEligible || hasUnsavedText || proposalStale
+            }
             onClick={() => void accept()}
           >
             {t("accept")}
@@ -305,7 +364,9 @@ export function ClaimEvidence({
           <Button
             variant="secondary"
             size="sm"
-            disabled={!!correctionBusy || !editable || hasUnsavedText || proposalStale}
+            disabled={
+              !!correctionBusy || !editable || !aiDraftEligible || hasUnsavedText || proposalStale
+            }
             onClick={() => void propose(proposal.claimIndex)}
           >
             {correctionBusy === "propose" ? t("proposing") : t("tryAgain")}
@@ -432,15 +493,21 @@ export function ClaimEvidence({
                   editable &&
                   !review.stale && (
                     <div className="mt-3">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={hasUnsavedText || correctionBusy !== null}
-                        onClick={() => void propose(claimIndex)}
-                      >
-                        {correctionBusy === "propose" ? t("proposing") : t("propose")}
-                      </Button>
-                      <p className="mt-1 text-sm text-fg-tertiary">{t("proposalCostHint")}</p>
+                      {aiDraftEligible ? (
+                        <>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={hasUnsavedText || correctionBusy !== null}
+                            onClick={() => void propose(claimIndex)}
+                          >
+                            {correctionBusy === "propose" ? t("proposing") : t("propose")}
+                          </Button>
+                          <p className="mt-1 text-sm text-fg-tertiary">{t("proposalCostHint")}</p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-fg-secondary">{t("aiDraftOnly")}</p>
+                      )}
                     </div>
                   )}
                 {proposal?.reviewId === review.id &&
@@ -458,6 +525,94 @@ export function ClaimEvidence({
           review.claims[proposal.claimIndex]
         ) &&
         proposalView()}
+      <Advanced label={t("historyTitle")} className="mt-4" onOpenChange={setHistoryOpen}>
+        <p className="text-sm text-fg-secondary">{t("historyHint")}</p>
+        {historyLoading && historyRows.length === 0 && <Skeleton lines={2} className="mt-3" />}
+        {historyLoaded && !historyLoading && historyRows.length === 0 && !historyError && (
+          <EmptyState
+            title={t("historyEmpty")}
+            action={<span className="text-sm text-fg-secondary">{t("historyEmptyHint")}</span>}
+            className="mt-3"
+          />
+        )}
+        {historyRows.length > 0 && (
+          <ol className="mt-3 space-y-4">
+            {historyRows.map((entry) => (
+              <li key={entry.id} className="border-t border-border pt-3">
+                <p className="text-sm font-medium text-fg">
+                  {t("acceptedAt", { date: new Date(entry.acceptedAt).toLocaleString(locale) })}
+                </p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <h4 className="text-sm font-medium text-fg">{t("before")}</h4>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg-secondary">
+                      {entry.claim}
+                    </p>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-fg">{t("after")}</h4>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg">
+                      {entry.replacement}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm text-fg-secondary">{entry.reason}</p>
+                {entry.evidence.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-sm font-medium text-fg">{t("sourceResults")}</p>
+                    <ul className="mt-2 space-y-2">
+                      {entry.evidence.map((source) =>
+                        isHttpUrl(source.url) ? (
+                          <li key={`${source.url}:${source.snippet}`} className="text-sm">
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-accent underline"
+                            >
+                              {source.title || source.url}
+                            </a>
+                            <p className="mt-1 text-fg-secondary">{source.snippet}</p>
+                          </li>
+                        ) : null,
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+        {historyError && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {historyError}
+          </p>
+        )}
+        {historyError && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-3"
+            disabled={historyLoading}
+            onClick={() =>
+              void loadHistory(historyRows.length > 0 ? (historyNext ?? undefined) : undefined)
+            }
+          >
+            {t("retry")}
+          </Button>
+        )}
+        {historyNext && !historyError && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-3"
+            disabled={historyLoading}
+            onClick={() => void loadHistory(historyNext)}
+          >
+            {historyLoading ? t("historyLoading") : t("loadMore")}
+          </Button>
+        )}
+      </Advanced>
       {notice && (
         <p role="status" className="mt-3 text-sm text-fg-secondary">
           {notice}

@@ -18,6 +18,7 @@ const voidRequest = vi.mocked(apiVoid);
 const itemId = "62229ae6-231e-4c71-bcc6-ab34fb3194e4";
 const endpoint = `/api/content/${itemId}/claim-review`;
 const correctionEndpoint = `/api/content/${itemId}/claim-correction`;
+const historyEndpoint = `/api/content/${itemId}/claim-corrections`;
 const body = "Revenue grew by 12% in 2026.";
 
 function review(overrides: Record<string, unknown> = {}) {
@@ -61,6 +62,29 @@ function correction(overrides: Record<string, unknown> = {}) {
       { title: "Annual report", url: "https://example.org/report", snippet: "Revenue grew by 8%." },
     ],
     createdAt: "2026-09-25T00:00:04.000Z",
+    ...overrides,
+  };
+}
+
+function acceptedCorrection(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "72192d8f-59a2-4d3e-9084-54bc8595213d",
+    contentItemId: itemId,
+    reviewId: review().id,
+    fragmentVersionId: "035f7ee5-0c56-4dc9-a2d5-03e15e536f09",
+    claimIndex: 0,
+    sourceBodyHash: "a".repeat(64),
+    claim: body,
+    replacement: "Revenue grew by 8% in 2026.",
+    reason: "The annual report gives a different number.",
+    evidence: [
+      {
+        title: "Archived annual report",
+        url: "https://example.org/archive",
+        snippet: "Revenue grew by 8%.",
+      },
+    ],
+    acceptedAt: "2026-09-25T01:00:00.000Z",
     ...overrides,
   };
 }
@@ -257,6 +281,27 @@ describe("claim evidence", () => {
     expect(screen.getByText(en.ClaimEvidence.proposalCostHint)).toBeVisible();
   });
 
+  it("keeps evidence readable without offering paid correction for a manual draft", async () => {
+    const conflicting = review({
+      claims: [{ claim: body, outcome: "evidence_conflicts", evidence: correction().evidence }],
+    });
+    request.mockImplementation(async (path) => (path === correctionEndpoint ? null : conflicting));
+    await renderAsync(
+      <ClaimEvidence
+        itemId={itemId}
+        savedBody={body}
+        draftBody={body}
+        editable
+        aiDraftEligible={false}
+      />,
+    );
+    expect(await screen.findByText(en.ClaimEvidence.aiDraftOnly)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Annual report" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: en.ClaimEvidence.propose }),
+    ).not.toBeInTheDocument();
+  });
+
   it("stages a suggestion and accepts the saved-body change explicitly", async () => {
     const conflicting = review({
       claims: [{ claim: body, outcome: "evidence_conflicts", evidence: correction().evidence }],
@@ -416,5 +461,37 @@ describe("claim evidence", () => {
     expect(screen.getByRole("button", { name: en.ClaimEvidence.accept })).toBeEnabled();
     rerender(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
     expect(screen.queryByText(en.ClaimEvidence.formattingReset)).not.toBeInTheDocument();
+  });
+
+  it("loads accepted correction history only when opened and pages it once", async () => {
+    const cursor = "0de22e04-07c2-4f3e-bbb7-d3efbd828a20";
+    request.mockImplementation(async (path) => {
+      if (path === endpoint) return review();
+      if (path === correctionEndpoint) return null;
+      if (path === historyEndpoint) return { rows: [acceptedCorrection()], nextCursor: cursor };
+      if (path === `${historyEndpoint}?cursor=${cursor}`) {
+        return {
+          rows: [acceptedCorrection({ id: cursor, replacement: "A later correction." })],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    await renderAsync(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
+    expect(request.mock.calls.some(([path]) => path.startsWith(historyEndpoint))).toBe(false);
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.ClaimEvidence.historyTitle));
+    expect(await screen.findByText("Archived annual report")).toBeVisible();
+    expect(screen.getByText(acceptedCorrection().reason)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Archived annual report" })).toHaveAttribute(
+      "href",
+      "https://example.org/archive",
+    );
+    await user.click(screen.getByRole("button", { name: en.ClaimEvidence.loadMore }));
+    expect(await screen.findByText("A later correction.")).toBeVisible();
+    expect(request.mock.calls.filter(([path]) => path.startsWith(historyEndpoint))).toHaveLength(2);
+    await user.click(screen.getByText(en.ClaimEvidence.historyTitle));
+    await user.click(screen.getByText(en.ClaimEvidence.historyTitle));
+    expect(request.mock.calls.filter(([path]) => path.startsWith(historyEndpoint))).toHaveLength(2);
   });
 });
