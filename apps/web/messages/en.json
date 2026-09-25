@@ -313,6 +313,7 @@
     "commentsNotChecked": "Comments have not been checked yet.",
     "commentsEmpty": "No readable comments in this sample.",
     "commentsSample": "Saved sample of up to 50 text replies. Short and duplicate replies are skipped; authors are not stored. An older sample remains visible if a check fails.",
+    "privateCommentsNotice": "This member-only story uses the connected Telegram account to read its linked discussion. The account needs access to that discussion. Collection is manual; automatic collection and AI analysis are unavailable for private stories.",
     "analysisTitle": "Comment analysis",
     "analyzeComments": "Analyze sample",
     "analysisWorking": "Analyzing…",

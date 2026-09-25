@@ -502,6 +502,69 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .patch(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`)
       .send({ isActive: true })
       .expect(200);
+    const [privateItem] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId: ownerOrgId,
+        brandId: a.body.id,
+        sourceId: privateSource.id,
+        title: "Member-only story",
+        url: "https://t.me/c/123456/42",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!privateItem) throw new Error("Private story fixture was not inserted");
+    const privateComments = `/api/sources/items/${privateItem.id}/comments?brandId=${a.body.id}`;
+    const privateRefresh = `/api/sources/items/${privateItem.id}/comments/refresh?brandId=${a.body.id}`;
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    await other.get(privateComments).expect(404);
+    await owner
+      .get(`/api/sources/items/${privateItem.id}/comments?brandId=${b.body.id}`)
+      .expect(404);
+    expect((await owner.post(privateRefresh).expect(201)).body).toEqual({ queued: true });
+    await owner
+      .get(`/api/sources/items/${privateItem.id}/comment-analysis?brandId=${a.body.id}`)
+      .expect(409);
+    await owner
+      .post(`/api/sources/items/${privateItem.id}/comment-analysis?brandId=${a.body.id}`)
+      .expect(409);
+    await db.insert(schema.newsComments).values({
+      orgId: ownerOrgId,
+      brandId: a.body.id,
+      itemId: privateItem.id,
+      telegramMessageId: 1,
+      body: "Earlier member reply",
+      publishedAt: new Date(),
+    });
+    await db
+      .update(schema.newsItems)
+      .set({
+        commentsStatus: "available",
+        commentsSampleVersion: randomUUID(),
+        commentsCheckedAt: new Date(),
+      })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    await db
+      .update(schema.newsItems)
+      .set({ commentsStatus: "private" })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    await db
+      .update(schema.newsItems)
+      .set({ commentsStatus: "error" })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "replacement-session", connectedAt: new Date(Date.now() + 1_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, ownerOrgId));
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    await owner
+      .patch(`/api/sources/${privateSource.id}?brandId=${a.body.id}`)
+      .send({ isActive: false })
+      .expect(200);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    await owner.post(privateRefresh).expect(409);
     await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await other.get(`/api/sources/items?brandId=${a.body.id}`).expect(404);
     await other

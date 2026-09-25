@@ -424,16 +424,19 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     [id, describeError],
   );
 
+  const commentsSourceKind = sources?.find((source) => source.id === commentsItem?.sourceId)?.kind;
+
   useEffect(() => {
     if (!commentsItem) return;
+    const isPublicChannel = commentsSourceKind === "telegram";
     loadComments(commentsItem.id);
-    loadCommentAnalysis(commentsItem.id);
+    if (isPublicChannel) loadCommentAnalysis(commentsItem.id);
     const timer = window.setInterval(() => {
       loadComments(commentsItem.id);
-      loadCommentAnalysis(commentsItem.id);
+      if (isPublicChannel) loadCommentAnalysis(commentsItem.id);
     }, 15_000);
     return () => window.clearInterval(timer);
-  }, [commentsItem, loadComments, loadCommentAnalysis]);
+  }, [commentsItem, commentsSourceKind, loadComments, loadCommentAnalysis]);
 
   async function analyzeComments(itemId: string) {
     setAnalysisBusy(true);
@@ -624,6 +627,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const closeDelete = useCallback(() => setPendingDelete(null), []);
   const closeComments = useCallback(() => setCommentsItem(null), []);
   const activeCommentsItem = items?.find((item) => item.id === commentsItem?.id) ?? commentsItem;
+  const privateComments = commentsSourceKind === "telegram_private";
 
   async function createDraft() {
     if (!selectedItem || selectedChannels.size === 0) return;
@@ -1071,7 +1075,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                     </>
                   )}
                   {sources?.some(
-                    (source) => source.id === item.sourceId && source.kind === "telegram",
+                    (source) =>
+                      source.id === item.sourceId &&
+                      (source.kind === "telegram" || source.kind === "telegram_private"),
                   ) && (
                     <Button
                       variant="secondary"
@@ -1115,6 +1121,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         }
       >
         <p className="mb-3 text-sm text-fg-secondary">{activeCommentsItem?.title}</p>
+        {privateComments && (
+          <p className="mb-3 text-sm text-fg-secondary">{t("privateCommentsNotice")}</p>
+        )}
         {commentsError && (
           <p role="alert" className="mb-3 text-sm text-danger">
             {commentsError}
@@ -1164,70 +1173,74 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           activeCommentsItem?.commentsStatus !== "unavailable" && (
             <p className="mt-3 text-xs text-fg-secondary">{t("commentsSample")}</p>
           )}
-        <section aria-label={t("analysisTitle")} className="mt-6 border-t border-line pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
-            <div className="flex flex-wrap gap-2">
-              {activeCommentsItem &&
-                commentAnalysis &&
-                ["not_analyzed", "stale"].includes(
-                  commentAnalysis.current?.status ?? commentAnalysis.status,
-                ) && (
+        {!privateComments && (
+          <section aria-label={t("analysisTitle")} className="mt-6 border-t border-line pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
+              <div className="flex flex-wrap gap-2">
+                {activeCommentsItem &&
+                  commentAnalysis &&
+                  ["not_analyzed", "stale"].includes(
+                    commentAnalysis.current?.status ?? commentAnalysis.status,
+                  ) && (
+                    <Button
+                      size="sm"
+                      disabled={analysisBusy}
+                      onClick={() => analyzeComments(activeCommentsItem.id)}
+                    >
+                      {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
+                    </Button>
+                  )}
+                {activeCommentsItem && commentAnalysis && (
                   <Button
                     size="sm"
-                    disabled={analysisBusy}
-                    onClick={() => analyzeComments(activeCommentsItem.id)}
+                    variant="secondary"
+                    onClick={() => loadCommentAnalysis(activeCommentsItem.id)}
                   >
-                    {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
+                    {t("checkAnalysisResult")}
                   </Button>
                 )}
-              {activeCommentsItem && commentAnalysis && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => loadCommentAnalysis(activeCommentsItem.id)}
-                >
-                  {t("checkAnalysisResult")}
-                </Button>
-              )}
+              </div>
             </div>
-          </div>
-          {analysisError && (
-            <p role="alert" className="mt-2 text-sm text-danger">
-              {analysisError}
-            </p>
-          )}
-          {!commentAnalysis ? (
-            <Skeleton lines={2} />
-          ) : commentAnalysis.status === "ready" &&
-            (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
-            analysisResult(commentAnalysis)
-          ) : (
-            <p role="status" className="mt-2 text-sm text-fg-secondary">
-              {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
-            </p>
-          )}
-          {commentAnalysis?.current?.collectionStatus &&
-            ["error", "failed", "unavailable"].includes(commentAnalysis.current.collectionStatus) &&
-            commentAnalysis.current.status === "ready" && (
-              <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
+            {analysisError && (
+              <p role="alert" className="mt-2 text-sm text-danger">
+                {analysisError}
+              </p>
             )}
-          {commentAnalysis?.earlierAnalysis && (
-            <div className="mt-4 border-t border-line pt-4">
-              <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
-              {analysisResult(commentAnalysis.earlierAnalysis)}
-            </div>
-          )}
-          {commentAnalysis?.status === "no_key" && (
-            <Link
-              href={`/${locale}/settings`}
-              className="mt-2 inline-block text-sm text-accent underline"
-            >
-              {t("analysisSetupKey")}
-            </Link>
-          )}
-          <p className="mt-3 text-xs text-fg-secondary">{t("analysisDisclaimer")}</p>
-        </section>
+            {!commentAnalysis ? (
+              <Skeleton lines={2} />
+            ) : commentAnalysis.status === "ready" &&
+              (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
+              analysisResult(commentAnalysis)
+            ) : (
+              <p role="status" className="mt-2 text-sm text-fg-secondary">
+                {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
+              </p>
+            )}
+            {commentAnalysis?.current?.collectionStatus &&
+              ["error", "failed", "unavailable"].includes(
+                commentAnalysis.current.collectionStatus,
+              ) &&
+              commentAnalysis.current.status === "ready" && (
+                <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
+              )}
+            {commentAnalysis?.earlierAnalysis && (
+              <div className="mt-4 border-t border-line pt-4">
+                <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
+                {analysisResult(commentAnalysis.earlierAnalysis)}
+              </div>
+            )}
+            {commentAnalysis?.status === "no_key" && (
+              <Link
+                href={`/${locale}/settings`}
+                className="mt-2 inline-block text-sm text-accent underline"
+              >
+                {t("analysisSetupKey")}
+              </Link>
+            )}
+            <p className="mt-3 text-xs text-fg-secondary">{t("analysisDisclaimer")}</p>
+          </section>
+        )}
       </Modal>
 
       <Modal

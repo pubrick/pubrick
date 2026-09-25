@@ -364,6 +364,9 @@ bug-fix protocol). If you run `apps/web`'s vitest directly instead of via
 `pnpm test` (e.g. `pnpm exec vitest run`, or a single-file invocation), you
 MUST prefix it with `NODE_OPTIONS=--no-experimental-webstorage` — only the
 package's own `test` script sets that, and without it 8 tests fail on Node ≥24.
+Use the slice cadence in `CONTRIBUTING.md`: focused checks while building,
+one integrated local gate and combined review, and affected checks for minor
+follow-up fixes. Do not repeat the full suite or review after every small edit.
 
 ## Things Claude gets wrong
 

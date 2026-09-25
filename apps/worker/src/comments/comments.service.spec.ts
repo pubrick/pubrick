@@ -8,6 +8,7 @@ const item = {
   id: "item-1",
   orgId: "org-1",
   brandId: "brand-1",
+  sourceId: "source-1",
   url: "https://t.me/example_channel/42",
   sourceKind: "telegram",
 };
@@ -37,7 +38,7 @@ describe("CommentsService", () => {
     savePublication: vi.fn(),
     failPublication: vi.fn(),
   };
-  const telegram = { comments: vi.fn() };
+  const telegram = { comments: vi.fn(), commentsPrivate: vi.fn() };
   const service = new CommentsService(repo as never, telegram as never);
 
   beforeEach(() => {
@@ -122,6 +123,55 @@ describe("CommentsService", () => {
     expect(repo.session).toHaveBeenCalledWith("org-1");
     expect(telegram.comments).toHaveBeenCalledWith(item.url, "encrypted-session");
     expect(repo.save).toHaveBeenCalledWith("org-1", "item-1", item.url, sample);
+  });
+
+  it("uses the encrypted peer for a manual private story and never routes it through public lookup", async () => {
+    const privateItem = {
+      ...item,
+      sourceKind: "telegram_private",
+      url: "https://t.me/c/123456/42",
+      privatePeerEncrypted: "encrypted-peer",
+    };
+    const sample = { status: "available", comments: [] };
+    repo.item.mockResolvedValue(privateItem);
+    telegram.commentsPrivate.mockResolvedValue(sample);
+    await service.handle({ orgId: "org-1", itemId: "item-1" });
+    expect(telegram.commentsPrivate).toHaveBeenCalledWith(
+      privateItem.url,
+      "encrypted-peer",
+      "encrypted-session",
+    );
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.save).toHaveBeenCalledWith("org-1", "item-1", privateItem.url, sample, {
+      brandId: "brand-1",
+      sourceId: "source-1",
+      privatePeerEncrypted: "encrypted-peer",
+      sessionEncrypted: "encrypted-session",
+    });
+  });
+
+  it("clears a private sample when access is revoked", async () => {
+    repo.item.mockResolvedValue({
+      ...item,
+      sourceKind: "telegram_private",
+      url: "https://t.me/c/123456/42",
+      privatePeerEncrypted: "encrypted-peer",
+    });
+    telegram.commentsPrivate.mockRejectedValue(new TelegramSourceError("telegram_access_denied"));
+    await service.handle({ orgId: "org-1", itemId: "item-1" });
+    expect(repo.save).toHaveBeenCalledWith(
+      "org-1",
+      "item-1",
+      "https://t.me/c/123456/42",
+      { status: "private", comments: [] },
+      {
+        brandId: "brand-1",
+        sourceId: "source-1",
+        privatePeerEncrypted: "encrypted-peer",
+        sessionEncrypted: "encrypted-session",
+      },
+    );
+    expect(repo.fail).not.toHaveBeenCalled();
   });
 
   it("records only a safe code when a session is unavailable", async () => {

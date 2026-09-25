@@ -596,7 +596,12 @@ export class SourcesRepository {
     });
   }
 
-  private async requireTelegramItem(orgId: string, brandId: string, itemId: string) {
+  private async requireTelegramItem(
+    orgId: string,
+    brandId: string,
+    itemId: string,
+    allowPrivate = false,
+  ) {
     await this.requireBrand(orgId, brandId);
     const rows = await db
       .select({
@@ -623,18 +628,28 @@ export class SourcesRepository {
       .limit(1);
     const item = rows[0];
     if (!item) throw new NotFoundException("Story not found");
-    if (item.sourceKind !== "telegram")
+    if (item.sourceKind !== "telegram" && !(allowPrivate && item.sourceKind === "telegram_private"))
       throw new ConflictException("Comments are available for Telegram stories only");
     return item;
   }
 
   async comments(orgId: string, brandId: string, itemId: string) {
-    await this.requireTelegramItem(orgId, brandId, itemId);
-    return db
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
+    if (item.sourceKind === "telegram_private") {
+      if (
+        !item.sourceActive ||
+        !item.commentsSampleVersion ||
+        item.commentsStatus === "private" ||
+        item.commentsStatus === "unavailable"
+      )
+        return [];
+    }
+    const rows = await db
       .select({
         id: schema.newsComments.id,
         body: schema.newsComments.body,
         publishedAt: schema.newsComments.publishedAt,
+        createdAt: schema.newsComments.createdAt,
       })
       .from(schema.newsComments)
       .where(
@@ -646,10 +661,19 @@ export class SourcesRepository {
       )
       .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
       .limit(50);
+    if (item.sourceKind === "telegram_private") {
+      const [account] = await db
+        .select({ connectedAt: schema.telegramSourceAccounts.connectedAt })
+        .from(schema.telegramSourceAccounts)
+        .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+        .limit(1);
+      if (!account || rows.some((row) => row.createdAt < account.connectedAt)) return [];
+    }
+    return rows.map(({ createdAt: _createdAt, ...row }) => row);
   }
 
   async refreshComments(orgId: string, brandId: string, itemId: string) {
-    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
     if (!item.sourceActive)
       throw new ConflictException("Enable this source before collecting comments");
     if (item.commentsCheckedAt && Date.now() - item.commentsCheckedAt.getTime() < 15 * 60_000)

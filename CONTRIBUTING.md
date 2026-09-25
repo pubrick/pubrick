@@ -6,6 +6,13 @@ Humans and AI agents follow the same gates.
 
 `pnpm typecheck && pnpm lint && pnpm test` must pass. CI runs exactly these.
 
+Develop in coherent, reviewable slices. During a slice, run focused checks for
+the code being changed. After the slice is integrated, run the full local gate
+once and review the combined diff once before opening a PR. A small follow-up
+fix needs the affected checks; repeat the full gate only if the fix changes a
+shared contract or leaves a concrete integration risk. Let one CI run verify
+the final PR head instead of pushing every intermediate commit to trigger CI.
+
 ## Bug-fix protocol
 
 1. Write a failing test that reproduces the bug. Commit it first.

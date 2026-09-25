@@ -3,6 +3,7 @@ import {
   readChannel,
   readComments,
   readPrivateChannel,
+  readPrivateComments,
   resolveJoinedPrivateChannel,
 } from "./index.js";
 
@@ -10,6 +11,7 @@ const fake = vi.hoisted(() => ({
   importSession: vi.fn(),
   getChat: vi.fn(),
   getHistory: vi.fn(),
+  getMessages: vi.fn(),
   getDiscussionMessage: vi.fn(),
   call: vi.fn(),
   created: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock("@mtcute/node", () => ({
     importSession = fake.importSession;
     getChat = fake.getChat;
     getHistory = fake.getHistory;
+    getMessages = fake.getMessages;
     getDiscussionMessage = fake.getDiscussionMessage;
     call = fake.call;
     destroy = fake.destroy;
@@ -311,5 +314,113 @@ describe("Telegram discussion adapter", () => {
       "unavailable",
     );
     expect(fake.importSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("private Telegram discussion adapter", () => {
+  const input = {
+    apiId: 1,
+    apiHash: "hash",
+    session: "private",
+    peer: { channelId: 123456, accessHash: "987654321" },
+    url: "https://t.me/c/123456/42",
+  };
+  const peer = { _: "inputPeerChannel", channelId: 123456, accessHash: "987654321" };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    fake.importSession.mockResolvedValue(undefined);
+    fake.destroy.mockResolvedValue(undefined);
+    fake.getChat.mockResolvedValue({
+      chatType: "channel",
+      isMember: true,
+      isLikelyUnavailable: false,
+    });
+    fake.getMessages.mockResolvedValue([
+      {
+        id: 42,
+        isChannelPost: true,
+        isService: false,
+        isContentProtected: false,
+      },
+    ]);
+    fake.getDiscussionMessage.mockResolvedValue({
+      id: 100,
+      chat: { inputPeer: { _: "inputPeerChannel", channelId: 777 } },
+    });
+    fake.call.mockResolvedValue({
+      _: "messages.messages",
+      messages: [
+        { _: "message", id: 100, message: "Discussion root", date: 1 },
+        { _: "message", id: 101, message: "A useful and detailed response.", date: 2 },
+        { _: "message", id: 102, message: "A useful and detailed response!", date: 3 },
+        { _: "message", id: 103, message: "https://spam.example", date: 4 },
+        { _: "message", id: 104, message: "Protected response content", date: 5, noforwards: true },
+      ],
+    });
+  });
+
+  it("checks the exact member-only post before sampling its linked replies", async () => {
+    expect(await readPrivateComments(input)).toEqual({
+      status: "available",
+      comments: [
+        { messageId: 101, body: "A useful and detailed response.", publishedAt: new Date(2000) },
+      ],
+    });
+    expect(fake.getChat).toHaveBeenCalledWith(peer);
+    expect(fake.getMessages).toHaveBeenCalledWith(peer, [42]);
+    expect(fake.getDiscussionMessage).toHaveBeenCalledWith({ chatId: peer, message: 42 });
+    expect(fake.call).toHaveBeenCalledWith(
+      expect.objectContaining({ _: "messages.getReplies", msgId: 100, limit: 50 }),
+    );
+    expect(fake.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("refuses links from a different source before opening a session", async () => {
+    for (const url of [
+      "https://t.me/c/123457/42",
+      "https://t.me/c/123456/0",
+      "https://t.me/c/123456/42/extra",
+      "https://t.me/c/123456/42?thread=1",
+      "https://evil.example/c/123456/42",
+      "https://t.me/c/123456/9007199254740992",
+    ]) {
+      await expect(readPrivateComments({ ...input, url })).rejects.toThrow("unavailable");
+    }
+    expect(fake.importSession).not.toHaveBeenCalled();
+    expect(fake.getDiscussionMessage).not.toHaveBeenCalled();
+  });
+
+  it("never reads replies when membership or source post access is missing", async () => {
+    fake.getChat.mockResolvedValueOnce({ chatType: "channel", isMember: false });
+    expect(await readPrivateComments(input)).toEqual({ status: "private", comments: [] });
+    fake.getMessages.mockResolvedValueOnce([null]);
+    expect(await readPrivateComments(input)).toEqual({ status: "unavailable", comments: [] });
+    fake.getMessages.mockResolvedValueOnce([
+      { id: 42, isChannelPost: true, isContentProtected: true },
+    ]);
+    expect(await readPrivateComments(input)).toEqual({ status: "private", comments: [] });
+    expect(fake.getDiscussionMessage).not.toHaveBeenCalled();
+  });
+
+  it("maps provider access errors without exposing their details", async () => {
+    fake.getChat.mockRejectedValueOnce({ text: "CHANNEL_PRIVATE", secret: "do not show" });
+    expect(await readPrivateComments(input)).toEqual({ status: "private", comments: [] });
+    fake.getMessages.mockRejectedValueOnce({ text: "SERVER_ERROR", secret: "do not show" });
+    await expect(readPrivateComments(input)).rejects.toThrow("unavailable");
+  });
+
+  it("ends a stalled private discussion request at the 20-second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      fake.getDiscussionMessage.mockReturnValue(new Promise(() => undefined));
+      const reading = readPrivateComments(input);
+      const failure = expect(reading).rejects.toThrow("unavailable");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await failure;
+      expect(fake.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

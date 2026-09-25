@@ -233,39 +233,9 @@ export async function readComments(
     return await Promise.race([
       (async (): Promise<ChannelComments> => {
         await client.importSession(input.session);
-        const discussion = await client.getDiscussionMessage({
-          chatId: handle,
-          message: messageId,
-        });
-        if (!discussion) return { status: "unavailable", comments: [] };
-        const result = await client.call({
-          _: "messages.getReplies",
-          peer: discussion.chat.inputPeer,
-          msgId: discussion.id,
-          offsetId: 0,
-          offsetDate: 0,
-          addOffset: 0,
-          limit: 50,
-          maxId: 0,
-          minId: 0,
-          hash: Long.ZERO,
-        });
-        if (result._ === "messages.messagesNotModified") throw new Error("unavailable");
-        const seen = new Set<string>();
-        const comments = result.messages.flatMap((message): ChannelComment[] => {
-          if (message._ !== "message" || message.id === discussion.id || message.noforwards)
-            return [];
-          const body = message.message.replaceAll("\u0000", "").trim().slice(0, 4000);
-          if (body.length < 15 || /^https?:\/\/\S+$/i.test(body) || /^@\w+$/.test(body)) return [];
-          const normalized = body
-            .toLowerCase()
-            .replace(/[^\p{L}\p{N}]+/gu, " ")
-            .trim();
-          if (!normalized || seen.has(normalized)) return [];
-          seen.add(normalized);
-          return [{ messageId: message.id, body, publishedAt: new Date(message.date * 1000) }];
-        });
-        return { status: "available", comments };
+        return collectReplies(client, () =>
+          client.getDiscussionMessage({ chatId: handle, message: messageId }),
+        );
       })(),
       deadline,
     ]);
@@ -287,4 +257,119 @@ export async function readComments(
     clearTimeout(timer);
     await client.destroy().catch(() => undefined);
   }
+}
+
+/** Manual, member-only sampling for a post from the saved private channel peer. */
+export async function readPrivateComments(
+  input: Credentials & { session: string; peer: PrivateChannelPeer; url: string },
+): Promise<ChannelComments> {
+  const { channelId, accessHash } = input.peer;
+  if (!Number.isSafeInteger(channelId) || channelId < 1 || !/^-?\d+$/.test(accessHash))
+    throw new Error("unavailable");
+  let parsed: URL;
+  try {
+    parsed = new URL(input.url);
+  } catch {
+    throw new Error("unavailable");
+  }
+  const [, linkChannelId, rawMessageId] = parsed.pathname.slice(1).split("/");
+  const messageId = Number(rawMessageId);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "t.me" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    !/^\/c\/[1-9]\d*\/[1-9]\d*$/.test(parsed.pathname) ||
+    linkChannelId !== String(channelId) ||
+    !Number.isSafeInteger(messageId)
+  )
+    throw new Error("unavailable");
+
+  const client = createClient({ apiId: input.apiId, apiHash: input.apiHash });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void client.destroy().catch(() => undefined);
+      reject(new Error("unavailable"));
+    }, 20_000);
+  });
+  try {
+    return await Promise.race([
+      (async (): Promise<ChannelComments> => {
+        await client.importSession(input.session);
+        const peer = {
+          _: "inputPeerChannel" as const,
+          channelId,
+          accessHash: Long.fromString(accessHash),
+        };
+        const chat = await client.getChat(peer);
+        if (chat.chatType !== "channel" || !chat.isMember || chat.isLikelyUnavailable)
+          return { status: "private", comments: [] };
+        const [post] = await client.getMessages(peer, [messageId]);
+        if (!post || post.id !== messageId || !post.isChannelPost || post.isService)
+          return { status: "unavailable", comments: [] };
+        if (post.isContentProtected) return { status: "private", comments: [] };
+        return collectReplies(client, () =>
+          client.getDiscussionMessage({ chatId: peer, message: messageId }),
+        );
+      })(),
+      deadline,
+    ]);
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "text" in error ? String(error.text) : "";
+    if (
+      [
+        "CHANNEL_PRIVATE",
+        "CHAT_ADMIN_REQUIRED",
+        "PEER_ID_INVALID",
+        "USER_BANNED_IN_CHANNEL",
+        "AUTH_KEY_UNREGISTERED",
+        "SESSION_REVOKED",
+      ].includes(code)
+    )
+      return { status: "private", comments: [] };
+    if (code === "MSG_ID_INVALID") return { status: "unavailable", comments: [] };
+    throw new Error("unavailable");
+  } finally {
+    clearTimeout(timer);
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+async function collectReplies(
+  client: TelegramClient,
+  findDiscussion: () => ReturnType<TelegramClient["getDiscussionMessage"]>,
+): Promise<ChannelComments> {
+  const discussion = await findDiscussion();
+  if (!discussion) return { status: "unavailable", comments: [] };
+  const result = await client.call({
+    _: "messages.getReplies",
+    peer: discussion.chat.inputPeer,
+    msgId: discussion.id,
+    offsetId: 0,
+    offsetDate: 0,
+    addOffset: 0,
+    limit: 50,
+    maxId: 0,
+    minId: 0,
+    hash: Long.ZERO,
+  });
+  if (result._ === "messages.messagesNotModified") throw new Error("unavailable");
+  const seen = new Set<string>();
+  const comments = result.messages.slice(0, 50).flatMap((message): ChannelComment[] => {
+    if (message._ !== "message" || message.id === discussion.id || message.noforwards) return [];
+    const body = message.message.replaceAll("\u0000", "").trim().slice(0, 4000);
+    if (body.length < 15 || /^https?:\/\/\S+$/i.test(body) || /^@\w+$/.test(body)) return [];
+    const normalized = body
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+    if (!normalized || seen.has(normalized)) return [];
+    seen.add(normalized);
+    return [{ messageId: message.id, body, publishedAt: new Date(message.date * 1000) }];
+  });
+  return { status: "available", comments };
 }

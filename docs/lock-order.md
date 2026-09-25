@@ -126,6 +126,16 @@ locked. Opt-out therefore wins before a final write or waits for it; neither
 path can hold the config while waiting for a target that deletion already
 holds. The Telegram network read remains outside the transaction.
 
+Manual private Telegram reply completion takes `organization FOR KEY SHARE` →
+`telegram_source_accounts FOR UPDATE` → `brands FOR KEY SHARE` →
+`news_sources FOR UPDATE` → `news_items FOR UPDATE`. The account lock follows
+the organization's parent lock and precedes the brand/source/story chain;
+account replacement and disconnect take only the account tail after their
+member/login-attempt locks, while source pause takes only the source row. The
+worker compares the exact encrypted session and peer, active source and pending
+story under these locks before writing either a sample or an error. No MTProto
+call holds database locks.
+
 The new paid-reply admission function locks the organization `FOR NO KEY
 UPDATE` before the brand, then asks its caller to lock the live target chain
 and verify the saved sample version. Only then does it lock the organization
