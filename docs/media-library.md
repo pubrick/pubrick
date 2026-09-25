@@ -101,6 +101,19 @@ The result is not attached to any post. Review it and choose **Use** on an
 editable Telegram, VK, MAX, or Bluesky post before approval. No background generation is triggered
 by typing, opening the library, or approving a post.
 
+An editable draft also offers **Regenerate cover**. Its dialog prefills an
+editable prompt from the current generated asset's display name when available,
+or suggests one from the post title. Opening or editing the dialog does not
+call Gemini. Confirming makes one text-to-image request through the same Google
+key, organization-wide 12-calls-per-hour limit, lock and usage ledger as library
+generation. The new JPEG is saved as a separate brand asset before Pubrick
+tries to attach it. Attachment rechecks the post's organization, brand, editable
+status, partial Telegram recovery, supported channels and original cover under
+a row lock. If another editor has changed the cover, the new paid image stays
+in the library and the dialog shows it with a path to manual selection. The
+previous asset is never deleted. Approval and publication still require normal
+human review. Approved and archived posts refuse regeneration before billing.
+
 The compose screen and planned generation calendar also offer an unchecked
 **Generate a cover image** option for a generation run. It requires a saved
 Google key and checks the image-call budget at admission; the selected channels

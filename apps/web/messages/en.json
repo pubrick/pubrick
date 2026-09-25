@@ -871,7 +871,10 @@
     "openDecisionDraft": "Open draft",
     "removedDecisionDraft": "Draft removed",
     "loadMoreDecisions": "Load more",
-    "decisionVerdicts": { "approved": "Approved", "rejected": "Rejected" },
+    "decisionVerdicts": {
+      "approved": "Approved",
+      "rejected": "Rejected"
+    },
     "usageTitle": "Version {version}: pinned runs",
     "usageWindow": "Time window",
     "days": "Last {days} days",
@@ -1418,7 +1421,8 @@
     "publication_comments_unavailable": "Replies are unavailable for this Telegram publication.",
     "publication_comments_refresh_cooldown": "Replies were checked recently. Try collecting again in 15 minutes.",
     "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
-    "metrics_unavailable": "Automatic metrics are unavailable for this publication."
+    "metrics_unavailable": "Automatic metrics are unavailable for this publication.",
+    "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -1756,7 +1760,19 @@
     "cancelVariation": "Cancel variation",
     "image": "image",
     "reviewImage": "New image — review before choosing it",
-    "generateFailed": "Could not generate an image. Try again."
+    "generateFailed": "Could not generate an image. Try again.",
+    "regenerateCover": "Regenerate cover",
+    "coverRegenerateHint": "A click uses one Gemini image call. The new image stays in your media library even if this draft changes while it is generated.",
+    "coverPromptSuggestion": "Editorial cover image for {title}, without text, logos, or watermarks.",
+    "coverUntitled": "this post",
+    "coverNeedsGoogle": "Add a Google AI key in Settings before regenerating a cover.",
+    "coverRegenerateFailed": "Could not regenerate the cover.",
+    "newCover": "New cover",
+    "coverAttached": "The new cover is attached. Review it before approval.",
+    "coverConflict": "The draft changed while Gemini generated this image. The paid image is saved in your media library; review the latest draft and select it there if you still want it.",
+    "coverUnattached": "The image was saved in your media library, but could not be attached. Review the draft and select it manually if appropriate.",
+    "openLibrary": "Open media library",
+    "done": "Done"
   },
   "InlineImages": {
     "title": "Inline images",

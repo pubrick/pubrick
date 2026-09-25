@@ -871,7 +871,10 @@
     "openDecisionDraft": "Abrir rascunho",
     "removedDecisionDraft": "Rascunho removido",
     "loadMoreDecisions": "Carregar mais",
-    "decisionVerdicts": { "approved": "Aprovado", "rejected": "Rejeitado" },
+    "decisionVerdicts": {
+      "approved": "Aprovado",
+      "rejected": "Rejeitado"
+    },
     "usageTitle": "Versão {version}: execuções fixadas",
     "usageWindow": "Período",
     "days": "Últimos {days} dias",
@@ -1418,7 +1421,8 @@
     "publication_comments_unavailable": "As respostas estão indisponíveis para esta publicação do Telegram.",
     "publication_comments_refresh_cooldown": "As respostas foram recolhidas recentemente. Tente recolher novamente daqui a 15 minutos.",
     "metrics_refresh_cooldown": "Esta publicação foi consultada recentemente. Tente novamente em 15 minutos.",
-    "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação."
+    "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação.",
+    "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -1756,7 +1760,19 @@
     "cancelVariation": "Cancelar variação",
     "image": "imagem",
     "reviewImage": "Nova imagem: revise antes de escolher",
-    "generateFailed": "Não foi possível gerar a imagem. Tente novamente."
+    "generateFailed": "Não foi possível gerar a imagem. Tente novamente.",
+    "regenerateCover": "Regenerar capa",
+    "coverRegenerateHint": "Cada clique usa uma chamada de imagem do Gemini. A nova imagem permanece na biblioteca mesmo se o rascunho mudar durante a geração.",
+    "coverPromptSuggestion": "Imagem editorial de capa para {title}, sem texto, logotipos ou marcas d'água.",
+    "coverUntitled": "esta publicação",
+    "coverNeedsGoogle": "Adicione uma chave do Google AI nas Configurações antes de regenerar a capa.",
+    "coverRegenerateFailed": "Não foi possível regenerar a capa.",
+    "newCover": "Nova capa",
+    "coverAttached": "A nova capa foi anexada. Revise-a antes de aprovar.",
+    "coverConflict": "O rascunho mudou enquanto o Gemini gerava a imagem. A imagem paga foi salva na biblioteca; revise o rascunho e selecione-a lá se ainda quiser usá-la.",
+    "coverUnattached": "A imagem foi salva na biblioteca, mas não pôde ser anexada. Revise o rascunho e selecione-a manualmente se fizer sentido.",
+    "openLibrary": "Abrir biblioteca de mídia",
+    "done": "Concluído"
   },
   "InlineImages": {
     "title": "Imagens no texto",

@@ -871,7 +871,10 @@
     "openDecisionDraft": "Abrir borrador",
     "removedDecisionDraft": "Borrador eliminado",
     "loadMoreDecisions": "Cargar más",
-    "decisionVerdicts": { "approved": "Aprobado", "rejected": "Rechazado" },
+    "decisionVerdicts": {
+      "approved": "Aprobado",
+      "rejected": "Rechazado"
+    },
     "usageTitle": "Versión {version}: ejecuciones fijadas",
     "usageWindow": "Período",
     "days": "Últimos {days} días",
@@ -1418,7 +1421,8 @@
     "publication_comments_unavailable": "Las respuestas no están disponibles para esta publicación de Telegram.",
     "publication_comments_refresh_cooldown": "Las respuestas se comprobaron hace poco. Intenta recopilarlas de nuevo en 15 minutos.",
     "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",
-    "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación."
+    "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación.",
+    "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -1756,7 +1760,19 @@
     "cancelVariation": "Cancelar variación",
     "image": "imagen",
     "reviewImage": "Imagen nueva: revísala antes de elegirla",
-    "generateFailed": "No se pudo generar la imagen. Vuelve a intentarlo."
+    "generateFailed": "No se pudo generar la imagen. Vuelve a intentarlo.",
+    "regenerateCover": "Regenerar portada",
+    "coverRegenerateHint": "Cada clic usa una llamada de imagen de Gemini. La imagen nueva permanece en tu biblioteca incluso si el borrador cambia durante la generación.",
+    "coverPromptSuggestion": "Imagen editorial de portada para {title}, sin texto, logotipos ni marcas de agua.",
+    "coverUntitled": "esta publicación",
+    "coverNeedsGoogle": "Añade una clave de Google AI en Configuración antes de regenerar la portada.",
+    "coverRegenerateFailed": "No se pudo regenerar la portada.",
+    "newCover": "Nueva portada",
+    "coverAttached": "La nueva portada está adjunta. Revísala antes de aprobar.",
+    "coverConflict": "El borrador cambió mientras Gemini generaba la imagen. La imagen pagada se guardó en tu biblioteca; revisa el borrador y selecciónala allí si aún la quieres.",
+    "coverUnattached": "La imagen se guardó en tu biblioteca, pero no se pudo adjuntar. Revisa el borrador y selecciónala manualmente si corresponde.",
+    "openLibrary": "Abrir biblioteca multimedia",
+    "done": "Listo"
   },
   "InlineImages": {
     "title": "Imágenes intercaladas",
