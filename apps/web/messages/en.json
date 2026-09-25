@@ -733,11 +733,11 @@
     "saveError": "The feed could not be updated."
   },
   "Publish": {
-    "costReceiptTitle": "AI cost for this post",
+    "costReceiptTitle": "Recorded AI costs for this post",
     "costReceiptLoading": "Loading this post's AI costs…",
-    "costReceiptAtLeast": "≥ {amount} ({count, plural, one {# call unpriced} other {# calls unpriced}})",
-    "costReceiptPossibleFloor": "≥ {amount} (older accounting incomplete)",
-    "costReceiptApproximate": "≈ {amount}",
+    "costReceiptAtLeast": "{amount} recorded · unknown-cost calls: {count}",
+    "costReceiptApproximate": "≈ {amount} recorded",
+    "costReceiptRecorded": "{amount} recorded",
     "costReceiptEmpty": "No model calls are recorded for this post.",
     "costReceiptUnrecorded": "{count, plural, one {# call on this post could not be saved to the ledger} other {# calls on this post could not be saved to the ledger}}. The total is incomplete.",
     "costReceiptLegacy": "An older generation run has no lost-call count. Its total may be incomplete.",
@@ -746,7 +746,7 @@
     "costReceiptUnknown": "Cost unknown",
     "costReceiptNoCharge": "No recorded charge",
     "costReceiptRecent": "Showing the latest {shown} of {total} recorded calls.",
-    "costReceiptScope": "Includes this post's generation and direct AI edits. Topic planning and other posts are excluded. Costs use USD; estimates and unknown charges are marked.",
+    "costReceiptScope": "Shows attributable recorded calls only; a direct AI edit may be missing if its ledger write failed. Topic planning and other posts are excluded. USD estimates and unknown charges are marked.",
     "costReceiptError": "Could not load this post's AI costs.",
     "costReceiptRetry": "Retry",
     "richEditor": {

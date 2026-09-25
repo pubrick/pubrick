@@ -35,8 +35,11 @@ and direct editor calls with no run. A surviving run takes precedence if a row's
 post link disagrees. It excludes topic planning and sibling posts, which the
 reference endpoint could double-count by joining on a shared topic. The USD
 total covers all attributable ledger rows while the detail shows only the latest
-50; price-table estimates, unpriced calls, failed ledger writes, and legacy runs
-with unknown loss accounting remain explicit.
+50. Price-table estimates, unpriced calls, lost generation or claim-review
+ledger writes, and legacy runs with unknown loss accounting remain explicit.
+The figure is a subtotal of recorded calls, not a provider invoice: direct
+editor calls whose ledger write failed have no durable per-post loss marker and
+may be absent.
 
 News scores and AI topic suggestions remain advisory; an editor chooses and
 approves each topic before generation. The public RSS output is available for

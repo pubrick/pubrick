@@ -254,4 +254,32 @@ describe.skipIf(!url)("per-post AI cost receipt", () => {
     expect(receipt.summary).toEqual({ kind: "exact", usd: 0.055 });
     expect(receipt.legacyRuns).toBe(1);
   });
+
+  it("includes a lost claim-review call without claiming a zero-cost post", async () => {
+    const a = await actor();
+    const first = await post(a);
+    const sibling = await post(a);
+    await db.insert(schema.claimReviews).values([
+      {
+        orgId: a.orgId,
+        contentItemId: first,
+        bodyHash: "a".repeat(64),
+        unrecordedCalls: 1,
+      },
+      {
+        orgId: a.orgId,
+        contentItemId: sibling,
+        bodyHash: "b".repeat(64),
+        unrecordedCalls: 7,
+      },
+    ]);
+
+    const receipt = contentCostReceiptDtoSchema.parse(
+      (await a.visitor.get(`/api/content/${first}/cost`).expect(200)).body,
+    );
+    expect(receipt.summary).toEqual({ kind: "atLeast", usd: 0, unpricedCalls: 1 });
+    expect(receipt.unrecordedCalls).toBe(1);
+    expect(receipt.recordedCalls).toBe(0);
+    expect(receipt.calls).toEqual([]);
+  });
 });

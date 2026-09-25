@@ -14,8 +14,9 @@ export class ContentCostRepository {
     const d = schema.contentItems;
     const r = schema.pipelineRuns;
     const l = schema.usageLedger;
+    const q = schema.claimReviews;
     const [item] = await db
-      .select({ id: d.id })
+      .select({ id: d.id, brandId: d.brandId })
       .from(d)
       .where(and(eq(d.orgId, orgId), eq(d.id, contentItemId)))
       .limit(1);
@@ -24,17 +25,26 @@ export class ContentCostRepository {
     const linkedRuns = db
       .select({ id: r.id })
       .from(r)
-      .where(and(eq(r.orgId, orgId), eq(r.contentItemId, contentItemId)));
+      .where(
+        and(eq(r.orgId, orgId), eq(r.brandId, item.brandId), eq(r.contentItemId, contentItemId)),
+      );
     // A surviving run wins over a disagreeing item link, as in brand analytics.
     // The OR selects each physical row once if both keys identify this post.
     // Topic-level estimates are absent: one topic can make several posts.
     const attributed = and(
       eq(l.orgId, orgId),
-      or(and(eq(l.contentItemId, contentItemId), isNull(l.runId)), inArray(l.runId, linkedRuns)),
+      or(
+        and(
+          eq(l.contentItemId, contentItemId),
+          isNull(l.runId),
+          or(isNull(l.brandId), eq(l.brandId, item.brandId)),
+        ),
+        inArray(l.runId, linkedRuns),
+      ),
     );
     const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
     const unpriced = sql`not (${priced}) and (${l.inputTokens} + ${l.outputTokens} > 0 or ${l.outcome} is distinct from 'refused')`;
-    const [totals, losses, calls] = await Promise.all([
+    const [totals, losses, reviewLosses, calls] = await Promise.all([
       db
         .select({
           usd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
@@ -50,7 +60,13 @@ export class ContentCostRepository {
           legacyRuns: sql<string>`count(*) filter (where ${r.unrecordedCalls} is null)`,
         })
         .from(r)
-        .where(and(eq(r.orgId, orgId), eq(r.contentItemId, contentItemId))),
+        .where(
+          and(eq(r.orgId, orgId), eq(r.brandId, item.brandId), eq(r.contentItemId, contentItemId)),
+        ),
+      db
+        .select({ unrecordedCalls: sql<string>`coalesce(sum(${q.unrecordedCalls}), 0)` })
+        .from(q)
+        .where(and(eq(q.orgId, orgId), eq(q.contentItemId, contentItemId))),
       db
         .select({
           id: l.id,
@@ -71,7 +87,8 @@ export class ContentCostRepository {
         .limit(RECEIPT_CALL_LIMIT),
     ]);
 
-    const unrecordedCalls = Number(losses[0]?.unrecordedCalls ?? 0);
+    const unrecordedCalls =
+      Number(losses[0]?.unrecordedCalls ?? 0) + Number(reviewLosses[0]?.unrecordedCalls ?? 0);
     return {
       summary: summarizeCost({
         usd: Number(totals[0]?.usd ?? 0),

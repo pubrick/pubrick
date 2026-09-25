@@ -737,11 +737,11 @@
     "saveError": "Не удалось обновить RSS-ленту."
   },
   "Publish": {
-    "costReceiptTitle": "Затраты ИИ на этот материал",
+    "costReceiptTitle": "Учтённые затраты ИИ на этот материал",
     "costReceiptLoading": "Загружаем затраты ИИ на этот материал…",
-    "costReceiptAtLeast": "≥ {amount} ({count, plural, one {# вызов без цены} few {# вызова без цены} other {# вызовов без цены}})",
-    "costReceiptPossibleFloor": "≥ {amount} (учёт старых запусков неполный)",
-    "costReceiptApproximate": "≈ {amount}",
+    "costReceiptAtLeast": "Учтено {amount} · вызовов с неизвестной стоимостью: {count}",
+    "costReceiptApproximate": "Учтено примерно {amount}",
+    "costReceiptRecorded": "Учтено {amount}",
     "costReceiptEmpty": "Для этого материала нет записанных вызовов модели.",
     "costReceiptUnrecorded": "{count, plural, one {# вызов не удалось записать} few {# вызова не удалось записать} other {# вызовов не удалось записать}} в журнал. Сумма неполная.",
     "costReceiptLegacy": "У старого запуска нет счётчика пропущенных вызовов. Сумма может быть неполной.",
@@ -750,7 +750,7 @@
     "costReceiptUnknown": "Стоимость неизвестна",
     "costReceiptNoCharge": "Нет записанной стоимости",
     "costReceiptRecent": "Показаны последние {shown} из {total} записанных вызовов.",
-    "costReceiptScope": "Учтены генерация этого материала и прямые правки ИИ. Планирование тем и другие материалы исключены. Суммы в USD; оценки и неизвестные цены отмечены.",
+    "costReceiptScope": "Показаны только записанные вызовы, относящиеся к материалу; прямая правка ИИ может отсутствовать при сбое записи расхода. Планирование тем и другие материалы исключены. Оценки в USD и неизвестные суммы отмечены.",
     "costReceiptError": "Не удалось загрузить затраты ИИ для этого материала.",
     "costReceiptRetry": "Повторить",
     "richEditor": {

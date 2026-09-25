@@ -55,7 +55,7 @@ describe("post AI cost receipt", () => {
     expect(await screen.findByText(en.Publish.costReceiptUnknown)).toBeInTheDocument();
     expect(screen.getByText("Input 100 · output 20 tokens")).toBeInTheDocument();
     expect(screen.getByText(/attempt 2/)).toBeInTheDocument();
-    expect(screen.getByText(/≥ \$0\.003/)).toBeInTheDocument();
+    expect(screen.getByText("$0.003 recorded · unknown-cost calls: 1")).toBeInTheDocument();
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
@@ -86,7 +86,26 @@ describe("post AI cost receipt", () => {
     } as Response);
     render(<PostCostReceipt contentItemId={id} />);
     await userEvent.click(screen.getByText(en.Publish.costReceiptTitle));
-    expect(await screen.findByText(/≥ \$0\.004/)).toBeInTheDocument();
+    expect(await screen.findByText("$0.004 recorded")).toBeInTheDocument();
     expect(screen.getByText(en.Publish.costReceiptLegacy)).toBeInTheDocument();
+  });
+
+  it("keeps the estimate qualifier when an older run may have lost calls", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        summary: { kind: "approximate", usd: 0.004 },
+        recordedCalls: 1,
+        unrecordedCalls: 0,
+        legacyRuns: 1,
+        calls: [],
+      }),
+    } as Response);
+    render(<PostCostReceipt contentItemId={id} />);
+    await userEvent.click(screen.getByText(en.Publish.costReceiptTitle));
+    expect(await screen.findByText("≈ $0.004 recorded")).toBeInTheDocument();
+    expect(screen.getByText(en.Publish.costReceiptLegacy)).toBeInTheDocument();
+    expect(screen.queryByText(/≥/)).not.toBeInTheDocument();
   });
 });

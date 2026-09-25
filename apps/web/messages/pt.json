@@ -737,11 +737,11 @@
     "saveError": "Não foi possível atualizar o feed."
   },
   "Publish": {
-    "costReceiptTitle": "Custo de IA desta publicação",
+    "costReceiptTitle": "Custos de IA registrados desta publicação",
     "costReceiptLoading": "Carregando os custos de IA desta publicação…",
-    "costReceiptAtLeast": "≥ {amount} ({count, plural, one {# chamada sem preço} other {# chamadas sem preço}})",
-    "costReceiptPossibleFloor": "≥ {amount} (registro antigo incompleto)",
-    "costReceiptApproximate": "≈ {amount}",
+    "costReceiptAtLeast": "{amount} registrados · chamadas com custo desconhecido: {count}",
+    "costReceiptApproximate": "≈ {amount} registrados",
+    "costReceiptRecorded": "{amount} registrados",
     "costReceiptEmpty": "Não há chamadas de modelo registradas para esta publicação.",
     "costReceiptUnrecorded": "{count, plural, one {Não foi possível registrar # chamada} other {Não foi possível registrar # chamadas}} no histórico. O total está incompleto.",
     "costReceiptLegacy": "Uma execução antiga não tem contagem de chamadas perdidas. O total pode estar incompleto.",
@@ -750,7 +750,7 @@
     "costReceiptUnknown": "Custo desconhecido",
     "costReceiptNoCharge": "Sem cobrança registrada",
     "costReceiptRecent": "Exibindo as últimas {shown} de {total} chamadas registradas.",
-    "costReceiptScope": "Inclui a geração desta publicação e edições diretas com IA. Exclui o planejamento de temas e outras publicações. Valores em USD; estimativas e custos desconhecidos são marcados.",
+    "costReceiptScope": "Mostra apenas chamadas registradas atribuíveis; uma edição direta com IA pode faltar se o registro contábil falhou. O planejamento de temas e outras publicações são excluídos. Estimativas em USD e custos desconhecidos são indicados.",
     "costReceiptError": "Não foi possível carregar os custos de IA desta publicação.",
     "costReceiptRetry": "Tentar novamente",
     "richEditor": {

@@ -47,11 +47,9 @@ export function PostCostReceipt({ contentItemId }: { contentItemId: string }) {
   const cost = summary
     ? summary.kind === "atLeast"
       ? t("costReceiptAtLeast", { amount: known, count: summary.unpricedCalls })
-      : data && data.legacyRuns > 0
-        ? t("costReceiptPossibleFloor", { amount: known })
-        : summary.kind === "approximate"
-          ? t("costReceiptApproximate", { amount: known })
-          : known
+      : summary.kind === "approximate"
+        ? t("costReceiptApproximate", { amount: known })
+        : t("costReceiptRecorded", { amount: known })
     : null;
 
   return (
