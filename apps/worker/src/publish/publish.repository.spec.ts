@@ -1218,6 +1218,46 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(pubsAfterSecond).toHaveLength(1);
   });
 
+  it("markExhausted preserves an accepted Telegram photo as an unresolved partial delivery", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId, null);
+    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    expect(
+      await repo.markTelegramPhotoAccepted(orgId, adaptationId, claim, {
+        photoId: "4711",
+        photoUrl: "https://t.me/mychannel/4711",
+        followupText: "Frozen missing reply",
+        followupOutcome: "pending",
+      }),
+    ).toBe(true);
+
+    await service.markExhausted({ adaptationId, orgId });
+    const [adaptation] = await db
+      .select({
+        status: schema.adaptations.status,
+        failureReason: schema.adaptations.failureReason,
+        lastError: schema.adaptations.lastError,
+      })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    expect(adaptation).toMatchObject({
+      status: "failed",
+      failureReason: "outcome_unknown",
+      lastError: expect.stringContaining("accepted the cover"),
+    });
+    const receipts = await publicationsFor(adaptationId);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      status: "unknown",
+      partialPhotoId: "4711",
+      partialPhotoUrl: "https://t.me/mychannel/4711",
+      partialFollowupText: "Frozen missing reply",
+      partialFollowupOutcome: "pending",
+    });
+    await service.markExhausted({ adaptationId, orgId });
+    expect(await publicationsFor(adaptationId)).toHaveLength(1);
+  });
+
   /**
    * A channel of its own, for the tests that DELETE one. The shared fixtures
    * above are used by every other test in this file, so a delete of either

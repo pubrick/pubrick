@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -38,6 +38,35 @@ const COLUMNS = {
 @Injectable()
 export class MediaRepository {
   private readonly logger = new Logger(MediaRepository.name);
+
+  /** A live Telegram cover keeps the reviewed media frozen until recovery. */
+  private async requireNoPartialTelegram(
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+    orgId: string,
+    itemId: string,
+  ): Promise<void> {
+    const unresolved = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, itemId),
+          eq(schema.adaptations.status, "failed"),
+          sql`(select p.partial_followup_text from publications p
+                where p.adaptation_id = ${schema.adaptations.id} and p.status <> 'in_flight'
+                order by p.created_at desc limit 1) is not null`,
+        ),
+      )
+      .limit(1);
+    if (unresolved.length > 0) {
+      throw conflict(
+        "partial_telegram_unresolved",
+        "Resolve the partial Telegram post before changing its cover or video",
+      );
+    }
+  }
+
   async list(orgId: string, brandId: string, offset = 0) {
     await this.requireBrand(orgId, brandId);
     return db
@@ -325,6 +354,7 @@ export class MediaRepository {
           "This post is already approved or published; reject it before changing its cover",
         );
       }
+      await this.requireNoPartialTelegram(tx, orgId, itemId);
       if (mediaId) {
         const assets = await tx
           .select({
@@ -397,6 +427,7 @@ export class MediaRepository {
           "This post is already approved or published; reject it before changing its video",
         );
       }
+      await this.requireNoPartialTelegram(tx, orgId, itemId);
       if (mediaId) {
         const [asset] = await tx
           .select({ id: schema.mediaAssets.id, kind: schema.mediaAssets.kind })

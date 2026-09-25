@@ -134,20 +134,25 @@ describe("telegramPublisher.publish", () => {
     expect(caption + reply.text).toBe(text);
     expect(reply.reply_parameters).toEqual({
       message_id: 4711,
-      allow_sending_without_reply: true,
+      allow_sending_without_reply: false,
     });
     expect(reply.parse_mode).toBeUndefined();
     expect(result).toEqual({ externalId: "4711", externalUrl: "https://t.me/mychannel/4711" });
   });
 
-  it("stops as an unknown partial delivery when Telegram refuses the reply", async () => {
+  it("keeps the delivery partial if its photo disappeared before the reply", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(okMessage())))
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: false, error_code: 400, description: "reply refused" }), {
-          status: 400,
-        }),
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: message to be replied not found",
+          }),
+          { status: 400 },
+        ),
       );
     const error = await telegramPublisher
       .publish(
@@ -166,6 +171,11 @@ describe("telegramPublisher.publish", () => {
       ),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const reply = JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(reply.reply_parameters).toEqual({
+      message_id: 4711,
+      allow_sending_without_reply: false,
+    });
   });
 
   it("checkpoints the accepted photo before sending its reply and never sends when checkpointing fails", async () => {
