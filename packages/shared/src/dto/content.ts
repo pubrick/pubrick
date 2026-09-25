@@ -181,6 +181,10 @@ export function isOutstandingAdaptation(status: AdaptationStatus): boolean {
 export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknown"] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
+/** State of the required Telegram reply after its cover was accepted. */
+export const TELEGRAM_FOLLOWUP_OUTCOMES = ["pending", "not_sent", "rejected", "unknown"] as const;
+export type TelegramFollowupOutcome = (typeof TELEGRAM_FOLLOWUP_OUTCOMES)[number];
+
 /**
  * WHY A DELIVERY ENDED — `adaptations.failure_reason`, the CLASS of a failure
  * as opposed to the sentence about it.
@@ -639,6 +643,7 @@ export type ContentApprove = z.infer<typeof contentApproveSchema>;
  */
 export const deliveryAssertionSchema = z.object({
   delivered: z.boolean(),
+  partialResolution: z.enum(["completed", "removed"]).optional(),
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
 
@@ -663,7 +668,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * on every adaptation it returns, and the only field a screen needs in order to
  * label a delivery.
  *
- * Six of the seven values are the adaptation row's own `status`, forwarded:
+ * Six values are the adaptation row's own `status`, forwarded:
  *
  * - `pending` — created, not approved yet. Nothing has been sent.
  * - `scheduled` — approved for a future time; the queue holds the job until it.
@@ -674,7 +679,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * - `failed` — the attempt ended and NOTHING reached the platform. Safe to
  *   approve again: re-approving sends the post for the first time.
  *
- * The seventh has no column of its own and is the reason this field exists:
+ * Two outcomes have no adaptation column of their own:
  *
  * - `unknown` — the request may have left this process and never came back.
  *   The post may be live in the channel and nothing here can tell. It carries
@@ -682,19 +687,23 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  *   emphatically NOT `failed`: re-approving an unknown delivery can put a
  *   SECOND copy in someone's channel, so a human has to open the channel and
  *   look first.
+ * - `partial` — Telegram accepted the cover photo, but its required text reply
+ *   was not confirmed. The receipt holds the photo id/link and exact remaining
+ *   text. Re-approving before recovery would duplicate the photo.
  *
- * The adaptation column cannot hold that seventh value: `failed` is its only
+ * The adaptation column cannot hold those two values: `failed` is its only
  * terminal-and-not-published state, and the distinction lives one table over,
  * on the `publications` receipt the worker writes per attempt (`unknown`
  * there). The api joins the two — a `failed` adaptation whose most recent
- * finished receipt says `unknown` is reported here as `unknown` — so that a
+ * finished receipt says `unknown` is reported as `partial` when it has a
+ * confirmed cover checkpoint, and otherwise as `unknown` — so that a
  * browser never has to, and so the queue and the item screen cannot disagree.
  * The status is part of the pair on purpose: a re-approved adaptation is
  * `queued` again, and an older attempt's `unknown` receipt must not keep
  * describing the delivery that is currently in flight.
  *
  * DERIVED FROM `ADAPTATION_STATUSES` rather than spelled out beside it. "Six
- * of the seven values are the adaptation row's own status" IS the definition,
+ * of the eight values are the adaptation row's own status" IS the definition,
  * so a seventh adaptation status has to appear here — and the moment it does,
  * every `Record<DeliveryOutcome, …>` in the web is missing a key and stops
  * compiling, which is exactly where the decision about its color belongs.
@@ -702,7 +711,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * badge lookup would answer `undefined` for the new status and paint a badge
  * with `undefined` classes.
  */
-export const DELIVERY_OUTCOMES = [...ADAPTATION_STATUSES, "unknown"] as const;
+export const DELIVERY_OUTCOMES = [...ADAPTATION_STATUSES, "unknown", "partial"] as const;
 export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
 
 /** Is this string one of the outcomes? Guards a value read back off the wire. */
@@ -736,16 +745,17 @@ export const adaptationDtoSchema = z.strictObject({
   attemptCount: z.number().int().nonnegative(),
   lastError: z.string().nullable(),
   /**
-   * THE FOUR FIELDS THE DELIVERY RECEIPT CONTRIBUTES, all nullable, all of
+   * THE RECEIPT FIELDS THE DELIVERY CONTRIBUTES, all nullable, all of
    * them `ADAPTATION_COLUMNS` members like the rest of this schema.
    *
    * `failureReason` is the closed code the screens say a failure from, and
    * `lateBySeconds` the number its missed-slot sentence names; `assertedByName`
    * and `assertedAt` are whose word a delivery is when no platform answered for
-   * it. They are declared here for the reason the docstring above gives: a
+   * it. `partialTelegram` preserves the accepted cover and exact missing text.
+   * They are declared here for the reason the docstring above gives: a
    * field on this schema is a field the api MUST return, and one that stops
    * being selected fails a parse rather than arriving in a browser as
-   * `undefined` — which for these four is precisely how the screens go back to
+   * `undefined` — which for these fields is precisely how the screens go back to
    * printing a worker's English log line, or claiming a platform confirmation
    * nobody ever got.
    */
@@ -753,6 +763,15 @@ export const adaptationDtoSchema = z.strictObject({
   lateBySeconds: z.number().nullable(),
   externalUrl: z.string().nullable(),
   deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
+  partialTelegram: z
+    .object({
+      photoId: z.string().nullable(),
+      photoUrl: z.string().nullable(),
+      followupText: z.string(),
+      followupOutcome: z.enum(TELEGRAM_FOLLOWUP_OUTCOMES),
+    })
+    .nullable()
+    .default(null),
   assertedByName: z.string().nullable(),
   assertedAt: z.string().nullable(),
 });

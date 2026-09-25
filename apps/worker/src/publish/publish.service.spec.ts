@@ -5,8 +5,10 @@ import { schema } from "@pubrick/db";
 import {
   BLUESKY_REQUEST_TIMEOUT_MS,
   MASTODON_REQUEST_TIMEOUT_MS,
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
+  type PublishResult,
   TELEGRAM_REQUEST_TIMEOUT_MS,
   TransientPublishError,
   UnknownOutcomePublishError,
@@ -86,6 +88,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     // The claim it wrote, named by its own primary key — not a bare true. Every
     // later write of this attempt addresses that row through it.
     claimSend: vi.fn().mockResolvedValue(CLAIM),
+    markTelegramPhotoAccepted: vi.fn().mockResolvedValue(true),
     releaseSend: vi.fn().mockResolvedValue(true),
     markPublished: vi.fn().mockResolvedValue(undefined),
     markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
@@ -180,6 +183,64 @@ describe("PublishService.handle", () => {
         expect.anything(),
       );
       expect(repo.markPublished).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
+      else process.env.MEDIA_STORAGE_DIR = previous;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("checkpoints a live Telegram cover before the reply and records a terminal partial receipt", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-partial-"));
+    const previous = process.env.MEDIA_STORAGE_DIR;
+    process.env.MEDIA_STORAGE_DIR = directory;
+    const coverMediaId = "00000000-0000-4000-8000-000000000099";
+    try {
+      await writeFile(path.join(directory, `${coverMediaId}.jpg`), Buffer.from([0xff, 0xd8]));
+      const { repo } = fixture({ coverMediaId, itemBody: "x".repeat(1025) });
+      const primary = { externalId: "4711", externalUrl: "https://t.me/mychannel/4711" };
+      const publish = vi.fn(
+        async (
+          _credentials: unknown,
+          _input: unknown,
+          options: {
+            onTelegramPhotoAccepted: (accepted: PublishResult, followup: string) => Promise<void>;
+          },
+        ) => {
+          await options.onTelegramPhotoAccepted(primary, "x");
+          throw new PartialTelegramPublishError("reply refused", primary, "x", "rejected");
+        },
+      );
+      const service = new PublishService(
+        repo as never,
+        () => publisherStub(publish),
+        "https://api",
+      );
+      await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+      expect(repo.markTelegramPhotoAccepted).toHaveBeenCalledWith("o1", "a1", CLAIM, {
+        photoId: "4711",
+        photoUrl: "https://t.me/mychannel/4711",
+        followupText: "x",
+        followupOutcome: "pending",
+      });
+      expect(repo.markFailed).toHaveBeenCalledWith(
+        "o1",
+        "a1",
+        expect.stringContaining("reply refused"),
+        "outcome_unknown",
+        { status: "publishing", attemptCount: 1 },
+        "unknown",
+        CLAIM,
+        {
+          photoId: "4711",
+          photoUrl: "https://t.me/mychannel/4711",
+          followupText: "x",
+          followupOutcome: "rejected",
+        },
+      );
+      expect(repo.markPublished).not.toHaveBeenCalled();
+      expect(repo.releaseSend).not.toHaveBeenCalled();
+      expect(publish).toHaveBeenCalledTimes(1);
     } finally {
       if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR;
       else process.env.MEDIA_STORAGE_DIR = previous;

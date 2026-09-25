@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
 import {
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type PublishInput,
@@ -148,19 +149,44 @@ describe("telegramPublisher.publish", () => {
           status: 400,
         }),
       );
-    await expect(
-      telegramPublisher.publish(
+    const error = await telegramPublisher
+      .publish(
         CREDS,
         { text: "x".repeat(1025), image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
         { fetchImpl },
-      ),
-    ).rejects.toMatchObject({
-      name: "UnknownOutcomePublishError",
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PartialTelegramPublishError);
+    expect(error).toMatchObject({
+      primary: { externalId: "4711", externalUrl: "https://t.me/mychannel/4711" },
+      followup: "x",
+      followupOutcome: "rejected",
       message: expect.stringContaining(
         "Telegram accepted the photo at https://t.me/mychannel/4711",
       ),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("checkpoints the accepted photo before sending its reply and never sends when checkpointing fails", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const checkpoint = vi.fn(async () => {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      throw new Error("database unavailable");
+    });
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(1025), image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
+        { fetchImpl, onTelegramPhotoAccepted: checkpoint },
+      )
+      .catch((caught: unknown) => caught);
+    expect(checkpoint).toHaveBeenCalledWith(
+      { externalId: "4711", externalUrl: "https://t.me/mychannel/4711" },
+      "x",
+    );
+    expect(error).toMatchObject({ followupOutcome: "not_sent", followup: "x" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("does not send a reply when the accepted photo has no usable message ID", async () => {

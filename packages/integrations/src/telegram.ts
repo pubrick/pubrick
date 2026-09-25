@@ -1,6 +1,7 @@
 import { PLATFORM_MAX_TEXT_LENGTH, telegramPhotoParts } from "@pubrick/shared";
 import { z } from "zod";
 import {
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
@@ -440,12 +441,26 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       const primary = messageLink(await call<unknown>("sendPhoto", credentials, payload, options));
       if (parts.followup === null) return primary;
 
+      try {
+        await options?.onTelegramPhotoAccepted?.(primary, parts.followup);
+      } catch {
+        throw new PartialTelegramPublishError(
+          "Telegram accepted the photo, but its delivery checkpoint failed; the text reply was not sent.",
+          primary,
+          parts.followup,
+          "not_sent",
+        );
+      }
+
       // The photo is already live. A missing message ID means the reply cannot
       // be linked safely; stopping here is a partial delivery, never a retry.
       const primaryId = Number(primary.externalId);
       if (!primary.externalId || !Number.isSafeInteger(primaryId) || primaryId <= 0) {
-        throw new UnknownOutcomePublishError(
+        throw new PartialTelegramPublishError(
           "Telegram accepted the photo, but returned no usable message ID; the text reply was not sent. Check the channel before sending again.",
+          primary,
+          parts.followup,
+          "not_sent",
         );
       }
       try {
@@ -466,9 +481,14 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
         // on its terminal unknown/partial path so a queue retry cannot post a
         // second photo. call() has already redacted the bot token.
         const detail = error instanceof Error ? error.message : String(error);
-        throw new UnknownOutcomePublishError(
+        throw new PartialTelegramPublishError(
           `Telegram accepted the photo${primary.externalUrl ? ` at ${primary.externalUrl}` : ""}, ` +
             `but its text reply was not confirmed (${detail}). Check the channel before sending again.`,
+          primary,
+          parts.followup,
+          error instanceof PermanentPublishError || error instanceof TransientPublishError
+            ? "rejected"
+            : "unknown",
         );
       }
       return primary;

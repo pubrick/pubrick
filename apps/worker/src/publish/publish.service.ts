@@ -7,6 +7,7 @@ import {
   getPublisher,
   MASTODON_REQUEST_TIMEOUT_MS,
   MAX_REQUEST_TIMEOUT_MS,
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
@@ -27,6 +28,7 @@ import {
   type AttemptFence,
   ChannelNotFoundError,
   NoAutomaticCredentialsError,
+  type PartialTelegramDelivery,
   PublishRepository,
   type SendClaim,
 } from "./publish.repository";
@@ -589,6 +591,24 @@ export class PublishService {
         { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
         {
           baseUrl,
+          ...(adaptation.platform === "telegram" && image
+            ? {
+                onTelegramPhotoAccepted: async (primary: PublishResult, followup: string) => {
+                  const checkpointed = await this.repo.markTelegramPhotoAccepted(
+                    job.orgId,
+                    job.adaptationId,
+                    claim,
+                    {
+                      photoId: primary.externalId,
+                      photoUrl: primary.externalUrl,
+                      followupText: followup,
+                      followupOutcome: "pending",
+                    },
+                  );
+                  if (!checkpointed) throw new Error("The send claim is no longer active");
+                },
+              }
+            : {}),
         },
       );
     } catch (error) {
@@ -601,7 +621,23 @@ export class PublishService {
         // to look at the channel first. This is finding (a) — before, this
         // error did not exist and the case above it took the branch below,
         // where the rethrow is the second send.
-        await this.recordUnknownOutcome(job.orgId, job.adaptationId, message, fence, claim);
+        const partial: PartialTelegramDelivery | undefined =
+          error instanceof PartialTelegramPublishError
+            ? {
+                photoId: error.primary.externalId,
+                photoUrl: error.primary.externalUrl,
+                followupText: error.followup,
+                followupOutcome: error.followupOutcome,
+              }
+            : undefined;
+        await this.recordUnknownOutcome(
+          job.orgId,
+          job.adaptationId,
+          message,
+          fence,
+          claim,
+          partial,
+        );
         return;
       }
       if (error instanceof PermanentPublishError) {
@@ -849,6 +885,7 @@ export class PublishService {
     detail: string,
     fence: AttemptFence,
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<void> {
     const reason =
       "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
@@ -863,6 +900,7 @@ export class PublishService {
       fence,
       "unknown",
       claim,
+      partial,
     );
   }
 
@@ -994,18 +1032,30 @@ export class PublishService {
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<void> {
     try {
       if (
-        !(await this.repo.markFailed(
-          orgId,
-          adaptationId,
-          reason,
-          failureReason,
-          fence,
-          outcome,
-          claim,
-        ))
+        !(await (partial
+          ? this.repo.markFailed(
+              orgId,
+              adaptationId,
+              reason,
+              failureReason,
+              fence,
+              outcome,
+              claim,
+              partial,
+            )
+          : this.repo.markFailed(
+              orgId,
+              adaptationId,
+              reason,
+              failureReason,
+              fence,
+              outcome,
+              claim,
+            )))
       ) {
         // Not an error, and emphatically not something to retry or force: the
         // row moved out from under this attempt, which only the api does and

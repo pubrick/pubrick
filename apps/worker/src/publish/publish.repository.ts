@@ -187,7 +187,24 @@ type ClaimOutcome = {
   externalUrl: string | null;
   error: string | null;
   attempt: number;
+  partial?: PartialTelegramDelivery;
 };
+
+export type PartialTelegramDelivery = {
+  photoId: string | null;
+  photoUrl: string | null;
+  followupText: string;
+  followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+};
+
+function partialColumns(partial: PartialTelegramDelivery) {
+  return {
+    partialPhotoId: partial.photoId,
+    partialPhotoUrl: partial.photoUrl,
+    partialFollowupText: partial.followupText,
+    partialFollowupOutcome: partial.followupOutcome,
+  };
+}
 
 /**
  * THE CLAIM THIS ATTEMPT WROTE, named by its own primary key.
@@ -254,6 +271,15 @@ async function resolveClaim(
       externalUrl: outcome.externalUrl,
       error: outcome.error,
       attempt: outcome.attempt,
+      ...(outcome.partial ? partialColumns(outcome.partial) : {}),
+      ...(outcome.status === "published"
+        ? {
+            partialPhotoId: null,
+            partialPhotoUrl: null,
+            partialFollowupText: null,
+            partialFollowupOutcome: null,
+          }
+        : {}),
     })
     .where(
       and(
@@ -276,6 +302,7 @@ async function resolveClaim(
     externalUrl: outcome.externalUrl,
     error: outcome.error,
     attempt: outcome.attempt,
+    ...(outcome.partial ? partialColumns(outcome.partial) : {}),
   });
 }
 
@@ -786,6 +813,32 @@ export class PublishRepository {
     }
   }
 
+  /** Checkpoint the accepted cover before any reply request can leave this process. */
+  async markTelegramPhotoAccepted(
+    orgId: string,
+    adaptationId: string,
+    claim: SendClaim,
+    partial: PartialTelegramDelivery,
+  ): Promise<boolean> {
+    const rows = await db
+      .update(schema.publications)
+      .set(partialColumns(partial))
+      .where(
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.id, claim.id),
+          eq(schema.publications.status, "in_flight"),
+          sql`exists (
+            select 1 from adaptations a
+            where a.org_id = ${orgId} and a.id = ${adaptationId}
+              and a.status = 'publishing' and a.attempt_count = ${claim.attempt}
+          )`,
+        ),
+      )
+      .returning({ id: schema.publications.id });
+    return rows.length === 1;
+  }
+
   /**
    * Gives THIS ATTEMPT'S claim back, for the one ending where that is safe: the
    * platform (or the connect phase) told us the request was NOT delivered, so a
@@ -927,6 +980,10 @@ export class PublishRepository {
         externalUrl: result.externalUrl,
         error: null,
         attempt: claim.attempt,
+        partialPhotoId: null,
+        partialPhotoUrl: null,
+        partialFollowupText: null,
+        partialFollowupOutcome: null,
       })
       .where(
         and(
@@ -1010,6 +1067,7 @@ export class PublishRepository {
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
       const rows = await tx
@@ -1032,7 +1090,12 @@ export class PublishRepository {
         if (claim) {
           await tx
             .update(schema.publications)
-            .set({ status: outcome, error, attempt: claim.attempt })
+            .set({
+              status: outcome,
+              error,
+              attempt: claim.attempt,
+              ...(partial ? partialColumns(partial) : {}),
+            })
             .where(
               and(
                 eq(schema.publications.orgId, orgId),
@@ -1055,6 +1118,7 @@ export class PublishRepository {
           externalUrl: null,
           error,
           attempt: updated.attemptCount,
+          partial,
         },
         claim,
       );

@@ -5,6 +5,7 @@ export { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
 export { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
 export { sendTelegramNotification } from "./telegram-notification.js";
 export {
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
