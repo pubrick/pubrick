@@ -22,18 +22,22 @@ type WindowDays = 7 | 30 | 90;
 export function RoleTemplateOutcomes({
   templateRole,
   activeRevisionId,
+  refreshToken,
 }: {
   templateRole: PromptRole;
   activeRevisionId: string | null;
+  refreshToken: number;
 }) {
   const t = useTranslations("RoleTemplates");
   const tp = useTranslations("Prompts");
   const te = useTranslations("Errors");
   const locale = useLocale();
+  const [open, setOpen] = useState(false);
   const [brands, setBrands] = useState<BrandOption[] | null>(null);
   const [brandId, setBrandId] = useState("");
   const [days, setDays] = useState<WindowDays>(30);
   const [comparison, setComparison] = useState<RoleTemplateOutcomeComparisonDto | null>(null);
+  const [comparisonRefreshToken, setComparisonRefreshToken] = useState<number | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [brandError, setBrandError] = useState<string | null>(null);
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
@@ -41,12 +45,18 @@ export function RoleTemplateOutcomes({
   const [moreBusy, setMoreBusy] = useState(false);
   const brandSequence = useRef(0);
   const outcomeSequence = useRef(0);
+  const brandRequested = useRef(false);
+  const lastOutcomeKey = useRef<string | null>(null);
   const visible =
-    comparison?.brandId === brandId && comparison.role === templateRole && comparison.days === days
+    comparison?.brandId === brandId &&
+    comparison.role === templateRole &&
+    comparison.days === days &&
+    comparisonRefreshToken === refreshToken
       ? comparison
       : null;
 
   const loadBrands = useCallback(async () => {
+    brandRequested.current = true;
     const sequence = ++brandSequence.current;
     setBrandError(null);
     try {
@@ -64,43 +74,52 @@ export function RoleTemplateOutcomes({
   }, [t, te]);
 
   useEffect(() => {
-    void loadBrands();
+    if (open && !brandRequested.current) void loadBrands();
+  }, [open, loadBrands]);
+
+  useEffect(() => {
     return () => {
       brandSequence.current += 1;
+      outcomeSequence.current += 1;
     };
-  }, [loadBrands]);
+  }, []);
 
-  const loadOutcomes = useCallback(async () => {
-    const sequence = ++outcomeSequence.current;
-    setComparison(null);
-    setCursor(null);
-    setMoreError(null);
-    setMoreBusy(false);
-    if (!brandId) return;
-    setOutcomeError(null);
-    try {
-      const page = await api<RoleTemplateOutcomeComparisonDto>(
-        `/api/prompts/brands/${brandId}/${templateRole}/templates/outcomes?days=${days}`,
-      );
-      if (sequence !== outcomeSequence.current) return;
-      setComparison(page);
-      setCursor(page.nextCursor);
-    } catch (cause) {
-      if (sequence === outcomeSequence.current) {
-        setOutcomeError(errorMessage(cause, t("outcomesLoadError"), te));
+  const loadOutcomes = useCallback(
+    async (force = false) => {
+      if (!open || !brandId) return;
+      const key = `${brandId}:${templateRole}:${days}:${refreshToken}`;
+      if (!force && lastOutcomeKey.current === key) return;
+      lastOutcomeKey.current = key;
+      const sequence = ++outcomeSequence.current;
+      setComparison(null);
+      setComparisonRefreshToken(null);
+      setCursor(null);
+      setMoreError(null);
+      setMoreBusy(false);
+      setOutcomeError(null);
+      try {
+        const page = await api<RoleTemplateOutcomeComparisonDto>(
+          `/api/prompts/brands/${brandId}/${templateRole}/templates/outcomes?days=${days}`,
+        );
+        if (sequence !== outcomeSequence.current) return;
+        setComparison(page);
+        setComparisonRefreshToken(refreshToken);
+        setCursor(page.nextCursor);
+      } catch (cause) {
+        if (sequence === outcomeSequence.current) {
+          setOutcomeError(errorMessage(cause, t("outcomesLoadError"), te));
+        }
       }
-    }
-  }, [brandId, days, templateRole, t, te]);
+    },
+    [brandId, days, open, refreshToken, templateRole, t, te],
+  );
 
   useEffect(() => {
     void loadOutcomes();
-    return () => {
-      outcomeSequence.current += 1;
-    };
   }, [loadOutcomes]);
 
   async function loadMore() {
-    if (!brandId || cursor === null || moreBusy) return;
+    if (!open || !brandId || cursor === null || moreBusy) return;
     const sequence = outcomeSequence.current;
     setMoreBusy(true);
     setMoreError(null);
@@ -137,7 +156,7 @@ export function RoleTemplateOutcomes({
   const rows = visible ? [visible.default, ...visible.rows] : [];
 
   return (
-    <Advanced label={t("outcomesTitle")} className="mb-5">
+    <Advanced label={t("outcomesTitle")} className="mb-5" open={open} onOpenChange={setOpen}>
       <div className="space-y-4">
         <p className="text-sm text-fg-secondary">{t("outcomesCaveat")}</p>
         <div className="flex flex-wrap gap-4">
@@ -193,7 +212,7 @@ export function RoleTemplateOutcomes({
         {brands && brands.length > 0 && outcomeError && (
           <div role="alert" className="space-y-2 text-sm text-danger">
             <p>{outcomeError}</p>
-            <Button variant="secondary" size="sm" onClick={() => void loadOutcomes()}>
+            <Button variant="secondary" size="sm" onClick={() => void loadOutcomes(true)}>
               {t("outcomesRetry")}
             </Button>
           </div>

@@ -191,6 +191,8 @@ describe("role template editor", () => {
     render(<RoleTemplatesPage />);
     const user = userEvent.setup();
     await screen.findByLabelText(en.RoleTemplates.source);
+    expect(calls).not.toContain("/api/brands");
+    expect(calls.some((path) => path.includes("/templates/outcomes?"))).toBe(false);
     await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
     expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Built-in.*3.*2.*1/ })).toBeInTheDocument();
@@ -209,5 +211,70 @@ describe("role template editor", () => {
     expect(screen.queryByRole("row", { name: /Version 1.*7/ })).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(en.RoleTemplates.outcomesBrand), otherBrandId);
     expect(await screen.findByRole("row", { name: /Built-in.*5/ })).toBeInTheDocument();
+    const scanned = calls.filter((path) => path.includes("/templates/outcomes?")).length;
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    expect(calls.filter((path) => path.includes("/templates/outcomes?"))).toHaveLength(scanned);
+    expect(calls.filter((path) => path === "/api/brands")).toHaveLength(1);
+  });
+
+  it("refreshes the open outcome cohorts as soon as a new revision is saved", async () => {
+    let saved = false;
+    const outcomeCalls: string[] = [];
+    const created = {
+      id: revisionId,
+      role: "researcher",
+      version: 1,
+      source: "Plan a useful angle.",
+      sourceSha256: "a".repeat(64),
+      createdAt: "2026-09-25T00:00:00.000Z",
+    };
+    const defaultRow = {
+      kind: "default",
+      revisionId: null,
+      version: null,
+      runCount: 0,
+      succeededRuns: 0,
+      publishedRuns: 0,
+      currentItemStatuses: {},
+      withoutCurrentItem: 0,
+      reviewActs: { approved: 0, rejected: 0 },
+    };
+    vi.mocked(api).mockImplementation(async (path, init) => {
+      if (path === "/api/brands") return [{ id: brandId, name: "Example Brand" }];
+      if (path === "/api/prompts/templates") return [head];
+      if (path === "/api/prompts/researcher/templates/revisions" && !init)
+        return { rows: [], nextCursor: null };
+      if (path === "/api/prompts/researcher/templates/revisions" && init?.method === "POST") {
+        saved = true;
+        return created;
+      }
+      if (path === `/api/prompts/brands/${brandId}/researcher/templates/outcomes?days=30`) {
+        outcomeCalls.push(path);
+        return {
+          brandId,
+          role: "researcher",
+          days: 30,
+          activeRevisionId: null,
+          default: defaultRow,
+          rows: saved
+            ? [{ ...defaultRow, kind: "revision", revisionId, version: 1, runCount: 0 }]
+            : [],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`Unexpected API call ${path}`);
+    });
+    render(<RoleTemplatesPage />);
+    const user = userEvent.setup();
+    const source = await screen.findByLabelText(en.RoleTemplates.source);
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    expect(await screen.findByText(en.RoleTemplates.outcomesNoRevisions)).toBeInTheDocument();
+    expect(outcomeCalls).toHaveLength(1);
+    await user.clear(source);
+    await user.type(source, created.source);
+    await user.click(screen.getByRole("button", { name: en.RoleTemplates.saveDraft }));
+    expect(await screen.findByRole("row", { name: /Version 1.*0/ })).toBeInTheDocument();
+    expect(outcomeCalls).toHaveLength(2);
   });
 });

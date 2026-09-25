@@ -44,6 +44,7 @@ export default function RoleTemplatesPage() {
   const [moreBusy, setMoreBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [outcomeRefreshToken, setOutcomeRefreshToken] = useState(0);
   const requestSequence = useRef(0);
   const head = heads?.find((candidate) => candidate.role === role);
   const dirty = source !== baseline;
@@ -110,6 +111,7 @@ export default function RoleTemplatesPage() {
       setSource(created.source);
       setBaseline(created.source);
       setHistory((rows) => (rows === null ? [created] : [created, ...rows]));
+      setOutcomeRefreshToken((token) => token + 1);
       setNotice(t("saved", { version: created.version }));
     } catch (cause) {
       setError(errorMessage(cause, t("saveError"), te));
@@ -367,7 +369,11 @@ export default function RoleTemplatesPage() {
         )}
       </Advanced>
       {head && (
-        <RoleTemplateOutcomes templateRole={role} activeRevisionId={head.activeRevisionId} />
+        <RoleTemplateOutcomes
+          templateRole={role}
+          activeRevisionId={head.activeRevisionId}
+          refreshToken={outcomeRefreshToken}
+        />
       )}
       <Modal
         open={pendingRole !== null}

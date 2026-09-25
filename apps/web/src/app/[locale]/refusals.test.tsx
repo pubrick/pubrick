@@ -577,9 +577,12 @@ describe("role template outcomes", () => {
       }
       return undefined;
     });
-    render(<RoleTemplateOutcomes templateRole="researcher" activeRevisionId={null} />, {
-      locale: "es",
-    });
+    render(
+      <RoleTemplateOutcomes templateRole="researcher" activeRevisionId={null} refreshToken={0} />,
+      {
+        locale: "es",
+      },
+    );
     await userEvent.setup().click(screen.getByText(es.RoleTemplates.outcomesTitle));
     await expectShown(es.Errors.forbidden, sentence);
   });
