@@ -1,21 +1,24 @@
 "use client";
 
 import { type BrandOverviewDto, brandOverviewDtoSchema, formatUsd } from "@pubrick/shared";
+import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+import { ApiError, api, errorMessage } from "@/lib/api";
 
 export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30 | 90 }) {
   const t = useTranslations("Analytics");
+  const te = useTranslations("Errors");
   const locale = useLocale();
+  const router = useRouter();
   const [state, setState] = useState<{
     key: string;
     data: BrandOverviewDto | null;
-    error: boolean;
-  }>({ key: "", data: null, error: false });
+    error: string | null;
+  }>({ key: "", data: null, error: null });
   const [attempt, setAttempt] = useState(0);
   const key = `${brandId}:${days}:${attempt}`;
 
@@ -25,21 +28,34 @@ export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30
       .then((body) => {
         const parsed = brandOverviewDtoSchema.safeParse(body);
         if (active)
-          setState({ key, data: parsed.success ? parsed.data : null, error: !parsed.success });
+          setState({
+            key,
+            data: parsed.success ? parsed.data : null,
+            error: parsed.success ? null : t("overviewError"),
+          });
       })
-      .catch(() => {
-        if (active) setState({ key, data: null, error: true });
+      .catch((cause: unknown) => {
+        if (!active) return;
+        if (cause instanceof ApiError && cause.noActiveOrg) {
+          router.replace(`/${locale}/onboarding`);
+          return;
+        }
+        setState({ key, data: null, error: errorMessage(cause, t("overviewError"), te) });
       });
     return () => {
       active = false;
     };
-  }, [brandId, days, key]);
+  }, [brandId, days, key, locale, router, t, te]);
 
   const data = state.key === key ? state.data : null;
   const error = state.key === key && state.error;
   const number = (value: number) => value.toLocaleString(locale);
   const spend = data?.spend;
-  const missingCost = (spend?.unpricedCalls ?? 0) + (spend?.unrecordedCalls ?? 0);
+  const missingCost =
+    (spend?.unpricedCalls ?? 0) +
+    (spend?.unrecordedCalls ?? 0) +
+    (spend?.reviewUnrecordedCalls ?? 0) +
+    (spend?.legacyRuns ?? 0);
   const costLabel = spend
     ? missingCost > 0
       ? t("overviewCostFloor", { amount: formatUsd(spend.knownUsd) })
@@ -61,7 +77,7 @@ export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30
       {!data && !error && <Skeleton lines={4} />}
       {error && (
         <div role="alert" className="flex items-center gap-3 text-sm text-danger">
-          <span>{t("overviewError")}</span>
+          <span>{error}</span>
           <Button variant="secondary" className="min-h-11" onClick={() => setAttempt((n) => n + 1)}>
             {t("retry")}
           </Button>
@@ -136,6 +152,7 @@ export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30
                   estimated: number(data.spend.estimatedCalls),
                   unpriced: number(data.spend.unpricedCalls),
                   unrecorded: number(data.spend.unrecordedCalls),
+                  reviewUnrecorded: number(data.spend.reviewUnrecordedCalls),
                   legacy: number(data.spend.legacyRuns),
                 })}
               </p>

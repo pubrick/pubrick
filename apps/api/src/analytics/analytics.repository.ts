@@ -191,6 +191,14 @@ export class AnalyticsRepository {
           lt(r.createdAt, to),
         ),
       );
+    // Claim review usage losses are outside pipeline runs. The review's own
+    // creation time is the only durable window clock for a missing ledger row.
+    const q = schema.claimReviews;
+    const [reviewLoss] = await db
+      .select({ unrecordedCalls: sql<string>`coalesce(sum(${q.unrecordedCalls}), 0)` })
+      .from(q)
+      .innerJoin(d, and(eq(d.id, q.contentItemId), eq(d.orgId, orgId), eq(d.brandId, brandId)))
+      .where(and(eq(q.orgId, orgId), gte(q.createdAt, from), lt(q.createdAt, to)));
     return {
       days,
       from: from.toISOString(),
@@ -228,6 +236,7 @@ export class AnalyticsRepository {
         estimatedCalls: count(ledger?.estimatedCalls),
         unpricedCalls: count(ledger?.unpricedCalls),
         unrecordedCalls: count(runLoss?.unrecordedCalls),
+        reviewUnrecordedCalls: count(reviewLoss?.unrecordedCalls),
         legacyRuns: count(runLoss?.legacyRuns),
       },
     };
