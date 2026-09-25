@@ -161,6 +161,8 @@ describe.skipIf(!url)("auth e2e", () => {
       for (const role of [
         "admin",
         "owner",
+        "author",
+        "editor",
         "member,admin",
         ["member", "admin"],
         ["owner", "member"],
@@ -280,6 +282,52 @@ describe.skipIf(!url)("auth e2e", () => {
         .send({ email: fresh(), role: "admin", organizationId: orgId })
         .expect(200);
       expect(elevated.body.role).toBe("admin");
+    });
+
+    it("accepts author/editor invitations and lets only an owner change editorial roles", async () => {
+      const { db } = await import("./db");
+      let targetMemberId = "";
+      for (const role of ["author", "editor"]) {
+        const email = fresh();
+        const invitation = await owner
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role, organizationId: orgId })
+          .expect(200);
+        expect(invitation.body.role).toBe(role);
+        const invitee = request.agent(app.getHttpServer());
+        await invitee
+          .post("/api/auth/sign-up/email")
+          .send({ email, password: "password1234", name: role })
+          .expect(200);
+        await invitee
+          .post("/api/auth/organization/accept-invitation")
+          .send({ invitationId: invitation.body.id })
+          .expect(200);
+        const userId = (await invitee.get("/api/auth/get-session").expect(200)).body.user
+          .id as string;
+        const [membership] = await db
+          .select({ id: schema.member.id, role: schema.member.role })
+          .from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+        expect(membership?.role).toBe(role);
+        targetMemberId ||= membership?.id ?? "";
+      }
+
+      for (const role of ["editor", "author"]) {
+        await member
+          .post("/api/auth/organization/update-member-role")
+          .send({ memberId: targetMemberId, role, organizationId: orgId })
+          .expect(403);
+        await owner
+          .post("/api/auth/organization/update-member-role")
+          .send({ memberId: targetMemberId, role, organizationId: orgId })
+          .expect(200);
+        const [updated] = await db
+          .select({ role: schema.member.role })
+          .from(schema.member)
+          .where(eq(schema.member.id, targetMemberId));
+        expect(updated?.role).toBe(role);
+      }
     });
   });
 
