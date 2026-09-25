@@ -879,6 +879,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           </>
         }
       >
+        <p className="mb-3 text-sm text-fg-secondary">{tb("removeHint")}</p>
         <p className="mb-4 text-sm text-fg-secondary">
           {tb("removeConfirmHint", { name: brand?.name ?? "", id: id.slice(0, 8) })}
         </p>

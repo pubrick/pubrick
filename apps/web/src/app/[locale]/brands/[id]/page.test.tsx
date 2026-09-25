@@ -142,6 +142,10 @@ describe("brand removal", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.Brands.removeTitle }));
     const dialog = within(screen.getByRole("dialog", { name: en.Brands.removeTitle }));
+    expect(
+      dialog.getByText(/public RSS feed and Pubrick-hosted article links stop working/i),
+    ).toBeInTheDocument();
+    expect(dialog.getByText(/channels and saved credentials/i)).toBeInTheDocument();
     expect(dialog.getByText(/Acme \(ID b1\)/)).toBeInTheDocument();
     const confirm = dialog.getByRole("textbox", { name: "Brand name: Acme" });
     const remove = dialog.getByRole("button", { name: en.Brands.removeTitle });

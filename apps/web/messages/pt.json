@@ -114,7 +114,7 @@
     "analyticsLink": "Resultados",
     "accessLink": "Acesso da equipe",
     "removeTitle": "Remover marca",
-    "removeHint": "Remove permanentemente esta marca, suas fontes, tópicos, rascunhos, conhecimentos, mídias e tarefas agendadas. Publicações já enviadas a canais externos permanecem lá.",
+    "removeHint": "Remove permanentemente esta marca, seus canais e credenciais salvas, fontes, tópicos, rascunhos, conhecimentos, mídias e tarefas agendadas. O feed RSS público e os links de artigos hospedados no Pubrick deixarão de funcionar. Publicações já enviadas a canais externos permanecem lá.",
     "remove": "Remover",
     "removeCancel": "Cancelar",
     "removeConfirmHint": "Digite o nome exato para remover {name} (ID {id}). Esta ação não pode ser desfeita.",

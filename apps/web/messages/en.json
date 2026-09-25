@@ -114,7 +114,7 @@
     "analyticsLink": "Results",
     "accessLink": "Team access",
     "removeTitle": "Remove brand",
-    "removeHint": "Permanently removes this brand, its sources, topics, drafts, knowledge, media, and scheduled work. Posts already published on external channels remain there.",
+    "removeHint": "Permanently removes this brand, its channels and saved credentials, sources, topics, drafts, knowledge, media, and scheduled work. Its public RSS feed and Pubrick-hosted article links stop working. Posts already published on external channels remain there.",
     "remove": "Remove",
     "removeCancel": "Cancel",
     "removeConfirmHint": "Type the exact name to remove {name} (ID {id}). This cannot be undone.",
