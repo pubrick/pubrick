@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  doublePrecision,
   index,
   integer,
   pgTable,
@@ -49,6 +50,8 @@ export const contentItems = pgTable(
     coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
+    /** Editor's optional self-rating, not a verified quality or approval verdict. */
+    qualityScore: doublePrecision("quality_score"),
     /** Compare-and-swap token for whole-set inline image edits. */
     imagesRevision: integer("images_revision").default(0),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
@@ -81,6 +84,10 @@ export const contentItems = pgTable(
       .notNull(),
   },
   (t) => [
+    check(
+      "content_items_quality_score_check",
+      sql`${t.qualityScore} >= 0 AND ${t.qualityScore} <= 1`,
+    ),
     index("content_items_org_id_idx").on(t.orgId),
     index("content_items_brand_id_idx").on(t.brandId),
     uniqueIndex("content_items_org_brand_id_idx").on(t.orgId, t.brandId, t.id),

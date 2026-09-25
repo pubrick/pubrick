@@ -1,9 +1,12 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { HttpException, Injectable, Logger } from "@nestjs/common";
 import { schema, withImageCallLock } from "@pubrick/db";
 import {
   IMAGE_CALL_STEPS,
   MAX_IMAGE_CALLS_PER_HOUR,
+  type MediaCoverRegenerate,
+  type MediaCoverRegenerateResult,
   type MediaGenerate,
+  mediaAssetDtoSchema,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -27,7 +30,7 @@ export class MediaImageService {
     private readonly caller: GeminiImageCaller,
   ) {}
 
-  async generate(orgId: string, request: MediaGenerate) {
+  async generate(orgId: string, request: MediaGenerate, regeneration = false) {
     // All authorization, source reads and key checks precede the billed request.
     await this.media.requireBrand(orgId, request.brandId);
     const source = request.sourceMediaId
@@ -49,7 +52,7 @@ export class MediaImageService {
         throw conflict("media_generation_limit", "The hourly image generation limit is reached");
       }
       const result = await this.caller.call(credential.apiKey, request.prompt, source);
-      await this.record(orgId, result, !!source);
+      await this.record(orgId, result, regeneration || !!source);
       return result;
     });
     if (!locked.acquired) {
@@ -75,6 +78,47 @@ export class MediaImageService {
       // A provider can return malformed output even after billing for the call.
       this.logger.warn(`Could not store generated image for org ${orgId}: ${String(error)}`);
       throw conflict("media_generation_failed", "Gemini returned an image that could not be saved");
+    }
+  }
+
+  async regenerateCover(
+    orgId: string,
+    itemId: string,
+    request: MediaCoverRegenerate,
+  ): Promise<MediaCoverRegenerateResult> {
+    const { brandId } = await this.media.coverForRegeneration(
+      orgId,
+      itemId,
+      request.expectedCoverMediaId,
+    );
+    // The cover is a new text-to-image result, as in the legacy action. The
+    // existing generated asset and its bytes remain untouched.
+    const saved = await this.generate(orgId, { brandId, prompt: request.prompt }, true);
+    if (!saved) {
+      throw conflict("media_generation_failed", "The generated image could not be saved");
+    }
+    const asset = mediaAssetDtoSchema.parse({
+      ...saved,
+      createdAt: saved.createdAt.toISOString(),
+    });
+    try {
+      await this.media.attach(orgId, itemId, asset.id, request.expectedCoverMediaId);
+      return { asset, attached: true };
+    } catch (error) {
+      // The call is already billed. Return the preserved library asset so the
+      // editor can select it explicitly after resolving the changed draft.
+      if (error instanceof HttpException) {
+        const response = error.getResponse();
+        const code =
+          typeof response === "object" && response !== null && "code" in response
+            ? String(response.code)
+            : "media_cover_attach_failed";
+        return { asset, attached: false, reason: code };
+      }
+      this.logger.error(
+        `Could not attach paid image ${asset.id} to post ${itemId}: ${String(error)}`,
+      );
+      return { asset, attached: false, reason: "media_cover_attach_failed" };
     }
   }
 

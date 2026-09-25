@@ -16,9 +16,11 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import {
+  type MediaCoverRegenerate,
   type MediaCoverUpdate,
   type MediaGenerate,
   type MediaVideoUpdate,
+  mediaCoverRegenerateSchema,
   mediaCoverUpdateSchema,
   mediaGenerateSchema,
   mediaVideoUpdateSchema,
@@ -73,6 +75,12 @@ export class MediaController {
     return this.images.generate(orgId, body);
   }
 
+  @Get(":id")
+  @BrandScope({ kind: "resource", resource: "media" })
+  get(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.media.get(orgId, id);
+  }
+
   @Get(":id/file")
   @BrandScope({ kind: "resource", resource: "media" })
   async file(
@@ -108,6 +116,16 @@ export class MediaController {
     @Body(new ZodValidationPipe(mediaCoverUpdateSchema)) body: MediaCoverUpdate,
   ) {
     return this.media.attach(orgId, id, body.mediaId);
+  }
+
+  @Post("posts/:id/cover/regenerate")
+  @BrandScope({ kind: "resource", resource: "content" })
+  regenerateCover(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(mediaCoverRegenerateSchema)) body: MediaCoverRegenerate,
+  ) {
+    return this.images.regenerateCover(orgId, id, body);
   }
 
   @Patch("posts/:id/video")

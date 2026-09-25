@@ -123,6 +123,8 @@ export const API_ERROR_CODES = [
   "media_in_use",
   "media_video_pinned",
   "media_cover_pinned",
+  "media_cover_changed",
+  "media_cover_video_selected",
   "media_generation_limit",
   "media_generation_busy",
   "media_generation_failed",

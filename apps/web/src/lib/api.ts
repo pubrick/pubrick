@@ -128,6 +128,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   media_unavailable: "media_unavailable",
   media_in_use: "media_in_use",
   media_cover_pinned: "media_cover_pinned",
+  media_cover_changed: "media_cover_changed",
+  media_cover_video_selected: "media_cover_video_selected",
   media_video_pinned: "media_video_pinned",
   media_generation_limit: "media_generation_limit",
   media_generation_busy: "media_generation_busy",

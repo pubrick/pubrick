@@ -80,6 +80,9 @@ export const brandOverviewDtoSchema = z.object({
     total: z.number().int().nonnegative(),
     ai: z.number().int().nonnegative(),
     human: z.number().int().nonnegative(),
+    /** Average of scored drafts only; null when the period has no self-ratings. */
+    averageEditorScore: z.number().finite().min(0).max(1).nullable(),
+    scoredCount: z.number().int().nonnegative(),
     draft: z.number().int().nonnegative(),
     approved: z.number().int().nonnegative(),
     rejected: z.number().int().nonnegative(),

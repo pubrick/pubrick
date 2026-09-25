@@ -54,6 +54,7 @@ import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/pla
 import type { RunInput } from "@/lib/runs";
 import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
+import { CoverRegenerate } from "./cover-regenerate";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
@@ -263,6 +264,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [showMedia, setShowMedia] = useState(false);
+  const [mediaVersion, setMediaVersion] = useState(0);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
@@ -2653,13 +2655,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </li>
         ))}
       </ul>
-      <div className="mt-6">
+      <div className="mt-6 flex flex-wrap gap-2">
         <Button variant="secondary" onClick={() => setShowMedia((current) => !current)}>
           {item.coverMediaId || item.videoMediaId ? tm("selected") : tm("title")}
         </Button>
+        {["draft", "rejected", "failed"].includes(item.status) && !item.videoMediaId && (
+          <CoverRegenerate
+            itemId={item.id}
+            title={item.title}
+            coverMediaId={item.coverMediaId}
+            onChanged={() => {
+              setMediaVersion((version) => version + 1);
+              return reload();
+            }}
+            onOpenLibrary={() => {
+              setMediaVersion((version) => version + 1);
+              setShowMedia(true);
+            }}
+          />
+        )}
       </div>
       {showMedia && (
         <MediaLibrary
+          key={mediaVersion}
           brandId={item.brandId}
           itemId={item.id}
           selectedId={item.videoMediaId ?? item.coverMediaId}

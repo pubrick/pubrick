@@ -104,6 +104,7 @@ const ITEM_COLUMNS = {
   createdAt: schema.contentItems.createdAt,
   updatedAt: schema.contentItems.updatedAt,
   body: schema.contentItems.body,
+  qualityScore: schema.contentItems.qualityScore,
 };
 
 /**

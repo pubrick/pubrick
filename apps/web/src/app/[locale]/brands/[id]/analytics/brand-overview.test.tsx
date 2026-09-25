@@ -22,6 +22,8 @@ const overview = (days: 7 | 30 | 90, total = 1) => ({
     total,
     ai: total,
     human: 0,
+    averageEditorScore: null,
+    scoredCount: 0,
     draft: total,
     approved: 0,
     rejected: 0,
@@ -44,6 +46,20 @@ const overview = (days: 7 | 30 | 90, total = 1) => ({
 
 describe("brand activity overview", () => {
   beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows the average only for scored drafts and names it a self-rating", async () => {
+    const base = overview(30, 3);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      response({
+        ...base,
+        drafts: { ...base.drafts, averageEditorScore: 0.84, scoredCount: 2 },
+      }),
+    );
+    render(<BrandOverview brandId={brandId} days={30} />);
+    expect(
+      await screen.findByText("AI editor self-rating average: 84% (2 scored drafts)"),
+    ).toHaveAttribute("title", en.Analytics.overviewEditorScoreHint);
+  });
 
   it("loads a selected period and keeps unknown spend distinct from zero", async () => {
     let resolveFirst!: (value: Response) => void;

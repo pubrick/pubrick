@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -793,5 +794,234 @@ describe.skipIf(!url)("media library e2e", () => {
     expect(modelCall).toHaveBeenCalledTimes(1);
     release();
     expect((await first).status).toBe(201);
+  });
+
+  it("preflights cover regeneration scope, key, status, and budget before a paid call", async () => {
+    const owner = await agent();
+    const stranger = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Cover draft" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Cover channel",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const draft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A cover draft", channelIds: [channel.body.id] })
+      .expect(201);
+    const endpoint = `/api/media/posts/${draft.body.id}/cover/regenerate`;
+    const body = {
+      prompt: "An editorial photograph of a mountain at dawn",
+      expectedCoverMediaId: null,
+    };
+    await stranger.post(endpoint).send(body).expect(404);
+    await owner
+      .post(endpoint)
+      .send({ ...body, expectedCoverMediaId: randomUUID() })
+      .expect(409);
+    await owner.post(endpoint).send(body).expect(404);
+    const manual = await owner
+      .post("/api/channels")
+      .send({ brandId: brand.body.id, platform: "vc_ru", name: "Manual article" })
+      .expect(201);
+    const unsupportedDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "Manual article", channelIds: [manual.body.id] })
+      .expect(201);
+    const unsupported = await owner
+      .post(`/api/media/posts/${unsupportedDraft.body.id}/cover/regenerate`)
+      .send(body)
+      .expect(409);
+    expect(unsupported.body.code).toBe("content_media_unsupported");
+    expect(modelCall).not.toHaveBeenCalled();
+
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const [brandRow] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    await direct.db.insert(schema.usageLedger).values(
+      Array.from({ length: 12 }, () => ({
+        orgId: brandRow?.orgId ?? "",
+        step: "image_generate" as const,
+        provider: "google" as const,
+        modelId: "gemini-3.1-flash-image",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+      })),
+    );
+    const capped = await owner.post(endpoint).send(body).expect(409);
+    expect(capped.body.code).toBe("media_generation_limit");
+    expect(modelCall).not.toHaveBeenCalled();
+    await owner.post(`/api/content/${draft.body.id}/approve`).send({}).expect(200);
+    const pinned = await owner.post(endpoint).send(body).expect(409);
+    expect(pinned.body.code).toBe("media_cover_pinned");
+    const archiveDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A second cover draft", channelIds: [channel.body.id] })
+      .expect(201);
+    await owner.post(`/api/content/${archiveDraft.body.id}/archive`).expect(200);
+    const archived = await owner
+      .post(`/api/media/posts/${archiveDraft.body.id}/cover/regenerate`)
+      .send(body)
+      .expect(409);
+    expect(archived.body.code).toBe("content_archived");
+    const videoDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A video draft", channelIds: [channel.body.id] })
+      .expect(201);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "clip.mp4", contentType: "video/mp4" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${videoDraft.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    const videoBlocked = await owner
+      .post(`/api/media/posts/${videoDraft.body.id}/cover/regenerate`)
+      .send(body)
+      .expect(409);
+    expect(videoBlocked.body.code).toBe("media_cover_video_selected");
+    expect((await owner.get(`/api/content/${videoDraft.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: null,
+      videoMediaId: video.body.id,
+    });
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it("attaches one newly billed cover and preserves a concurrent edit as a library asset", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Regenerate cover" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Cover channel",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const draft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A cover draft", channelIds: [channel.body.id] })
+      .expect(201);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const endpoint = `/api/media/posts/${draft.body.id}/cover/regenerate`;
+    const first = await owner
+      .post(endpoint)
+      .send({ prompt: "A blue editorial cityscape at dusk", expectedCoverMediaId: null })
+      .expect(201);
+    expect(first.body.attached).toBe(true);
+    expect(first.body.asset.brandId).toBe(brand.body.id);
+    expect(mediaAssetDtoSchema.safeParse(first.body.asset).success).toBe(true);
+    expect((await owner.get(`/api/content/${draft.body.id}`).expect(200)).body.coverMediaId).toBe(
+      first.body.asset.id,
+    );
+    expect(modelCall).toHaveBeenCalledTimes(1);
+    expect(modelCall.mock.calls[0]?.[2]).toBeUndefined();
+
+    let entered!: () => void;
+    let release!: () => void;
+    const providerEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const providerMayFinish = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    modelCall.mockImplementationOnce(async () => {
+      entered();
+      await providerMayFinish;
+      return { bytes: generatedPng, mimeType: "image/png", outcome: "completed", responseMs: 1 };
+    });
+    const secondPending = owner
+      .post(endpoint)
+      .send({
+        prompt: "A red editorial cityscape at dawn",
+        expectedCoverMediaId: first.body.asset.id,
+      })
+      .then((response) => response);
+    await providerEntered;
+    const selected = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "editor-choice.png", contentType: "image/png" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${draft.body.id}/cover`)
+      .send({ mediaId: selected.body.id })
+      .expect(200);
+    release();
+    const second = await secondPending;
+    expect(second.status).toBe(201);
+    expect(second.body).toMatchObject({ attached: false, reason: "media_cover_changed" });
+    expect(second.body.asset.id).not.toBe(first.body.asset.id);
+    expect((await owner.get(`/api/content/${draft.body.id}`).expect(200)).body.coverMediaId).toBe(
+      selected.body.id,
+    );
+    await owner.get(`/api/media/${first.body.asset.id}/file`).expect(200);
+    await owner.get(`/api/media/${second.body.asset.id}/file`).expect(200);
+    const videoDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A video draft", channelIds: [channel.body.id] })
+      .expect(201);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "new-video.mp4", contentType: "video/mp4" })
+      .expect(201);
+    let videoEntered!: () => void;
+    let videoRelease!: () => void;
+    const videoProviderEntered = new Promise<void>((resolve) => {
+      videoEntered = resolve;
+    });
+    const videoProviderMayFinish = new Promise<void>((resolve) => {
+      videoRelease = resolve;
+    });
+    modelCall.mockImplementationOnce(async () => {
+      videoEntered();
+      await videoProviderMayFinish;
+      return { bytes: generatedPng, mimeType: "image/png", outcome: "completed", responseMs: 1 };
+    });
+    const videoPending = owner
+      .post(`/api/media/posts/${videoDraft.body.id}/cover/regenerate`)
+      .send({ prompt: "A cover for the video draft", expectedCoverMediaId: null })
+      .then((response) => response);
+    await videoProviderEntered;
+    await owner
+      .patch(`/api/media/posts/${videoDraft.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    videoRelease();
+    const videoResult = await videoPending;
+    expect(videoResult.status).toBe(201);
+    expect(videoResult.body).toMatchObject({
+      attached: false,
+      reason: "media_cover_video_selected",
+    });
+    expect((await owner.get(`/api/content/${videoDraft.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: null,
+      videoMediaId: video.body.id,
+    });
+    await owner.get(`/api/media/${videoResult.body.asset.id}/file`).expect(200);
+    const [brandRow] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    const ledger = await direct.db
+      .select()
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, brandRow?.orgId ?? ""));
+    expect(ledger.filter((row) => row.step === "image_regenerate")).toHaveLength(3);
+    expect(modelCall).toHaveBeenCalledTimes(3);
   });
 });

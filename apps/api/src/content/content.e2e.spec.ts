@@ -5029,6 +5029,48 @@ describe.skipIf(!url)("content e2e", () => {
     /** Long enough that its absence from a list row is unmistakable. */
     const CARD_BODY = "Nous ouvrons à sept heures et le café est déjà prêt.";
 
+    it("exposes a bounded advisory score only within the item's organization", async () => {
+      const owner = await orgAgent();
+      const stranger = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(owner);
+      const created = await owner
+        .post("/api/content")
+        .send({ brandId, body: CARD_BODY, channelIds: [channelId] })
+        .expect(201);
+      expect(created.body.qualityScore).toBeNull();
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.contentItems)
+          .set({ qualityScore: 0.84 })
+          .where(eq(schema.contentItems.id, created.body.id));
+        const card = contentListItemDtoSchema.parse(
+          (await owner.get("/api/content").expect(200)).body[0],
+        );
+        const detail = contentDetailDtoSchema.parse(
+          (await owner.get(`/api/content/${created.body.id}`).expect(200)).body,
+        );
+        expect(card.qualityScore).toBe(0.84);
+        expect(detail.qualityScore).toBe(0.84);
+        expect((await stranger.get("/api/content").expect(200)).body).toEqual([]);
+        await stranger.get(`/api/content/${created.body.id}`).expect(404);
+        await expect(
+          db.execute(
+            sql`UPDATE content_items SET quality_score = 1.01 WHERE id = ${created.body.id}`,
+          ),
+        ).rejects.toThrow();
+        await expect(
+          db.execute(
+            sql`UPDATE content_items SET quality_score = -0.01 WHERE id = ${created.body.id}`,
+          ),
+        ).rejects.toThrow();
+      } finally {
+        await pool.end();
+      }
+    });
+
     /**
      * The list row has no `body`; the item still does.
      *

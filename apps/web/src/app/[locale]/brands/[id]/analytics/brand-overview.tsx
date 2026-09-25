@@ -104,6 +104,14 @@ export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30
                   other: number(data.drafts.other),
                 })}
               </p>
+              {data.drafts.averageEditorScore !== null && (
+                <p className="mt-1 text-xs text-fg-tertiary" title={t("overviewEditorScoreHint")}>
+                  {t("overviewEditorScore", {
+                    score: Math.round(data.drafts.averageEditorScore * 100),
+                    count: number(data.drafts.scoredCount),
+                  })}
+                </p>
+              )}
             </Card>
             <Card>
               <p className="text-sm text-fg-secondary">{t("overviewRuns")}</p>

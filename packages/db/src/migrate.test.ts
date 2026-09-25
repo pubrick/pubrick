@@ -302,6 +302,7 @@ const NON_ENUM_CHECKS = [
   "media_assets_shape_check",
   "media_assets_byte_size_check",
   "content_items_one_media_check",
+  "content_items_quality_score_check",
   // 0064 stores article image positions and accessibility text outside the
   // plain-text body. API and public-feed tests exercise valid slot writes.
   "content_image_slots_paragraph_check",
@@ -1563,6 +1564,66 @@ describe.skipIf(!url)("runMigrations", () => {
       // why this is not simply `PINNED_COLUMNS.length` any more.
       expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length + NON_ENUM_CHECKS.length);
       expect(index.rows[0]?.indexdef).toContain("WHERE (status <> 'published'::text)");
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds nullable bounded editor ratings without rewriting historical drafts", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0091_advisory_editor_score");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let itemId: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('score_old', 'Old', 'score-old')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('score_old', 'Brand') RETURNING id",
+        );
+        const item = await pool.query<{ id: string }>(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('score_old', $1, 'Old draft') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        itemId = item.rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const column = await after.query(
+          "SELECT is_nullable, data_type FROM information_schema.columns WHERE table_name = 'content_items' AND column_name = 'quality_score'",
+        );
+        expect(column.rows[0]).toMatchObject({ is_nullable: "YES", data_type: "double precision" });
+        expect(
+          (
+            await after.query("SELECT body, quality_score FROM content_items WHERE id = $1", [
+              itemId,
+            ])
+          ).rows[0],
+        ).toMatchObject({ body: "Old draft", quality_score: null });
+        await after.query("UPDATE content_items SET quality_score = 0 WHERE id = $1", [itemId]);
+        await after.query("UPDATE content_items SET quality_score = 1 WHERE id = $1", [itemId]);
+        await refusal(after, "UPDATE content_items SET quality_score = -0.01 WHERE id = $1", [
+          itemId,
+        ]);
+        await refusal(after, "UPDATE content_items SET quality_score = 1.01 WHERE id = $1", [
+          itemId,
+        ]);
+        await refusal(after, "UPDATE content_items SET quality_score = 'NaN' WHERE id = $1", [
+          itemId,
+        ]);
+        await refusal(after, "UPDATE content_items SET quality_score = 'Infinity' WHERE id = $1", [
+          itemId,
+        ]);
+      } finally {
+        await after.end();
+      }
     } finally {
       await fs.rm(before, { recursive: true, force: true });
       await fresh.drop();

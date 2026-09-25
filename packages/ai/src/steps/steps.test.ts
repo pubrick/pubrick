@@ -387,6 +387,24 @@ describe("the editor", () => {
     expect(EDITOR.schema.safeParse({ body: "text", changes: [] }).success).toBe(true);
   });
 
+  it("keeps a bounded self-rating and drops malformed optional ratings", () => {
+    expect(
+      EDITOR.schema.parse({ body: "text", changes: [], qualityScore: 0.84 }).qualityScore,
+    ).toBe(0.84);
+    for (const qualityScore of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        EDITOR.schema.parse({ body: "text", changes: [], qualityScore }).qualityScore,
+      ).toBeUndefined();
+    }
+  });
+
+  it("keeps the paid edit when only its advisory rating is invalid", async () => {
+    const model = jsonModel(JSON.stringify({ body: "Usable edit.", changes: [], qualityScore: 2 }));
+    const output = await EDITOR.run(contextFor(model), { research, body: DRAFT_MARKER });
+    expect(output.body).toBe("Usable edit.");
+    expect(output.qualityScore).toBeUndefined();
+  });
+
   it("requires the change list to be present, because an absent one is not the same claim", () => {
     // An omitted `changes` would be stored as undefined and rendered to the
     // approving human as "the editor changed nothing" — a statement the model

@@ -366,6 +366,8 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         .body,
     );
     expect(overview.spend.unpricedCalls).toBe(3);
+    expect(overview.drafts.averageEditorScore).toBeNull();
+    expect(overview.drafts.scoredCount).toBe(0);
   });
 
   it("counts brand activity by event window without multiplying linked costs or leaking tenants", async () => {
@@ -383,6 +385,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
           brandId: brand.body.id,
           body: "Current",
           origin: "ai",
+          qualityScore: 0.8,
           status: "approved",
           createdAt: daysAgo(2),
         },
@@ -390,10 +393,17 @@ describe.skipIf(!url)("publication analytics e2e", () => {
           orgId: owner.orgId,
           brandId: brand.body.id,
           body: "Old",
+          qualityScore: 0.6,
           status: "draft",
           createdAt: daysAgo(40),
         },
-        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling", createdAt: daysAgo(2) },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          body: "Sibling",
+          qualityScore: 1,
+          createdAt: daysAgo(2),
+        },
       ])
       .returning({ id: schema.contentItems.id });
     if (!item || !oldItem || !siblingItem) throw new Error("Missing overview item");
@@ -575,6 +585,8 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       (await owner.agent.get(`${path}?days=7`).expect(200)).body,
     );
     expect(week.drafts).toMatchObject({ total: 1, ai: 1, approved: 1 });
+    expect(week.drafts.scoredCount).toBe(1);
+    expect(week.drafts.averageEditorScore).toBeCloseTo(0.8);
     expect(week.runs).toMatchObject({ total: 1, succeeded: 1 });
     expect(week.decisions).toEqual({ approved: 1, rejected: 1 });
     expect(week.publications).toMatchObject({
@@ -594,21 +606,26 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       (await owner.agent.get(`${path}?days=30`).expect(200)).body,
     );
     expect(month.runs).toMatchObject({ total: 2, failed: 1 });
+    expect(month.drafts.scoredCount).toBe(1);
     expect(month.spend.legacyRuns).toBe(1);
     const quarter = brandOverviewDtoSchema.parse(
       (await owner.agent.get(`${path}?days=90`).expect(200)).body,
     );
     expect(quarter.drafts.total).toBe(2);
+    expect(quarter.drafts.scoredCount).toBe(2);
+    expect(quarter.drafts.averageEditorScore).toBeCloseTo(0.7);
     expect(quarter.decisions.approved).toBe(2);
     expect(quarter.publications.total).toBe(2);
     expect(quarter.spend.reviewUnrecordedCalls).toBe(8);
-    expect(
+    const siblingOverview = brandOverviewDtoSchema.parse(
       (
         await owner.agent
           .get(`/api/analytics/brands/${sibling.body.id}/overview?days=30`)
           .expect(200)
-      ).body.spend.knownUsd,
-    ).toBe(5);
+      ).body,
+    );
+    expect(siblingOverview.spend.knownUsd).toBe(5);
+    expect(siblingOverview.drafts.averageEditorScore).toBe(1);
   });
 
   it("lists at most 50 attributable calls in stable order without exposing other brands or deleted links", async () => {

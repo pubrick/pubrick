@@ -831,6 +831,7 @@ export const contentListItemDtoSchema = z.strictObject({
   status: z.enum(CONTENT_STATUSES),
   origin: z.enum(CONTENT_ORIGINS),
   bodyIsAiVerbatim: z.boolean(),
+  qualityScore: z.number().finite().min(0).max(1).nullable(),
   adaptations: z.array(adaptationListDtoSchema),
   createdAt: z.string(),
   updatedAt: z.string(),

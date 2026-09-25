@@ -554,6 +554,8 @@
     "filterLabel": "Status",
     "filterAll": "Todos",
     "untitled": "(sem título)",
+    "qualityScore": "Autoavaliação do editor {score}%",
+    "qualityScoreHint": "Autoavaliação consultiva do editor de IA ao gerar o rascunho. Não é atualizada após edições nem mede a precisão factual.",
     "status": {
       "draft": "Rascunho",
       "approved": "Aprovado",
@@ -871,7 +873,10 @@
     "openDecisionDraft": "Abrir rascunho",
     "removedDecisionDraft": "Rascunho removido",
     "loadMoreDecisions": "Carregar mais",
-    "decisionVerdicts": { "approved": "Aprovado", "rejected": "Rejeitado" },
+    "decisionVerdicts": {
+      "approved": "Aprovado",
+      "rejected": "Rejeitado"
+    },
     "usageTitle": "Versão {version}: execuções fixadas",
     "usageWindow": "Período",
     "days": "Últimos {days} dias",
@@ -1418,7 +1423,9 @@
     "publication_comments_unavailable": "As respostas estão indisponíveis para esta publicação do Telegram.",
     "publication_comments_refresh_cooldown": "As respostas foram recolhidas recentemente. Tente recolher novamente daqui a 15 minutos.",
     "metrics_refresh_cooldown": "Esta publicação foi consultada recentemente. Tente novamente em 15 minutos.",
-    "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação."
+    "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação.",
+    "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la.",
+    "media_cover_video_selected": "Remova o vídeo selecionado antes de regenerar a capa."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -1756,7 +1763,19 @@
     "cancelVariation": "Cancelar variação",
     "image": "imagem",
     "reviewImage": "Nova imagem: revise antes de escolher",
-    "generateFailed": "Não foi possível gerar a imagem. Tente novamente."
+    "generateFailed": "Não foi possível gerar a imagem. Tente novamente.",
+    "regenerateCover": "Regenerar capa",
+    "coverRegenerateHint": "Cada clique usa uma chamada de imagem do Gemini. A nova imagem permanece na biblioteca mesmo se o rascunho mudar durante a geração.",
+    "coverPromptSuggestion": "Imagem editorial de capa para {title}, sem texto, logotipos ou marcas d'água.",
+    "coverUntitled": "esta publicação",
+    "coverNeedsGoogle": "Adicione uma chave do Google AI nas Configurações antes de regenerar a capa.",
+    "coverRegenerateFailed": "Não foi possível regenerar a capa.",
+    "newCover": "Nova capa",
+    "coverAttached": "A nova capa foi anexada. Revise-a antes de aprovar.",
+    "coverConflict": "O rascunho mudou enquanto o Gemini gerava a imagem. A imagem paga foi salva na biblioteca; revise o rascunho e selecione-a lá se ainda quiser usá-la.",
+    "coverUnattached": "A imagem foi salva na biblioteca, mas não pôde ser anexada. Revise o rascunho e selecione-a manualmente se fizer sentido.",
+    "openLibrary": "Abrir biblioteca de mídia",
+    "done": "Concluído"
   },
   "InlineImages": {
     "title": "Imagens no texto",
@@ -1833,6 +1852,8 @@
     "overviewError": "Não foi possível carregar o resumo da atividade.",
     "overviewDrafts": "Rascunhos criados",
     "overviewDraftDetail": "{ai} IA · {human} humanos. Estado atual: {draft} rascunhos, {approved} aprovados, {rejected} rejeitados, {published} publicados, {other} outros.",
+    "overviewEditorScore": "Média da autoavaliação do editor de IA: {score}% ({count, plural, one {# rascunho avaliado} other {# rascunhos avaliados}})",
+    "overviewEditorScoreHint": "Média das autoavaliações do modelo editor ao gerar rascunhos no período. Exclui notas ausentes. Não mede a precisão factual nem as edições posteriores.",
     "overviewRuns": "Gerações criadas",
     "overviewRunDetail": "{success} concluídas · {failed} falhadas · {active} ativas · {cancelled} canceladas",
     "overviewDecisions": "Decisões humanas",

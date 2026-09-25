@@ -51,3 +51,18 @@ export const mediaGenerateSchema = z.strictObject({
   sourceMediaId: z.uuid().optional(),
 });
 export type MediaGenerate = z.infer<typeof mediaGenerateSchema>;
+
+/** A paid cover call may finish after someone else has changed the draft. */
+export const mediaCoverRegenerateSchema = z.strictObject({
+  prompt: z.string().trim().min(8).max(2000),
+  expectedCoverMediaId: z.uuid().nullable(),
+});
+export type MediaCoverRegenerate = z.infer<typeof mediaCoverRegenerateSchema>;
+
+export const mediaCoverRegenerateResultSchema = z.strictObject({
+  asset: mediaAssetDtoSchema,
+  attached: z.boolean(),
+  /** Set when the paid asset remains in the library for manual selection. */
+  reason: z.string().optional(),
+});
+export type MediaCoverRegenerateResult = z.infer<typeof mediaCoverRegenerateResultSchema>;
