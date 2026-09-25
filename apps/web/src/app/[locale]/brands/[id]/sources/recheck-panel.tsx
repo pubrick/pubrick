@@ -15,6 +15,10 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 
+function isActive(status: NewsRecheckBatch["status"] | null | undefined) {
+  return status === "queued" || status === "running" || status === "halting";
+}
+
 export function RecheckPanel({ brandId, onFinished }: { brandId: string; onFinished: () => void }) {
   const t = useTranslations("Sources");
   const te = useTranslations("Errors");
@@ -36,13 +40,7 @@ export function RecheckPanel({ brandId, onFinished }: { brandId: string; onFinis
     const { batch: next } = await api<{ batch: NewsRecheckBatch | null }>(
       `/api/sources/items/recheck?brandId=${brandId}`,
     );
-    if (
-      (priorStatus.current === "queued" || priorStatus.current === "running") &&
-      next &&
-      next.status !== "queued" &&
-      next.status !== "running"
-    )
-      onFinished();
+    if (isActive(priorStatus.current) && next && !isActive(next.status)) onFinished();
     priorStatus.current = next?.status ?? null;
     setBatch(next);
   }, [brandId, onFinished]);
@@ -53,7 +51,7 @@ export function RecheckPanel({ brandId, onFinished }: { brandId: string; onFinis
   }, [canManage, loadBatch, t]);
 
   useEffect(() => {
-    if (!canManage || !batch || (batch.status !== "queued" && batch.status !== "running")) return;
+    if (!canManage || !isActive(batch?.status)) return;
     const timer = window.setInterval(() => {
       void loadBatch().catch(() => setError(t("recheckLoadError")));
     }, 5000);
@@ -80,7 +78,7 @@ export function RecheckPanel({ brandId, onFinished }: { brandId: string; onFinis
   }, [brandId, days, open, t, te]);
 
   if (!canManage) return null;
-  const active = batch?.status === "queued" || batch?.status === "running";
+  const active = isActive(batch?.status);
 
   async function start() {
     if (!preview || preview.eligible === 0) return;

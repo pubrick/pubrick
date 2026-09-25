@@ -2760,6 +2760,43 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("rejects a paid relevance batch with another organization's brand", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('recheck_fk_a', 'A', 'recheck-fk-a'), ('recheck_fk_b', 'B', 'recheck-fk-b')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('recheck_fk_a', 'A brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id as string;
+        const inserted = await pool.query<{ id: string }>(
+          "INSERT INTO news_relevance_batches (org_id, brand_id, days, selected_count) VALUES ('recheck_fk_a', $1, 7, 1) RETURNING id",
+          [brandId],
+        );
+        expect(inserted.rows).toHaveLength(1);
+        await expect(
+          pool.query(
+            "INSERT INTO news_relevance_batches (org_id, brand_id, days, selected_count) VALUES ('recheck_fk_b', $1, 7, 1)",
+            [brandId],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query("UPDATE news_relevance_batches SET org_id = 'recheck_fk_b' WHERE id = $1", [
+            inserted.rows[0]?.id,
+          ]),
+        ).rejects.toMatchObject({ code: "23503" });
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
   it("keeps historical image revisions null while defaulting new posts to zero", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0064_amusing_unus");

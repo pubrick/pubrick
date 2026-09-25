@@ -90,4 +90,20 @@ describe("paid relevance recheck panel", () => {
     expect(screen.queryByText(en.Sources.recheckAdvanced)).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("keeps a stopping batch visible and blocks another paid admission", async () => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "owner" }] },
+      isPending: false,
+    } as never);
+    vi.mocked(fetch).mockResolvedValue(
+      response({ batch: { ...batch, status: "halting", processedCount: 1, failedCount: 1 } }),
+    );
+    await renderAsync(
+      <RecheckPanel brandId="7c5d37a7-fde5-4118-a5a1-2272a3e88e4a" onFinished={vi.fn()} />,
+    );
+    expect(await screen.findByText(en.Sources.recheckStatus_halting)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByText(en.Sources.recheckAdvanced));
+    expect(screen.getByRole("button", { name: en.Sources.recheck })).toBeDisabled();
+  });
 });

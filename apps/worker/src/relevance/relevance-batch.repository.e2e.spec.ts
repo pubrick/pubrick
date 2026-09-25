@@ -1,3 +1,4 @@
+import { KNOWLEDGE_EMBEDDING_DIMENSIONS, KNOWLEDGE_EMBEDDING_MODEL } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { and, eq } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
@@ -45,7 +46,7 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
     const items = await db
       .insert(schema.newsItems)
       .values(
-        [1, 2, 3, 4].map((n) => ({
+        [1, 2, 3, 4, 5].map((n) => ({
           orgId,
           brandId: brand.id,
           sourceId: source.id,
@@ -56,6 +57,13 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
           relevanceReason: "Old verdict",
           relevanceUrgency: "timely" as const,
           relevanceScoredAt: new Date(),
+          ...(n === 2
+            ? {
+                embedding: Array(KNOWLEDGE_EMBEDDING_DIMENSIONS).fill(0.01),
+                embeddingModel: KNOWLEDGE_EMBEDDING_MODEL,
+                embeddingDimensions: KNOWLEDGE_EMBEDDING_DIMENSIONS,
+              }
+            : {}),
         })),
       )
       .returning({ id: schema.newsItems.id });
@@ -141,15 +149,25 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
     expect(
       (
         await db
-          .select({ score: schema.newsItems.relevanceScore })
+          .select({
+            score: schema.newsItems.relevanceScore,
+            embedding: schema.newsItems.embedding,
+            embeddingModel: schema.newsItems.embeddingModel,
+            embeddingDimensions: schema.newsItems.embeddingDimensions,
+          })
           .from(schema.newsItems)
           .where(eq(schema.newsItems.id, second))
-      )[0]?.score,
-    ).toBe(0.4);
+      )[0],
+    ).toMatchObject({
+      score: 0.4,
+      embedding: Array(KNOWLEDGE_EMBEDDING_DIMENSIONS).fill(0.01),
+      embeddingModel: KNOWLEDGE_EMBEDDING_MODEL,
+      embeddingDimensions: KNOWLEDGE_EMBEDDING_DIMENSIONS,
+    });
 
     const [halted] = await db
       .insert(schema.relevanceBatches)
-      .values({ orgId, brandId: brand.id, days: 7, selectedCount: 2 })
+      .values({ orgId, brandId: brand.id, days: 7, selectedCount: 3 })
       .returning({ id: schema.relevanceBatches.id });
     if (!halted) throw new Error("second batch fixture");
     await db.insert(schema.relevanceBatchItems).values(
@@ -162,14 +180,16 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
     );
     const third = items[2]?.id as string;
     const fourth = items[3]?.id as string;
+    const fifth = items[4]?.id as string;
     await repo.claimBatch(orgId, brand.id, halted.id, third);
+    await repo.claimBatch(orgId, brand.id, halted.id, fourth);
     await repo.finishBatch(orgId, brand.id, halted.id, third, {
       kind: "failed",
       code: "invalid_key",
       halt: true,
     });
-    expect(await repo.claimBatch(orgId, brand.id, halted.id, fourth)).toBeNull();
-    const [stopped] = await db
+    expect(await repo.claimBatch(orgId, brand.id, halted.id, fifth)).toBeNull();
+    const [stopping] = await db
       .select({
         status: schema.relevanceBatches.status,
         processed: schema.relevanceBatches.processedCount,
@@ -181,13 +201,88 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
       .where(
         and(eq(schema.relevanceBatches.orgId, orgId), eq(schema.relevanceBatches.id, halted.id)),
       );
-    expect(stopped).toEqual({
-      status: "halted",
+    expect(stopping).toEqual({
+      status: "halting",
       processed: 2,
       failed: 1,
       skipped: 1,
       code: "invalid_key",
     });
+    await expect(
+      db
+        .insert(schema.relevanceBatches)
+        .values({ orgId, brandId: brand.id, days: 7, selectedCount: 1 }),
+    ).rejects.toThrow();
+    await repo.finishBatch(orgId, brand.id, halted.id, fourth, {
+      kind: "scored",
+      score: 0.8,
+      reason: "Already running",
+      urgency: "timely",
+      feedbackDelta: 0,
+    });
+    const [stopped] = await db
+      .select({
+        status: schema.relevanceBatches.status,
+        processed: schema.relevanceBatches.processedCount,
+        updated: schema.relevanceBatches.updatedCount,
+        code: schema.relevanceBatches.errorCode,
+      })
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, halted.id));
+    expect(stopped).toMatchObject({
+      status: "halted",
+      processed: 3,
+      updated: 1,
+      code: "invalid_key",
+    });
+
+    const [racing] = await db
+      .insert(schema.relevanceBatches)
+      .values({ orgId, brandId: brand.id, days: 7, selectedCount: 1 })
+      .returning({ id: schema.relevanceBatches.id });
+    if (!racing) throw new Error("racing batch fixture");
+    await db
+      .insert(schema.relevanceBatchItems)
+      .values({ orgId, brandId: brand.id, batchId: racing.id, itemId: fifth });
+    let unlock!: () => void;
+    let locked!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    const acquired = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const stop = db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.relevanceBatches.id })
+        .from(schema.relevanceBatches)
+        .where(eq(schema.relevanceBatches.id, racing.id))
+        .for("update");
+      await tx
+        .update(schema.relevanceBatchItems)
+        .set({ status: "skipped", completedAt: new Date() })
+        .where(eq(schema.relevanceBatchItems.batchId, racing.id));
+      await tx
+        .update(schema.relevanceBatches)
+        .set({ status: "halted", processedCount: 1, skippedCount: 1, completedAt: new Date() })
+        .where(eq(schema.relevanceBatches.id, racing.id));
+      locked();
+      await gate;
+    });
+    await acquired;
+    let claimSettled = false;
+    const claim = repo.claimBatch(orgId, brand.id, racing.id, fifth).then((value) => {
+      claimSettled = true;
+      return value;
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(claimSettled).toBe(false);
+    } finally {
+      unlock();
+      await stop;
+    }
+    expect(await claim).toBeNull();
 
     const [orphan] = await db
       .insert(schema.relevanceBatches)
@@ -196,15 +291,15 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
     if (!orphan) throw new Error("orphan fixture");
     await db
       .insert(schema.relevanceBatchItems)
-      .values({ orgId, brandId: brand.id, batchId: orphan.id, itemId: fourth });
+      .values({ orgId, brandId: brand.id, batchId: orphan.id, itemId: fifth });
     const missingJobs = await repo.orphanedBatchJobs();
     expect(missingJobs).toContainEqual({
       orgId,
       brandId: brand.id,
       batchId: orphan.id,
-      itemId: fourth,
+      itemId: fifth,
     });
-    await repo.finishBatch(orgId, brand.id, orphan.id, fourth, {
+    await repo.finishBatch(orgId, brand.id, orphan.id, fifth, {
       kind: "failed",
       code: "model_failed",
     });
