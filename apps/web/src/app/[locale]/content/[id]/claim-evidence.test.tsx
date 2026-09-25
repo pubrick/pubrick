@@ -281,6 +281,40 @@ describe("claim evidence", () => {
     expect(screen.getByText(en.ClaimEvidence.proposalCostHint)).toBeVisible();
   });
 
+  it("lets an author propose a correction without review or decision controls", async () => {
+    const conflicting = review({
+      claims: [{ claim: body, outcome: "evidence_conflicts", evidence: correction().evidence }],
+    });
+    request.mockImplementation(async (path, options) => {
+      if (path === endpoint) return conflicting;
+      if (path === correctionEndpoint && options?.method === "POST") return correction();
+      if (path === correctionEndpoint) return null;
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    await renderAsync(
+      <ClaimEvidence
+        itemId={itemId}
+        savedBody={body}
+        draftBody={body}
+        editable
+        canDecide={false}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: en.ClaimEvidence.propose })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: en.ClaimEvidence.runAgain }),
+    ).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: en.ClaimEvidence.propose }));
+    expect(
+      await screen.findByRole("region", { name: en.ClaimEvidence.proposalTitle }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: en.ClaimEvidence.tryAgain })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: en.ClaimEvidence.accept })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.ClaimEvidence.discard }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps evidence readable without offering paid correction for a manual draft", async () => {
     const conflicting = review({
       claims: [{ claim: body, outcome: "evidence_conflicts", evidence: correction().evidence }],

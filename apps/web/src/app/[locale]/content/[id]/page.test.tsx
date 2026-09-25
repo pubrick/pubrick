@@ -298,6 +298,25 @@ describe("editorial roles on content detail", () => {
     expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: en.Publish.reject })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(en.Publish.scheduleLabel)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.archive })).toBeEnabled();
+  });
+
+  it("lets an author restore and delete an archived draft", async () => {
+    roleAs("author");
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "archived",
+          archivedFromStatus: "draft",
+          adaptations: [makeAdaptation()],
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.restore })).toBeEnabled();
+    expect(screen.getByRole("button", { name: en.Publish.delete })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
   });
 
   it("still offers an editor the delivery decision", async () => {
@@ -306,6 +325,14 @@ describe("editorial roles on content detail", () => {
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     expect(await screen.findByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Publish.reject })).toBeInTheDocument();
+  });
+
+  it("does not offer manager-only feed controls to an editor", async () => {
+    roleAs("editor");
+    installBaseHandlers({ current: makeItem({ status: "published" }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.alreadyPublished)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: en.Feed.title })).not.toBeInTheDocument();
   });
 
   it("keeps uncertain and scheduled delivery details readable without author resolution actions", async () => {

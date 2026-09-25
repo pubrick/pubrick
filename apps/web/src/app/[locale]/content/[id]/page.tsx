@@ -279,6 +279,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
   const canDecideDelivery = ["owner", "admin", "member", "editor"].includes(role ?? "");
+  const canManageDraft = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
+  const canManageFeed = ["owner", "admin", "member"].includes(role ?? "");
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [showMedia, setShowMedia] = useState(false);
@@ -1066,6 +1068,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function changeArchiveState(action: "archive" | "restore") {
+    if (!canManageDraft) return;
     setArchiveBusy(true);
     setActionError(null);
     try {
@@ -1080,6 +1083,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function deleteArchivedPost() {
+    if (!canManageDraft) return;
     setDeleteBusy(true);
     setActionError(null);
     try {
@@ -1682,8 +1686,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        * card, next to the other approval path.
        */
       primaryAction={
-        canDecideDelivery ? (
-          isArchived ? (
+        isArchived ? (
+          canManageDraft ? (
             <Button
               variant="primary"
               onClick={() => changeArchiveState("restore")}
@@ -1691,13 +1695,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             >
               {t("restore")}
             </Button>
-          ) : (
-            <Button
-              variant="primary"
-              onClick={() => approve(false)}
-              disabled={isPublished || manualReadyWithoutApprovalTargets || archiveBusy}
-            >
-              {/*
+          ) : undefined
+        ) : canDecideDelivery ? (
+          <Button
+            variant="primary"
+            onClick={() => approve(false)}
+            disabled={isPublished || manualReadyWithoutApprovalTargets || archiveBusy}
+          >
+            {/*
             The same button, saying what it will do to THIS post. "Publish now"
             on a post that is already live in one channel reads as "publish it
             again", which is the one thing approve cannot do — and the reader
@@ -1708,15 +1713,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             send to no channels: an item whose only remaining half ended
             `unknown` has nothing approve will target, and the api refuses it.
           */}
-              {manualReadyWithoutApprovalTargets
-                ? t("manualReadyAction")
-                : hasManualApprovalTarget
-                  ? t("approveManual")
-                  : partialSendCount > 0
-                    ? t("approveNowPartial", { count: partialSendCount })
-                    : t("approveNow")}
-            </Button>
-          )
+            {manualReadyWithoutApprovalTargets
+              ? t("manualReadyAction")
+              : hasManualApprovalTarget
+                ? t("approveManual")
+                : partialSendCount > 0
+                  ? t("approveNowPartial", { count: partialSendCount })
+                  : t("approveNow")}
+          </Button>
         ) : undefined
       }
     >
@@ -2005,6 +2009,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         savedBody={item.body}
         draftBody={bodyDraft}
         editable={["draft", "rejected", "failed"].includes(item.status)}
+        canDecide={canDecideDelivery}
         aiDraftEligible={item.origin === "ai"}
         hasRichFormatting={item.richBody !== null}
         unsavedFormatting={richDirty}
@@ -2412,7 +2417,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
-      {canDecideDelivery &&
+      {canManageDraft &&
         (isArchived ? (
           <Card className="mb-6">
             <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
@@ -2424,7 +2429,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               <p className="text-sm text-fg-tertiary">{t("deleteUnavailableHint")}</p>
             )}
           </Card>
-        ) : (
+        ) : canDecideDelivery ? (
           <Card className="mb-6">
             {isPublished && (
               <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>
@@ -2483,9 +2488,24 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
             )}
           </Card>
-        ))}
+        ) : null)}
 
-      {canDecideDelivery && (
+      {canManageDraft && !canDecideDelivery && !isArchived && (
+        <Card className="mb-6">
+          <Button
+            variant="secondary"
+            onClick={() => changeArchiveState("archive")}
+            disabled={hasOutstanding || archiveBusy}
+          >
+            {t("archive")}
+          </Button>
+          {hasOutstanding && (
+            <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
+          )}
+        </Card>
+      )}
+
+      {canManageDraft && (
         <Modal
           open={deleteOpen}
           onClose={closeDelete}
@@ -2964,7 +2984,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           onChange={() => void reload()}
         />
       )}
-      <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
+      {canManageFeed && (
+        <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
+      )}
     </AppShell>
   );
 }
