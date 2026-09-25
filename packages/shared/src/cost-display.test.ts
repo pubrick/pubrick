@@ -190,20 +190,25 @@ describe("a round trip whose outcome we never learned", () => {
     });
   });
 
-  it("is the only zero-token outcome that degrades the label", () => {
-    // The two rows are identical in every column the ledger had before
-    // `outcome` existed. If this passes with only one of them counted, the
-    // column is doing exactly the work it was added for.
+  it("ignores only an explicit token-free refusal", () => {
     expect(costTotals([refusedBeforeTokens(), lostAfterDispatch()]).unpricedCalls).toBe(1);
   });
 
-  it("leaves a row written before the column exactly as it read then", () => {
-    // NULL means "nobody recorded this", not "unknown outcome". Reading it the
-    // other way would stamp "≥" on every existing org's lifetime total for a
-    // transient blip that may well have been a 429.
+  it("treats a legacy row with no refusal evidence as an unknown charge", () => {
     const summary = summarizeCost(costTotals([reported(1.23), beforeTheColumn()]));
 
-    expect(summary).toEqual({ kind: "exact", usd: 1.23 });
+    expect(summary).toEqual({ kind: "atLeast", usd: 1.23, unpricedCalls: 1 });
+  });
+
+  it("counts a completed image call without token metadata as unpriced", () => {
+    const image: CostRow = {
+      costUsd: null,
+      costSource: "unknown",
+      inputTokens: 0,
+      outputTokens: 0,
+      outcome: "completed",
+    };
+    expect(costTotals([image])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });
   });
 
   it("still adds a PRICED row to the sum whatever its outcome says", () => {
