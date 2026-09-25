@@ -120,18 +120,17 @@ export const manualTopicPlanAttempts = pgTable(
   },
   (t) => [
     index("manual_topic_plan_attempts_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
-    check(
-      "manual_topic_plan_attempts_status_check",
-      sql`${t.status} IN ('queued', 'running', 'completed', 'failed')`,
-    ),
-    check(
-      "manual_topic_plan_attempts_error_check",
-      sql`${t.errorCode} IS NULL OR ${t.errorCode} = 'worker_failed'`,
-    ),
+    enumCheck("manual_topic_plan_attempts_status_check", t.status, [
+      "queued",
+      "running",
+      "completed",
+      "failed",
+    ]),
+    enumCheck("manual_topic_plan_attempts_error_code_check", t.errorCode, ["worker_failed"]),
     check("manual_topic_plan_attempts_count_check", sql`${t.createdCount} >= 0`),
     check(
       "manual_topic_plan_attempts_terminal_check",
-      sql`((${t.status} IN ('queued', 'running')) AND ${t.completedAt} IS NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'completed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'failed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NOT NULL)`,
+      sql`((${t.status} = 'queued' OR ${t.status} = 'running') AND ${t.completedAt} IS NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'completed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'failed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NOT NULL)`,
     ),
   ],
 );

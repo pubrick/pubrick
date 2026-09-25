@@ -1802,11 +1802,11 @@
       "checkConstraints": {
         "manual_topic_plan_attempts_status_check": {
           "name": "manual_topic_plan_attempts_status_check",
-          "value": "\"manual_topic_plan_attempts\".\"status\" IN ('queued', 'running', 'completed', 'failed')"
+          "value": "\"manual_topic_plan_attempts\".\"status\" in ('queued', 'running', 'completed', 'failed')"
         },
-        "manual_topic_plan_attempts_error_check": {
-          "name": "manual_topic_plan_attempts_error_check",
-          "value": "\"manual_topic_plan_attempts\".\"error_code\" IS NULL OR \"manual_topic_plan_attempts\".\"error_code\" = 'worker_failed'"
+        "manual_topic_plan_attempts_error_code_check": {
+          "name": "manual_topic_plan_attempts_error_code_check",
+          "value": "\"manual_topic_plan_attempts\".\"error_code\" in ('worker_failed')"
         },
         "manual_topic_plan_attempts_count_check": {
           "name": "manual_topic_plan_attempts_count_check",
@@ -1814,7 +1814,7 @@
         },
         "manual_topic_plan_attempts_terminal_check": {
           "name": "manual_topic_plan_attempts_terminal_check",
-          "value": "((\"manual_topic_plan_attempts\".\"status\" IN ('queued', 'running')) AND \"manual_topic_plan_attempts\".\"completed_at\" IS NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NULL) OR (\"manual_topic_plan_attempts\".\"status\" = 'completed' AND \"manual_topic_plan_attempts\".\"completed_at\" IS NOT NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NULL) OR (\"manual_topic_plan_attempts\".\"status\" = 'failed' AND \"manual_topic_plan_attempts\".\"completed_at\" IS NOT NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NOT NULL)"
+          "value": "((\"manual_topic_plan_attempts\".\"status\" = 'queued' OR \"manual_topic_plan_attempts\".\"status\" = 'running') AND \"manual_topic_plan_attempts\".\"completed_at\" IS NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NULL) OR (\"manual_topic_plan_attempts\".\"status\" = 'completed' AND \"manual_topic_plan_attempts\".\"completed_at\" IS NOT NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NULL) OR (\"manual_topic_plan_attempts\".\"status\" = 'failed' AND \"manual_topic_plan_attempts\".\"completed_at\" IS NOT NULL AND \"manual_topic_plan_attempts\".\"error_code\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false

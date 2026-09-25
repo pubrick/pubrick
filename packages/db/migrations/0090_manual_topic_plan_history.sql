@@ -8,10 +8,10 @@ CREATE TABLE "manual_topic_plan_attempts" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"started_at" timestamp with time zone,
 	"completed_at" timestamp with time zone,
-	CONSTRAINT "manual_topic_plan_attempts_status_check" CHECK ("manual_topic_plan_attempts"."status" IN ('queued', 'running', 'completed', 'failed')),
-	CONSTRAINT "manual_topic_plan_attempts_error_check" CHECK ("manual_topic_plan_attempts"."error_code" IS NULL OR "manual_topic_plan_attempts"."error_code" = 'worker_failed'),
+	CONSTRAINT "manual_topic_plan_attempts_status_check" CHECK ("manual_topic_plan_attempts"."status" in ('queued', 'running', 'completed', 'failed')),
+	CONSTRAINT "manual_topic_plan_attempts_error_code_check" CHECK ("manual_topic_plan_attempts"."error_code" in ('worker_failed')),
 	CONSTRAINT "manual_topic_plan_attempts_count_check" CHECK ("manual_topic_plan_attempts"."created_count" >= 0),
-	CONSTRAINT "manual_topic_plan_attempts_terminal_check" CHECK ((("manual_topic_plan_attempts"."status" IN ('queued', 'running')) AND "manual_topic_plan_attempts"."completed_at" IS NULL AND "manual_topic_plan_attempts"."error_code" IS NULL) OR ("manual_topic_plan_attempts"."status" = 'completed' AND "manual_topic_plan_attempts"."completed_at" IS NOT NULL AND "manual_topic_plan_attempts"."error_code" IS NULL) OR ("manual_topic_plan_attempts"."status" = 'failed' AND "manual_topic_plan_attempts"."completed_at" IS NOT NULL AND "manual_topic_plan_attempts"."error_code" IS NOT NULL))
+	CONSTRAINT "manual_topic_plan_attempts_terminal_check" CHECK ((("manual_topic_plan_attempts"."status" = 'queued' OR "manual_topic_plan_attempts"."status" = 'running') AND "manual_topic_plan_attempts"."completed_at" IS NULL AND "manual_topic_plan_attempts"."error_code" IS NULL) OR ("manual_topic_plan_attempts"."status" = 'completed' AND "manual_topic_plan_attempts"."completed_at" IS NOT NULL AND "manual_topic_plan_attempts"."error_code" IS NULL) OR ("manual_topic_plan_attempts"."status" = 'failed' AND "manual_topic_plan_attempts"."completed_at" IS NOT NULL AND "manual_topic_plan_attempts"."error_code" IS NOT NULL))
 );
 --> statement-breakpoint
 ALTER TABLE "calendar_slots" ADD COLUMN "manual_plan_attempt_id" uuid;--> statement-breakpoint
