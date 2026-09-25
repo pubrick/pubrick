@@ -59,3 +59,24 @@ export type BrandCreate = z.infer<typeof brandCreateSchema>;
 
 export const brandUpdateSchema = brandCreateSchema.partial();
 export type BrandUpdate = z.infer<typeof brandUpdateSchema>;
+
+/** A preview request never writes brand data. The caller opts into one paid AI call. */
+export const brandImportRequestSchema = z.strictObject({
+  url: publicUrl,
+  acceptAiCost: z.literal(true),
+});
+export type BrandImportRequest = z.infer<typeof brandImportRequestSchema>;
+
+export const brandImportSuggestionSchema = z.strictObject({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2000),
+  voice: z.string().trim().max(2000),
+  audience: z.string().trim().max(2000),
+  contentLanguage: z.string().trim().min(2).max(10),
+  topics: z.array(z.string().trim().min(1).max(500)).max(3),
+});
+export type BrandImportSuggestion = z.infer<typeof brandImportSuggestionSchema>;
+
+/** Only these reviewed fields can be applied. In particular, linkPolicy is absent. */
+export const brandImportApplySchema = brandImportSuggestionSchema;
+export type BrandImportApply = z.infer<typeof brandImportApplySchema>;
