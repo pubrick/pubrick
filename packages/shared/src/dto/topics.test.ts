@@ -45,6 +45,8 @@ describe("dated topic planning contract", () => {
         description: "",
         sourceUrl: null,
         status: "approved",
+        blockedAt: null,
+        blockReason: null,
         origin: "manual",
         plannedDate: "2026-10-11",
         priority: 5,
