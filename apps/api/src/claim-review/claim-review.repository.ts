@@ -33,10 +33,10 @@ type ReviewRow = {
   [K in keyof typeof REVIEW_COLUMNS]: (typeof schema.claimReviews.$inferSelect)[K];
 };
 
-function toDto(row: ReviewRow, currentBody: string): ClaimReviewDto {
+function toDto(row: ReviewRow, contentItemId: string, currentBody: string): ClaimReviewDto {
   return {
     id: row.id,
-    contentItemId: row.contentItemId,
+    contentItemId,
     status: row.status,
     stale: row.bodyHash !== hashBody(currentBody),
     claims: row.claims,
@@ -69,7 +69,7 @@ export class ClaimReviewRepository {
       )
       .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
       .limit(1);
-    return review ? toDto(review, item.body) : null;
+    return review ? toDto(review, contentItemId, item.body) : null;
   }
 
   async start(orgId: string, contentItemId: string, expectedBody: string): Promise<ClaimReviewDto> {
@@ -123,7 +123,7 @@ export class ClaimReviewRepository {
           ),
         )
         .limit(1);
-      if (active) return toDto(active, item.body);
+      if (active) return toDto(active, contentItemId, item.body);
 
       const [review] = await tx
         .insert(schema.claimReviews)
@@ -131,7 +131,7 @@ export class ClaimReviewRepository {
         .returning(REVIEW_COLUMNS);
       if (!review) throw new Error("Claim review insert returned no row");
       await this.queue.enqueueClaimReview(tx, { orgId, reviewId: review.id });
-      return toDto(review, item.body);
+      return toDto(review, contentItemId, item.body);
     });
   }
 }

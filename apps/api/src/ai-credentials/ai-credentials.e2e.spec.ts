@@ -959,6 +959,24 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       });
     });
 
+    it("includes a lost claim review call after its article was deleted", async () => {
+      const { agent, orgId } = await orgAgent();
+      await direct.db.insert(schema.claimReviews).values({
+        orgId,
+        contentItemId: null,
+        bodyHash: "a".repeat(64),
+        status: "failed",
+        errorCode: "source_changed",
+        completedAt: new Date(),
+        unrecordedCalls: 1,
+      });
+      expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
+        kind: "atLeast",
+        usd: 0,
+        unpricedCalls: 1,
+      });
+    });
+
     it("keeps counting a call whose run was deleted — it sums by org_id alone", async () => {
       const { agent, orgId } = await orgAgent();
       const brand = await agent.post("/api/brands").send({ name: "Doomed" }).expect(201);
