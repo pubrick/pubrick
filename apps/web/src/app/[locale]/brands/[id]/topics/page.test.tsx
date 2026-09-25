@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
+import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import es from "../../../../../../messages/es.json";
 import TopicsPage from "./page";
@@ -39,6 +39,8 @@ describe("topic bank page", () => {
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -129,6 +131,8 @@ describe("topic bank page", () => {
       calls.push({ url, method });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) {
         if (method === "POST") request = queued;
         return response(200, method === "POST" ? request : { request });
@@ -146,7 +150,100 @@ describe("topic bank page", () => {
       url: expect.stringContaining(`/api/topics/suggestions?brandId=${BRAND_ID}`),
       method: "POST",
     });
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.includes("/api/topics/suggestions/history?")),
+      ).toHaveLength(2),
+    );
     expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
+  });
+
+  it("keeps an in-flight history page when request polling updates its heartbeat", async () => {
+    const requestId = "749d9a5e-06f8-4b40-9b83-a33a6e69482a";
+    const olderId = "255e6b41-cf47-4e69-8a5a-af06827d82e8";
+    let resolveOlder!: (value: Response) => void;
+    const older = new Promise<Response>((resolve) => {
+      resolveOlder = resolve;
+    });
+    let poll: (() => void) | undefined;
+    let heartbeat = 0;
+    let historyLoads = 0;
+    vi.spyOn(window, "setInterval").mockImplementation((handler, delay) => {
+      if (delay === 5000 && typeof handler === "function") poll = handler;
+      return 1 as unknown as ReturnType<typeof window.setInterval>;
+    });
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?")) {
+        if (url.includes("cursor=")) return older;
+        historyLoads++;
+        return response(200, {
+          rows: [
+            {
+              id: requestId,
+              brandId: BRAND_ID,
+              origin: "manual",
+              status: "running",
+              errorCode: null,
+              localDate: null,
+              suggestionCount: 0,
+              createdAt: "2026-09-23T12:00:00Z",
+              updatedAt: "2026-09-23T12:00:00Z",
+            },
+          ],
+          nextCursor: requestId,
+        });
+      }
+      if (url.includes("/api/topics/suggestions?"))
+        return response(200, {
+          request: {
+            id: requestId,
+            brandId: BRAND_ID,
+            status: "running",
+            errorCode: null,
+            suggestionCount: 0,
+            createdAt: "2026-09-23T12:00:00Z",
+            updatedAt: `2026-09-23T12:00:0${heartbeat++}Z`,
+          },
+        });
+      if (url.includes("/api/topics?")) return response(200, []);
+      return response(200, {});
+    });
+
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Topics.historyLoadMore }));
+    expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
+    expect(poll).toBeDefined();
+    const loadsBeforeHeartbeat = historyLoads;
+    await act(async () => poll?.());
+    expect(historyLoads).toBe(loadsBeforeHeartbeat);
+    expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
+    await act(async () => {
+      resolveOlder(
+        response(200, {
+          rows: [
+            {
+              id: olderId,
+              brandId: BRAND_ID,
+              origin: "automatic",
+              status: "succeeded",
+              errorCode: null,
+              localDate: "2026-09-22",
+              suggestionCount: 2,
+              createdAt: "2026-09-22T12:00:00Z",
+              updatedAt: "2026-09-22T12:01:00Z",
+            },
+          ],
+          nextCursor: null,
+        }),
+      );
+      await older;
+    });
+    expect(screen.getByText(en.Topics.historyOrigin_automatic)).toBeInTheDocument();
+    expect(screen.getByText(en.Topics.historyOrigin_manual)).toBeInTheDocument();
   });
 
   it("blocks with a reason and offers only unblock for the blocked topic", async () => {
@@ -159,6 +256,8 @@ describe("topic bank page", () => {
       calls.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/block?")) blocked = true;
       if (url.includes("/unblock?")) blocked = false;
@@ -205,6 +304,8 @@ describe("topic bank page", () => {
       const url = String(input);
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -250,6 +351,8 @@ describe("topic bank page", () => {
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -296,6 +399,8 @@ describe("topic bank page", () => {
       requests.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?") || url.endsWith("/api/topics"))
         return response(method === "POST" ? 201 : 200, method === "POST" ? body : []);
@@ -353,6 +458,8 @@ describe("topic bank page", () => {
       requests.push({ method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes(`/api/topics/${TOPIC_ID}`)) return response(200, { ...topic, ...body });
       if (url.includes("/api/topics?")) return response(200, [topic]);

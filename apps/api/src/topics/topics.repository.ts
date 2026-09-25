@@ -6,7 +6,9 @@ import {
   type TopicBlock,
   type TopicCreate,
   type TopicRun,
+  type TopicSuggestionHistoryQuery,
   type TopicUpdate,
+  topicSuggestionHistoryPageSchema,
 } from "@pubrick/shared";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -32,6 +34,18 @@ const COLUMNS = {
   revision: schema.topics.revision,
   createdAt: schema.topics.createdAt,
   updatedAt: schema.topics.updatedAt,
+};
+
+const SUGGESTION_HISTORY_COLUMNS = {
+  id: schema.topicSuggestionRequests.id,
+  brandId: schema.topicSuggestionRequests.brandId,
+  status: schema.topicSuggestionRequests.status,
+  origin: schema.topicSuggestionRequests.origin,
+  localDate: schema.topicSuggestionRequests.localDate,
+  errorCode: schema.topicSuggestionRequests.errorCode,
+  suggestionCount: schema.topicSuggestionRequests.suggestionCount,
+  createdAt: schema.topicSuggestionRequests.createdAt,
+  updatedAt: schema.topicSuggestionRequests.updatedAt,
 };
 
 @Injectable()
@@ -85,6 +99,54 @@ export class TopicsRepository {
       )
       .limit(1);
     return { request: rows[0] ?? null };
+  }
+
+  async suggestionHistory(orgId: string, brandId: string, query: TopicSuggestionHistoryQuery) {
+    await this.requireBrand(orgId, brandId);
+    const [cursor] = query.cursor
+      ? await db
+          .select({
+            id: schema.topicSuggestionRequests.id,
+            createdAt: schema.topicSuggestionRequests.createdAt,
+          })
+          .from(schema.topicSuggestionRequests)
+          .where(
+            and(
+              eq(schema.topicSuggestionRequests.orgId, orgId),
+              eq(schema.topicSuggestionRequests.brandId, brandId),
+              eq(schema.topicSuggestionRequests.id, query.cursor),
+            ),
+          )
+          .limit(1)
+      : [];
+    if (query.cursor && !cursor)
+      throw badRequest("invalid_request", "Suggestion history cursor is unavailable");
+    const rows = await db
+      .select(SUGGESTION_HISTORY_COLUMNS)
+      .from(schema.topicSuggestionRequests)
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brandId),
+          cursor
+            ? sql`(${schema.topicSuggestionRequests.createdAt}, ${schema.topicSuggestionRequests.id}) < (${cursor.createdAt}, ${cursor.id}::uuid)`
+            : undefined,
+        ),
+      )
+      .orderBy(
+        desc(schema.topicSuggestionRequests.createdAt),
+        desc(schema.topicSuggestionRequests.id),
+      )
+      .limit(query.limit + 1);
+    const page = rows.slice(0, query.limit);
+    return topicSuggestionHistoryPageSchema.parse({
+      rows: page.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      nextCursor: rows.length > query.limit ? page.at(-1)?.id : null,
+    });
   }
 
   async requestSuggestions(orgId: string, brandId: string) {

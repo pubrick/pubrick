@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { topicDtoSchema } from "@pubrick/shared";
+import { topicDtoSchema, topicSuggestionHistoryPageSchema } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -244,6 +244,87 @@ describe.skipIf(!url)("topic bank e2e", () => {
     expect(
       (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body,
     ).toEqual([]);
+  });
+
+  it("lists bounded suggestion history by stable cursor within one brand", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Ideas" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Other ideas" }).expect(201);
+    const idPrefix = randomUUID().slice(0, 8);
+    const ids = [1, 2, 3, 4].map(
+      (n) => `${idPrefix}-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    );
+    const sameTime = new Date("2026-09-23T12:00:00.000Z");
+    await db.insert(schema.topicSuggestionRequests).values([
+      {
+        id: ids[0],
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        origin: "manual",
+        status: "failed",
+        errorCode: "model_failed",
+        createdAt: new Date("2026-09-22T12:00:00.000Z"),
+      },
+      {
+        id: ids[1],
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        origin: "automatic",
+        localDate: "2026-09-23",
+        status: "succeeded",
+        suggestionCount: 2,
+        createdAt: sameTime,
+      },
+      {
+        id: ids[2],
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        origin: "manual",
+        status: "running",
+        createdAt: sameTime,
+      },
+      {
+        id: ids[3],
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        origin: "automatic",
+        localDate: "2026-09-24",
+        status: "queued",
+        createdAt: new Date("2026-09-24T12:00:00.000Z"),
+      },
+    ]);
+    const [foreign] = await db
+      .insert(schema.topicSuggestionRequests)
+      .values({
+        orgId: owner.orgId,
+        brandId: sibling.body.id,
+        origin: "manual",
+      })
+      .returning({ id: schema.topicSuggestionRequests.id });
+    if (!foreign) throw new Error("Foreign suggestion seed failed");
+    const base = `/api/topics/suggestions/history?brandId=${brand.body.id}`;
+    const endpoint = `${base}&limit=2`;
+    await other.agent.get(endpoint).expect(404);
+    await owner.agent.get(`${endpoint}&cursor=${foreign.id}`).expect(400);
+    await owner.agent.get(`${base}&limit=0`).expect(400);
+    const first = topicSuggestionHistoryPageSchema.parse(
+      (await owner.agent.get(endpoint).expect(200)).body,
+    );
+    expect(first.rows.map((row) => row.id)).toEqual([ids[3], ids[2]]);
+    expect(first.rows[0]).toMatchObject({
+      origin: "automatic",
+      localDate: "2026-09-24",
+      status: "queued",
+    });
+    expect(first.nextCursor).toBe(ids[2]);
+    const second = topicSuggestionHistoryPageSchema.parse(
+      (await owner.agent.get(`${endpoint}&cursor=${first.nextCursor}`).expect(200)).body,
+    );
+    expect(second.rows.map((row) => row.id)).toEqual([ids[1], ids[0]]);
+    expect(second.rows[0]).toMatchObject({ origin: "automatic", suggestionCount: 2 });
+    expect(second.rows[1]).toMatchObject({ errorCode: "model_failed" });
+    expect(second.nextCursor).toBeNull();
   });
 
   it("blocks an exact title as a durable tombstone until explicitly unblocked", async () => {

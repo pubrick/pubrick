@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { topicCreateSchema, topicDtoSchema, topicRunSchema, topicUpdateSchema } from "./topics.js";
+import {
+  topicCreateSchema,
+  topicDtoSchema,
+  topicRunSchema,
+  topicSuggestionHistoryPageSchema,
+  topicSuggestionHistoryQuerySchema,
+  topicUpdateSchema,
+} from "./topics.js";
 
 const brandId = "00000000-0000-4000-8000-000000000001";
 
@@ -93,5 +100,39 @@ describe("dated topic planning contract", () => {
     expect(topicRunSchema.parse({ channelIds: [brandId], seoKeywords: [] }).seoKeywords).toEqual(
       [],
     );
+  });
+});
+
+describe("topic suggestion history contract", () => {
+  it("bounds page size and validates the cursor", () => {
+    expect(topicSuggestionHistoryQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(topicSuggestionHistoryQuerySchema.parse({ limit: "50", cursor: brandId })).toEqual({
+      limit: 50,
+      cursor: brandId,
+    });
+    expect(topicSuggestionHistoryQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
+    expect(topicSuggestionHistoryQuerySchema.safeParse({ cursor: "bad" }).success).toBe(false);
+  });
+
+  it("shows origin and local date without exposing internal attempts", () => {
+    expect(
+      topicSuggestionHistoryPageSchema.parse({
+        rows: [
+          {
+            id: brandId,
+            brandId,
+            origin: "automatic",
+            localDate: "2026-09-25",
+            status: "succeeded",
+            errorCode: null,
+            suggestionCount: 2,
+            createdAt: "2026-09-25T09:00:00.000Z",
+            updatedAt: "2026-09-25T09:01:00.000Z",
+            attempts: 3,
+          },
+        ],
+        nextCursor: null,
+      }).rows[0],
+    ).not.toHaveProperty("attempts");
   });
 });

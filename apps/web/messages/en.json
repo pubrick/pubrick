@@ -1552,7 +1552,21 @@
     "suggestionError_no_api_key": "Add an AI key in Settings, then try again.",
     "suggestionError_unreadable_key": "Your AI key could not be read. Replace it in Settings, then try again.",
     "suggestionError_model_failed": "Ideas could not be suggested. Try again later.",
-    "aiSuggestion": "AI suggestion"
+    "aiSuggestion": "AI suggestion",
+    "historyTitle": "Suggestion history",
+    "historyHint": "Manual and daily AI requests for this brand. Ideas still need your approval.",
+    "historyEmpty": "No requests yet. Use Suggest topics to request ideas.",
+    "historyLoading": "Loading history…",
+    "historyError": "Suggestion history could not be loaded.",
+    "historyLoadMore": "Load more",
+    "historyOrigin_manual": "Manual request",
+    "historyOrigin_automatic": "Daily request",
+    "historyStatus_queued": "Queued",
+    "historyStatus_running": "Running",
+    "historyStatus_succeeded": "Succeeded",
+    "historyStatus_failed": "Failed",
+    "historyCount": "Ideas added: {count}",
+    "historyLocalDate": "For {date}"
   },
   "Autopilot": {
     "title": "Autopilot",
