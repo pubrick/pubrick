@@ -81,6 +81,24 @@ export async function admitPaidReplyAttempt(
     if (!(await input.lockAndValidateTarget(tx)))
       return { status: "blocked", reason: "sample_changed" };
 
+    const [orgSettings] = await tx
+      .select()
+      .from(schema.organizationPaidReplySettings)
+      .where(eq(schema.organizationPaidReplySettings.orgId, input.orgId))
+      .for("key share");
+    const [brandSettings] = await tx
+      .select()
+      .from(schema.brandPaidReplySettings)
+      .where(
+        and(
+          eq(schema.brandPaidReplySettings.orgId, input.orgId),
+          eq(schema.brandPaidReplySettings.brandId, input.brandId),
+        ),
+      )
+      .for("key share");
+    if (!orgSettings || !brandSettings) return { status: "blocked", reason: "setting_changed" };
+    // Claim locks settings before the attempt row. Keep admission in that order
+    // so an edit or queued job cannot form a settings/attempt lock cycle.
     const [existing] = await tx
       .select({
         id: schema.paidReplyAnalysisAttempts.id,
@@ -98,23 +116,6 @@ export async function admitPaidReplyAttempt(
       .limit(1);
     if (existing)
       return { status: "existing", attemptId: existing.id, attemptStatus: existing.status };
-
-    const [orgSettings] = await tx
-      .select()
-      .from(schema.organizationPaidReplySettings)
-      .where(eq(schema.organizationPaidReplySettings.orgId, input.orgId))
-      .for("key share");
-    const [brandSettings] = await tx
-      .select()
-      .from(schema.brandPaidReplySettings)
-      .where(
-        and(
-          eq(schema.brandPaidReplySettings.orgId, input.orgId),
-          eq(schema.brandPaidReplySettings.brandId, input.brandId),
-        ),
-      )
-      .for("key share");
-    if (!orgSettings || !brandSettings) return { status: "blocked", reason: "setting_changed" };
     if (input.origin === "automatic") {
       const enabled =
         input.targetKind === "source_comment"
@@ -235,8 +236,8 @@ export async function admitPaidReplyAttempt(
           coalesce(bool_or(outcome = 'unknown' OR (cost_usd IS NULL AND outcome IS DISTINCT FROM 'refused') OR (cost_source = 'unknown' AND outcome IS DISTINCT FROM 'refused')), false) AS unknown
         FROM usage_ledger
         WHERE org_id = ${input.orgId}
-          AND created_at AT TIME ZONE 'UTC' >= ${dayStart}
-          AND created_at AT TIME ZONE 'UTC' < ${dayEnd}
+          AND created_at >= ${dayStart}
+          AND created_at < ${dayEnd}
       ), reservations AS (
         SELECT coalesce(sum(reserved_max_usd), 0)::text AS org_cost,
           coalesce(sum(CASE WHEN brand_id = ${input.brandId}::uuid THEN reserved_max_usd ELSE 0 END), 0)::text AS brand_cost,
@@ -252,8 +253,8 @@ export async function admitPaidReplyAttempt(
         ) OR EXISTS (
           SELECT 1 FROM pipeline_runs
           WHERE org_id = ${input.orgId} AND unrecorded_calls > 0
-            AND created_at AT TIME ZONE 'UTC' >= ${dayStart}
-            AND created_at AT TIME ZONE 'UTC' < ${dayEnd}
+            AND created_at >= ${dayStart}
+            AND created_at < ${dayEnd}
         ) AS unknown
       )
       SELECT ledger.org_cost AS ledger_org, ledger.brand_cost AS ledger_brand,

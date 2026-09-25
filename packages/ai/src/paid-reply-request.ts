@@ -224,7 +224,13 @@ export async function generatePaidReply(
             const structured = commentAnalysisResultSchema.safeParse(JSON.parse(text));
             if (
               structured.success &&
-              structured.data.themes.every((theme) => theme.mentions <= request.sampleSize)
+              structured.data.themes.every((theme) => theme.mentions <= request.sampleSize) &&
+              Math.abs(
+                structured.data.sentiment.positive +
+                  structured.data.sentiment.neutral +
+                  structured.data.sentiment.negative -
+                  1,
+              ) <= 0.05
             ) {
               result = structured.data;
               status = "ok";

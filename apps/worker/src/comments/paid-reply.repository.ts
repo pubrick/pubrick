@@ -1,13 +1,11 @@
-import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import {
   buildPaidReplyRequest,
   countPaidReplyTokens,
-  PAID_REPLY_MAX_OUTPUT_TOKENS,
   PAID_REPLY_MODEL_ID,
   type PaidReplyGeneration,
   type PaidReplyRequest,
-  priceFor,
+  pricePaidReplyReservation,
 } from "@pubrick/ai";
 import { admitPaidReplyAttempt, type PaidReplyTransaction, schema } from "@pubrick/db";
 import {
@@ -44,21 +42,6 @@ const encryptedRequestSchema = z.object({
 });
 const publicStoryUrl = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/[1-9]\d*$/;
 const BATCH_SIZE = 20;
-
-function priceIdentity(at: Date): string | null {
-  const rate = priceFor("google", PAID_REPLY_MODEL_ID, at);
-  return rate ? createHash("sha256").update(JSON.stringify(rate)).digest("hex") : null;
-}
-
-function maximumUsd(allowance: number, at: Date): string | null {
-  const rate = priceFor("google", PAID_REPLY_MODEL_ID, at);
-  if (!rate) return null;
-  const tier =
-    rate.longContext && allowance > rate.longContext.fromInputTokens ? rate.longContext : rate;
-  const dollars =
-    (allowance * tier.inputPerMTok + PAID_REPLY_MAX_OUTPUT_TOKENS * tier.outputPerMTok) / 1_000_000;
-  return (Math.max(1, Math.ceil(dollars * 1_000_000)) / 1_000_000).toFixed(6);
-}
 
 function safeKey(encrypted: string | undefined): string | null {
   if (!encrypted) return null;
@@ -325,9 +308,8 @@ export class PaidReplyRepository {
         continue;
       }
       const at = new Date();
-      const identity = priceIdentity(at);
-      const reservation = maximumUsd(allowance, at);
-      if (!reservation || !identity) {
+      const reservation = pricePaidReplyReservation(at, allowance);
+      if (!reservation) {
         await this.finishHandoff(handoff.id, "blocked", "unpriced_model");
         continue;
       }
@@ -343,8 +325,8 @@ export class PaidReplyRepository {
           promptEncrypted: encryptJson(request, env.APP_ENCRYPTION_KEY),
           sampleSize: request.sampleSize,
           modelId: request.modelId,
-          priceWindow: identity,
-          reservedMaxUsd: reservation,
+          priceWindow: reservation.priceWindow,
+          reservedMaxUsd: reservation.reservedMaxUsd,
           freeRevision: handoff.freeRevision,
           paidRevision: handoff.paidRevision,
           orgSettingsRevision: handoff.orgSettingsRevision,
@@ -355,10 +337,11 @@ export class PaidReplyRepository {
               sql`SELECT (extract(epoch from now()) * 1000)::bigint::text AS at_ms`,
             );
             const dbAt = new Date(Number((clock.rows[0] as { at_ms?: string } | undefined)?.at_ms));
+            const currentPrice = pricePaidReplyReservation(dbAt, allowance);
             if (
-              !Number.isFinite(dbAt.getTime()) ||
-              priceIdentity(dbAt) !== identity ||
-              maximumUsd(allowance, dbAt) !== reservation
+              !currentPrice ||
+              currentPrice.priceWindow !== reservation.priceWindow ||
+              currentPrice.reservedMaxUsd !== reservation.reservedMaxUsd
             )
               return false;
             const [config] = await tx
@@ -560,7 +543,7 @@ export class PaidReplyRepository {
         reason ??= "setting_changed";
       if (
         !Number.isFinite(dbAt.getTime()) ||
-        priceIdentity(dbAt) !== attempt.priceWindow ||
+        pricePaidReplyReservation(dbAt, 1)?.priceWindow !== attempt.priceWindow ||
         attempt.modelId !== PAID_REPLY_MODEL_ID
       )
         reason ??= "unpriced_model";
@@ -574,8 +557,8 @@ export class PaidReplyRepository {
                 (cost_usd IS NULL AND outcome IS DISTINCT FROM 'refused') OR
                 (cost_source = 'unknown' AND outcome IS DISTINCT FROM 'refused')), false) AS unknown
             FROM usage_ledger WHERE org_id = ${job.orgId}
-              AND created_at AT TIME ZONE 'UTC' >= ${attempt.dayStartUtc}
-              AND created_at AT TIME ZONE 'UTC' < ${attempt.dayEndUtc}
+              AND created_at >= ${attempt.dayStartUtc}
+              AND created_at < ${attempt.dayEndUtc}
           ), reservations AS (
             SELECT coalesce(sum(reserved_max_usd), 0) AS org_cost,
               coalesce(sum(CASE WHEN brand_id = ${attempt.brandId}::uuid THEN reserved_max_usd ELSE 0 END), 0) AS brand_cost,
@@ -588,8 +571,8 @@ export class PaidReplyRepository {
               AND unrecorded_calls > 0 AND requested_at >= ${attempt.dayStartUtc}
               AND requested_at < ${attempt.dayEndUtc}) OR
               EXISTS (SELECT 1 FROM pipeline_runs WHERE org_id = ${job.orgId}
-              AND unrecorded_calls > 0 AND created_at AT TIME ZONE 'UTC' >= ${attempt.dayStartUtc}
-              AND created_at AT TIME ZONE 'UTC' < ${attempt.dayEndUtc}) AS unknown
+              AND unrecorded_calls > 0 AND created_at >= ${attempt.dayStartUtc}
+              AND created_at < ${attempt.dayEndUtc}) AS unknown
           )
           SELECT (NOT ledger.unknown AND NOT reservations.unknown AND NOT markers.unknown) AS known,
             ledger.org_cost + reservations.org_cost <= ${orgSettings.dailyThresholdUsd}::numeric AS org_allowed,

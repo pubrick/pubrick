@@ -382,6 +382,7 @@ each one in full.
 | 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
 | 2026-09-23 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | no | required together when reading Telegram channel sources ([setup](telegram-sources.md)) |
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
+| 2026-09-25 | `PAID_REPLY_DISPATCH_AFTER` | no | optional ISO instant with a timezone offset; only automatic reply-analysis handoffs collected at or after this instant may start a paid Gemini call. Unset means no automatic paid dispatch. Existing manual Analyze remains available. Brand-level paid switches and daily admission thresholds must also be configured. |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot
 miss them. The seven optional ones are the ones worth reading: an `.env` written

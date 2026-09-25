@@ -24,9 +24,13 @@ import {
   type ManualAutopilotJob,
   type ManualDigestJob,
   type ManualTopicPlanJob,
+  PAID_REPLY_ANALYSIS_OPTIONS,
+  PAID_REPLY_ANALYSIS_QUEUE,
+  type PaidReplyAnalysisJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  paidReplyAnalysisJobOptions,
   RELEVANCE_BATCH_DLQ,
   RELEVANCE_BATCH_QUEUE,
   RELEVANCE_BATCH_QUEUE_OPTIONS,
@@ -140,6 +144,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.updateQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
     await boss.createQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
     await boss.updateQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
+    await boss.createQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
+    await boss.updateQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
@@ -265,6 +271,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     });
     if (id === null) throw new ConflictException("Manual digest could not be queued");
     return true;
+  }
+
+  async enqueuePaidReplyAnalysis(tx: Tx, payload: PaidReplyAnalysisJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(PAID_REPLY_ANALYSIS_QUEUE, payload, {
+      ...paidReplyAnalysisJobOptions(payload.attemptId, payload.orgId),
+      id: payload.attemptId,
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Paid reply analysis was not queued");
   }
 
   /**

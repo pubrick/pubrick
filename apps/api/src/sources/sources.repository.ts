@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { type AiCredential, type FeedbackArticle, feedbackAdjustment } from "@pubrick/ai";
+import { type FeedbackArticle, feedbackAdjustment } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
 import {
   commentAnalysisResultSchema,
@@ -21,12 +21,11 @@ import {
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
-import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { requestManualPaidReplyAnalysis } from "../paid-replies/manual-analysis";
 import { QueueService } from "../queue/queue.service";
-import { CommentAnalysisCaller } from "./comment-analysis.caller";
 
 const SOURCE_COLUMNS = {
   id: schema.newsSources.id,
@@ -71,7 +70,6 @@ export class SourcesRepository {
   constructor(
     private readonly queue: QueueService,
     private readonly aiCredentials: AiCredentialsRepository,
-    private readonly commentAnalysisCaller: CommentAnalysisCaller,
   ) {}
 
   private async requireBrand(orgId: string, brandId: string) {
@@ -606,6 +604,7 @@ export class SourcesRepository {
         sourceId: schema.newsItems.sourceId,
         title: schema.newsItems.title,
         commentsCheckedAt: schema.newsItems.commentsCheckedAt,
+        commentsSampleVersion: schema.newsItems.commentsSampleVersion,
         commentsStatus: schema.newsItems.commentsStatus,
         sourceKind: schema.newsSources.kind,
         sourceActive: schema.newsSources.isActive,
@@ -645,7 +644,7 @@ export class SourcesRepository {
           eq(schema.newsComments.itemId, itemId),
         ),
       )
-      .orderBy(desc(schema.newsComments.publishedAt))
+      .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
       .limit(50);
   }
 
@@ -683,15 +682,19 @@ export class SourcesRepository {
           eq(schema.newsComments.itemId, itemId),
         ),
       )
-      .orderBy(desc(schema.newsComments.publishedAt))
+      .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
       .limit(30);
   }
 
-  async commentAnalysis(orgId: string, brandId: string, itemId: string) {
+  private async commentAnalysisCurrent(orgId: string, brandId: string, itemId: string) {
     const item = await this.requireTelegramItem(orgId, brandId, itemId);
-    if (item.commentsStatus === "private" || item.commentsStatus === "unavailable")
-      return { status: "unavailable" as const };
-    if (!item.commentsCheckedAt) return { status: "not_collected" as const };
+    if (!item.commentsSampleVersion)
+      return {
+        status:
+          item.commentsStatus === "private" || item.commentsStatus === "unavailable"
+            ? ("unavailable" as const)
+            : ("not_collected" as const),
+      };
     const sample = await this.analysisSample(orgId, brandId, itemId);
     if (sample.length === 0) return { status: "no_comments" as const };
     const rows = await db
@@ -699,6 +702,7 @@ export class SourcesRepository {
         result: schema.newsCommentAnalyses.result,
         sampleSize: schema.newsCommentAnalyses.sampleSize,
         sampleCheckedAt: schema.newsCommentAnalyses.sampleCheckedAt,
+        sampleVersion: schema.newsCommentAnalyses.sampleVersion,
         createdAt: schema.newsCommentAnalyses.createdAt,
       })
       .from(schema.newsCommentAnalyses)
@@ -711,7 +715,7 @@ export class SourcesRepository {
       )
       .limit(1);
     const analysis = rows[0];
-    if (analysis?.sampleCheckedAt.getTime() === item.commentsCheckedAt.getTime()) {
+    if (analysis?.sampleVersion === item.commentsSampleVersion) {
       const result = commentAnalysisResultSchema.safeParse(analysis.result);
       if (result.success)
         return {
@@ -721,6 +725,24 @@ export class SourcesRepository {
           analyzedAt: analysis.createdAt.toISOString(),
         };
     }
+    if (item.commentsStatus === "private" || item.commentsStatus === "unavailable")
+      return { status: "unavailable" as const };
+    const [attempt] = await db
+      .select({ status: schema.paidReplyAnalysisAttempts.status })
+      .from(schema.paidReplyAnalysisAttempts)
+      .where(
+        and(
+          eq(schema.paidReplyAnalysisAttempts.orgId, orgId),
+          eq(schema.paidReplyAnalysisAttempts.targetKind, "source_comment"),
+          eq(schema.paidReplyAnalysisAttempts.targetId, itemId),
+          eq(schema.paidReplyAnalysisAttempts.sampleVersion, item.commentsSampleVersion),
+        ),
+      )
+      .limit(1);
+    if (attempt?.status === "queued" || attempt?.status === "dispatching")
+      return { status: "in_progress" as const };
+    if (attempt?.status === "unknown") return { status: "unknown" as const };
+    if (attempt?.status === "failed") return { status: "failed" as const };
     const keys = await db
       .select({ orgId: schema.aiCredentials.orgId })
       .from(schema.aiCredentials)
@@ -732,6 +754,49 @@ export class SourcesRepository {
     return { status: analysis ? ("stale" as const) : ("not_analyzed" as const) };
   }
 
+  async commentAnalysis(orgId: string, brandId: string, itemId: string) {
+    const current = await this.commentAnalysisCurrent(orgId, brandId, itemId);
+    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const [saved] = await db
+      .select({
+        result: schema.newsCommentAnalyses.result,
+        sampleVersion: schema.newsCommentAnalyses.sampleVersion,
+        sampleSize: schema.newsCommentAnalyses.sampleSize,
+        createdAt: schema.newsCommentAnalyses.createdAt,
+      })
+      .from(schema.newsCommentAnalyses)
+      .where(
+        and(
+          eq(schema.newsCommentAnalyses.orgId, orgId),
+          eq(schema.newsCommentAnalyses.brandId, brandId),
+          eq(schema.newsCommentAnalyses.itemId, itemId),
+        ),
+      )
+      .limit(1);
+    const earlier =
+      saved && saved.sampleVersion !== item.commentsSampleVersion
+        ? commentAnalysisResultSchema.safeParse(saved.result)
+        : null;
+    return {
+      ...current,
+      current: {
+        status: current.status,
+        sampleVersion: item.commentsSampleVersion,
+        collectionStatus: item.commentsStatus,
+      },
+      ...(saved && earlier?.success
+        ? {
+            earlierAnalysis: {
+              sampleVersion: saved.sampleVersion,
+              result: earlier.data,
+              sampleSize: saved.sampleSize,
+              analyzedAt: saved.createdAt.toISOString(),
+            },
+          }
+        : {}),
+    };
+  }
+
   async analyzeComments(orgId: string, brandId: string, itemId: string) {
     const current = await this.commentAnalysis(orgId, brandId, itemId);
     if (
@@ -739,65 +804,28 @@ export class SourcesRepository {
       current.status === "not_collected" ||
       current.status === "no_comments" ||
       current.status === "no_key" ||
-      current.status === "ready"
+      current.status === "ready" ||
+      current.status === "in_progress" ||
+      current.status === "failed" ||
+      current.status === "unknown"
     )
       return current;
     const item = await this.requireTelegramItem(orgId, brandId, itemId);
     const sample = await this.analysisSample(orgId, brandId, itemId);
-    if (!item.commentsCheckedAt || sample.length === 0) return { status: "no_comments" as const };
-    const checkedAt = item.commentsCheckedAt;
-
-    // Only Google's key from this organization is used. No platform fallback.
-    let credential: AiCredential;
-    try {
-      credential = await this.aiCredentials.getDecrypted(orgId, "google");
-    } catch (error) {
-      // The key may have been removed between the status read and this call.
-      if (error instanceof NotFoundException) return { status: "no_key" as const };
-      throw error;
-    }
-    const admission = await admitAnalysis({
+    if (!item.commentsSampleVersion || sample.length === 0)
+      return { status: "no_comments" as const };
+    const status = await requestManualPaidReplyAnalysis({
       orgId,
+      brandId,
       targetKind: "source_comment",
       targetId: itemId,
-      sampleCheckedAt: checkedAt,
-    });
-    if (admission.status !== "admitted") return { status: admission.status };
-    try {
-      const afterAdmission = await this.commentAnalysis(orgId, brandId, itemId);
-      if (afterAdmission.status === "ready") return afterAdmission;
-      const latest = await this.requireTelegramItem(orgId, brandId, itemId);
-      if (latest.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
-        return { status: "stale" as const };
-      }
-      const outcome = await this.commentAnalysisCaller.run({
-        credential,
-        title: item.title,
-        comments: sample.map((row) => row.body),
-        onUsage: (record) =>
-          recordAnalysisUsage({
-            admissionId: admission.id,
-            orgId,
-            targetKind: "source_comment",
-            record,
-          }),
-      });
-      if (!outcome.ok) return { status: outcome.failure };
-      const saved = await db.transaction(async (tx) => {
-        const [organization] = await tx
-          .select({ id: schema.organization.id })
-          .from(schema.organization)
-          .where(eq(schema.organization.id, orgId))
-          .limit(1)
-          .for("key share");
-        if (!organization) return false;
-        const [brand] = await tx
-          .select({ id: schema.brands.id })
-          .from(schema.brands)
-          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-          .limit(1)
-          .for("key share");
-        if (!brand) return false;
+      sampleVersion: item.commentsSampleVersion,
+      sampleCheckedAt: item.commentsCheckedAt ?? new Date(),
+      title: item.title,
+      comments: sample.map((row) => row.body),
+      credentials: this.aiCredentials,
+      queue: this.queue,
+      lockAndValidateTarget: async (tx) => {
         const [source] = await tx
           .select({ id: schema.newsSources.id })
           .from(schema.newsSources)
@@ -807,13 +835,16 @@ export class SourcesRepository {
               eq(schema.newsSources.brandId, brandId),
               eq(schema.newsSources.id, item.sourceId),
               eq(schema.newsSources.kind, "telegram"),
+              eq(schema.newsSources.isActive, true),
             ),
           )
-          .limit(1)
           .for("key share");
         if (!source) return false;
-        const [currentItem] = await tx
-          .select({ commentsCheckedAt: schema.newsItems.commentsCheckedAt })
+        const [locked] = await tx
+          .select({
+            sampleVersion: schema.newsItems.commentsSampleVersion,
+            dismissedAt: schema.newsItems.dismissedAt,
+          })
           .from(schema.newsItems)
           .where(
             and(
@@ -823,36 +854,10 @@ export class SourcesRepository {
               eq(schema.newsItems.id, itemId),
             ),
           )
-          .limit(1)
           .for("update");
-        if (currentItem?.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
-          return false;
-        }
-        await tx
-          .insert(schema.newsCommentAnalyses)
-          .values({
-            itemId,
-            orgId,
-            brandId,
-            sampleCheckedAt: checkedAt,
-            sampleSize: sample.length,
-            result: outcome.result,
-          })
-          .onConflictDoUpdate({
-            target: schema.newsCommentAnalyses.itemId,
-            set: {
-              sampleCheckedAt: checkedAt,
-              sampleSize: sample.length,
-              result: outcome.result,
-              createdAt: new Date(),
-            },
-          });
-        return true;
-      });
-      if (!saved) return { status: "stale" as const };
-      return this.commentAnalysis(orgId, brandId, itemId);
-    } finally {
-      await finishAnalysisAdmission(admission.id, orgId);
-    }
+        return locked?.sampleVersion === item.commentsSampleVersion && !locked.dismissedAt;
+      },
+    });
+    return status.status === "in_progress" ? this.commentAnalysis(orgId, brandId, itemId) : status;
   }
 }
