@@ -208,6 +208,13 @@ deadlock with a tenant delete, which locks the organization before cascading
 to either child. `FOR KEY SHARE` conflicts with the tenant delete but allows
 independent writers in the same organization to proceed concurrently.
 
+Approve and Reject also append prompt decision evidence. They take the
+organization's `FOR KEY SHARE` lock before adaptation and item locks so the
+event's organization foreign key adds no late edge. Historical run, revision,
+and item IDs in the event deliberately have no foreign key: the path reads the
+producing run and revisions without locking them after the item, and the
+journal survives deletion of those records.
+
 **`ai_credentials`** IS taken together with a table in the order, and is named
 here rather than left silent. `AiCredentialsRepository.delete` locks the key rows
 (the `DELETE ... RETURNING`) and then, in the same transaction, the org's queued

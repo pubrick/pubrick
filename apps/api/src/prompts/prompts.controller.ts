@@ -15,6 +15,7 @@ import {
   promptRevisionCreateSchema,
   promptRoleSchema,
 } from "@pubrick/shared";
+import { z } from "zod";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
@@ -57,5 +58,18 @@ export class PromptsController {
     @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
   ) {
     return this.prompts.usage(orgId, role, revisionId, days);
+  }
+
+  @Get(":role/revisions/:revisionId/decisions")
+  decisions(
+    @OrgId() orgId: string,
+    @Param("role", new ZodValidationPipe(promptRoleSchema)) role: PromptRole,
+    @Param("revisionId", ParseUUIDPipe) revisionId: string,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+    @Query("cursor", new ZodValidationPipe(z.string().uuid().optional())) cursor:
+      | string
+      | undefined,
+  ) {
+    return this.prompts.decisions(orgId, role, revisionId, days, cursor);
   }
 }

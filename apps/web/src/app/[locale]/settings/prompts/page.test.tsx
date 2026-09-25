@@ -110,4 +110,76 @@ describe("generation guidance page", () => {
     await user.selectOptions(screen.getByLabelText(en.Prompts.role), "writer");
     await waitFor(() => expect(screen.queryByText("Runs: 2")).not.toBeInTheDocument());
   });
+
+  it("shows historical decisions separately and loads the next keyset page", async () => {
+    const revision = {
+      id: "9e3abb7b-95b2-4d6f-b0df-e0801685d5ba",
+      role: "researcher",
+      version: 1,
+      guidance: "Find sources",
+      createdAt: "2026-09-23T00:00:00.000Z",
+    };
+    const firstId = "4f84b4d0-c44e-4557-8451-482f3a7e946b";
+    const secondId = "c904c7b9-0c7e-42cc-b7cc-cf9998f86c6e";
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === "/api/prompts/researcher/revisions") return [revision];
+      if (path === `/api/prompts/researcher/revisions/${revision.id}/decisions?days=30`) {
+        return {
+          revisionId: revision.id,
+          role: "researcher",
+          days: 30,
+          counts: { approved: 1, rejected: 1 },
+          rows: [
+            {
+              id: firstId,
+              contentItemId: "fa0f14e8-cb2d-47ac-aa96-afcf4e2d8f7e",
+              itemExists: true,
+              verdict: "approved",
+              decidedAt: "2026-09-24T12:00:00.000Z",
+            },
+          ],
+          nextCursor: firstId,
+        };
+      }
+      if (
+        path ===
+        `/api/prompts/researcher/revisions/${revision.id}/decisions?days=30&cursor=${firstId}`
+      ) {
+        return {
+          revisionId: revision.id,
+          role: "researcher",
+          days: 30,
+          counts: { approved: 1, rejected: 1 },
+          rows: [
+            {
+              id: secondId,
+              contentItemId: "bd14fddb-bd08-49d6-ae95-e1ef68b232de",
+              itemExists: false,
+              verdict: "rejected",
+              decidedAt: "2026-09-23T12:00:00.000Z",
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      return [];
+    });
+    render(<PromptsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Prompts.decisions }));
+    expect(await screen.findByText("Approved: 1 · Rejected: 1")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.Prompts.openDecisionDraft })).toHaveAttribute(
+      "href",
+      "/en/content/fa0f14e8-cb2d-47ac-aa96-afcf4e2d8f7e",
+    );
+    await user.click(screen.getByRole("button", { name: en.Prompts.loadMoreDecisions }));
+    expect(await screen.findByText(en.Prompts.removedDecisionDraft)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.Prompts.loadMoreDecisions }),
+    ).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(en.Prompts.role), "writer");
+    await waitFor(() =>
+      expect(screen.queryByText("Approved: 1 · Rejected: 1")).not.toBeInTheDocument(),
+    );
+  });
 });

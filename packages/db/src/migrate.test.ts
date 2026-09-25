@@ -165,6 +165,8 @@ const ZONED_COLUMNS = [
   "notification_settings.updated_at",
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
+  "prompt_decision_revisions.decided_at",
+  "prompt_decisions.created_at",
   "prompt_revisions.created_at",
   "publication_comment_analyses.created_at",
   "publication_comment_analyses.sample_checked_at",
@@ -422,6 +424,11 @@ const NON_ENUM_CHECKS = [
   "autopilot_scan_events_status_check",
   "autopilot_scan_events_decision_check",
   "autopilot_scan_events_terminal_check",
+  // 0079's immutable review events link only verified pinned revisions.
+  "prompt_decisions_verdict_check",
+  "prompt_decisions_ordinal_positive_check",
+  "prompt_decision_revisions_role_check",
+  "prompt_decision_revisions_version_positive_check",
   // 0076 adds explicit opt-in for publication reply sampling.
   "publication_comment_collection_configs_revision_check",
 ];

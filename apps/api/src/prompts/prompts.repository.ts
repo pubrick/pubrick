@@ -3,13 +3,14 @@ import { schema } from "@pubrick/db";
 import {
   CONTENT_STATUSES,
   type ContentStatus,
+  type PromptDecisionHistoryDto,
   type PromptRevisionCreate,
   type PromptRevisionUsageDto,
   type PromptRole,
   RUN_STATUSES,
   type RunStatus,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db";
 
 const COLUMNS = {
@@ -57,6 +58,113 @@ export function pinnedRunGroups(
 
 @Injectable()
 export class PromptsRepository {
+  async decisions(
+    orgId: string,
+    role: PromptRole,
+    revisionId: string,
+    days: 7 | 30 | 90,
+    cursor: string | undefined,
+  ): Promise<PromptDecisionHistoryDto> {
+    const [revision] = await db
+      .select({ id: schema.promptRevisions.id })
+      .from(schema.promptRevisions)
+      .where(
+        and(
+          eq(schema.promptRevisions.orgId, orgId),
+          eq(schema.promptRevisions.role, role),
+          eq(schema.promptRevisions.id, revisionId),
+        ),
+      )
+      .limit(1);
+    if (!revision) throw new NotFoundException("Prompt revision not found");
+
+    const scope = and(
+      eq(schema.promptDecisionRevisions.orgId, orgId),
+      eq(schema.promptDecisionRevisions.role, role),
+      eq(schema.promptDecisionRevisions.revisionId, revisionId),
+      gte(schema.promptDecisionRevisions.decidedAt, sql`now() - (${days} * interval '1 day')`),
+    );
+    const totals = await db
+      .select({ verdict: schema.promptDecisions.verdict, count: sql<number>`count(*)::int` })
+      .from(schema.promptDecisionRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .where(scope)
+      .groupBy(schema.promptDecisions.verdict);
+    const counts = { approved: 0, rejected: 0 };
+    for (const total of totals) counts[total.verdict] = total.count;
+
+    let seek: { decidedAt: Date; decisionId: string } | undefined;
+    if (cursor) {
+      const [row] = await db
+        .select({
+          decidedAt: schema.promptDecisionRevisions.decidedAt,
+          decisionId: schema.promptDecisionRevisions.decisionId,
+        })
+        .from(schema.promptDecisionRevisions)
+        .where(and(scope, eq(schema.promptDecisionRevisions.decisionId, cursor)))
+        .limit(1);
+      if (!row) throw new NotFoundException("Decision cursor not found");
+      seek = row;
+    }
+    const page = await db
+      .select({
+        id: schema.promptDecisions.id,
+        contentItemId: schema.promptDecisions.contentItemId,
+        liveItemId: schema.contentItems.id,
+        verdict: schema.promptDecisions.verdict,
+        decidedAt: schema.promptDecisionRevisions.decidedAt,
+      })
+      .from(schema.promptDecisionRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .leftJoin(
+        schema.contentItems,
+        and(
+          eq(schema.contentItems.id, schema.promptDecisions.contentItemId),
+          eq(schema.contentItems.orgId, orgId),
+        ),
+      )
+      .where(
+        and(
+          scope,
+          seek
+            ? sql`(${schema.promptDecisionRevisions.decidedAt}, ${schema.promptDecisionRevisions.decisionId}) < (${seek.decidedAt}, ${seek.decisionId})`
+            : undefined,
+        ),
+      )
+      .orderBy(
+        desc(schema.promptDecisionRevisions.decidedAt),
+        desc(schema.promptDecisionRevisions.decisionId),
+      )
+      .limit(21);
+    const visible = page.slice(0, 20);
+    return {
+      revisionId,
+      role,
+      days,
+      counts,
+      rows: visible.map((row) => ({
+        id: row.id,
+        contentItemId: row.contentItemId,
+        itemExists: row.liveItemId !== null,
+        verdict: row.verdict,
+        decidedAt: row.decidedAt.toISOString(),
+      })),
+      nextCursor: page.length > 20 ? (visible.at(-1)?.id ?? null) : null,
+    };
+  }
+
   /** Only saved guidance appears here; the built-in roles live in packages/ai. */
   list(orgId: string) {
     return db

@@ -36,6 +36,8 @@ import {
   normalizeHashtags,
   normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
+  PROMPT_ROLES,
+  type PromptRole,
   planRefineAccept,
   type RefineAcceptPlan,
   type RefineProposal,
@@ -49,6 +51,7 @@ import {
 } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
+import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
@@ -3842,6 +3845,163 @@ export class ContentRepository {
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
   }
 
+  /** The decision journal has an org FK. Take its implicit lock before item locks. */
+  private async holdDecisionOrganization(tx: Tx, orgId: string): Promise<void> {
+    await tx
+      .select({ id: schema.organization.id })
+      .from(schema.organization)
+      .where(eq(schema.organization.id, orgId))
+      .for("key share");
+  }
+
+  /** Read only after the item lock: delivery status alone is not a new verdict. */
+  private async shouldJournalDecision(
+    tx: Tx,
+    orgId: string,
+    id: string,
+    verdict: "approved" | "rejected",
+    hasFailedTarget = false,
+  ): Promise<{ should: boolean; ordinal: number }> {
+    const [item] = await tx
+      .select({ status: schema.contentItems.status })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    const [last] = await tx
+      .select({ verdict: schema.promptDecisions.verdict, ordinal: schema.promptDecisions.ordinal })
+      .from(schema.promptDecisions)
+      .where(
+        and(eq(schema.promptDecisions.orgId, orgId), eq(schema.promptDecisions.contentItemId, id)),
+      )
+      .orderBy(desc(schema.promptDecisions.ordinal))
+      .limit(1);
+    const preStatus = item?.status;
+    const should =
+      verdict === "approved"
+        ? // A failed delivery, an edited draft, or a partly published fan-out
+          // can require a new human approval even after an earlier approval.
+          preStatus === "draft" ||
+          preStatus === "failed" ||
+          preStatus === "rejected" ||
+          preStatus === "partially_published" ||
+          hasFailedTarget ||
+          last?.verdict === "rejected"
+        : // A re-opened draft can be rejected again, but a delivery's status
+          // change alone never manufactures a second reject verdict.
+          (preStatus !== "rejected" && preStatus !== "partially_published") ||
+          last?.verdict === "approved";
+    return { should, ordinal: (last?.ordinal ?? 0) + 1 };
+  }
+
+  /** Persist the observed human act without locking a run after the item. */
+  private async appendPromptDecision(
+    tx: Tx,
+    orgId: string,
+    id: string,
+    verdict: "approved" | "rejected",
+    ordinal: number,
+  ): Promise<void> {
+    const fullAiMasters = await tx
+      .select({ runId: schema.contentVersions.runId })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, id),
+          isNull(schema.contentVersions.adaptationId),
+          eq(schema.contentVersions.origin, "ai"),
+          eq(schema.contentVersions.scope, "full"),
+        ),
+      )
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id))
+      .limit(2);
+    let runId: string | null = null;
+    let revisions: { role: PromptRole; revisionId: string; version: number }[] = [];
+    // A second full AI master has no single trustworthy producing-run anchor.
+    if (fullAiMasters.length === 1 && fullAiMasters[0]?.runId) {
+      const [run] = await tx
+        .select({
+          id: schema.pipelineRuns.id,
+          guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
+        })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.id, fullAiMasters[0].runId),
+            eq(schema.pipelineRuns.contentItemId, id),
+          ),
+        )
+        .limit(1);
+      const snapshot = run?.guidanceSnapshot;
+      if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+        const entries = Object.entries(snapshot);
+        const wellFormed = entries.every(
+          ([role, value]) =>
+            (PROMPT_ROLES as readonly string[]).includes(role) &&
+            value !== null &&
+            typeof value === "object" &&
+            z.string().uuid().safeParse(value.revisionId).success &&
+            Number.isInteger(value.version) &&
+            value.version > 0,
+        );
+        if (wellFormed) {
+          const candidates = entries.map(([role, value]) => ({
+            role: role as PromptRole,
+            revisionId: value.revisionId,
+            version: value.version,
+          }));
+          const stored = candidates.length
+            ? await tx
+                .select({
+                  id: schema.promptRevisions.id,
+                  role: schema.promptRevisions.role,
+                  version: schema.promptRevisions.version,
+                })
+                .from(schema.promptRevisions)
+                .where(
+                  and(
+                    eq(schema.promptRevisions.orgId, orgId),
+                    inArray(
+                      schema.promptRevisions.id,
+                      candidates.map((candidate) => candidate.revisionId),
+                    ),
+                  ),
+                )
+            : [];
+          if (
+            candidates.every((candidate) =>
+              stored.some(
+                (revision) =>
+                  revision.id === candidate.revisionId &&
+                  revision.role === candidate.role &&
+                  revision.version === candidate.version,
+              ),
+            )
+          ) {
+            runId = run.id;
+            revisions = candidates;
+          }
+        }
+      }
+    }
+    const decidedAt = new Date();
+    const [decision] = await tx
+      .insert(schema.promptDecisions)
+      .values({ orgId, contentItemId: id, runId, verdict, ordinal, createdAt: decidedAt })
+      .returning({ id: schema.promptDecisions.id });
+    if (decision && revisions.length) {
+      await tx.insert(schema.promptDecisionRevisions).values(
+        revisions.map((revision) => ({
+          orgId,
+          decisionId: decision.id,
+          ...revision,
+          decidedAt,
+        })),
+      );
+    }
+  }
+
   /**
    * Which of these adaptations had an attempt whose outcome nobody knows.
    *
@@ -4183,6 +4343,7 @@ export class ContentRepository {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
     await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, [
         "pending",
@@ -4191,6 +4352,13 @@ export class ContentRepository {
         "manual_ready",
       ]);
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
+      const journalDecision = await this.shouldJournalDecision(
+        tx,
+        orgId,
+        id,
+        "approved",
+        targets.some((target) => target.status === "failed"),
+      );
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
@@ -4466,6 +4634,9 @@ export class ContentRepository {
       }
 
       await this.setItemStatus(tx, orgId, id, "approved");
+      if (journalDecision.should && (sendable.length > 0 || manualReady.length > 0)) {
+        await this.appendPromptDecision(tx, orgId, id, "approved", journalDecision.ordinal);
+      }
     });
 
     return this.get(orgId, id);
@@ -4807,6 +4978,7 @@ export class ContentRepository {
    */
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,
@@ -4816,6 +4988,7 @@ export class ContentRepository {
         of: "the fan-out",
         hasOutstanding: outstanding.length > 0,
       });
+      const journalDecision = await this.shouldJournalDecision(tx, orgId, id, "rejected");
 
       for (const adaptation of outstanding) {
         if (adaptation.status !== "manual_ready") {
@@ -4844,6 +5017,9 @@ export class ContentRepository {
       }
 
       await this.setItemStatus(tx, orgId, id, live ? "partially_published" : "rejected");
+      if (journalDecision.should && (outstanding.length > 0 || !live)) {
+        await this.appendPromptDecision(tx, orgId, id, "rejected", journalDecision.ordinal);
+      }
     });
 
     return this.get(orgId, id);

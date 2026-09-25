@@ -20,6 +20,7 @@ export * from "./knowledge.js";
 export * from "./media.js";
 export * from "./memorable-dates.js";
 export * from "./notifications.js";
+export * from "./prompt-decisions.js";
 export * from "./prompts.js";
 export * from "./publication-comments.js";
 export * from "./publication-metrics.js";

@@ -60,10 +60,12 @@ export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
 export {
   PROMPT_ROLES,
+  type PromptDecisionHistoryDto,
   type PromptRevisionCreate,
   type PromptRevisionDto,
   type PromptRevisionUsageDto,
   type PromptRole,
+  promptDecisionHistoryDtoSchema,
   promptRevisionCreateSchema,
   promptRevisionDtoSchema,
   promptRevisionUsageDtoSchema,
