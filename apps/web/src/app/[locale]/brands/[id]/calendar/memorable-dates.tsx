@@ -32,7 +32,15 @@ const initial = {
   isActive: true,
 };
 
-export function MemorableDates({ brandId, selectedDay }: { brandId: string; selectedDay: string }) {
+export function MemorableDates({
+  brandId,
+  selectedDay,
+  readOnly = false,
+}: {
+  brandId: string;
+  selectedDay: string;
+  readOnly?: boolean;
+}) {
   const t = useTranslations("CalendarMemorable");
   const te = useTranslations("Errors");
   const [data, setData] = useState<DateList | null>(null);
@@ -87,7 +95,7 @@ export function MemorableDates({ brandId, selectedDay }: { brandId: string; sele
   }
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || readOnly) return;
     const body = editing
       ? memorableDateUpdateSchema.safeParse(form)
       : memorableDateCreateSchema.safeParse({ brandId, ...form });
@@ -118,7 +126,7 @@ export function MemorableDates({ brandId, selectedDay }: { brandId: string; sele
     }
   }
   async function remove() {
-    if (!removing || busy) return;
+    if (!removing || busy || readOnly) return;
     setBusy(true);
     try {
       await api(`/api/calendar/memorable-dates/${removing.id}?brandId=${brandId}`, {
@@ -135,6 +143,42 @@ export function MemorableDates({ brandId, selectedDay }: { brandId: string; sele
     } finally {
       setBusy(false);
     }
+  }
+
+  if (readOnly) {
+    return (
+      <section className="mb-6" aria-label={t("title")}>
+        <h2 className="text-lg font-semibold text-fg">{t("title")}</h2>
+        <p className="mb-3 text-sm text-fg-secondary">
+          {t("hint", { zone: data?.timezone ?? "UTC" })}
+        </p>
+        {error && (
+          <p role="alert" className="mb-3 text-sm text-danger">
+            {error}
+          </p>
+        )}
+        {data?.dates.length === 0 && <p className="text-sm text-fg-secondary">{t("empty")}</p>}
+        {data && data.dates.length > 0 && (
+          <div className="space-y-2">
+            {data.dates.map((date) => (
+              <Card key={date.id}>
+                <p className="font-medium text-fg">
+                  {date.title}
+                  {!date.isActive ? ` · ${t("inactive")}` : ""}
+                </p>
+                <p className="text-sm text-fg-secondary">{date.monthDay}</p>
+                {date.suggestedContentTypes.length > 0 && (
+                  <p className="mt-1 text-sm text-fg-secondary">
+                    {t("formats")}:{" "}
+                    {date.suggestedContentTypes.map((type) => t(`type_${type}`)).join(", ")}
+                  </p>
+                )}
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+    );
   }
 
   return (

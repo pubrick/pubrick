@@ -33,6 +33,26 @@ describe("memorable date refusals", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
+  it("shows all saved dates in read-only mode without management controls", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      response(200, {
+        timezone: "UTC",
+        dates: [date, { ...date, id: "other-date", title: "Winter campaign", isActive: false }],
+      }),
+    );
+    render(<MemorableDates brandId={brandId} selectedDay={selectedDay} readOnly />, {
+      locale: "es",
+    });
+    expect(await screen.findByText("Leap day")).toBeInTheDocument();
+    expect(screen.getByText(/Winter campaign/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: es.CalendarMemorable.manage }),
+    ).not.toBeInTheDocument();
+    expect(
+      vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === "GET"),
+    ).toBe(true);
+  });
+
   it("translates a list refusal", async () => {
     vi.mocked(fetch).mockResolvedValue(
       response(404, refusalBody(404, "brand_not_found", "Brand not found")),

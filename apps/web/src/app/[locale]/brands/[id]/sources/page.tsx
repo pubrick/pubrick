@@ -33,6 +33,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { AutoComments } from "./auto-comments";
 import { RecheckPanel } from "./recheck-panel";
 
@@ -72,6 +73,13 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const locale = useLocale();
   const router = useRouter();
   const urlSearchParams = useSearchParams();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const role: string | undefined = organization?.members?.find(
+    (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+  )?.role;
+  const canManageSources = ["owner", "admin", "member"].includes(role ?? "");
+  const canEditStory = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
   const [brand, setBrand] = useState<Brand | null>(null);
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
@@ -670,9 +678,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     <AppShell
       title={brand ? t("title", { brand: brand.name }) : <Skeleton lines={1} className="w-40" />}
       primaryAction={
-        <Button type="submit" form={FORM_ID} disabled={busy}>
-          {t("add")}
-        </Button>
+        canManageSources ? (
+          <Button type="submit" form={FORM_ID} disabled={busy}>
+            {t("add")}
+          </Button>
+        ) : undefined
       }
     >
       <Link
@@ -698,70 +708,72 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         </p>
       )}
 
-      <Card className="mb-6">
-        <form id={FORM_ID} onSubmit={addSource} className="grid gap-3 sm:grid-cols-[1fr_1fr_2fr]">
-          <Select
-            label={t("kind")}
-            value={kind}
-            onChange={(event) => {
-              setKind(event.target.value as typeof kind);
-              setUrl("");
-              setInvite("");
-            }}
-          >
-            <option value="rss">{t("rss")}</option>
-            <option value="telegram">{t("telegram")}</option>
-            <option value="telegram_private">{t("telegramPrivate")}</option>
-          </Select>
-          <Input
-            label={t("name")}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={120}
-            required
-          />
-          {kind === "telegram_private" ? (
-            <Input
-              id="private-telegram-invite"
-              label={t("privateInvite")}
-              type="password"
-              autoComplete="off"
-              value={invite}
-              onChange={(event) => setInvite(event.target.value)}
-              maxLength={160}
-              required
-            />
-          ) : (
-            <Input
-              label={t(kind === "telegram" ? "telegramUrl" : "url")}
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              inputMode="url"
-              maxLength={2048}
-              required
-            />
-          )}
-        </form>
-        {(kind === "telegram" || kind === "telegram_private") && (
-          <p className="mt-3 text-sm text-fg-secondary">
-            {!telegramConnected && <>{t("telegramSetup")} </>}
-            {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
-            <Link href={`/${locale}/settings/telegram`} className="underline">
-              {t("telegramSettings")}
-            </Link>{" "}
-            <a
-              href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
+      {canManageSources && (
+        <Card className="mb-6">
+          <form id={FORM_ID} onSubmit={addSource} className="grid gap-3 sm:grid-cols-[1fr_1fr_2fr]">
+            <Select
+              label={t("kind")}
+              value={kind}
+              onChange={(event) => {
+                setKind(event.target.value as typeof kind);
+                setUrl("");
+                setInvite("");
+              }}
             >
-              {t("setupGuide")}
-            </a>
-          </p>
-        )}
-      </Card>
+              <option value="rss">{t("rss")}</option>
+              <option value="telegram">{t("telegram")}</option>
+              <option value="telegram_private">{t("telegramPrivate")}</option>
+            </Select>
+            <Input
+              label={t("name")}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={120}
+              required
+            />
+            {kind === "telegram_private" ? (
+              <Input
+                id="private-telegram-invite"
+                label={t("privateInvite")}
+                type="password"
+                autoComplete="off"
+                value={invite}
+                onChange={(event) => setInvite(event.target.value)}
+                maxLength={160}
+                required
+              />
+            ) : (
+              <Input
+                label={t(kind === "telegram" ? "telegramUrl" : "url")}
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                inputMode="url"
+                maxLength={2048}
+                required
+              />
+            )}
+          </form>
+          {(kind === "telegram" || kind === "telegram_private") && (
+            <p className="mt-3 text-sm text-fg-secondary">
+              {!telegramConnected && <>{t("telegramSetup")} </>}
+              {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
+              <Link href={`/${locale}/settings/telegram`} className="underline">
+                {t("telegramSettings")}
+              </Link>{" "}
+              <a
+                href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {t("setupGuide")}
+              </a>
+            </p>
+          )}
+        </Card>
+      )}
 
-      <AutoComments brandId={id} telegramConnected={telegramConnected} />
+      {canManageSources && <AutoComments brandId={id} telegramConnected={telegramConnected} />}
       <PaidReplyBrandSettings brandId={id} kind="source" />
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
@@ -774,14 +786,16 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <EmptyState
             title={t("emptySources")}
             action={
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  document.querySelector<HTMLInputElement>(`#${FORM_ID} input`)?.focus()
-                }
-              >
-                {t("addFirst")}
-              </Button>
+              canManageSources ? (
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    document.querySelector<HTMLInputElement>(`#${FORM_ID} input`)?.focus()
+                  }
+                >
+                  {t("addFirst")}
+                </Button>
+              ) : undefined
             }
           />
         ) : (
@@ -815,29 +829,31 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                 </span>
               }
               trailing={
-                <>
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(source)}>
-                    {t("edit")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => refresh(source)}
-                    disabled={!source.isActive}
-                  >
-                    {t("refresh")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setActive(source, !source.isActive)}
-                  >
-                    {source.isActive ? t("pause") : t("resume")}
-                  </Button>
-                  <Button variant="danger" size="sm" onClick={() => setPendingDelete(source)}>
-                    {t("remove")}
-                  </Button>
-                </>
+                canManageSources ? (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(source)}>
+                      {t("edit")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => refresh(source)}
+                      disabled={!source.isActive}
+                    >
+                      {t("refresh")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setActive(source, !source.isActive)}
+                    >
+                      {source.isActive ? t("pause") : t("resume")}
+                    </Button>
+                    <Button variant="danger" size="sm" onClick={() => setPendingDelete(source)}>
+                      {t("remove")}
+                    </Button>
+                  </>
+                ) : undefined
               }
             />
           ))
@@ -929,12 +945,19 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             {t("clear")}
           </Button>
         )}
-        <Button variant="secondary" onClick={rerankNews} disabled={rerankBusy} className="self-end">
-          {t(rerankBusy ? "reranking" : rerankCursor ? "rerankContinue" : "rerank")}
-        </Button>
+        {canManageSources && (
+          <Button
+            variant="secondary"
+            onClick={rerankNews}
+            disabled={rerankBusy}
+            className="self-end"
+          >
+            {t(rerankBusy ? "reranking" : rerankCursor ? "rerankContinue" : "rerank")}
+          </Button>
+        )}
       </div>
       <p className="mb-3 text-sm text-fg-secondary">{t("minScoreHint")}</p>
-      <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
+      {canManageSources && <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>}
       <RecheckPanel brandId={id} onFinished={load} />
       <Card padded={false}>
         {items === null ? (
@@ -1019,59 +1042,73 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                     {t("open")}
                   </a>
                   {view === "dismissed" ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={itemActionBusy !== null}
-                      onClick={() => void setDismissed(item, false)}
-                    >
-                      {t("restoreItem")}
-                    </Button>
+                    canManageSources ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={itemActionBusy !== null}
+                        onClick={() => void setDismissed(item, false)}
+                      >
+                        {t("restoreItem")}
+                      </Button>
+                    ) : null
                   ) : (
                     <>
-                      <Button variant="secondary" size="sm" onClick={() => openRun(item)}>
-                        {t("createDraft")}
-                      </Button>
-                      <Menu
-                        trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
-                        items={[
-                          ...(item.relevanceStatus === "scored"
-                            ? []
-                            : [
-                                {
-                                  label: t(
-                                    item.relevanceStatus === "failed" ? "retryScore" : "score",
-                                  ),
-                                  onSelect: () => void score(item),
-                                },
-                              ]),
-                          { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
-                          {
-                            label: t(
-                              item.editorSignal === "relevant" ? "clearRelevant" : "relevant",
-                            ),
-                            onSelect: () =>
-                              void setSignal(
-                                item,
-                                item.editorSignal === "relevant" ? null : "relevant",
+                      {canEditStory && (
+                        <Button variant="secondary" size="sm" onClick={() => openRun(item)}>
+                          {t("createDraft")}
+                        </Button>
+                      )}
+                      {canEditStory && (
+                        <Menu
+                          trigger={
+                            <span className={buttonClasses("ghost", "sm")}>{t("more")}</span>
+                          }
+                          items={[
+                            ...(!canManageSources || item.relevanceStatus === "scored"
+                              ? []
+                              : [
+                                  {
+                                    label: t(
+                                      item.relevanceStatus === "failed" ? "retryScore" : "score",
+                                    ),
+                                    onSelect: () => void score(item),
+                                  },
+                                ]),
+                            { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
+                            {
+                              label: t(
+                                item.editorSignal === "relevant" ? "clearRelevant" : "relevant",
                               ),
-                          },
-                          {
-                            label: t(
-                              item.editorSignal === "irrelevant" ? "clearIrrelevant" : "irrelevant",
-                            ),
-                            onSelect: () =>
-                              void setSignal(
-                                item,
-                                item.editorSignal === "irrelevant" ? null : "irrelevant",
+                              onSelect: () =>
+                                void setSignal(
+                                  item,
+                                  item.editorSignal === "relevant" ? null : "relevant",
+                                ),
+                            },
+                            {
+                              label: t(
+                                item.editorSignal === "irrelevant"
+                                  ? "clearIrrelevant"
+                                  : "irrelevant",
                               ),
-                          },
-                          {
-                            label: t("dismissItem"),
-                            onSelect: () => void setDismissed(item, true),
-                          },
-                        ]}
-                      />
+                              onSelect: () =>
+                                void setSignal(
+                                  item,
+                                  item.editorSignal === "irrelevant" ? null : "irrelevant",
+                                ),
+                            },
+                            ...(canManageSources
+                              ? [
+                                  {
+                                    label: t("dismissItem"),
+                                    onSelect: () => void setDismissed(item, true),
+                                  },
+                                ]
+                              : []),
+                          ]}
+                        />
+                      )}
                     </>
                   )}
                   {sources?.some(
@@ -1109,14 +1146,16 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             <Button variant="secondary" onClick={closeComments}>
               {t("close")}
             </Button>
-            <Button
-              disabled={
-                !sources?.find((source) => source.id === activeCommentsItem?.sourceId)?.isActive
-              }
-              onClick={() => activeCommentsItem && refreshComments(activeCommentsItem)}
-            >
-              {t("collectComments")}
-            </Button>
+            {canManageSources && (
+              <Button
+                disabled={
+                  !sources?.find((source) => source.id === activeCommentsItem?.sourceId)?.isActive
+                }
+                onClick={() => activeCommentsItem && refreshComments(activeCommentsItem)}
+              >
+                {t("collectComments")}
+              </Button>
+            )}
           </>
         }
       >
@@ -1178,7 +1217,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
               <div className="flex flex-wrap gap-2">
-                {activeCommentsItem &&
+                {canManageSources &&
+                  activeCommentsItem &&
                   commentAnalysis &&
                   ["not_analyzed", "stale"].includes(
                     commentAnalysis.current?.status ?? commentAnalysis.status,
@@ -1243,65 +1283,69 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         )}
       </Modal>
 
-      <Modal
-        open={editingSource !== null}
-        onClose={closeEdit}
-        title={t("editTitle")}
-        footer={
-          <>
-            <Button variant="secondary" disabled={editBusy} onClick={closeEdit}>
-              {t("cancel")}
-            </Button>
-            <Button disabled={editBusy} onClick={saveSource}>
-              {t("save")}
-            </Button>
-          </>
-        }
-      >
-        {editError && (
-          <p role="alert" className="mb-4 text-sm text-danger">
-            {editError}
-          </p>
-        )}
-        <div className="space-y-4">
-          <Input
-            label={t("name")}
-            value={editName}
-            onChange={(event) => setEditName(event.target.value)}
-            maxLength={120}
-            required
-          />
-          {editingSource?.kind === "telegram_private" ? (
-            <p className="text-sm text-fg-secondary">{t("privateIdentityFixed")}</p>
-          ) : (
+      {canManageSources && (
+        <Modal
+          open={editingSource !== null}
+          onClose={closeEdit}
+          title={t("editTitle")}
+          footer={
+            <>
+              <Button variant="secondary" disabled={editBusy} onClick={closeEdit}>
+                {t("cancel")}
+              </Button>
+              <Button disabled={editBusy} onClick={saveSource}>
+                {t("save")}
+              </Button>
+            </>
+          }
+        >
+          {editError && (
+            <p role="alert" className="mb-4 text-sm text-danger">
+              {editError}
+            </p>
+          )}
+          <div className="space-y-4">
             <Input
-              label={t(editingSource?.kind === "telegram" ? "telegramUrl" : "url")}
-              value={editUrl}
-              onChange={(event) => setEditUrl(event.target.value)}
-              inputMode="url"
-              maxLength={2048}
+              label={t("name")}
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+              maxLength={120}
               required
             />
-          )}
-        </div>
-      </Modal>
-      <Modal
-        open={pendingDelete !== null}
-        onClose={closeDelete}
-        title={t("removeTitle")}
-        footer={
-          <>
-            <Button variant="secondary" onClick={closeDelete}>
-              {t("cancel")}
-            </Button>
-            <Button variant="danger" onClick={remove}>
-              {t("remove")}
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
-      </Modal>
+            {editingSource?.kind === "telegram_private" ? (
+              <p className="text-sm text-fg-secondary">{t("privateIdentityFixed")}</p>
+            ) : (
+              <Input
+                label={t(editingSource?.kind === "telegram" ? "telegramUrl" : "url")}
+                value={editUrl}
+                onChange={(event) => setEditUrl(event.target.value)}
+                inputMode="url"
+                maxLength={2048}
+                required
+              />
+            )}
+          </div>
+        </Modal>
+      )}
+      {canManageSources && (
+        <Modal
+          open={pendingDelete !== null}
+          onClose={closeDelete}
+          title={t("removeTitle")}
+          footer={
+            <>
+              <Button variant="secondary" onClick={closeDelete}>
+                {t("cancel")}
+              </Button>
+              <Button variant="danger" onClick={remove}>
+                {t("remove")}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
+        </Modal>
+      )}
       <Modal
         open={selectedItem !== null}
         onClose={closeRun}

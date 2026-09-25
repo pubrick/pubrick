@@ -1,6 +1,7 @@
 import { calendarSlotCreateSchema, calendarSlotsBulkCreateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
 import { fireEvent, renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../../messages/en.json";
@@ -19,8 +20,102 @@ function jsonResponse(body: unknown): Response {
 describe("brand calendar", () => {
   beforeEach(() => {
     signedInSession();
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "owner", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
     vi.stubGlobal("fetch", vi.fn());
     window.history.replaceState({}, "", "/");
+  });
+
+  afterEach(() => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: null,
+      isPending: false,
+    } as ReturnType<typeof authClient.useActiveOrganization>);
+  });
+
+  it("keeps the calendar readable for an author without slot actions", async () => {
+    vi.spyOn(authClient, "useActiveOrganization").mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "author", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).includes("/api/calendar/memorable-dates")
+        ? jsonResponse({
+            timezone: "UTC",
+            dates: [
+              {
+                id: "date-1",
+                monthDay: "09-25",
+                title: "Editorial day",
+                leadDays: 14,
+                suggestedContentTypes: [],
+                isActive: true,
+              },
+            ],
+          })
+        : String(input).includes("/api/calendar/slots")
+          ? jsonResponse([
+              {
+                id: "slot-1",
+                scheduledAt: new Date().toISOString(),
+                brief: "Ready for review",
+                seoKeywords: [],
+                topicId: null,
+                topicTitle: null,
+                channelIds: [],
+                generateCover: false,
+                notes: null,
+                runId: null,
+                errorCode: null,
+                retryAfter: null,
+              },
+            ])
+          : jsonResponse([]),
+    );
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    expect(await screen.findByText("Ready for review")).toBeInTheDocument();
+    expect(await screen.findByText("Editorial day")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.CalendarMemorable.manage }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Calendar.add })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Calendar.edit })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Calendar.remove })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Calendar.nextMonth })).toBeInTheDocument();
+  });
+
+  it("lets an editor plan slots while keeping memorable dates read-only", async () => {
+    vi.spyOn(authClient, "useActiveOrganization").mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "editor", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).includes("/api/calendar/memorable-dates")
+        ? jsonResponse({ timezone: "UTC", dates: [] })
+        : jsonResponse([]),
+    );
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    expect(
+      (await screen.findAllByRole("button", { name: en.Calendar.add })).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: en.CalendarMemorable.manage }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText(en.CalendarMemorable.empty)).toBeInTheDocument();
   });
 
   it("opens and focuses a linked manual planning slot on its calendar day", async () => {

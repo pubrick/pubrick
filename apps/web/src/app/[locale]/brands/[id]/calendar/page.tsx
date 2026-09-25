@@ -24,6 +24,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { MemorableDates } from "./memorable-dates";
 
 type Channel = { id: string; name: string; platform: string };
@@ -86,6 +87,13 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const role: string | undefined = organization?.members?.find(
+    (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+  )?.role;
+  const canMutateCalendar = ["owner", "admin", "member", "editor"].includes(role ?? "");
+  const canManageMemorableDates = ["owner", "admin", "member"].includes(role ?? "");
   const [month, setMonth] = useState(() => monthStart(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
@@ -229,7 +237,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || !canMutateCalendar) return;
     setFormError(null);
     if (selectedChannels.length === 0) {
       setFormError(t("chooseChannel"));
@@ -285,7 +293,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   }
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!editing || busy) return;
+    if (!editing || busy || !canMutateCalendar) return;
     if (selectedChannels.length === 0) {
       setFormError(t("chooseChannel"));
       return;
@@ -324,7 +332,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     }
   }
   async function remove() {
-    if (!removing || busy) return;
+    if (!removing || busy || !canMutateCalendar) return;
     setBusy(true);
     try {
       await api(`/api/calendar/slots/${removing.id}?brandId=${brandId}`, { method: "DELETE" });
@@ -623,9 +631,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     <AppShell
       title={t("title")}
       primaryAction={
-        <Button type="submit" form={FORM_ID} disabled={busy || channels?.length === 0}>
-          {t("add")}
-        </Button>
+        canMutateCalendar ? (
+          <Button type="submit" form={FORM_ID} disabled={busy || channels?.length === 0}>
+            {t("add")}
+          </Button>
+        ) : undefined
       }
     >
       <Link
@@ -714,13 +724,15 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           <EmptyState
             title={t("emptyDay")}
             action={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => document.getElementById("calendar-brief")?.focus()}
-              >
-                {t("add")}
-              </Button>
+              canMutateCalendar ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => document.getElementById("calendar-brief")?.focus()}
+                >
+                  {t("add")}
+                </Button>
+              ) : undefined
             }
           />
         ) : (
@@ -795,7 +807,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                         >
                           {t("viewRun")}
                         </Link>
-                      ) : (
+                      ) : canMutateCalendar ? (
                         <>
                           <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
                             {t("edit")}
@@ -804,7 +816,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                             {t("remove")}
                           </Button>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </Card>
@@ -813,218 +825,227 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           </div>
         )}
       </section>
-      <MemorableDates brandId={brandId} selectedDay={selectedDay} />
-      <Card>
-        <h2 className="mb-3 text-lg font-semibold text-fg">{t("addTitle")}</h2>
-        <form id={FORM_ID} onSubmit={add}>
-          {fields(false)}
-        </form>
-      </Card>
-      <Card className="mt-6">
-        <h2 className="mb-2 text-lg font-semibold text-fg">{t("bulkTitle")}</h2>
-        <p className="mb-4 text-sm text-fg-secondary">{t("bulkIntro")}</p>
-        {bulkSuccess !== null && (
-          <p role="status" className="mb-4 text-sm text-fg-secondary">
-            {t("bulkSuccess", { count: bulkSuccess })}
-          </p>
-        )}
-        <form id={BULK_FORM_ID} onSubmit={reviewBulk} className="space-y-4" noValidate>
-          <fieldset className="rounded-card border border-border p-3">
-            <legend className="px-1 text-sm font-medium text-fg">{t("bulkTopics")}</legend>
-            <p className="mb-2 text-sm text-fg-secondary" aria-live="polite">
-              {t("bulkSelectedCount", { count: bulkRows.length, limit: BULK_LIMIT })}
-            </p>
-            {topics.length === 0 ? (
-              <div className="space-y-1 text-sm">
-                <p className="text-fg-secondary">{t("bulkNoTopics")}</p>
-                <Link
-                  href={`/${locale}/brands/${brandId}/topics`}
-                  className="inline-block min-h-11 content-center text-accent underline"
-                >
-                  {t("bulkOpenTopics")}
-                </Link>
-              </div>
-            ) : (
-              <div className="max-h-52 space-y-1 overflow-y-auto">
-                {topics.map((topic) => {
-                  const checked = bulkRows.some((row) => row.topicId === topic.id);
-                  return (
-                    <label
-                      key={topic.id}
-                      className="flex min-h-11 items-center gap-3 text-sm text-fg"
+      <MemorableDates
+        brandId={brandId}
+        selectedDay={selectedDay}
+        readOnly={!canManageMemorableDates}
+      />
+      {canMutateCalendar && (
+        <>
+          <Card>
+            <h2 className="mb-3 text-lg font-semibold text-fg">{t("addTitle")}</h2>
+            <form id={FORM_ID} onSubmit={add}>
+              {fields(false)}
+            </form>
+          </Card>
+          <Card className="mt-6">
+            <h2 className="mb-2 text-lg font-semibold text-fg">{t("bulkTitle")}</h2>
+            <p className="mb-4 text-sm text-fg-secondary">{t("bulkIntro")}</p>
+            {bulkSuccess !== null && (
+              <p role="status" className="mb-4 text-sm text-fg-secondary">
+                {t("bulkSuccess", { count: bulkSuccess })}
+              </p>
+            )}
+            <form id={BULK_FORM_ID} onSubmit={reviewBulk} className="space-y-4" noValidate>
+              <fieldset className="rounded-card border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-fg">{t("bulkTopics")}</legend>
+                <p className="mb-2 text-sm text-fg-secondary" aria-live="polite">
+                  {t("bulkSelectedCount", { count: bulkRows.length, limit: BULK_LIMIT })}
+                </p>
+                {topics.length === 0 ? (
+                  <div className="space-y-1 text-sm">
+                    <p className="text-fg-secondary">{t("bulkNoTopics")}</p>
+                    <Link
+                      href={`/${locale}/brands/${brandId}/topics`}
+                      className="inline-block min-h-11 content-center text-accent underline"
                     >
+                      {t("bulkOpenTopics")}
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="max-h-52 space-y-1 overflow-y-auto">
+                    {topics.map((topic) => {
+                      const checked = bulkRows.some((row) => row.topicId === topic.id);
+                      return (
+                        <label
+                          key={topic.id}
+                          className="flex min-h-11 items-center gap-3 text-sm text-fg"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={busy || (!checked && bulkRows.length >= BULK_LIMIT)}
+                            onChange={(e) => toggleBulkTopic(topic.id, e.target.checked)}
+                          />
+                          <span>{topic.title}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </fieldset>
+              {bulkRows.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-sm text-fg-secondary">{t("bulkDatesHint")}</p>
+                  {bulkRows.map((row) => {
+                    const topic = topics.find((item) => item.id === row.topicId);
+                    return (
+                      <Input
+                        key={row.topicId}
+                        type="datetime-local"
+                        label={t("bulkDateForTopic", { topic: topic?.title ?? row.topicId })}
+                        value={row.dateInput}
+                        min={localInput(new Date())}
+                        onChange={(e) => {
+                          setBulkError(null);
+                          setBulkSuccess(null);
+                          setBulkRows((current) =>
+                            current.map((item) =>
+                              item.topicId === row.topicId
+                                ? { ...item, dateInput: e.target.value }
+                                : item,
+                            ),
+                          );
+                        }}
+                        required
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              <fieldset className="rounded-card border border-border p-3">
+                <legend className="px-1 text-sm font-medium text-fg">{t("bulkChannels")}</legend>
+                <div className="flex flex-wrap gap-3">
+                  {(channels ?? []).map((channel) => (
+                    <label key={channel.id} className="flex min-h-11 items-center gap-2 text-sm">
                       <input
                         type="checkbox"
-                        checked={checked}
-                        disabled={busy || (!checked && bulkRows.length >= BULK_LIMIT)}
-                        onChange={(e) => toggleBulkTopic(topic.id, e.target.checked)}
+                        aria-label={t("bulkChannelLabel", { channel: channel.name })}
+                        checked={bulkChannels.includes(channel.id)}
+                        disabled={busy}
+                        onChange={(e) => {
+                          setBulkError(null);
+                          setBulkSuccess(null);
+                          setBulkChannels((current) =>
+                            e.target.checked
+                              ? [...current, channel.id]
+                              : current.filter((id) => id !== channel.id),
+                          );
+                        }}
                       />
-                      <span>{topic.title}</span>
+                      {channel.name}
                     </label>
-                  );
-                })}
-              </div>
-            )}
-          </fieldset>
-          {bulkRows.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-sm text-fg-secondary">{t("bulkDatesHint")}</p>
-              {bulkRows.map((row) => {
-                const topic = topics.find((item) => item.id === row.topicId);
-                return (
-                  <Input
-                    key={row.topicId}
-                    type="datetime-local"
-                    label={t("bulkDateForTopic", { topic: topic?.title ?? row.topicId })}
-                    value={row.dateInput}
-                    min={localInput(new Date())}
-                    onChange={(e) => {
-                      setBulkError(null);
-                      setBulkSuccess(null);
-                      setBulkRows((current) =>
-                        current.map((item) =>
-                          item.topicId === row.topicId
-                            ? { ...item, dateInput: e.target.value }
-                            : item,
-                        ),
-                      );
-                    }}
-                    required
-                  />
-                );
-              })}
-            </div>
-          )}
-          <fieldset className="rounded-card border border-border p-3">
-            <legend className="px-1 text-sm font-medium text-fg">{t("bulkChannels")}</legend>
-            <div className="flex flex-wrap gap-3">
-              {(channels ?? []).map((channel) => (
-                <label key={channel.id} className="flex min-h-11 items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    aria-label={t("bulkChannelLabel", { channel: channel.name })}
-                    checked={bulkChannels.includes(channel.id)}
-                    disabled={busy}
-                    onChange={(e) => {
-                      setBulkError(null);
-                      setBulkSuccess(null);
-                      setBulkChannels((current) =>
-                        e.target.checked
-                          ? [...current, channel.id]
-                          : current.filter((id) => id !== channel.id),
-                      );
-                    }}
-                  />
-                  {channel.name}
-                </label>
-              ))}
-            </div>
-            {channels?.length === 0 && (
-              <p className="text-sm text-fg-secondary">{t("noChannels")}</p>
-            )}
-          </fieldset>
-          <p className="text-xs text-fg-tertiary">{t("timezone", { zone: timezone })}</p>
-          {bulkError && !bulkPreview && (
-            <p role="alert" className="text-sm text-danger">
-              {bulkError}
-            </p>
-          )}
-          <Button type="submit" variant="secondary" disabled={busy || topics.length === 0}>
-            {t("bulkReview")}
-          </Button>
-        </form>
-      </Card>
-      <Modal
-        open={bulkPreview}
-        onClose={() => {
-          if (!busy) setBulkPreview(false);
-        }}
-        title={t("bulkPreviewTitle")}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setBulkPreview(false)} disabled={busy}>
-              {t("cancel")}
-            </Button>
-            <Button onClick={confirmBulk} disabled={busy}>
-              {t("bulkConfirm", { count: bulkPreviewRows.length })}
-            </Button>
-          </>
-        }
-      >
-        <p className="mb-3 text-sm text-fg-secondary">{t("bulkPreviewIntro")}</p>
-        <ol className="space-y-2">
-          {bulkPreviewRows.map((row) => (
-            <li key={row.topicId} className="rounded-card border border-border p-3 text-sm">
-              <p className="font-medium text-fg">{row.title}</p>
-              {row.description && <p className="mt-1 text-fg-secondary">{row.description}</p>}
-              {row.sourceUrl && (
-                <p className="mt-1 break-all text-xs text-fg-tertiary">{row.sourceUrl}</p>
-              )}
-              <p className="mt-1 text-fg-secondary">{tc(`contentType.${row.contentType}`)}</p>
-              {row.seoKeywords.length > 0 && (
-                <p className="mt-1 text-fg-secondary">
-                  {tt("savedKeywords", { count: row.seoKeywords.length })}:{" "}
-                  {row.seoKeywords.join(", ")}. {tt("seoKeywordsHint")}
+                  ))}
+                </div>
+                {channels?.length === 0 && (
+                  <p className="text-sm text-fg-secondary">{t("noChannels")}</p>
+                )}
+              </fieldset>
+              <p className="text-xs text-fg-tertiary">{t("timezone", { zone: timezone })}</p>
+              {bulkError && !bulkPreview && (
+                <p role="alert" className="text-sm text-danger">
+                  {bulkError}
                 </p>
               )}
-              <p className="mt-1 text-fg-secondary">
-                {new Intl.DateTimeFormat(locale, {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(new Date(row.dateInput))}
-                {" · "}
-                {bulkChannels
-                  .map(
-                    (id) =>
-                      channels?.find((channel) => channel.id === id)?.name ?? t("missingChannel"),
-                  )
-                  .join(", ")}
+              <Button type="submit" variant="secondary" disabled={busy || topics.length === 0}>
+                {t("bulkReview")}
+              </Button>
+            </form>
+          </Card>
+          <Modal
+            open={bulkPreview}
+            onClose={() => {
+              if (!busy) setBulkPreview(false);
+            }}
+            title={t("bulkPreviewTitle")}
+            footer={
+              <>
+                <Button variant="secondary" onClick={() => setBulkPreview(false)} disabled={busy}>
+                  {t("cancel")}
+                </Button>
+                <Button onClick={confirmBulk} disabled={busy}>
+                  {t("bulkConfirm", { count: bulkPreviewRows.length })}
+                </Button>
+              </>
+            }
+          >
+            <p className="mb-3 text-sm text-fg-secondary">{t("bulkPreviewIntro")}</p>
+            <ol className="space-y-2">
+              {bulkPreviewRows.map((row) => (
+                <li key={row.topicId} className="rounded-card border border-border p-3 text-sm">
+                  <p className="font-medium text-fg">{row.title}</p>
+                  {row.description && <p className="mt-1 text-fg-secondary">{row.description}</p>}
+                  {row.sourceUrl && (
+                    <p className="mt-1 break-all text-xs text-fg-tertiary">{row.sourceUrl}</p>
+                  )}
+                  <p className="mt-1 text-fg-secondary">{tc(`contentType.${row.contentType}`)}</p>
+                  {row.seoKeywords.length > 0 && (
+                    <p className="mt-1 text-fg-secondary">
+                      {tt("savedKeywords", { count: row.seoKeywords.length })}:{" "}
+                      {row.seoKeywords.join(", ")}. {tt("seoKeywordsHint")}
+                    </p>
+                  )}
+                  <p className="mt-1 text-fg-secondary">
+                    {new Intl.DateTimeFormat(locale, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(row.dateInput))}
+                    {" · "}
+                    {bulkChannels
+                      .map(
+                        (id) =>
+                          channels?.find((channel) => channel.id === id)?.name ??
+                          t("missingChannel"),
+                      )
+                      .join(", ")}
+                  </p>
+                </li>
+              ))}
+            </ol>
+            {bulkError && (
+              <p role="alert" className="mt-3 text-sm text-danger">
+                {bulkError}
               </p>
-            </li>
-          ))}
-        </ol>
-        {bulkError && (
-          <p role="alert" className="mt-3 text-sm text-danger">
-            {bulkError}
-          </p>
-        )}
-      </Modal>
-      <Modal
-        open={editing !== null}
-        onClose={() => setEditing(null)}
-        title={t("editTitle")}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setEditing(null)}>
-              {t("cancel")}
-            </Button>
-            <Button type="submit" form={EDIT_FORM_ID} disabled={busy}>
-              {t("save")}
-            </Button>
-          </>
-        }
-      >
-        <form id={EDIT_FORM_ID} onSubmit={save}>
-          {fields(true)}
-        </form>
-      </Modal>
-      <Modal
-        open={removing !== null}
-        onClose={() => setRemoving(null)}
-        title={t("removeTitle")}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setRemoving(null)}>
-              {t("cancel")}
-            </Button>
-            <Button variant="danger" onClick={remove} disabled={busy}>
-              {t("remove")}
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
-      </Modal>
+            )}
+          </Modal>
+          <Modal
+            open={editing !== null}
+            onClose={() => setEditing(null)}
+            title={t("editTitle")}
+            footer={
+              <>
+                <Button variant="secondary" onClick={() => setEditing(null)}>
+                  {t("cancel")}
+                </Button>
+                <Button type="submit" form={EDIT_FORM_ID} disabled={busy}>
+                  {t("save")}
+                </Button>
+              </>
+            }
+          >
+            <form id={EDIT_FORM_ID} onSubmit={save}>
+              {fields(true)}
+            </form>
+          </Modal>
+          <Modal
+            open={removing !== null}
+            onClose={() => setRemoving(null)}
+            title={t("removeTitle")}
+            footer={
+              <>
+                <Button variant="secondary" onClick={() => setRemoving(null)}>
+                  {t("cancel")}
+                </Button>
+                <Button variant="danger" onClick={remove} disabled={busy}>
+                  {t("remove")}
+                </Button>
+              </>
+            }
+          >
+            <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
+          </Modal>
+        </>
+      )}
     </AppShell>
   );
 }

@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
 import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor, within } from "@/test/render";
@@ -40,11 +41,109 @@ function response(status: number, body: unknown): Response {
 describe("watched sources page", () => {
   beforeEach(() => {
     signedInSession();
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "owner", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
     vi.stubGlobal("fetch", vi.fn());
     window.history.replaceState({}, "", `/en/brands/${BRAND_ID}/sources`);
   });
 
-  afterEach(() => window.history.replaceState({}, "", "/"));
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: null,
+      isPending: false,
+    } as ReturnType<typeof authClient.useActiveOrganization>);
+  });
+
+  it("keeps source write controls hidden until the workspace role is known", async () => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: null,
+      isPending: true,
+    } as ReturnType<typeof authClient.useActiveOrganization>);
+    install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          name: "Journal",
+          url: "https://example.com/feed.xml",
+          kind: "rss",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect((await screen.findAllByText("Journal")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: en.Sources.add })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Sources.edit })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Sources.rerank })).not.toBeInTheDocument();
+  });
+
+  it.each(["author", "editor"] as const)(
+    "lets a %s read sources and start a draft without manager controls",
+    async (role) => {
+      vi.spyOn(authClient, "useActiveOrganization").mockReturnValue({
+        data: {
+          id: "org-1",
+          name: "Workspace",
+          members: [{ role, user: { id: "test-user" } }],
+        },
+        isPending: false,
+      } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+      install(
+        [
+          {
+            id: ITEM_ID,
+            brandId: BRAND_ID,
+            sourceId: SOURCE_ID,
+            title: "Battery rules",
+            summary: "Recycling guidance",
+            url: "https://example.com/batteries",
+            publishedAt: null,
+            createdAt: "2026-09-23T12:00:00.000Z",
+            relevanceStatus: "unscored",
+            relevanceScore: null,
+            rankScore: null,
+            feedbackDelta: 0,
+            relevanceReason: null,
+            relevanceUrgency: null,
+            relevanceErrorCode: null,
+            relevanceScoredAt: null,
+            editorSignal: null,
+            dismissedAt: null,
+          },
+        ],
+        [
+          {
+            id: SOURCE_ID,
+            name: "Journal",
+            url: "https://example.com/feed.xml",
+            kind: "rss",
+            isActive: true,
+          },
+        ],
+      );
+      await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+      expect(await screen.findByText("Battery rules")).toBeInTheDocument();
+      expect(screen.getAllByText("Journal").length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: en.Sources.createDraft })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: en.Sources.add })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: en.Sources.rerank })).not.toBeInTheDocument();
+      await userEvent.setup().click(screen.getByRole("button", { name: en.Sources.more }));
+      expect(screen.getByRole("menuitem", { name: en.Sources.saveTopic })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: en.Sources.relevant })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: en.Sources.score })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("menuitem", { name: en.Sources.dismissItem }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("server-renders the dismissed URL state without accessing window", () => {
     navigationState.searchParams = new URLSearchParams("news_view=dismissed");
