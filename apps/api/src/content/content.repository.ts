@@ -4453,28 +4453,9 @@ export class ContentRepository {
             "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
           );
         }
-        const overrideBodies = await tx
-          .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
-          .from(schema.adaptations)
-          .where(
-            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
-          );
-        const telegramChannelIds = new Set(
-          platforms
-            .filter((channel) => channel.platform === "telegram")
-            .map((channel) => channel.id),
-        );
-        if (
-          overrideBodies.some(
-            (row) =>
-              telegramChannelIds.has(row.channelId) && (row.body ?? coveredItem.body).length > 1024,
-          )
-        ) {
-          throw conflict(
-            "content_media_caption_too_long",
-            "Telegram photo captions must be 1024 characters or fewer",
-          );
-        }
+        // Telegram delivers reviewed photo text over 1024 characters as a
+        // caption plus one reply. The shared 4096-character adaptation limit
+        // bounds that second call; video remains a single-caption delivery.
       }
       if (coveredItem?.videoId) {
         if (

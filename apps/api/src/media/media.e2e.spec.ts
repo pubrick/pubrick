@@ -417,7 +417,6 @@ describe.skipIf(!url)("media library e2e", () => {
       .patch(`/api/content/${item.body.id}`)
       .send({ body: "x".repeat(1025) })
       .expect(200);
-    await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(409);
     await owner.patch(`/api/content/${item.body.id}`).send({ body: "Hello" }).expect(200);
     await owner.delete(`/api/media/${image.body.id}`).expect(409);
 
@@ -435,6 +434,34 @@ describe.skipIf(!url)("media library e2e", () => {
       .expect(409);
     await owner.patch(`/api/media/posts/${item.body.id}/cover`).send({ mediaId: null }).expect(200);
     await owner.delete(`/api/media/${image.body.id}`).expect(204);
+  });
+
+  it("approves a reviewed Telegram cover post whose text needs a photo reply", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Long cover" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const item = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "x".repeat(1025), channelIds: [channel.body.id] })
+      .expect(201);
+    const image = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", generatedPng, { filename: "cover.png", contentType: "image/png" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${item.body.id}/cover`)
+      .send({ mediaId: image.body.id })
+      .expect(200);
+    const approved = await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(200);
+    expect(approved.body.adaptations).toMatchObject([{ status: "queued" }]);
   });
 
   it("keeps archived post attachments read-only until restore", async () => {

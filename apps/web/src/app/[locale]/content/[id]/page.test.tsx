@@ -1330,7 +1330,7 @@ describe("per-channel override (Step 6)", () => {
     expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
   });
 
-  it("shows the Telegram cover and warns only beyond the 1024-character caption limit", async () => {
+  it("previews a Telegram cover's caption and reply under the reviewed 4096-character limit", async () => {
     const served = {
       current: makeItem({
         coverMediaId: "cover-1",
@@ -1347,12 +1347,17 @@ describe("per-channel override (Step 6)", () => {
       within(preview).getByRole("img", { name: en.Publish.reviewPreviewCoverAlt }),
     ).toHaveAttribute("src", "/api/media/cover-1/file");
     const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
-    expect(counterFor(field)).toHaveTextContent("1024 / 1024");
+    expect(counterFor(field)).toHaveTextContent("1024 / 4096");
     expect(within(preview).queryByRole("alert")).toBeNull();
 
     fireEvent.change(field, { target: { value: "a".repeat(1025) } });
-    expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
-    expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+    expect(within(preview).getByText(en.Publish.reviewPreviewPhotoCaption)).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewPhotoReply)).toBeVisible();
+    expect(within(preview).queryByRole("alert")).toBeNull();
+    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+
+    fireEvent.change(field, { target: { value: "a".repeat(4097) } });
+    expect(within(preview).getByRole("alert")).toHaveTextContent("4096");
   });
 
   it("previews a VK video without applying Telegram's caption limit", async () => {

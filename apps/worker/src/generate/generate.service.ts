@@ -648,11 +648,6 @@ export class GenerateService {
               context.channels.some(
                 (channel) =>
                   !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
-              ) ||
-              adaptations.some(
-                (adaptation) =>
-                  context.channels.find((channel) => channel.id === adaptation.channelId)
-                    ?.platform === "telegram" && adaptation.body.length > 1024,
               )
             ) {
               this.logger.warn(`Run ${run.id}: cover skipped because a channel cannot accept it`);
