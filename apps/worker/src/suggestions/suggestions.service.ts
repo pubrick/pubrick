@@ -36,17 +36,16 @@ type ClaimedInput = NonNullable<Awaited<ReturnType<SuggestionsRepository["claim"
 const BLOCKED_TOPIC_COSINE_THRESHOLD = 0.88;
 
 function cosine(a: number[], b: number[]): number {
+  const aNorm = Math.hypot(...a);
+  const bNorm = Math.hypot(...b);
+  // The batch was validated before this call. Keep the comparison closed if
+  // malformed vectors somehow reach it through a future caller.
+  if (!Number.isFinite(aNorm) || !Number.isFinite(bNorm) || aNorm === 0 || bNorm === 0) return 1;
   let dot = 0;
-  let aSquare = 0;
-  let bSquare = 0;
   for (let index = 0; index < a.length; index += 1) {
-    const x = a[index] ?? 0;
-    const y = b[index] ?? 0;
-    dot += x * y;
-    aSquare += x * x;
-    bSquare += y * y;
+    dot += ((a[index] ?? 0) / aNorm) * ((b[index] ?? 0) / bNorm);
   }
-  return aSquare > 0 && bSquare > 0 ? dot / Math.sqrt(aSquare * bSquare) : 0;
+  return dot;
 }
 
 @Injectable()
