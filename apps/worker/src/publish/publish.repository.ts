@@ -199,6 +199,8 @@ export type PartialTelegramDelivery = {
 
 const PARTIAL_TELEGRAM_EXHAUSTED_ERROR =
   "Telegram accepted the cover, but its reply was not confirmed. Check the channel before sending again.";
+const CLAIM_EXHAUSTED_UNKNOWN_ERROR =
+  "A send was in flight when retries ended. The platform may have published the post; check the channel before sending again.";
 
 function partialColumns(partial: PartialTelegramDelivery) {
   return {
@@ -782,18 +784,19 @@ export class PublishRepository {
    * attempt.
    *
    * Writes an `in_flight` `publications` row before the platform is called,
-   * guarded by `publications_one_in_flight_per_adaptation`. Returns false when
-   * that index refuses the insert, which means one thing only: a previous
-   * attempt wrote a claim and never came back to resolve it. Its outcome is
-   * therefore unknown — it may have posted — and the caller must not send.
+   * guarded by `publications_one_in_flight_per_adaptation`. A null result has
+   * two safe endings: the attempt fence no longer matches (do not send), or
+   * that index found a previous unresolved claim (the prior send may be live,
+   * so do not send). The caller's fenced terminal write distinguishes them.
    *
    * The row's `attempt` is read from `adaptations.attempt_count` in the same
    * statement rather than passed in, so it cannot drift from the count
    * `markPublishing` just bumped. The INSERT ... SELECT also makes "the
    * adaptation exists" a condition of the claim: zero rows selected inserts
    * nothing, and the caller is told so. The SELECT locks and rechecks the
-   * publishing row after a concurrent Reject, so a rejected attempt cannot
-   * create a claim and send after Reject commits.
+   * publishing row after a concurrent Reject, and requires the exact attempt
+   * count returned by this handler's `markPublishing`. A delayed handler can
+   * therefore neither send after Reject nor claim a newer re-approval's send.
    *
    * Deliberately NOT inside `markPublishing`'s update: a unique violation
    * inside a transaction aborts the whole transaction, and the two claims have
@@ -801,18 +804,35 @@ export class PublishRepository {
    * "an attempt is unaccounted for"). The index, not a shared transaction, is
    * what makes two workers racing here safe.
    */
-  async claimSend(orgId: string, adaptationId: string): Promise<SendClaim | null> {
+  async claimSend(
+    orgId: string,
+    adaptationId: string,
+    expectedAttemptCount: number,
+  ): Promise<SendClaim | null> {
     try {
-      const result = await db.execute(sql`
-        insert into publications (org_id, adaptation_id, channel_id, status, attempt)
-        select a.org_id, a.id, a.channel_id, 'in_flight', a.attempt_count
-          from adaptations a
-         where a.org_id = ${orgId} and a.id = ${adaptationId} and a.status = 'publishing'
-           for update of a
-        returning id, attempt
-      `);
-      const row = result.rows[0] as { id: string; attempt: number } | undefined;
-      return row ? { id: row.id, attempt: Number(row.attempt) } : null;
+      return await db.transaction(async (tx) => {
+        // The publication INSERT takes an FK KEY SHARE on organization. Take
+        // that lock first, before the adaptation's FOR UPDATE, so a concurrent
+        // organization delete cannot deadlock against its child cascade.
+        const org = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (org.length === 0) return null;
+        const result = await tx.execute(sql`
+          insert into publications (org_id, adaptation_id, channel_id, status, attempt)
+          select a.org_id, a.id, a.channel_id, 'in_flight', a.attempt_count
+            from adaptations a
+           where a.org_id = ${orgId} and a.id = ${adaptationId}
+             and a.status = 'publishing' and a.attempt_count = ${expectedAttemptCount}
+             for update of a
+          returning id, attempt
+        `);
+        const row = result.rows[0] as { id: string; attempt: number } | undefined;
+        return row ? { id: row.id, attempt: Number(row.attempt) } : null;
+      });
     } catch (error) {
       if (isInFlightClaimConflict(error)) return null;
       throw error;
@@ -1117,10 +1137,11 @@ export class PublishRepository {
         return false;
       }
 
-      // The DLQ has no in-memory PartialTelegramPublishError to pass along.
-      // Read the durable send claim under its row lock after fencing the
-      // adaptation, so a previously accepted photo always ends as unknown.
-      const [checkpoint] = await tx
+      // A dead letter cannot know whether an in-flight claim reached the
+      // platform. Read that durable claim under its row lock after fencing
+      // the adaptation. A photo checkpoint adds structured partial evidence;
+      // without it the outcome is still unknown, not a retryable failure.
+      const [activeClaim] = await tx
         .select({ followupText: schema.publications.partialFollowupText })
         .from(schema.publications)
         .where(
@@ -1134,11 +1155,16 @@ export class PublishRepository {
         )
         .limit(1)
         .for("update");
-      const hasPartial = partial !== undefined || checkpoint?.followupText != null;
-      const finalOutcome = hasPartial ? "unknown" : outcome;
+      const hasPartial = partial !== undefined || activeClaim?.followupText != null;
+      const exhaustedClaim = failureReason === "retries_exhausted" && activeClaim !== undefined;
+      const finalOutcome = hasPartial || exhaustedClaim ? "unknown" : outcome;
       const finalError =
-        hasPartial && outcome === "failed" ? PARTIAL_TELEGRAM_EXHAUSTED_ERROR : error;
-      if (hasPartial && outcome === "failed") {
+        outcome === "failed" && hasPartial
+          ? PARTIAL_TELEGRAM_EXHAUSTED_ERROR
+          : outcome === "failed" && exhaustedClaim
+            ? CLAIM_EXHAUSTED_UNKNOWN_ERROR
+            : error;
+      if (finalOutcome === "unknown" && outcome === "failed") {
         await tx
           .update(schema.adaptations)
           .set({ lastError: finalError, failureReason: "outcome_unknown" })

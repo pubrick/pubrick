@@ -379,7 +379,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("a call carrying another org's id moves nothing: every writer is a no-op", async () => {
     const adaptationId = await seedAdaptation("queued");
     expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
-    const claim = await repo.claimSend(orgId, adaptationId);
+    const claim = await repo.claimSend(orgId, adaptationId, 1);
     expect(claim).not.toBeNull();
 
     const before = {
@@ -408,7 +408,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.releaseSend(strangerOrgId, claim as SendClaim)).toBe(false);
     // The two that answer rather than write: a claim another org cannot take.
     expect(await repo.markPublishing(strangerOrgId, adaptationId, null)).toBeNull();
-    expect(await repo.claimSend(strangerOrgId, adaptationId)).toBeNull();
+    expect(await repo.claimSend(strangerOrgId, adaptationId, 1)).toBeNull();
 
     expect({
       adaptation: await adaptationRow(adaptationId),
@@ -762,7 +762,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markFailed is fenced on the STATUS too, not just the count", async () => {
     const adaptationId = await seedAdaptation("queued");
     const attempt = await repo.markPublishing(orgId, adaptationId, null);
-    await repo.claimSend(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId, 1);
     await repo.markPublished(orgId, adaptationId, {
       externalId: "4242",
       externalUrl: "https://t.me/x/4242",
@@ -1218,10 +1218,56 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(pubsAfterSecond).toHaveLength(1);
   });
 
+  it("markExhausted keeps an uncheckpointed in-flight send unknown and notifies accordingly", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId, null);
+    expect(await repo.claimSend(orgId, adaptationId, 1)).not.toBeNull();
+    await db.insert(schema.notificationSettings).values({
+      orgId,
+      enabled: true,
+      deliveryProblem: true,
+      credentialsEncrypted: "test-only",
+    });
+    try {
+      await service.markExhausted({ adaptationId, orgId });
+      const [adaptation] = await db
+        .select({
+          status: schema.adaptations.status,
+          failureReason: schema.adaptations.failureReason,
+          lastError: schema.adaptations.lastError,
+        })
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(adaptation).toMatchObject({
+        status: "failed",
+        failureReason: "outcome_unknown",
+        lastError: expect.stringContaining("may have published"),
+      });
+      const receipts = await publicationsFor(adaptationId);
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]).toMatchObject({
+        status: "unknown",
+        partialPhotoId: null,
+        partialFollowupText: null,
+      });
+      const notifications = await db
+        .select({ event: schema.notificationEvents.event })
+        .from(schema.notificationEvents)
+        .where(eq(schema.notificationEvents.subjectId, adaptationId));
+      expect(notifications).toEqual([{ event: "delivery_unknown" }]);
+      await service.markExhausted({ adaptationId, orgId });
+      expect(await publicationsFor(adaptationId)).toHaveLength(1);
+    } finally {
+      await db
+        .delete(schema.notificationSettings)
+        .where(eq(schema.notificationSettings.orgId, orgId));
+    }
+  });
+
   it("markExhausted preserves an accepted Telegram photo as an unresolved partial delivery", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const claim = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
     expect(
       await repo.markTelegramPhotoAccepted(orgId, adaptationId, claim, {
         photoId: "4711",
@@ -1339,7 +1385,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
 
-    const claim = await repo.claimSend(orgId, adaptationId);
+    const claim = await repo.claimSend(orgId, adaptationId, 1);
 
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(1);
@@ -1359,17 +1405,17 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("claimSend refuses a second claim while one is unresolved, and writes nothing", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 1)).not.toBeNull();
 
     await repo.markPublishing(orgId, adaptationId, null); // the redelivery re-claims the attempt
-    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 2)).toBeNull();
 
     expect(await publicationsFor(adaptationId)).toHaveLength(1);
   });
 
   it("claimSend is org-scoped and reports false for an adaptation that is not there", async () => {
     const adaptationId = await seedAdaptation("queued");
-    expect(await repo.claimSend("some-other-org", adaptationId)).toBeNull();
+    expect(await repo.claimSend("some-other-org", adaptationId, 1)).toBeNull();
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
   });
 
@@ -1381,8 +1427,31 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "pending", attemptCount: 2 })
       .where(eq(schema.adaptations.id, adaptationId));
 
-    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 1)).toBeNull();
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
+  });
+
+  it("claimSend cannot let a delayed handler claim a newer approval's publishing attempt", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const staleAttempt = await repo.markPublishing(orgId, adaptationId, null);
+    expect(staleAttempt).toBe(1);
+    await db
+      .update(schema.adaptations)
+      .set({ status: "pending", attemptCount: 2 })
+      .where(eq(schema.adaptations.id, adaptationId));
+    await db
+      .update(schema.adaptations)
+      .set({ status: "queued" })
+      .where(eq(schema.adaptations.id, adaptationId));
+    const currentAttempt = await repo.markPublishing(orgId, adaptationId, null);
+    expect(currentAttempt).toBe(3);
+
+    expect(await repo.claimSend(orgId, adaptationId, staleAttempt as number)).toBeNull();
+    expect(await publicationsFor(adaptationId)).toHaveLength(0);
+    expect(await repo.claimSend(orgId, adaptationId, currentAttempt as number)).toMatchObject({
+      attempt: 3,
+    });
+    expect(await publicationsFor(adaptationId)).toHaveLength(1);
   });
 
   it("claimSend rechecks publishing after waiting for a concurrent reject", async () => {
@@ -1392,7 +1461,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     try {
       await holder.query("BEGIN");
       await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
-      const claiming = repo.claimSend(orgId, adaptationId);
+      const claiming = repo.claimSend(orgId, adaptationId, 1);
       await waitForLockWaiters("%insert into publications%", 1, claiming);
       await holder.query(
         "UPDATE adaptations SET status = 'pending', attempt_count = 2 WHERE id = $1",
@@ -1407,22 +1476,74 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
   });
 
+  it("claimSend takes the organization lock before the adaptation during deletion", async () => {
+    const deletingOrgId = `claim-delete-${randomUUID()}`;
+    await db.insert(schema.organization).values({
+      id: deletingOrgId,
+      name: "Claim deletion race",
+      slug: deletingOrgId,
+      createdAt: new Date(),
+    });
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId: deletingOrgId, name: "Brand" })
+      .returning({ id: schema.brands.id });
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId: deletingOrgId,
+        brandId: brand?.id as string,
+        platform: "telegram",
+        name: "Channel",
+        credentialsEncrypted: "test-only",
+      })
+      .returning({ id: schema.channels.id });
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId: deletingOrgId, brandId: brand?.id as string, body: "Hello" })
+      .returning({ id: schema.contentItems.id });
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: deletingOrgId,
+        contentItemId: item?.id as string,
+        channelId: channel?.id as string,
+        status: "publishing",
+        attemptCount: 1,
+      })
+      .returning({ id: schema.adaptations.id });
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM organization WHERE id = $1 FOR UPDATE", [deletingOrgId]);
+      const claiming = repo.claimSend(deletingOrgId, adaptation?.id as string, 1);
+      await waitForLockWaiters('%from "organization"%for key share%', 1, claiming);
+      await holder.query("DELETE FROM organization WHERE id = $1", [deletingOrgId]);
+      await holder.query("COMMIT");
+      expect(await claiming).toBeNull();
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      holder.release();
+      await db.delete(schema.organization).where(eq(schema.organization.id, deletingOrgId));
+    }
+  });
+
   it("releaseSend hands the claim back so an honest retry can take it again", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const claim = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
 
     expect(await repo.releaseSend(orgId, claim)).toBe(true);
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
 
     await repo.markPublishing(orgId, adaptationId, null);
-    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 2)).not.toBeNull();
   });
 
   it("durably freezes an accepted Telegram photo and tail on this tenant's claim", async () => {
     const adaptationId = await seedAdaptation("queued");
     const attempt = await repo.markPublishing(orgId, adaptationId, null);
-    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const claim = (await repo.claimSend(orgId, adaptationId, attempt as number)) as SendClaim;
     const partial = {
       photoId: "4711",
       photoUrl: "https://t.me/mychannel/4711",
@@ -1493,7 +1614,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId, null);
-    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const claim = (await repo.claimSend(orgId, adaptationId, 2)) as SendClaim;
 
     expect(await repo.releaseSend(orgId, claim)).toBe(true);
 
@@ -1505,7 +1626,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markPublished resolves the claim in place: one row, not a claim plus a delivery", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    await repo.claimSend(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId, 1);
 
     await repo.markPublished(orgId, adaptationId, {
       externalId: "77",
@@ -1528,13 +1649,13 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId, null);
-    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 2)).not.toBeNull();
   });
 
   it("markFailed resolves the claim to failed rather than leaving one behind", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    await repo.claimSend(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId, 1);
 
     await repo.markFailed(orgId, adaptationId, "Forbidden", "platform_rejected", {
       status: "publishing",
@@ -1553,7 +1674,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markFailed with the unknown outcome: adaptation failed, publication unknown", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    await repo.claimSend(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId, 1);
 
     await repo.markFailed(
       orgId,
@@ -1590,7 +1711,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("the database itself refuses a second in-flight claim for one adaptation", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    await repo.claimSend(orgId, adaptationId);
+    await repo.claimSend(orgId, adaptationId, 1);
 
     const error = await db
       .insert(schema.publications)
@@ -1618,7 +1739,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId, null);
-    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 2)).not.toBeNull();
     const pubs = await publicationsFor(adaptationId);
     expect(pubs).toHaveLength(2);
     expect(pubs.map((row) => row.status).sort()).toEqual(["in_flight", "unknown"]);
@@ -1640,7 +1761,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("releaseSend gives back only THIS attempt's claim, never the one that overtook it", async () => {
     const adaptationId = await seedAdaptation("queued");
     expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
-    const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const hung = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
 
     // The redelivered attempt B: refused the claim, records an unknown outcome,
     // and in doing so RESOLVES the hung attempt's row — the slot is free again.
@@ -1661,7 +1782,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(2);
-    const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const live = (await repo.claimSend(orgId, adaptationId, 2)) as SendClaim;
     expect(live.id).not.toBe(hung.id);
 
     // A comes back at last. Its release must match its own row — which is no
@@ -1679,7 +1800,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId, null);
-    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 3)).toBeNull();
   });
 
   /**
@@ -1696,7 +1817,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   it("markPublished resolves its OWN claim, never a successor's, when it comes back late", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
-    const hung = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const hung = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
     // The redelivery reports an unknown outcome, resolving the hung claim.
     await repo.markFailed(
       orgId,
@@ -1714,7 +1835,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       .set({ status: "queued" })
       .where(eq(schema.adaptations.id, adaptationId));
     await repo.markPublishing(orgId, adaptationId, null);
-    const live = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const live = (await repo.claimSend(orgId, adaptationId, 2)) as SendClaim;
 
     await repo.markPublished(
       orgId,
@@ -1747,7 +1868,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const disposable = await seedDisposableChannel("Deleted mid-send");
     const adaptationId = await seedAdaptation("queued", disposable);
     await repo.markPublishing(orgId, adaptationId, null);
-    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const claim = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
 
     // The user deletes the channel while the request is in flight. The cascade
     // takes the adaptation; `SET NULL` takes both of the claim's pointers; the
@@ -1785,11 +1906,11 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     const stale = await seedDisposableChannel("Long gone");
     const staleAdaptation = await seedAdaptation("queued", stale);
     await repo.markPublishing(orgId, staleAdaptation, null);
-    const staleClaim = (await repo.claimSend(orgId, staleAdaptation)) as SendClaim;
+    const staleClaim = (await repo.claimSend(orgId, staleAdaptation, 1)) as SendClaim;
     const fresh = await seedDisposableChannel("Just now");
     const freshAdaptation = await seedAdaptation("queued", fresh);
     await repo.markPublishing(orgId, freshAdaptation, null);
-    const freshClaim = (await repo.claimSend(orgId, freshAdaptation)) as SendClaim;
+    const freshClaim = (await repo.claimSend(orgId, freshAdaptation, 1)) as SendClaim;
     await db.delete(schema.channels).where(eq(schema.channels.id, stale));
     await db.delete(schema.channels).where(eq(schema.channels.id, fresh));
     // Only one of them is older than a whole attempt window plus its grace.
@@ -1812,7 +1933,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     // This pass is only for the rows that side can never see.
     const reachable = await seedAdaptation("queued");
     await repo.markPublishing(orgId, reachable, null);
-    const reachableClaim = (await repo.claimSend(orgId, reachable)) as SendClaim;
+    const reachableClaim = (await repo.claimSend(orgId, reachable, 1)) as SendClaim;
     await db.execute(
       `UPDATE publications SET created_at = now() - interval '1 day' WHERE id = '${reachableClaim.id}'`,
     );

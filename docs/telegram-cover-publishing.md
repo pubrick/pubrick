@@ -17,6 +17,9 @@ photo but omits its message ID stops before the reply and follows the same path.
 The reply request refuses to send as a standalone message if Telegram can no
 longer find the photo. A dead-lettered attempt with a saved photo checkpoint
 also keeps the partial outcome instead of becoming a plain failed send.
+If a dead-lettered attempt has an in-flight send claim but no photo checkpoint,
+Pubrick records a generic unknown outcome: the send may already have reached
+Telegram, so retry still requires a channel check.
 Reject is refused while a send claim is in flight, including the interval
 between Telegram accepting the photo and the worker saving its checkpoint.
 After the attempt finishes, the operator resolves an unknown or partial
