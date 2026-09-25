@@ -1165,7 +1165,7 @@
     "propose": "Proponer",
     "proposing": "Preparando una sugerencia…",
     "tryAgain": "Probar de nuevo",
-    "proposalCostHint": "Esto utiliza una llamada de pago al modelo de IA. El borrador solo cambia si aceptas la sugerencia.",
+    "proposalCostHint": "Esto puede realizar hasta dos llamadas de pago al modelo de IA. El borrador solo cambia si aceptas la sugerencia.",
     "proposalTitle": "Corrección sugerida",
     "proposalHint": "Compara la afirmación exacta y la sustitución sugerida. Los fragmentos de búsqueda no son pruebas; abre las páginas enlazadas antes de decidir.",
     "formattingReset": "Al aceptar esta sugerencia, se sustituye el texto principal y se elimina su formato. Las versiones anteriores con formato siguen en el historial.",

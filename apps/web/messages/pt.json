@@ -1165,7 +1165,7 @@
     "propose": "Sugerir",
     "proposing": "A preparar uma sugestão…",
     "tryAgain": "Tentar novamente",
-    "proposalCostHint": "Isto utiliza uma chamada paga ao modelo de IA. O rascunho só muda se aceitar a sugestão.",
+    "proposalCostHint": "Isto pode fazer até duas chamadas pagas ao modelo de IA. O rascunho só muda se aceitar a sugestão.",
     "proposalTitle": "Correção sugerida",
     "proposalHint": "Compare a afirmação exata e a substituição sugerida. Os excertos da pesquisa não são prova; abra as páginas ligadas antes de decidir.",
     "formattingReset": "Aceitar esta sugestão substitui o texto principal e remove a formatação. As versões anteriores com formatação continuam no histórico.",

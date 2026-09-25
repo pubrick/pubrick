@@ -1165,7 +1165,7 @@
     "propose": "Propose",
     "proposing": "Preparing a suggestion…",
     "tryAgain": "Try again",
-    "proposalCostHint": "This uses one billable AI model call. The draft changes only if you accept the suggestion.",
+    "proposalCostHint": "This can make up to two billable AI model calls. The draft changes only if you accept the suggestion.",
     "proposalTitle": "Suggested correction",
     "proposalHint": "Compare the exact claim and suggested replacement. Search snippets are not proof; open the linked pages before deciding.",
     "formattingReset": "Accepting this suggestion replaces the master text and clears its formatting. Earlier formatted versions remain in history.",
