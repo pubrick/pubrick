@@ -1515,7 +1515,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     !channelsFailed &&
     item.adaptations.every((adaptation) => {
       const platform = channels.find((channel) => channel.id === adaptation.channelId)?.platform;
-      return platform !== undefined && !isManualPlatform(platform);
+      return (
+        platform !== undefined &&
+        !isManualPlatform(platform) &&
+        adaptation.deliveryOutcome !== "unknown"
+      );
     });
 
   return (
