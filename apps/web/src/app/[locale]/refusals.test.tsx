@@ -117,6 +117,7 @@ function serve(refuse: (url: string, method: string) => Response | undefined) {
       return jsonResponse(200, { images: [], revision: 0 });
     }
     if (url === `/api/content/${ITEM_ID}/claim-review`) return jsonResponse(200, null);
+    if (url === `/api/content/${ITEM_ID}/claim-correction`) return jsonResponse(200, null);
     if (url === `/api/content/${ITEM_ID}`) return jsonResponse(200, item);
     if (url === `/api/runs/${RUN_ID}`) return jsonResponse(200, run);
     if (url === "/api/brands") return jsonResponse(200, []);
