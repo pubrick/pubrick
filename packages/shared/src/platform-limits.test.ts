@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { PLATFORM_IDS } from "./dto/channels.js";
-import { MAX_BODY_LENGTH } from "./dto/content.js";
+import { MAX_BODY_LENGTH, MAX_CHANNEL_BODY_LENGTH } from "./dto/content.js";
 import {
   adaptationLimit,
+  isPinnedAdaptationLimit,
   PLATFORM_MAX_TEXT_LENGTH,
   TELEGRAM_ADAPTER_MAX_TEXT_LENGTH,
 } from "./platform-limits.js";
@@ -14,8 +15,8 @@ describe("PLATFORM_MAX_TEXT_LENGTH", () => {
     }
   });
 
-  it("keeps telegram at the documented Bot API limit", () => {
-    expect(PLATFORM_MAX_TEXT_LENGTH.telegram).toBe(4096);
+  it("uses the bounded multi-message Telegram authoring limit", () => {
+    expect(PLATFORM_MAX_TEXT_LENGTH.telegram).toBe(12_000);
     expect(TELEGRAM_ADAPTER_MAX_TEXT_LENGTH).toBe(12_000);
   });
 });
@@ -27,12 +28,16 @@ describe("PLATFORM_MAX_TEXT_LENGTH", () => {
  * now in the package both of them already depend on.
  */
 describe("adaptationLimit", () => {
-  it("is min(platform limit, MAX_BODY_LENGTH) for every platform there is", () => {
+  it("uses the channel bound for Telegram and the master bound elsewhere", () => {
     for (const platform of PLATFORM_IDS) {
       expect(adaptationLimit(platform), platform).toBe(
-        Math.min(PLATFORM_MAX_TEXT_LENGTH[platform], MAX_BODY_LENGTH),
+        Math.min(
+          PLATFORM_MAX_TEXT_LENGTH[platform],
+          platform === "telegram" ? MAX_CHANNEL_BODY_LENGTH : MAX_BODY_LENGTH,
+        ),
       );
     }
+    expect(adaptationLimit("telegram")).toBe(MAX_CHANNEL_BODY_LENGTH);
   });
 
   it("gives a platform its own limit where that is the smaller number", () => {
@@ -56,5 +61,16 @@ describe("adaptationLimit", () => {
     // invent a number.
     expect(adaptationLimit("myspace")).toBeUndefined();
     expect(adaptationLimit("")).toBeUndefined();
+  });
+});
+
+describe("pinned adaptation limits", () => {
+  it("keeps old 4096-character Telegram claim receipts valid", () => {
+    expect(isPinnedAdaptationLimit("telegram", 4096)).toBe(true);
+    expect(isPinnedAdaptationLimit("telegram", 12_000)).toBe(true);
+    expect(isPinnedAdaptationLimit("telegram", 8192)).toBe(false);
+    expect(isPinnedAdaptationLimit("vk", 4096)).toBe(true);
+    expect(isPinnedAdaptationLimit("vk", 12_000)).toBe(false);
+    expect(isPinnedAdaptationLimit("unknown", 4096)).toBe(false);
   });
 });

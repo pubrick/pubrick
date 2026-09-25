@@ -1,4 +1,5 @@
 import {
+  isPinnedAdaptationLimit,
   normalizeNewlines,
   PermanentError,
   PLATFORM_IDS,
@@ -16,7 +17,7 @@ export type Platform = (typeof PLATFORM_IDS)[number];
 /**
  * How long an adaptation for this platform may be, or a `PermanentError`.
  *
- * The number itself — `min(platform limit, MAX_BODY_LENGTH)` — is
+ * The number itself — the platform limit within the channel-body bound — is
  * `@pubrick/shared`'s, so the bound this step generates against and the
  * denominator the editor's counter shows cannot drift apart. What is decided
  * *here* is the policy for a platform this build has no limit for.
@@ -100,7 +101,10 @@ function isBodyTooLong(error: unknown): boolean {
  * the cut would land mid-sentence at exactly the character the platform counts
  * differently from us.
  */
-export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationOutput> {
+export function adapterFor(
+  channel: StepChannel,
+  pinnedLimit?: number,
+): Step<AdapterInput, AdaptationOutput> {
   const parsed = stepChannelSchema.safeParse(channel);
   if (!parsed.success) {
     const detail = parsed.error.issues
@@ -114,7 +118,14 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
     );
   }
   const { id, name, platform } = parsed.data;
-  const limit = adaptationLimit(platform);
+  const currentLimit = adaptationLimit(platform);
+  if (pinnedLimit !== undefined && !isPinnedAdaptationLimit(platform, pinnedLimit)) {
+    throw withRunFailure(
+      new PermanentError(`unsupported pinned text limit for platform "${platform}"`),
+      "internal",
+    );
+  }
+  const limit = pinnedLimit ?? currentLimit;
 
   // The custom message is not how the overflow is detected — `isBodyTooLong`
   // does that from the issues. It is how the model is told what it missed: it
@@ -159,7 +170,7 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
     name: `adapter:${id}`,
     schema,
     channelId: id,
-    role: builtInAdapterRoleLines({ name, platform }),
+    role: builtInAdapterRoleLines({ name, platform, limit }),
     material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
   });
 

@@ -169,7 +169,8 @@ export type ClaimedRun = {
 /** The brand and channels one run writes for, in the shape `@pubrick/ai` takes. */
 export type RunContext = {
   brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
-  channels: Array<{ id: string; name: string; platform: PlatformId }>;
+  /** Channel limit from the run's immutable claim receipt, including legacy pins. */
+  channels: Array<{ id: string; name: string; platform: PlatformId; limit: number }>;
   promptGuidance?: Partial<Record<PromptRole, string>>;
   linkPolicy: (typeof schema.brands.$inferSelect)["linkPolicy"];
 };

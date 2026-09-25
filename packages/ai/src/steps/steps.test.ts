@@ -591,19 +591,33 @@ describe("the adapter", () => {
     expect(adapterFor(channel).name).toBe(`adapter:${channel.id}`);
   });
 
-  it("targets the smaller of the platform limit and MAX_BODY_LENGTH", () => {
-    // MAX_BODY_LENGTH bounds adaptationUpdateSchema: a longer adaptation would
-    // be un-editable through the API forever.
+  it("targets the platform limit within the channel-body bound", () => {
     expect(adaptationLimit("bluesky")).toBe(300);
-    expect(adaptationLimit("telegram")).toBe(4096);
+    expect(adaptationLimit("telegram")).toBe(12_000);
     expect(adaptationLimit("vk")).toBe(MAX_BODY_LENGTH);
     expect(PLATFORM_MAX_TEXT_LENGTH.vk).toBeGreaterThan(MAX_BODY_LENGTH);
 
     for (const platform of Object.keys(PLATFORM_MAX_TEXT_LENGTH) as Platform[]) {
       expect(adaptationLimit(platform)).toBe(
-        Math.min(PLATFORM_MAX_TEXT_LENGTH[platform], MAX_BODY_LENGTH),
+        Math.min(
+          PLATFORM_MAX_TEXT_LENGTH[platform],
+          platform === "telegram" ? 12_000 : MAX_BODY_LENGTH,
+        ),
       );
     }
+  });
+
+  it("uses a pinned old Telegram limit when resuming an earlier claim", () => {
+    const telegram = { ...channel, platform: "telegram" as const };
+    expect(adapterFor(telegram).schema.safeParse({ body: "x".repeat(12_000) }).success).toBe(true);
+    expect(adapterFor(telegram, 4096).schema.safeParse({ body: "x".repeat(4096) }).success).toBe(
+      true,
+    );
+    expect(adapterFor(telegram, 4096).schema.safeParse({ body: "x".repeat(4097) }).success).toBe(
+      false,
+    );
+    expect(() => adapterFor(telegram, 8192)).toThrow(PermanentError);
+    expect(() => adapterFor({ ...channel, platform: "vk" }, 12_000)).toThrow(PermanentError);
   });
 
   it("refuses a platform it has no limit for instead of computing NaN", () => {

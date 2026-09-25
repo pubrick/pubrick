@@ -1,5 +1,5 @@
 import type { PLATFORM_IDS } from "./dto/channels.js";
-import { MAX_BODY_LENGTH } from "./dto/content.js";
+import { MAX_BODY_LENGTH, MAX_CHANNEL_BODY_LENGTH } from "./dto/content.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "./telegram-photo-parts.js";
 
 /**
@@ -7,13 +7,10 @@ import { TELEGRAM_LONG_POST_LENGTH } from "./telegram-photo-parts.js";
  *
  * This lives here, as data, rather than on the `Publisher` interface: the
  * generation pipeline needs a limit for every platform a channel can exist
- * for. Telegram deliberately remains at its stage-1 authoring limit while
- * its adapter prepares for longer reviewed posts.
+ * for. Telegram's review limit is the bounded multi-message delivery limit.
  */
 export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], number> = {
-  // Stage 1 keeps the authoring limit at 4096. The publisher's preflight is
-  // ready for TELEGRAM_LONG_POST_LENGTH; raising this value is a later release.
-  telegram: 4096,
+  telegram: TELEGRAM_LONG_POST_LENGTH,
   vk: 16000,
   dzen: 20000,
   vc_ru: 20000,
@@ -26,14 +23,12 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
 export const TELEGRAM_ADAPTER_MAX_TEXT_LENGTH = TELEGRAM_LONG_POST_LENGTH;
 
 /**
- * How long an adaptation for this platform may be: `min(platform limit,
- * MAX_BODY_LENGTH)`.
+ * How long an adaptation for this platform may be. Telegram can use the
+ * channel-body bound; every other channel still uses the master-body bound.
  *
- * The second half is not padding. `MAX_BODY_LENGTH` bounds
- * `adaptationUpdateSchema`, so an adaptation longer than it would be
- * un-editable through the API forever — a human could read the text and never
- * fix it. Platforms whose own limit is larger (vk, dzen, vc_ru) are therefore
- * clamped to what the product can store.
+ * The channel DTO accepts the widest platform limit; the API checks this
+ * platform-specific cap after looking up the saved channel. Master posts and
+ * all non-Telegram channel text remain capped at `MAX_BODY_LENGTH`.
  *
  * `undefined` for a platform id this build has no limit for. `channels.platform`
  * is a text column, so that is a runtime possibility whatever the types say, and
@@ -55,5 +50,14 @@ export const TELEGRAM_ADAPTER_MAX_TEXT_LENGTH = TELEGRAM_LONG_POST_LENGTH;
 export function adaptationLimit(platform: string): number | undefined {
   const limit: number | undefined =
     PLATFORM_MAX_TEXT_LENGTH[platform as (typeof PLATFORM_IDS)[number]];
-  return limit === undefined ? undefined : Math.min(limit, MAX_BODY_LENGTH);
+  if (limit === undefined) return undefined;
+  return Math.min(limit, platform === "telegram" ? MAX_CHANNEL_BODY_LENGTH : MAX_BODY_LENGTH);
+}
+
+/** Existing claimed runs pinned Telegram's former single-message limit. */
+export function isPinnedAdaptationLimit(platform: string, limit: number): boolean {
+  return (
+    Number.isInteger(limit) &&
+    (limit === adaptationLimit(platform) || (platform === "telegram" && limit === MAX_BODY_LENGTH))
+  );
 }

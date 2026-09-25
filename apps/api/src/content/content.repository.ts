@@ -62,6 +62,8 @@ import {
   replaceHashtags,
   richBodySchema,
   stripHashtagSuffix,
+  TELEGRAM_PHOTO_CAPTION_LENGTH,
+  telegramPostParts,
   toLedgerCostUsd,
   withHashtags,
 } from "@pubrick/shared";
@@ -140,6 +142,20 @@ function bodyRevisionConflict(revision: number): ConflictException {
     ...refusalBody(409, "version_changed", "This post changed; reload before saving"),
     bodyRevision: revision,
   });
+}
+
+/** Validate the exact reviewed text the Telegram publisher will receive. */
+function telegramTextProblem(body: string, covered: boolean, video: boolean): string | null {
+  if (video && body.length > TELEGRAM_PHOTO_CAPTION_LENGTH) {
+    return "Telegram video captions must be 1024 characters or fewer";
+  }
+  try {
+    telegramPostParts(body, covered);
+    return null;
+  } catch (error) {
+    if (error instanceof RangeError) return error.message;
+    throw error;
+  }
 }
 
 /**
@@ -1778,6 +1794,7 @@ export class ContentRepository {
         const [adaptation] = await tx
           .select({
             status: schema.adaptations.status,
+            channelId: schema.adaptations.channelId,
             body: schema.adaptations.body,
             hashtags: schema.adaptations.hashtags,
             cta: schema.adaptations.cta,
@@ -1793,7 +1810,7 @@ export class ContentRepository {
           .limit(1)
           .for("update");
         if (!adaptation) throw notFound("adaptation_not_found", "Adaptation not found");
-        await this.requireEditableItem(tx, orgId, itemId);
+        const item = await this.requireEditableItem(tx, orgId, itemId);
         if (!isEditableAdaptationStatus(adaptation.status)) {
           throw conflict(
             PINNED_ADAPTATION_CODE[adaptation.status],
@@ -1814,6 +1831,29 @@ export class ContentRepository {
             "version_changed",
             "This channel's details changed; reload before restoring",
           );
+        }
+        const [channel] = await tx
+          .select({ platform: schema.channels.platform })
+          .from(schema.channels)
+          .where(
+            and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, adaptation.channelId)),
+          )
+          .limit(1);
+        if (!channel) throw notFound("channel_not_found", "Channel not found");
+        const limit = adaptationLimit(channel.platform);
+        if (limit === undefined || version.body.length > limit) {
+          throw badRequest(
+            "invalid_request",
+            `Saved channel text exceeds ${limit ?? 0} characters`,
+          );
+        }
+        if (channel.platform === "telegram") {
+          const problem = telegramTextProblem(
+            version.body,
+            item.coverMediaId !== null,
+            item.videoMediaId !== null,
+          );
+          if (problem) throw badRequest("invalid_request", problem);
         }
         if (
           adaptation.body !== version.body ||
@@ -1836,6 +1876,15 @@ export class ContentRepository {
         }
       } else {
         const item = await this.requireEditableItem(tx, orgId, itemId);
+        if (data.expectedBody !== null && data.expectedBody.length > MAX_BODY_LENGTH) {
+          throw badRequest(
+            "invalid_request",
+            `Expected post exceeds ${MAX_BODY_LENGTH} characters`,
+          );
+        }
+        if (version.body.length > MAX_BODY_LENGTH) {
+          throw badRequest("invalid_request", `Saved post exceeds ${MAX_BODY_LENGTH} characters`);
+        }
         if (item.body !== data.expectedBody) {
           throw conflict("version_changed", "This post changed; reload before restoring");
         }
@@ -1853,6 +1902,16 @@ export class ContentRepository {
           item.body !== version.body ||
           JSON.stringify(item.richBody) !== JSON.stringify(restoredRich)
         ) {
+          if (item.body !== version.body) {
+            await this.requireInheritedTelegramText(
+              tx,
+              orgId,
+              itemId,
+              version.body,
+              item.coverMediaId !== null,
+              item.videoMediaId !== null,
+            );
+          }
           await assertImagesFitBody(tx, orgId, itemId, version.body);
           await tx
             .update(schema.contentItems)
@@ -1991,13 +2050,22 @@ export class ContentRepository {
     tx: Tx,
     orgId: string,
     id: string,
-  ): Promise<{ body: string; status: ContentStatus; richBody: unknown; bodyRevision: number }> {
+  ): Promise<{
+    body: string;
+    status: ContentStatus;
+    richBody: unknown;
+    bodyRevision: number;
+    coverMediaId: string | null;
+    videoMediaId: string | null;
+  }> {
     const rows = await tx
       .select({
         status: schema.contentItems.status,
         body: schema.contentItems.body,
         richBody: schema.contentItems.richBody,
         bodyRevision: schema.contentItems.bodyRevision,
+        coverMediaId: schema.contentItems.coverMediaId,
+        videoMediaId: schema.contentItems.videoMediaId,
       })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -2028,6 +2096,34 @@ export class ContentRepository {
       );
     }
     return item;
+  }
+
+  /** A channel without an override publishes the master's reviewed text. */
+  private async requireInheritedTelegramText(
+    tx: Tx,
+    orgId: string,
+    itemId: string,
+    body: string,
+    covered: boolean,
+    video: boolean,
+  ): Promise<void> {
+    const [inherited] = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, itemId),
+          eq(schema.channels.orgId, orgId),
+          eq(schema.channels.platform, "telegram"),
+          isNull(schema.adaptations.body),
+        ),
+      )
+      .limit(1);
+    if (!inherited) return;
+    const problem = telegramTextProblem(body, covered, video);
+    if (problem) throw badRequest("invalid_request", problem);
   }
 
   /**
@@ -2107,6 +2203,14 @@ export class ContentRepository {
         throw bodyRevisionConflict(current.bodyRevision);
       }
       if (data.body !== undefined && data.body !== current.body) {
+        await this.requireInheritedTelegramText(
+          tx,
+          orgId,
+          id,
+          data.body,
+          current.coverMediaId !== null,
+          current.videoMediaId !== null,
+        );
         await assertImagesFitBody(tx, orgId, id, data.body);
       }
       await tx
@@ -3764,6 +3868,14 @@ export class ContentRepository {
           `Channel text with hashtags exceeds ${limit} characters`,
         );
       }
+      if (channel.platform === "telegram") {
+        const problem = telegramTextProblem(
+          proposedBody,
+          item.coverMediaId !== null,
+          item.videoMediaId !== null,
+        );
+        if (problem) throw badRequest("invalid_request", problem);
+      }
       if (adaptation.body !== proposedBody) {
         await tx
           .update(schema.adaptations)
@@ -3852,7 +3964,7 @@ export class ContentRepository {
       const current = locked[0];
       if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
 
-      await this.requireEditableItem(tx, orgId, contentItemId);
+      const item = await this.requireEditableItem(tx, orgId, contentItemId);
       if (!isEditableAdaptationStatus(current.status)) {
         throw conflict(
           PINNED_ADAPTATION_CODE[current.status],
@@ -3894,6 +4006,14 @@ export class ContentRepository {
           "invalid_request",
           `Channel text with hashtags exceeds ${limit} characters`,
         );
+      }
+      if (channel.platform === "telegram" && nextBody !== null) {
+        const problem = telegramTextProblem(
+          nextBody,
+          item.coverMediaId !== null,
+          item.videoMediaId !== null,
+        );
+        if (problem) throw badRequest("invalid_request", problem);
       }
       if (!nextBody?.trim() && (hashtags.length > 0 || cta)) {
         throw badRequest("invalid_request", "Hashtags and calls to action require channel text");
@@ -5186,9 +5306,40 @@ export class ContentRepository {
             "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
           );
         }
-        // Telegram delivers reviewed photo text over 1024 characters as a
-        // caption plus one reply. The shared 4096-character adaptation limit
-        // bounds that second call; video remains a single-caption delivery.
+      }
+      // Approval is the final boundary before a queued publisher can read this
+      // text. Preflight the exact inherited or overridden channel body now,
+      // including historic rows that bypassed today's editor validation.
+      const overrideBodies = await tx
+        .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, id),
+            inArray(
+              schema.adaptations.channelId,
+              platforms
+                .filter((channel) => channel.platform === "telegram")
+                .map((channel) => channel.id),
+            ),
+          ),
+        );
+      for (const row of overrideBodies) {
+        const problem = telegramTextProblem(
+          row.body ?? coveredItem?.body ?? "",
+          coveredItem?.id != null,
+          coveredItem?.videoId != null,
+        );
+        if (problem) {
+          throw conflict(
+            coveredItem?.videoId &&
+              (row.body ?? coveredItem.body).length > TELEGRAM_PHOTO_CAPTION_LENGTH
+              ? "content_media_caption_too_long"
+              : "invalid_request",
+            problem,
+          );
+        }
       }
       if (coveredItem?.videoId) {
         if (
@@ -5198,28 +5349,6 @@ export class ContentRepository {
           throw conflict(
             "content_media_unsupported",
             "Videos currently publish only to Telegram and VK channels",
-          );
-        }
-        const overrideBodies = await tx
-          .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
-          .from(schema.adaptations)
-          .where(
-            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
-          );
-        const telegramChannelIds = new Set(
-          platforms
-            .filter((channel) => channel.platform === "telegram")
-            .map((channel) => channel.id),
-        );
-        if (
-          overrideBodies.some(
-            (row) =>
-              telegramChannelIds.has(row.channelId) && (row.body ?? coveredItem.body).length > 1024,
-          )
-        ) {
-          throw conflict(
-            "content_media_caption_too_long",
-            "Telegram video captions must be 1024 characters or fewer",
           );
         }
       }

@@ -52,8 +52,9 @@ export const BUILT_IN_ROLE_LINES = {
 export function builtInAdapterRoleLines(channel: {
   name: string;
   platform: PlatformId;
+  limit?: number;
 }): readonly string[] {
-  const limit = adaptationLimit(channel.platform);
+  const limit = channel.limit ?? adaptationLimit(channel.platform);
   if (limit === undefined) throw new Error(`Unknown platform: ${channel.platform}`);
   return [
     `You rewrite an approved draft for one channel: ${channel.name}, on ${channel.platform}.`,

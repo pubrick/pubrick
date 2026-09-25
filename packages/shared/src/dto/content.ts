@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
 import { projectRichBody, richBodySchema } from "../rich-body.js";
+import { TELEGRAM_LONG_POST_LENGTH } from "../telegram-photo-parts.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
@@ -376,6 +377,8 @@ export const refineVerbSchema = z.enum(REFINE_VERBS);
 export const MAX_REFINE_CALLS_PER_HOUR = 120;
 
 export const MAX_BODY_LENGTH = 4096;
+/** A channel override may be longer than the canonical master on Telegram. */
+export const MAX_CHANNEL_BODY_LENGTH = TELEGRAM_LONG_POST_LENGTH;
 
 /**
  * A post body, in the one canonical form the rest of the product may assume:
@@ -403,6 +406,13 @@ const bodyText = z
   .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
   .transform(normalizeNewlines)
   .pipe(z.string().min(1).max(MAX_BODY_LENGTH));
+
+/** Channel text has its own bound; the API checks the selected platform's lower cap. */
+const channelBodyText = z
+  .string()
+  .refine((text) => !hasNulByte(text), { message: NO_NUL_BYTE_MESSAGE })
+  .transform(normalizeNewlines)
+  .pipe(z.string().min(1).max(MAX_CHANNEL_BODY_LENGTH));
 
 /**
  * A title is stored in the same kind of column as a body and refuses the same
@@ -491,7 +501,7 @@ export type ContentUpdate = z.infer<typeof contentUpdateSchema>;
 export const adaptationUpdateSchema = z
   .object({
     /** Authored text without managed hashtags; `null` clears the override. */
-    body: bodyText.nullable().optional(),
+    body: channelBodyText.nullable().optional(),
     hashtags: z
       .array(
         z
@@ -894,7 +904,7 @@ export type ContentVersionListQuery = z.infer<typeof contentVersionListQuerySche
 export const contentVersionRestoreSchema = z
   .object({
     /** The text the reader saw; a newer save must not be silently overwritten. */
-    expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+    expectedBody: z.string().max(MAX_CHANNEL_BODY_LENGTH).nullable(),
     expectedBodyRevision: z.number().int().min(0).optional(),
     /** Channel restores supply both metadata expectations; master restores supply neither. */
     expectedHashtags: z.array(z.string().max(80)).max(10).optional(),

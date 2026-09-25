@@ -14,6 +14,7 @@ import {
   isDeliveryOutcome,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  MAX_CHANNEL_BODY_LENGTH,
   MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
   nextItemStatus,
@@ -119,6 +120,24 @@ describe("body newline normalisation", () => {
   it("still refuses a body over the limit once normalised", () => {
     const body = `${"x".repeat(MAX_BODY_LENGTH)}\r\ny`;
     expect(contentUpdateSchema.safeParse({ body }).success).toBe(false);
+  });
+
+  it("bounds channel text separately while the master remains at 4096", () => {
+    const long = "x".repeat(MAX_CHANNEL_BODY_LENGTH);
+    expect(adaptationUpdateSchema.parse({ body: long }).body).toBe(long);
+    expect(adaptationUpdateSchema.safeParse({ body: `${long}x` }).success).toBe(false);
+    expect(contentVersionRestoreSchema.safeParse({ expectedBody: long }).success).toBe(true);
+    expect(contentVersionRestoreSchema.safeParse({ expectedBody: `${long}x` }).success).toBe(false);
+    expect(
+      contentCreateSchema.safeParse({ brandId: BRAND, body: long, channelIds: [CHANNEL] }).success,
+    ).toBe(false);
+    expect(contentUpdateSchema.safeParse({ body: long }).success).toBe(false);
+  });
+
+  it("measures the stored channel text after newline normalization", () => {
+    const body = `${"x".repeat(MAX_CHANNEL_BODY_LENGTH - 1)}\r\n`;
+    expect(body.length).toBe(MAX_CHANNEL_BODY_LENGTH + 1);
+    expect(adaptationUpdateSchema.parse({ body }).body).toHaveLength(MAX_CHANNEL_BODY_LENGTH);
   });
 
   it("still refuses an empty body", () => {

@@ -2753,7 +2753,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     it("fails generation when a hashtag suffix would exceed the channel limit", async () => {
       const seeded = await seed();
       const script = scriptedModel({
-        adapter: () => ({ body: "x".repeat(4095), hashtags: ["tag"] }),
+        adapter: () => ({ body: "x".repeat(11_999), hashtags: ["tag"] }),
       });
       await serviceFor(script).handle({
         id: "job-overlong-tags",
@@ -2764,6 +2764,52 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         status: "failed",
         error: "too_long_for_channel",
       });
+    }, 30_000);
+
+    it("uses a run's pinned 4096 Telegram limit after new runs allow 12000", async () => {
+      const newRun = await seed({ channels: 1 });
+      const newScript = scriptedModel({ adapter: () => ({ body: "x".repeat(5000) }) });
+      await serviceFor(newScript).handle({
+        id: "new-limit",
+        data: { runId: newRun.runId, orgId: newRun.orgId },
+      });
+      expect((await runRow(newRun.runId))?.status).toBe("succeeded");
+      expect((await itemsOf(newRun.orgId))[0]?.status).toBe("draft");
+
+      const oldRun = await seed({ channels: 1 });
+      const jobId = "old-limit";
+      const claimed = await new Repository().claim(
+        oldRun.orgId,
+        oldRun.runId,
+        `${jobId}#first`,
+        jobId,
+      );
+      if (!claimed?.templateSnapshot) throw new Error("Expected first-claim snapshot");
+      const legacy = structuredClone(claimed.templateSnapshot);
+      legacy.receipt.channels = legacy.receipt.channels.map((channel) => ({
+        ...channel,
+        limit: 4096,
+      }));
+      const { receiptDigest, digest } = await import("./template-snapshot");
+      legacy.receiptSha256 = receiptDigest(legacy.receipt);
+      for (const instruction of Object.values(legacy.instructions.adapters)) {
+        instruction.text = instruction.text.replaceAll("12000", "4096");
+        instruction.sha256 = digest(instruction.text);
+      }
+      await db
+        .update(schema.pipelineRuns)
+        .set({ templateSnapshot: legacy })
+        .where(eq(schema.pipelineRuns.id, oldRun.runId));
+
+      const oldScript = scriptedModel({ adapter: () => ({ body: "x".repeat(5000) }) });
+      await serviceFor(oldScript).handle({
+        id: jobId,
+        data: { runId: oldRun.runId, orgId: oldRun.orgId },
+      });
+      expect(oldScript.callsFor("adapter")).toBeGreaterThan(0);
+      expect((await runRow(oldRun.runId))?.status).toBe("failed");
+      expect((await runRow(oldRun.runId))?.error).toBe("too_long_for_channel");
+      expect(await itemsOf(oldRun.orgId)).toHaveLength(0);
     }, 30_000);
 
     it("survives a channel deleted mid-run, writing the draft for the ones that remain", async () => {

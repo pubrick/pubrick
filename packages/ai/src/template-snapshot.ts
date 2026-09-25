@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { adaptationLimit, CONTENT_TYPES, PLATFORM_IDS, PROMPT_ROLES } from "@pubrick/shared";
+import {
+  CONTENT_TYPES,
+  isPinnedAdaptationLimit,
+  PLATFORM_IDS,
+  PROMPT_ROLES,
+} from "@pubrick/shared";
 import { z } from "zod";
 import {
   builtInRoleTemplateSource,
@@ -118,7 +123,7 @@ export function validateTemplateSnapshot(raw: unknown): TemplateSnapshot {
   for (const channel of value.receipt.channels) {
     if (channelIds.has(channel.id)) invalid("duplicate channel");
     channelIds.add(channel.id);
-    if (adaptationLimit(channel.platform) !== channel.limit) invalid("adapter limit");
+    if (!isPinnedAdaptationLimit(channel.platform, channel.limit)) invalid("adapter limit");
   }
   const adapterIds = Object.keys(value.instructions.adapters);
   if (adapterIds.length !== channelIds.size || adapterIds.some((id) => !channelIds.has(id))) {

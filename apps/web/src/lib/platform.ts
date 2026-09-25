@@ -1,4 +1,7 @@
-import { MAX_BODY_LENGTH, adaptationLimit as platformAdaptationLimit } from "@pubrick/shared";
+import {
+  adaptationLimit as platformAdaptationLimit,
+  TELEGRAM_LONG_POST_LENGTH,
+} from "@pubrick/shared";
 
 /**
  * Display names for platform ids. Ids are wire values (PLATFORM_IDS in
@@ -26,7 +29,8 @@ export function channelLabel(platform: string, name: string): string {
 
 /**
  * How long an adaptation for this platform may be — the counter's denominator,
- * `min(platform limit, MAX_BODY_LENGTH)` (provenance-lens design §6).
+ * the shared platform rule (provenance-lens design §6). Telegram adaptations
+ * may be longer than the 4096-character master; other channel bodies may not.
  *
  * The formula is `@pubrick/shared`'s, and is the same one the adapter in
  * `@pubrick/ai` generates against: showing `/ 4096` for an X channel the model
@@ -35,13 +39,14 @@ export function channelLabel(platform: string, name: string): string {
  * briefly: `@pubrick/ai` is server-only, so the browser cannot import it, and
  * the shared home for the rule was held by another change at the time.)
  *
- * **This is display only.** The `maxLength` attribute stays at
- * `MAX_BODY_LENGTH`: an existing override already longer than the platform
+ * **This is display only.** The `maxLength` attribute stays at the largest
+ * channel body bound: an existing override already longer than the platform
  * limit must stay editable, and a hard cap below its length would make it
  * permanently unfixable — the human could read the text and never shorten it.
  * Over-limit is shown, never enforced here; see the provenance-lens design's §6.
  *
- * An unknown platform falls back rather than throwing, which is the opposite of
+ * An unknown platform falls back to the largest channel-body DTO bound rather
+ * than throwing, which is the opposite of
  * what the adapter does with it. There a wrong limit spends the org's money
  * generating unusable text, so failing loudly is right; here the worst case is
  * a denominator that is too generous, and a counter that throws takes the whole
@@ -49,7 +54,7 @@ export function channelLabel(platform: string, name: string): string {
  * knows about can reach this at runtime whatever the type says.
  */
 export function adaptationLimit(platform: string): number {
-  return platformAdaptationLimit(platform) ?? MAX_BODY_LENGTH;
+  return platformAdaptationLimit(platform) ?? TELEGRAM_LONG_POST_LENGTH;
 }
 
 /** Credential field ids are camelCase wire keys; humanize for the form label. */

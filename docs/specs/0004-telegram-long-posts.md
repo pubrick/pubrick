@@ -1,6 +1,6 @@
 # Bounded multi-message Telegram posts
 
-Status: compatible delivery implemented; long-post authoring pending. This
+Status: implemented in two rollout stages. This
 extends the existing reviewed Telegram cover delivery; it does not import the
 reference publisher's HTML mode or its optimistic
 `success=True` after a dropped tail.

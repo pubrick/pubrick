@@ -20,7 +20,7 @@ import {
   type RefineVerb,
   richBodySchema,
   stripHashtagSuffix,
-  telegramPhotoParts,
+  telegramPostParts,
   withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -1391,12 +1391,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   /**
    * The counter's denominator for one channel's override (provenance-lens design §6). An
    * unresolved channel — deleted, or `GET /api/channels` failed and `channels`
-   * is `[]` — keeps what the API can store, the same fallback
-   * `adaptationLimit` makes for an id it does not know.
+   * is `[]` — keeps the largest channel body the API can store, so a saved
+   * long Telegram override remains editable until channel details return.
    */
   function overrideLimit(channelId: string): number {
     const ch = channels.find((c) => c.id === channelId);
-    return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
+    return ch ? adaptationLimit(ch.platform) : adaptationLimit("");
   }
 
   function previewLimit(channelId: string): number {
@@ -1421,11 +1421,24 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       previewText !== (adaptation.body ?? currentItem.body) ||
       (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
-    const photoParts = telegramCover ? telegramPhotoParts(previewText) : null;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
       currentItem.videoMediaId !== null;
     const limit = previewLimit(adaptation.channelId);
+    let telegramParts: ReturnType<typeof telegramPostParts> | null = null;
+    let invalidTelegramParts = false;
+    if (
+      channel?.platform === "telegram" &&
+      !supportedVideo &&
+      previewText.length > 0 &&
+      previewText.length <= limit
+    ) {
+      try {
+        telegramParts = telegramPostParts(previewText, telegramCover);
+      } catch {
+        invalidTelegramParts = true;
+      }
+    }
 
     return (
       <section
@@ -1464,22 +1477,25 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           />
         )}
         {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
-        {photoParts ? (
+        {telegramParts ? (
           <>
             <p className="mb-1 text-xs font-medium text-fg-secondary">
-              {t("reviewPreviewPhotoCaption")}
+              {t(telegramCover ? "reviewPreviewPhotoCaption" : "reviewPreviewTelegramFirstMessage")}
             </p>
-            <p className="whitespace-pre-wrap break-words text-sm text-fg">{photoParts.caption}</p>
-            {photoParts.followup !== null && (
-              <>
+            <p className="whitespace-pre-wrap break-words text-sm text-fg">
+              {telegramParts.primaryText}
+            </p>
+            {telegramParts.replies.map((reply, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: ordered preview chunks have no child state and may have identical text
+              <div key={index}>
                 <p className="mb-1 mt-3 text-xs font-medium text-fg-secondary">
-                  {t("reviewPreviewPhotoReply")}
+                  {telegramCover && index === 0
+                    ? t("reviewPreviewPhotoReply")
+                    : t("reviewPreviewTelegramReply", { number: index + 1 })}
                 </p>
-                <p className="whitespace-pre-wrap break-words text-sm text-fg">
-                  {photoParts.followup}
-                </p>
-              </>
-            )}
+                <p className="whitespace-pre-wrap break-words text-sm text-fg">{reply}</p>
+              </div>
+            ))}
           </>
         ) : (
           <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
@@ -1489,6 +1505,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             {channel?.platform === "telegram" && supportedVideo
               ? t("reviewPreviewCaptionTooLong", { limit })
               : t("reviewPreviewTooLong", { limit })}
+          </p>
+        )}
+        {invalidTelegramParts && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {t("reviewPreviewCannotSplit")}
           </p>
         )}
       </section>
@@ -2138,7 +2159,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                * unfixable forever.
                */
               displayLimit={previewLimit(a.channelId)}
-              maxLength={MAX_BODY_LENGTH}
+              maxLength={Math.max(MAX_BODY_LENGTH, overrideLimit(a.channelId))}
               showCount
               rows={4}
             />

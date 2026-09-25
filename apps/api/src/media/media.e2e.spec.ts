@@ -515,6 +515,73 @@ describe.skipIf(!url)("media library e2e", () => {
     expect(approved.body.adaptations[0].status).toBe("queued");
   });
 
+  it("refuses a video over a long Telegram override and pins caption edits after attachment", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Long Telegram video" }).expect(201);
+    const channel = await owner
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Video channel",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const post = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "Master", channelIds: [channel.body.id] })
+      .expect(201);
+    await owner
+      .patch(`/api/content/${post.body.id}`)
+      .send({ body: "m".repeat(1025) })
+      .expect(200);
+    await owner.patch(`/api/content/${post.body.id}`).send({ body: "Master" }).expect(200);
+    const versions = await owner.get(`/api/content/${post.body.id}/versions`).expect(200);
+    const longMaster = versions.body.find((row: { body: string }) => row.body.length === 1025);
+    expect(longMaster).toBeDefined();
+    const adaptationPath = `/api/content/${post.body.id}/adaptations/${post.body.adaptations[0].id}`;
+    await owner
+      .patch(adaptationPath)
+      .send({ body: "x".repeat(5000) })
+      .expect(200);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "long.mp4", contentType: "video/mp4" })
+      .expect(201);
+    const refused = await owner
+      .patch(`/api/media/posts/${post.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(409);
+    expect(refused.body.code).toBe("content_media_caption_too_long");
+    await owner
+      .patch(adaptationPath)
+      .send({ body: "x".repeat(1024) })
+      .expect(200);
+    await owner
+      .patch(`/api/media/posts/${post.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    await owner
+      .patch(adaptationPath)
+      .send({ body: "x".repeat(1025) })
+      .expect(400);
+    expect(
+      (await owner.get(`/api/content/${post.body.id}`).expect(200)).body.adaptations[0].body,
+    ).toHaveLength(1024);
+    await owner.patch(adaptationPath).send({ body: null }).expect(200);
+    await owner
+      .patch(`/api/content/${post.body.id}`)
+      .send({ body: "m".repeat(1025) })
+      .expect(400);
+    await owner
+      .post(`/api/content/${post.body.id}/versions/${longMaster.id}/restore`)
+      .send({ expectedBody: "Master" })
+      .expect(400);
+    expect(
+      (await owner.get(`/api/content/${post.body.id}`).expect(200)).body.adaptations[0].body,
+    ).toBeNull();
+  });
+
   it("approves a Telegram, VK, and MAX cover when only Telegram has a short caption", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Mixed brand" }).expect(201);
