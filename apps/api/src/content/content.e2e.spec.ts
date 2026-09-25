@@ -1487,6 +1487,76 @@ describe.skipIf(!url)("content e2e", () => {
     expect(new Date(approved.body.adaptations[0].scheduledAt).toISOString()).toBe(when);
   });
 
+  it("returns an unsent scheduled approval to the draft and invalidates its old job", async () => {
+    const agent = await orgAgent();
+    const outsider = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Review this once more", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const when = new Date(Date.now() + 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: when }).expect(200);
+
+    await outsider.post(`/api/content/${itemId}/retract-approval`).expect(404);
+    const retracted = await agent.post(`/api/content/${itemId}/retract-approval`).expect(200);
+    expect(retracted.body).toMatchObject({
+      status: "draft",
+      adaptations: [{ status: "pending", scheduledAt: null, attemptCount: 1 }],
+    });
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const oldJobs = await db.execute(sql`
+        SELECT state FROM pgboss.job
+        WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+      `);
+      expect(oldJobs.rows.map((row) => row.state)).toEqual(["cancelled"]);
+      await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: when }).expect(200);
+      const jobs = await db.execute(sql`
+        SELECT state FROM pgboss.job
+        WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+      `);
+      expect(jobs.rows.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses to undo approval after any delivery attempt, preserving the send", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Delivery was attempted", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+      .expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      await db.execute(sql`
+        INSERT INTO publications (org_id, adaptation_id, channel_id, status)
+        SELECT org_id, id, channel_id, 'failed' FROM adaptations WHERE id = ${adaptationId}
+      `);
+      const refused = await agent.post(`/api/content/${itemId}/retract-approval`).expect(409);
+      expect(refused.body.code).toBe("approval_retraction_delivery_started");
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(item.body.status).toBe("approved");
+      expect(item.body.adaptations[0].status).toBe("scheduled");
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("enqueues exactly one publish job per adaptation, even when approve is called twice", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

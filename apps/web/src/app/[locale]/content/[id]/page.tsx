@@ -266,6 +266,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [retractBusy, setRetractBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const closeDelete = useCallback(() => {
@@ -873,6 +874,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function retractApproval() {
+    if (retractBusy) return;
+    setRetractBusy(true);
+    setActionError(null);
+    try {
+      await api(`/api/content/${id}/retract-approval`, { method: "POST" });
+      await reload();
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setRetractBusy(false);
+    }
+  }
+
   async function changeArchiveState(action: "archive" | "restore") {
     setArchiveBusy(true);
     setActionError(null);
@@ -1341,6 +1357,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const hasOutstanding = item.adaptations.some(
     (a) => isOutstandingAdaptation(a.status) || a.status === "manual_ready",
   );
+  const canRetractApproval =
+    item.status === "approved" &&
+    item.isSafeToDelete &&
+    item.adaptations.length > 0 &&
+    item.adaptations.every((adaptation) =>
+      ["pending", "manual_ready", "scheduled", "queued"].includes(adaptation.status),
+    );
   const manualAdaptations = item.adaptations.filter(
     (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
   );
@@ -2116,6 +2139,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             >
               {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
             </Button>
+            {canRetractApproval && (
+              <Button variant="secondary" onClick={retractApproval} disabled={retractBusy}>
+                {t("retractApproval")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               onClick={() => changeArchiveState("archive")}

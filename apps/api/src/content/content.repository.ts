@@ -4642,6 +4642,84 @@ export class ContentRepository {
     return this.get(orgId, id);
   }
 
+  /** Return an unsent approval to the review queue without recording a rejection. */
+  async retractApproval(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
+      await this.requireItem(tx, orgId, id);
+      // A worker claims an adaptation before making the external request. Lock
+      // every row first, in the same order as approval and publishing, so a
+      // claim cannot pass the checks below while its cancellation commits.
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "approved") {
+        throw conflict(
+          "approval_retraction_not_approved",
+          "Only an approved post can return to drafts",
+        );
+      }
+      if (
+        !item.isSafeToDelete ||
+        adaptations.length === 0 ||
+        adaptations.some(
+          (adaptation) =>
+            !["pending", "manual_ready", "scheduled", "queued"].includes(adaptation.status),
+        )
+      ) {
+        throw conflict(
+          "approval_retraction_delivery_started",
+          "A delivery has started or finished; inspect the channel results before changing this post",
+        );
+      }
+      const [receipt] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            inArray(
+              schema.publications.adaptationId,
+              adaptations.map((adaptation) => adaptation.id),
+            ),
+          ),
+        )
+        .limit(1);
+      if (receipt) {
+        throw conflict(
+          "approval_retraction_delivery_started",
+          "A delivery has started or finished; inspect the channel results before changing this post",
+        );
+      }
+      for (const adaptation of adaptations) {
+        const hadJob = adaptation.status === "scheduled" || adaptation.status === "queued";
+        if (hadJob) await this.queue.cancelPublish(tx, adaptation.id, orgId);
+        await tx
+          .update(schema.adaptations)
+          .set({
+            status: "pending",
+            scheduledAt: null,
+            attemptCount: adaptation.attemptCount + (hadJob ? 1 : 0),
+            lastError: null,
+            failureReason: null,
+          })
+          .where(
+            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
+          );
+      }
+      await this.setItemStatus(tx, orgId, id, "draft");
+    });
+    return this.get(orgId, id);
+  }
+
   /**
    * A PERSON SETTLES A DELIVERY NOBODY ELSE CAN — "Mark as delivered" and
    * "Mark as not delivered", per adaptation.

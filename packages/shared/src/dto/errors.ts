@@ -154,6 +154,8 @@ export const API_ERROR_CODES = [
   // ── content: the decision cannot be made ──────────────────────────────────
   /** Approve or reject on a post that is already live somewhere. */
   "content_already_published",
+  "approval_retraction_not_approved",
+  "approval_retraction_delivery_started",
   /**
    * REJECT ON A POST THAT IS PART LIVE AND PART OVER — a different refusal from
    * the one above, and a separate code because one sentence cannot be true of
