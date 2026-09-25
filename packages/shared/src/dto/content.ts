@@ -620,6 +620,16 @@ export const contentApproveSchema = z.object({
 });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
 
+/** Leave one dispatch window between an edit and an automatic channel send. */
+export const MIN_RESCHEDULE_LEAD_MS = 60_000;
+
+/** Move one already-scheduled automatic delivery, with a stale-editor fence. */
+export const adaptationRescheduleSchema = z.object({
+  scheduledAt: z.string().datetime(),
+  expectedScheduledAt: z.string().datetime(),
+});
+export type AdaptationReschedule = z.infer<typeof adaptationRescheduleSchema>;
+
 /**
  * WHAT A PERSON SAW WHEN THEY OPENED THE CHANNEL — the body of
  * `POST /api/content/:id/adaptations/:adaptationId/delivery`.

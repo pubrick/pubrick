@@ -31,6 +31,7 @@ import {
   MAX_BODY_LENGTH,
   MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
+  MIN_RESCHEDULE_LEAD_MS,
   nextItemStatus,
   normalizeForComparison,
   normalizeHashtags,
@@ -4640,6 +4641,142 @@ export class ContentRepository {
     });
 
     return this.get(orgId, id);
+  }
+
+  /** Move exactly one automatic channel's outstanding job without re-approving its siblings. */
+  async rescheduleAdaptation(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    expectedScheduledAt: Date,
+    scheduledAt: Date,
+  ) {
+    await db.transaction(async (tx) => {
+      // The publish worker claims this same row before any external call. A
+      // second request must wait for the first reschedule, then compare the
+      // time in a NEW statement under this lock (READ COMMITTED snapshot).
+      const [locked] = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!locked) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      const [current] = await tx
+        .select({
+          channelId: schema.adaptations.channelId,
+          status: schema.adaptations.status,
+          scheduledAt: schema.adaptations.scheduledAt,
+          attemptCount: schema.adaptations.attemptCount,
+          platform: schema.channels.platform,
+          nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
+        })
+        .from(schema.adaptations)
+        .innerJoin(
+          schema.channels,
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.id, schema.adaptations.channelId),
+          ),
+        )
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .limit(1);
+      if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // Archive/reject take adaptation locks before changing the parent, so
+      // this read stays valid until commit. Do not lock the item first: that
+      // would invert the worker's adaptation -> item lock order.
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1);
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "approved" && item.status !== "partially_published") {
+        throw conflict(
+          "schedule_parent_not_ready",
+          "This post is no longer approved for scheduling",
+        );
+      }
+      if (
+        current.status !== "scheduled" ||
+        !current.scheduledAt ||
+        isManualPlatform(current.platform)
+      ) {
+        throw conflict(
+          "schedule_not_scheduled",
+          "This channel has no scheduled automatic delivery to move",
+        );
+      }
+      if (current.scheduledAt.getTime() !== expectedScheduledAt.getTime()) {
+        throw conflict(
+          "schedule_changed",
+          "This channel's scheduled time changed; reload before moving it",
+        );
+      }
+      const [receipt] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.adaptationId, adaptationId),
+          ),
+        )
+        .limit(1);
+      if (receipt) {
+        throw conflict(
+          "schedule_has_history",
+          "This channel has delivery history; inspect it before scheduling again",
+        );
+      }
+
+      // Both comparisons use the DB clock AFTER any lock wait. pg-boss runs a
+      // past startAfter immediately; a short guard also avoids changing a job
+      // already due in the next dispatch window.
+      const now = current.nowMs;
+      if (scheduledAt.getTime() <= now) {
+        throw badRequest("schedule_in_past", "scheduledAt must be in the future");
+      }
+      if (
+        Math.min(current.scheduledAt.getTime(), scheduledAt.getTime()) <=
+        now + MIN_RESCHEDULE_LEAD_MS
+      ) {
+        throw conflict(
+          "schedule_too_close",
+          "Choose a time at least one minute away before this delivery is due",
+        );
+      }
+      if (scheduledAt.getTime() === current.scheduledAt.getTime()) return;
+
+      // Cancellation and replacement share this transaction with the row.
+      // The cancelled pg-boss id remains, so a fresh attempt count is required.
+      await this.queue.cancelPublish(tx, adaptationId, orgId);
+      const attemptCount = current.attemptCount + 1;
+      await tx
+        .update(schema.adaptations)
+        .set({ scheduledAt, attemptCount })
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        );
+      await this.queue.enqueuePublish(
+        tx,
+        { id: adaptationId, orgId, channelId: current.channelId, attemptCount },
+        scheduledAt,
+      );
+    });
+    return this.get(orgId, contentItemId);
   }
 
   /** Return an unsent approval to the review queue without recording a rejection. */

@@ -227,6 +227,11 @@ export const API_ERROR_CODES = [
   "manual_publication_not_ready",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
+  "schedule_too_close",
+  "schedule_changed",
+  "schedule_not_scheduled",
+  "schedule_parent_not_ready",
+  "schedule_has_history",
   /**
    * A NEW TIME FOR A POST THAT IS ALREADY ON ITS WAY — the two refusals that
    * replaced a 200 which changed nothing.

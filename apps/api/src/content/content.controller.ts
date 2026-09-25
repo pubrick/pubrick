@@ -14,7 +14,9 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type AdaptationReschedule,
   type AdaptationUpdate,
+  adaptationRescheduleSchema,
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
@@ -428,6 +430,24 @@ export class ContentController {
     @Body(new ZodValidationPipe(contentApproveSchema)) body: ContentApprove,
   ) {
     return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
+  }
+
+  @Post(":id/adaptations/:adaptationId/reschedule")
+  @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
+  @HttpCode(200)
+  rescheduleAdaptation(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(adaptationRescheduleSchema)) body: AdaptationReschedule,
+  ) {
+    return this.content.rescheduleAdaptation(
+      orgId,
+      id,
+      adaptationId,
+      new Date(body.expectedScheduledAt),
+      new Date(body.scheduledAt),
+    );
   }
 
   @Post(":id/retract-approval")

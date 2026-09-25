@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { INestApplication } from "@nestjs/common";
+import { ConflictException, type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
   adaptationLimit,
@@ -10,7 +10,7 @@ import {
 } from "@pubrick/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReadaptCaller, type ReadaptOutcome } from "./readapt.caller";
 import { RefineCaller, type RefineOutcome } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
@@ -2704,6 +2704,311 @@ describe.skipIf(!url)("content e2e", () => {
     expect(rows[0]?.state).toBe("cancelled");
     expect(rows[1]?.state).toBe("created");
     expect(new Date(rows[1]?.start_after as string).toISOString()).toBe(second);
+  });
+
+  it("moves only the selected channel's scheduled job and keeps its sibling and item decision", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const secondChannel = await agent
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "telegram",
+        name: "Second",
+        credentials: { botToken: "123:abc", chatId: "-1001234567891" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({
+        brandId,
+        body: "Two schedules",
+        channelIds: [channelId, secondChannel.body.id],
+      })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    const approved = await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: first })
+      .expect(200);
+    const target = approved.body.adaptations.find(
+      (a: { channelId: string }) => a.channelId === channelId,
+    );
+    const sibling = approved.body.adaptations.find(
+      (a: { channelId: string }) => a.channelId === secondChannel.body.id,
+    );
+    const moved = await agent
+      .post(`/api/content/${itemId}/adaptations/${target.id}/reschedule`)
+      .send({ expectedScheduledAt: first, scheduledAt: second })
+      .expect(200);
+    expect(moved.body.status).toBe("approved");
+    expect(moved.body.adaptations.find((a: { id: string }) => a.id === target.id)).toMatchObject({
+      status: "scheduled",
+      scheduledAt: second,
+      attemptCount: 1,
+    });
+    expect(moved.body.adaptations.find((a: { id: string }) => a.id === sibling.id)).toMatchObject({
+      status: "scheduled",
+      scheduledAt: first,
+      attemptCount: 0,
+    });
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const jobs = await db.execute(sql`
+        SELECT data->>'adaptationId' AS adaptation_id, state, start_after
+        FROM pgboss.job WHERE name = 'publish'
+          AND data->>'adaptationId' IN (${target.id}, ${sibling.id})
+        ORDER BY created_on, id
+      `);
+      const targetJobs = jobs.rows.filter((row) => row.adaptation_id === target.id);
+      const siblingJobs = jobs.rows.filter((row) => row.adaptation_id === sibling.id);
+      expect(targetJobs.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+      expect(siblingJobs.map((row) => row.state)).toEqual(["created"]);
+      expect(
+        targetJobs.some(
+          (row) =>
+            row.state === "created" && new Date(row.start_after as string).toISOString() === second,
+        ),
+      ).toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses cross-tenant, wrong-item, stale, past, near-due, and already-claimed channel moves", async () => {
+    const agent = await orgAgent();
+    const outsider = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const firstItem = await agent
+      .post("/api/content")
+      .send({ brandId, body: "First", channelIds: [channelId] })
+      .expect(201);
+    const otherItem = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Other", channelIds: [channelId] })
+      .expect(201);
+    const itemId = firstItem.body.id as string;
+    const adaptationId = firstItem.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const path = `/api/content/${itemId}/adaptations/${adaptationId}/reschedule`;
+    const body = { expectedScheduledAt: first, scheduledAt: second };
+    await outsider.post(path).send(body).expect(404);
+    const restrictedMember = await orgAgent();
+    const memberSession = await restrictedMember.get("/api/auth/get-session").expect(200);
+    const { createDb: createScopedDb, schema: scopedSchema } = await import("@pubrick/db");
+    const scoped = createScopedDb(url as string);
+    try {
+      const ownerOrgId = await orgOf(itemId);
+      await scoped.db.insert(scopedSchema.member).values({
+        id: randomUUID(),
+        organizationId: ownerOrgId,
+        userId: memberSession.body.user.id,
+        role: "member",
+      });
+      await restrictedMember
+        .post("/api/auth/organization/set-active")
+        .send({ organizationId: ownerOrgId })
+        .expect(200);
+      await restrictedMember.post(path).send(body).expect(404);
+    } finally {
+      await scoped.pool.end();
+    }
+    await agent
+      .post(`/api/content/${otherItem.body.id}/adaptations/${adaptationId}/reschedule`)
+      .send(body)
+      .expect(404);
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, expectedScheduledAt: second })
+          .expect(409)
+      ).body.code,
+    ).toBe("schedule_changed");
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, scheduledAt: new Date(Date.now() - 1000).toISOString() })
+          .expect(400)
+      ).body.code,
+    ).toBe("schedule_in_past");
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, scheduledAt: new Date(Date.now() + 10_000).toISOString() })
+          .expect(409)
+      ).body.code,
+    ).toBe("schedule_too_close");
+
+    const moved = await agent.post(path).send(body).expect(200);
+    expect(moved.body.adaptations[0].scheduledAt).toBe(second);
+    expect((await agent.post(path).send(body).expect(409)).body.code).toBe("schedule_changed");
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const [receipt] = await db
+        .insert(schema.publications)
+        .values({
+          orgId: await orgOf(itemId),
+          adaptationId,
+          channelId,
+          status: "failed",
+          attempt: 1,
+        })
+        .returning({ id: schema.publications.id });
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: second, scheduledAt: first })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_has_history");
+      if (receipt)
+        await db.delete(schema.publications).where(eq(schema.publications.id, receipt.id));
+      await db
+        .update(schema.adaptations)
+        .set({ status: "publishing" })
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: second, scheduledAt: first })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_not_scheduled");
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("rolls back the cancelled job and timestamp when replacement enqueue fails", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Atomic move", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const { QueueService } = await import("../queue/queue.service");
+    const failure = vi
+      .spyOn(app.get(QueueService), "enqueuePublish")
+      .mockRejectedValueOnce(new ConflictException("A publish job is already queued"));
+    try {
+      await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/reschedule`)
+        .send({ expectedScheduledAt: first, scheduledAt: second })
+        .expect(409);
+    } finally {
+      failure.mockRestore();
+    }
+    const current = await agent.get(`/api/content/${itemId}`).expect(200);
+    expect(current.body.adaptations[0]).toMatchObject({
+      status: "scheduled",
+      scheduledAt: first,
+      attemptCount: 0,
+    });
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const jobs = await db.execute(
+        sql`SELECT state FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}`,
+      );
+      expect(jobs.rows.map((row) => row.state)).toEqual(["created"]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses a slot already near dispatch and a claim that wins the adaptation lock", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Claim race", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const path = `/api/content/${itemId}/adaptations/${adaptationId}/reschedule`;
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const near = new Date(Date.now() + 30_000).toISOString();
+      await db
+        .update(schema.adaptations)
+        .set({ scheduledAt: new Date(near) })
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: near, scheduledAt: second })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_too_close");
+      await db
+        .update(schema.adaptations)
+        .set({ scheduledAt: new Date(first) })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      let moveSettled = false;
+      let move: Promise<request.Response> | undefined;
+      await db.transaction(async (tx) => {
+        await tx
+          .select({ id: schema.adaptations.id })
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.id, adaptationId))
+          .for("update");
+        move = agent.post(path).send({ expectedScheduledAt: first, scheduledAt: second });
+        void move.then(
+          () => {
+            moveSettled = true;
+          },
+          () => {
+            moveSettled = true;
+          },
+        );
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const waiting = await db.execute(sql`
+            SELECT count(*)::int AS count FROM pg_stat_activity
+            WHERE application_name = ${APP_NAME} AND wait_event_type = 'Lock'
+              AND query ILIKE '%adaptations%'
+          `);
+          if (Number(waiting.rows[0]?.count) > 0) break;
+          if (moveSettled || Date.now() > deadline)
+            throw new Error("Reschedule did not wait for the claim lock");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        // The worker's claim wins this lock, changing the row before the API
+        // wakes up. The API must read the NEW status and refuse the move.
+        await tx
+          .update(schema.adaptations)
+          .set({ status: "publishing" })
+          .where(eq(schema.adaptations.id, adaptationId));
+      });
+      const response = await move;
+      expect(response?.status).toBe(409);
+      expect(response?.body.code).toBe("schedule_not_scheduled");
+    } finally {
+      await pool.end();
+    }
   });
 
   /**
