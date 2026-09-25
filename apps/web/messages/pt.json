@@ -1111,6 +1111,8 @@
     "knowledgeNotesTitle": "Notas da marca selecionadas para esta geração",
     "knowledgeNotesEmpty": "Nenhuma nota da marca correspondente foi selecionada.",
     "knowledgeNotesHint": "Estas notas foram selecionadas como contexto. Reveja as afirmações factuais antes de publicar.",
+    "relatedNewsTitle": "Notícias relacionadas monitoradas",
+    "relatedNewsHint": "Os trechos são contexto, não prova. Abra a fonte antes de confiar em qualquer afirmação.",
     "step": {
       "researcher": "Pesquisa",
       "writer": "Rascunho",
@@ -1145,6 +1147,7 @@
     "claimNeedsCheck": "Vale verificar",
     "foundInMaterial": "Encontrado no material fornecido",
     "foundInBrandNote": "Encontrado em uma nota da marca ·",
+    "foundInRelatedNews": "Encontrado em trecho de notícia ·",
     "currentNote": "Nota atual da biblioteca",
     "changesEmpty": "A edição não mudou nada.",
     "status": {

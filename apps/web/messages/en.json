@@ -1111,6 +1111,8 @@
     "knowledgeNotesTitle": "Brand notes selected for this run",
     "knowledgeNotesEmpty": "No matching brand notes were selected.",
     "knowledgeNotesHint": "These notes were selected as context. Review factual claims before publishing.",
+    "relatedNewsTitle": "Related watched stories",
+    "relatedNewsHint": "Feed excerpts are context, not evidence. Open the source before relying on any claim.",
     "step": {
       "researcher": "Research",
       "writer": "Draft",
@@ -1145,6 +1147,7 @@
     "claimNeedsCheck": "Worth checking",
     "foundInMaterial": "Found in supplied material",
     "foundInBrandNote": "Found in brand note ·",
+    "foundInRelatedNews": "Found in feed excerpt ·",
     "currentNote": "Current library note",
     "changesEmpty": "The editor changed nothing.",
     "status": {
