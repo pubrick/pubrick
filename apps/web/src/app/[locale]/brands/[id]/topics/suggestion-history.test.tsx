@@ -202,4 +202,43 @@ describe("topic suggestion history", () => {
     });
     expect(screen.queryByText(en.Topics.scanDecision_ideas_pending)).not.toBeInTheDocument();
   });
+
+  it("clears a stale daily skip when refreshed decision history fails", async () => {
+    let decisionCalls = 0;
+    let rejectRefresh!: (error: Error) => void;
+    const refresh = new Promise<Response>((_, reject) => {
+      rejectRefresh = reject;
+    });
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (!String(input).includes("scan-decisions"))
+        return Promise.resolve(
+          response({ rows: [row(FIRST, { status: "queued" })], nextCursor: null }),
+        );
+      decisionCalls++;
+      return decisionCalls === 1
+        ? Promise.resolve(
+            response([
+              {
+                id: SECOND,
+                brandId: BRAND,
+                localDate: "2026-09-23",
+                decision: "ideas_pending",
+                createdAt: "2026-09-23T12:00:00Z",
+                updatedAt: "2026-09-23T12:00:00Z",
+              },
+            ]),
+          )
+        : refresh;
+    });
+    const view = render(<SuggestionHistory brandId={BRAND} refreshKey="before" />);
+    expect(await screen.findByText(en.Topics.scanDecision_ideas_pending)).toBeInTheDocument();
+    view.rerender(<SuggestionHistory brandId={BRAND} refreshKey="after" />);
+    expect(screen.queryByText(en.Topics.scanDecision_ideas_pending)).not.toBeInTheDocument();
+    await act(async () => {
+      rejectRefresh(new Error("network failed"));
+      await refresh.catch(() => undefined);
+    });
+    expect(screen.queryByText(en.Topics.scanDecision_ideas_pending)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
 });

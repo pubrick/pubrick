@@ -122,6 +122,7 @@ export function SuggestionHistory({
   useEffect(() => {
     let active = true;
     const requestKey = refreshKey;
+    setDecisionState(null);
     setDecisionError(null);
     api<TopicSuggestionScanDecision[]>(`/api/topics/suggestions/scan-decisions?brandId=${brandId}`)
       .then((rows) => {
