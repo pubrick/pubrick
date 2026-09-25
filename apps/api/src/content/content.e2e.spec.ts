@@ -8319,6 +8319,26 @@ describe.skipIf(!url)("content e2e", () => {
       );
     });
 
+    it("refuses a re-adaptation that contains only the carried-over managed tags", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["one", "two"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "#one #two",
+        reason: "Only tags",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      await agent.post(`${path}/${staged.body.id}/accept`).expect(400);
+      const unchanged = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(unchanged.body.adaptations[0].body).toBe("Earlier channel text\n\n#one #two");
+      expect(unchanged.body.adaptationProposals[0].id).toBe(staged.body.id);
+    });
+
     it("refuses a re-adaptation whose managed tags exceed the channel limit", async () => {
       const { agent, itemId, adaptationId } = await setup();
       await agent

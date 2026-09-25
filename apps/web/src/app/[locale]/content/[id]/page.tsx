@@ -671,7 +671,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   async function saveOverride(adaptationId: string) {
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
-    const hashtags = normalizeHashtags((tagDrafts[adaptationId] ?? "").split(","));
+    const tagValue = tagDrafts[adaptationId] ?? "";
+    const hashtags = normalizeHashtags(tagValue.split(","));
     const cta = ctaDrafts[adaptationId] ?? "";
     const saved = item?.adaptations.find((adaptation) => adaptation.id === adaptationId);
     const baselineTags = tagBaselines.current[adaptationId] ?? saved?.hashtags ?? [];
@@ -708,12 +709,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
       const persistedText =
         persisted.body === null ? "" : stripHashtagSuffix(persisted.body, persisted.hashtags);
-      setOverrideDrafts((current) => ({ ...current, [adaptationId]: persistedText }));
-      setTagDrafts((current) => ({
-        ...current,
-        [adaptationId]: persisted.hashtags.join(", "),
-      }));
-      setCtaDrafts((current) => ({ ...current, [adaptationId]: persisted.cta ?? "" }));
+      setOverrideDrafts((current) =>
+        (current[adaptationId] ?? "") === value
+          ? { ...current, [adaptationId]: persistedText }
+          : current,
+      );
+      setTagDrafts((current) =>
+        (current[adaptationId] ?? "") === tagValue
+          ? { ...current, [adaptationId]: persisted.hashtags.join(", ") }
+          : current,
+      );
+      setCtaDrafts((current) =>
+        (current[adaptationId] ?? "") === cta
+          ? { ...current, [adaptationId]: persisted.cta ?? "" }
+          : current,
+      );
       bodyBaselines.current[adaptationId] = persistedText;
       tagBaselines.current[adaptationId] = persisted.hashtags;
       ctaBaselines.current[adaptationId] = persisted.cta;

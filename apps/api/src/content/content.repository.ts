@@ -3112,10 +3112,11 @@ export class ContentRepository {
       // The model sees the previously composed channel body. If it carries
       // forward that exact managed final block, remove only that block before
       // composing again. Any different authored tag paragraph stays intact.
-      const proposedBody = withHashtags(
-        stripHashtagSuffix(proposal.proposal, adaptation.hashtags),
-        adaptation.hashtags,
-      );
+      const proposedText = stripHashtagSuffix(proposal.proposal, adaptation.hashtags);
+      if (!proposedText.trim()) {
+        throw badRequest("invalid_request", "Channel text must contain content before hashtags");
+      }
+      const proposedBody = withHashtags(proposedText, adaptation.hashtags);
       const [channel] = await tx
         .select({ platform: schema.channels.platform })
         .from(schema.channels)

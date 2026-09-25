@@ -1183,6 +1183,58 @@ describe("per-channel override (Step 6)", () => {
     });
   });
 
+  it("keeps edits typed during a channel save and uses the saved response as their baseline", async () => {
+    const original = makeAdaptation({ body: "Saved text" });
+    const persisted = makeAdaptation({
+      body: "Saved text\n\n#news",
+      hashtags: ["news"],
+      cta: "First CTA",
+    });
+    const served = { current: makeItem({ adaptations: [original] }) };
+    const calls: Call[] = [];
+    let finishPatch: ((value: Adaptation) => void) | undefined;
+    const pendingPatch = new Promise<Adaptation>((resolve) => {
+      finishPatch = resolve;
+    });
+    let patchCount = 0;
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method !== "PATCH" || path !== "/api/content/c1/adaptations/a1") return undefined;
+      patchCount += 1;
+      return patchCount === 1 ? pendingPatch : persisted;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    const override = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    const tags = screen.getByRole("textbox", { name: en.Publish.hashtagsLabel });
+    const cta = screen.getByRole("textbox", { name: en.Publish.ctaLabel });
+    fireEvent.change(tags, { target: { value: "news" } });
+    fireEvent.change(cta, { target: { value: "First CTA" } });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    await waitFor(() => expect(patchCount).toBe(1));
+
+    fireEvent.change(override, { target: { value: "Typed while saving" } });
+    fireEvent.change(tags, { target: { value: "later" } });
+    fireEvent.change(cta, { target: { value: "Second CTA" } });
+    served.current = { ...served.current, adaptations: [persisted] };
+    await act(async () => finishPatch?.(persisted));
+    expect(override).toHaveValue("Typed while saving");
+    expect(tags).toHaveValue("later");
+    expect(cta).toHaveValue("Second CTA");
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const channelPatches = calls.filter(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(channelPatches[1]?.body ?? "{}")).toEqual({
+      body: "Typed while saving",
+      hashtags: ["later"],
+      expectedHashtags: ["news"],
+      cta: "Second CTA",
+      expectedCta: "First CTA",
+    });
+  });
+
   it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
     const served = { current: makeItem({ adaptations: [makeAdaptation({ body: "Saved text" })] }) };
     installBaseHandlers(served, []);
