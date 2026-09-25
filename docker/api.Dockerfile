@@ -22,7 +22,7 @@ FROM deps AS build
 # node_modules from the deps stage above is not in the build context (see
 # .dockerignore), so this COPY layers source on top without touching it.
 COPY . .
-RUN pnpm build
+RUN pnpm --filter @pubrick/api... build
 RUN pnpm --filter @pubrick/api deploy --prod --legacy /out
 
 FROM node:22-slim
