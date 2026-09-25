@@ -21,17 +21,17 @@ import { findInitialOrganizationId } from "./org/initial-org";
  * `docker compose up` is the only one that can ever add a person, and everyone
  * it lets in is permanently unable to add anyone else.
  *
- * The Settings screen invites only ordinary members. Every member may do that
- * and may take back a pending invitation; owners/admins may also invite elevated
- * roles through the API. The invitationRoleGate enforces that distinction on
- * the raw auth route before Better Auth can cancel or resend an existing link.
+ * The ordinary `member` role may invite other members and take back pending
+ * invitations. Owners/admins may also invite elevated and editorial roles
+ * through the API. The invitationRoleGate enforces that distinction on the raw
+ * auth route before Better Auth can cancel or resend an existing link.
  *
- * What that costs: any member can widen the instance by one address. The
+ * What that costs: an ordinary member can widen the instance by one address. The
  * mitigations are that every pending invitation is visible to every member on
  * one screen and revocable there, that an invitation is single-use and expires,
  * and that this is a self-hosted product whose members are, by construction,
- * people the operator already let in. Role management has no UI yet; this
- * policy must remain server-side even if the invitation form only sends `member`.
+ * people the operator already let in. Role assignment must remain server-side
+ * regardless of which choices an interface exposes.
  */
 const ac = createAccessControl(defaultStatements);
 const memberAc = ac.newRole({
@@ -44,13 +44,30 @@ const memberAc = ac.newRole({
   ac: ["read"],
   invitation: ["create", "cancel"],
 });
+// Editorial permissions over brands and drafts are enforced by Pubrick's API
+// guards. Better Auth only needs to recognize these names for invitations and
+// role changes; neither role can manage organization membership or invitations.
+const authorAc = ac.newRole({
+  organization: [],
+  member: [],
+  team: [],
+  ac: ["read"],
+  invitation: [],
+});
+const editorAc = ac.newRole({
+  organization: [],
+  member: [],
+  team: [],
+  ac: ["read"],
+  invitation: [],
+});
 
 /** 48 hours, the plugin's own default — stated so `docs/self-hosting.md` cites code. */
 export const INVITATION_EXPIRES_IN_SECONDS = 48 * 60 * 60;
 
 const ORGANIZATION_OPTIONS = {
   ac,
-  roles: { owner: ownerAc, admin: adminAc, member: memberAc },
+  roles: { owner: ownerAc, admin: adminAc, member: memberAc, author: authorAc, editor: editorAc },
   invitationExpiresIn: INVITATION_EXPIRES_IN_SECONDS,
   // Stated, not inherited, and the default is the dangerous one HERE. The plugin
   // decides whether accepting an invitation requires a verified address by
