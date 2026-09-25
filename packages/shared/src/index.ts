@@ -160,7 +160,11 @@ export {
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 export * from "./link-policy-defaults.js";
-export { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
+export {
+  adaptationLimit,
+  PLATFORM_MAX_TEXT_LENGTH,
+  TELEGRAM_ADAPTER_MAX_TEXT_LENGTH,
+} from "./platform-limits.js";
 export {
   type AiVersionRow,
   aiSentenceMask,
@@ -183,5 +187,12 @@ export {
   type RefineAcceptPlan,
 } from "./refine-merge.js";
 export * from "./rich-body.js";
-export { TELEGRAM_PHOTO_CAPTION_LENGTH, telegramPhotoParts } from "./telegram-photo-parts.js";
+export {
+  TELEGRAM_LONG_POST_LENGTH,
+  TELEGRAM_MESSAGE_LENGTH,
+  TELEGRAM_PHOTO_CAPTION_LENGTH,
+  type TelegramPostParts,
+  telegramPhotoParts,
+  telegramPostParts,
+} from "./telegram-photo-parts.js";
 export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

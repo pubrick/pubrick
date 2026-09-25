@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { PLATFORM_IDS } from "./dto/channels.js";
 import { MAX_BODY_LENGTH } from "./dto/content.js";
-import { adaptationLimit, PLATFORM_MAX_TEXT_LENGTH } from "./platform-limits.js";
+import {
+  adaptationLimit,
+  PLATFORM_MAX_TEXT_LENGTH,
+  TELEGRAM_ADAPTER_MAX_TEXT_LENGTH,
+} from "./platform-limits.js";
 
 describe("PLATFORM_MAX_TEXT_LENGTH", () => {
   it("covers every platform a channel can be created for", () => {
@@ -12,6 +16,7 @@ describe("PLATFORM_MAX_TEXT_LENGTH", () => {
 
   it("keeps telegram at the documented Bot API limit", () => {
     expect(PLATFORM_MAX_TEXT_LENGTH.telegram).toBe(4096);
+    expect(TELEGRAM_ADAPTER_MAX_TEXT_LENGTH).toBe(12_000);
   });
 });
 

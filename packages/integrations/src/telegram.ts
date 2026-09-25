@@ -1,4 +1,4 @@
-import { PLATFORM_MAX_TEXT_LENGTH, telegramPhotoParts } from "@pubrick/shared";
+import { TELEGRAM_ADAPTER_MAX_TEXT_LENGTH, telegramPostParts } from "@pubrick/shared";
 import { z } from "zod";
 import {
   PartialTelegramPublishError,
@@ -14,7 +14,7 @@ import {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.telegram.org";
-const MAX_TEXT_LENGTH = PLATFORM_MAX_TEXT_LENGTH.telegram;
+const MAX_TEXT_LENGTH = TELEGRAM_ADAPTER_MAX_TEXT_LENGTH;
 
 /**
  * How long one Telegram call may take before the adapter aborts it. Exported
@@ -396,10 +396,21 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
   credentialsSchema,
 
   async publish(credentials, input: PublishInput, options): Promise<PublishResult> {
-    if (input.text.length === 0 || input.text.length > MAX_TEXT_LENGTH) {
+    if (
+      typeof input.text !== "string" ||
+      input.text.length === 0 ||
+      input.text.length > MAX_TEXT_LENGTH
+    ) {
       throw new PermanentPublishError(
-        `Text must be 1..${MAX_TEXT_LENGTH} characters, got ${input.text.length}`,
+        `Text must be 1..${MAX_TEXT_LENGTH} characters, got ${String(input.text?.length)}`,
       );
+    }
+
+    let plan: ReturnType<typeof telegramPostParts>;
+    try {
+      plan = telegramPostParts(input.text, Boolean(input.image));
+    } catch (error) {
+      throw new PermanentPublishError(error instanceof Error ? error.message : String(error));
     }
 
     if (input.video) {
@@ -429,80 +440,126 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       if (input.image.bytes.length === 0 || input.image.mimeType !== "image/jpeg") {
         throw new PermanentPublishError("Telegram photos require a nonempty JPEG");
       }
-      const parts = telegramPhotoParts(input.text);
-      const payload = new FormData();
-      payload.append("chat_id", credentials.chatId);
-      payload.append("caption", parts.caption);
-      payload.append(
-        "photo",
-        new Blob([new Uint8Array(input.image.bytes)], { type: "image/jpeg" }),
-        "cover.jpg",
+    }
+
+    if (
+      plan.replies.length > 0 &&
+      !options?.onTelegramPartAccepted &&
+      !(input.image && input.text.length <= 4096)
+    ) {
+      throw new PermanentPublishError("Multi-part Telegram delivery requires a durable checkpoint");
+    }
+
+    const primaryPayload: FormData | Record<string, unknown> = input.image
+      ? (() => {
+          const payload = new FormData();
+          payload.append("chat_id", credentials.chatId);
+          payload.append("caption", plan.primaryText);
+          payload.append(
+            "photo",
+            new Blob([new Uint8Array(input.image.bytes)], { type: "image/jpeg" }),
+            "cover.jpg",
+          );
+          return payload;
+        })()
+      : {
+          chat_id: credentials.chatId,
+          text: plan.primaryText,
+          link_preview_options: { is_disabled: input.disableLinkPreview !== false },
+        };
+    // No parse_mode: the reviewed plain text must be sent unchanged.
+    const primary = messageLink(
+      await call<unknown>(
+        input.image ? "sendPhoto" : "sendMessage",
+        credentials,
+        primaryPayload,
+        options,
+      ),
+    );
+    if (plan.replies.length === 0) return primary;
+
+    const primaryKind = plan.primaryKind;
+    const firstRemaining = plan.replies.join("");
+    try {
+      if (options?.onTelegramPartAccepted) {
+        await options.onTelegramPartAccepted({
+          primaryKind,
+          primary,
+          previousRemaining: null,
+          remaining: firstRemaining,
+        });
+      } else {
+        await options?.onTelegramPhotoAccepted?.(primary, firstRemaining);
+      }
+    } catch {
+      throw new PartialTelegramPublishError(
+        "Telegram accepted the primary message, but its delivery checkpoint failed; no reply was sent.",
+        primary,
+        firstRemaining,
+        "not_sent",
+        primaryKind,
       );
-      const primary = messageLink(await call<unknown>("sendPhoto", credentials, payload, options));
-      if (parts.followup === null) return primary;
+    }
 
-      try {
-        await options?.onTelegramPhotoAccepted?.(primary, parts.followup);
-      } catch {
-        throw new PartialTelegramPublishError(
-          "Telegram accepted the photo, but its delivery checkpoint failed; the text reply was not sent.",
-          primary,
-          parts.followup,
-          "not_sent",
-        );
-      }
+    const primaryId = Number(primary.externalId);
+    if (!primary.externalId || !Number.isSafeInteger(primaryId) || primaryId <= 0) {
+      throw new PartialTelegramPublishError(
+        "Telegram accepted the primary message, but returned no usable message ID; no reply was sent. Check the channel before sending again.",
+        primary,
+        firstRemaining,
+        "not_sent",
+        primaryKind,
+      );
+    }
 
-      // The photo is already live. A missing message ID means the reply cannot
-      // be linked safely; stopping here is a partial delivery, never a retry.
-      const primaryId = Number(primary.externalId);
-      if (!primary.externalId || !Number.isSafeInteger(primaryId) || primaryId <= 0) {
-        throw new PartialTelegramPublishError(
-          "Telegram accepted the photo, but returned no usable message ID; the text reply was not sent. Check the channel before sending again.",
-          primary,
-          parts.followup,
-          "not_sent",
-        );
-      }
+    for (let index = 0; index < plan.replies.length; index++) {
+      const before = plan.replies.slice(index).join("");
+      const after = plan.replies.slice(index + 1).join("");
       try {
         await call<unknown>(
           "sendMessage",
           credentials,
           {
             chat_id: credentials.chatId,
-            text: parts.followup,
+            text: plan.replies[index],
             link_preview_options: { is_disabled: true },
-            // Fail closed if the photo disappeared: a standalone tail is not
-            // the reviewed cover post and must not count as a full delivery.
             reply_parameters: { message_id: primaryId, allow_sending_without_reply: false },
           },
           options,
         );
       } catch (error) {
-        // Even a known rejection of the *reply* cannot make the whole delivery
-        // a known failure: the photo is already in the channel. Keep the worker
-        // on its terminal unknown/partial path so a queue retry cannot post a
-        // second photo. call() has already redacted the bot token.
         const detail = error instanceof Error ? error.message : String(error);
         throw new PartialTelegramPublishError(
-          `Telegram accepted the photo${primary.externalUrl ? ` at ${primary.externalUrl}` : ""}, ` +
+          `Telegram accepted the ${primaryKind}${primary.externalUrl ? ` at ${primary.externalUrl}` : ""}, ` +
             `but its text reply was not confirmed (${detail}). Check the channel before sending again.`,
           primary,
-          parts.followup,
+          before,
           error instanceof PermanentPublishError || error instanceof TransientPublishError
             ? "rejected"
             : "unknown",
+          primaryKind,
         );
       }
-      return primary;
+      if (options?.onTelegramPartAccepted) {
+        try {
+          await options.onTelegramPartAccepted({
+            primaryKind,
+            primary,
+            previousRemaining: before,
+            remaining: after,
+          });
+        } catch {
+          throw new PartialTelegramPublishError(
+            "Telegram accepted a reply, but its delivery checkpoint could not be confirmed. Check the channel before sending again.",
+            primary,
+            before,
+            "unknown",
+            primaryKind,
+          );
+        }
+      }
     }
-    const payload: Record<string, unknown> = {
-      chat_id: credentials.chatId,
-      text: input.text,
-      link_preview_options: { is_disabled: input.disableLinkPreview !== false },
-    };
-    // No `parse_mode` — see the doc comment on `PublishInput` in ./types.ts
-    // for why HTML formatting was removed rather than left unreachable.
-    return messageLink(await call<unknown>("sendMessage", credentials, payload, options));
+    return primary;
   },
 
   async verify(credentials, options): Promise<VerifyResult> {

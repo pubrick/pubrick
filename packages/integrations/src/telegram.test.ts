@@ -12,7 +12,7 @@ import {
 const CREDS = { botToken: "123:abc", chatId: "-1001234567890" };
 
 function fetchReturning(payload: unknown, status = 200) {
-  return vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status }));
+  return vi.fn().mockImplementation(async () => new Response(JSON.stringify(payload), { status }));
 }
 
 /**
@@ -138,6 +138,230 @@ describe("telegramPublisher.publish", () => {
     });
     expect(reply.parse_mode).toBeUndefined();
     expect(result).toEqual({ externalId: "4711", externalUrl: "https://t.me/mychannel/4711" });
+  });
+
+  it("sends a 12k text post as one primary and two replies with durable suffix checkpoints", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const text = "x".repeat(12_000);
+    const result = await telegramPublisher.publish(
+      CREDS,
+      { text },
+      {
+        fetchImpl,
+        onTelegramPartAccepted: checkpoint,
+      },
+    );
+    expect(result.externalId).toBe("4711");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const sent = fetchImpl.mock.calls.map((args) => {
+      const [url, init] = args as [string, RequestInit];
+      expect(url.endsWith("/sendMessage")).toBe(true);
+      return JSON.parse(init.body as string);
+    });
+    expect(sent.map((part: { text: string }) => part.text).join("")).toBe(text);
+    expect(sent.every((part: { text: string }) => part.text.length <= 4096)).toBe(true);
+    expect(sent[0].reply_parameters).toBeUndefined();
+    expect(
+      sent.slice(1).map((part: { reply_parameters: unknown }) => part.reply_parameters),
+    ).toEqual([
+      { message_id: 4711, allow_sending_without_reply: false },
+      { message_id: 4711, allow_sending_without_reply: false },
+    ]);
+    const firstSuffix = sent[1].text + sent[2].text;
+    expect(checkpoint.mock.calls.map(([arg]) => arg)).toEqual([
+      {
+        primaryKind: "message",
+        primary: result,
+        previousRemaining: null,
+        remaining: firstSuffix,
+      },
+      {
+        primaryKind: "message",
+        primary: result,
+        previousRemaining: firstSuffix,
+        remaining: sent[2].text,
+      },
+      {
+        primaryKind: "message",
+        primary: result,
+        previousRemaining: sent[2].text,
+        remaining: "",
+      },
+    ]);
+  });
+
+  it("sends a covered 12k post as one photo and three replies", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const text = "x".repeat(12_000);
+    await telegramPublisher.publish(
+      CREDS,
+      { text, image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
+      { fetchImpl, onTelegramPartAccepted: checkpoint },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    const caption = ((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as FormData).get(
+      "caption",
+    ) as string;
+    const replies = fetchImpl.mock.calls.slice(1).map((args) => {
+      const [, init] = args as [string, RequestInit];
+      return JSON.parse(init.body as string);
+    });
+    expect(caption.length).toBeLessThanOrEqual(1024);
+    expect(replies.map((reply: { text: string }) => reply.text).join("")).toBe(
+      text.slice(caption.length),
+    );
+    expect(replies.every((reply: { text: string }) => reply.text.length <= 4096)).toBe(true);
+    expect(checkpoint).toHaveBeenCalledTimes(4);
+    expect(checkpoint.mock.calls[3]?.[0]).toMatchObject({ remaining: "", primaryKind: "photo" });
+  });
+
+  it("preflights an unpaired surrogate and a multi-part send without checkpoint", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x\ud800" }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    await expect(
+      telegramPublisher.publish(CREDS, { text: "x".repeat(4097) }, { fetchImpl }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("stops after a failed reply checkpoint and preserves the old suffix", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const checkpoint = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("claim lost"));
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(12_000) },
+        {
+          fetchImpl,
+          onTelegramPartAccepted: checkpoint,
+        },
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PartialTelegramPublishError);
+    expect(error).toMatchObject({ primaryKind: "message", followupOutcome: "unknown" });
+    if (!(error instanceof PartialTelegramPublishError)) throw error;
+    expect(error.followup).toBe(checkpoint.mock.calls[0]?.[0].remaining);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("freezes the final suffix when the last accepted reply cannot be checkpointed", async () => {
+    const fetchImpl = fetchReturning(okMessage());
+    const checkpoint = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(12_000) },
+        {
+          fetchImpl,
+          onTelegramPartAccepted: checkpoint,
+        },
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PartialTelegramPublishError);
+    expect(error).toMatchObject({ primaryKind: "message", followupOutcome: "unknown" });
+    if (!(error instanceof PartialTelegramPublishError)) throw error;
+    expect(error.followup).toBe(checkpoint.mock.calls[1]?.[0].remaining);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops on a known rejection after a confirmed prefix", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(okMessage())))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(okMessage())))
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: false, error_code: 400, description: "reply missing" }),
+            { status: 400 },
+          ),
+      );
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(12_000) },
+        {
+          fetchImpl,
+          onTelegramPartAccepted: checkpoint,
+        },
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PartialTelegramPublishError);
+    expect(error).toMatchObject({ primaryKind: "message", followupOutcome: "rejected" });
+    if (!(error instanceof PartialTelegramPublishError)) throw error;
+    expect(error.followup).toBe(checkpoint.mock.calls[1]?.[0].remaining);
+    expect(checkpoint).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops on an ambiguous reply outcome without attempting a later part", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(okMessage())))
+      .mockRejectedValueOnce(new Error("socket closed"));
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(12_000) },
+        {
+          fetchImpl,
+          onTelegramPartAccepted: checkpoint,
+        },
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PartialTelegramPublishError);
+    expect(error).toMatchObject({ primaryKind: "message", followupOutcome: "unknown" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("never sends a reply after a primary with no usable ID", async () => {
+    const fetchImpl = fetchReturning({ ok: true, result: null });
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const error = await telegramPublisher
+      .publish(
+        CREDS,
+        { text: "x".repeat(5000) },
+        {
+          fetchImpl,
+          onTelegramPartAccepted: checkpoint,
+        },
+      )
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ primaryKind: "message", followupOutcome: "not_sent" });
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a valid primary ID even when its URL cannot be derived", async () => {
+    const fetchImpl = fetchReturning(okMessage({ chat: { id: 42 } }));
+    const checkpoint = vi.fn().mockResolvedValue(undefined);
+    const result = await telegramPublisher.publish(
+      CREDS,
+      { text: "x".repeat(5000) },
+      {
+        fetchImpl,
+        onTelegramPartAccepted: checkpoint,
+      },
+    );
+    expect(result).toEqual({ externalId: "4711", externalUrl: null });
+    const reply = JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(reply.reply_parameters).toEqual({
+      message_id: 4711,
+      allow_sending_without_reply: false,
+    });
   });
 
   it("keeps the delivery partial if its photo disappeared before the reply", async () => {
@@ -623,15 +847,27 @@ describe("telegramPublisher.publish", () => {
   // the only length under test was 4097, which both forms reject. Text of
   // exactly the limit is legal and must go out — the mutant silently refuses to
   // publish every post that lands on the boundary.
-  it("accepts text of exactly the platform limit and sends it", async () => {
+  it("accepts text of exactly the adapter limit and sends every planned part", async () => {
     const fetchImpl = fetchReturning(okMessage());
     const text = "x".repeat(telegramPublisher.maxTextLength);
-    await expect(telegramPublisher.publish(CREDS, { text }, { fetchImpl })).resolves.toMatchObject({
+    await expect(
+      telegramPublisher.publish(
+        CREDS,
+        { text },
+        { fetchImpl, onTelegramPartAccepted: vi.fn().mockResolvedValue(undefined) },
+      ),
+    ).resolves.toMatchObject({
       externalId: "4711",
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
-    expect(JSON.parse(init.body as string).text).toBe(text);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(
+      fetchImpl.mock.calls
+        .map((args) => {
+          const [, init] = args as [string, RequestInit];
+          return JSON.parse(init.body as string).text;
+        })
+        .join(""),
+    ).toBe(text);
   });
 
   // The lower boundary of the same check, for the same reason: `length === 0`

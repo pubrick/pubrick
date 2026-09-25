@@ -12,6 +12,7 @@ export {
   type PublisherOptions,
   type PublishInput,
   type PublishResult,
+  type TelegramPartCheckpoint,
   TransientPublishError,
   UnknownOutcomePublishError,
   type VerifyResult,
