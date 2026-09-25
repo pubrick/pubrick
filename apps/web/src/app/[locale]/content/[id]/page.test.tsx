@@ -8,6 +8,7 @@ import type {
   RunInput,
 } from "@pubrick/shared";
 import {
+  adaptationRescheduleSchema,
   adaptationUpdateSchema,
   allSentencesAi,
   contentApproveSchema,
@@ -482,6 +483,63 @@ describe("rendering by adaptation status (Step 1)", () => {
         `${en.Publish.scheduledFor} ${new Date(scheduledAt).toLocaleString("en")}`,
       );
     });
+  });
+
+  it("reschedules one channel with an expected-time fence and leaves the sibling alone", async () => {
+    const first = new Date(`${scheduleValue()}:00`).toISOString();
+    const secondInput = scheduleValue(2);
+    const target = makeAdaptation({ status: "scheduled", scheduledAt: first });
+    const sibling = makeAdaptation({
+      id: "a2",
+      channelId: "ch2",
+      status: "scheduled",
+      scheduledAt: first,
+    });
+    const served = { current: makeItem({ status: "approved", adaptations: [target, sibling] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content/c1/adaptations/a1/reschedule") {
+          served.current = {
+            ...served.current,
+            adaptations: [{ ...target, scheduledAt: new Date(secondInput).toISOString() }, sibling],
+          };
+          return served.current;
+        }
+        return undefined;
+      },
+      [channel, { id: "ch2", platform: "telegram", name: "Second" }],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = resultsList();
+    await userEvent.setup().click(
+      within(results).getAllByRole("button", {
+        name: en.Publish.rescheduleChannel,
+      })[0] as HTMLElement,
+    );
+    const field = screen.getByLabelText(/^New time for/);
+    fireEvent.change(field, { target: { value: secondInput } });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.rescheduleSave }));
+    await waitFor(() =>
+      expect(
+        within(resultsList()).getByText(
+          `${en.Publish.scheduledFor} ${new Date(secondInput).toLocaleString("en")}`,
+        ),
+      ).toBeInTheDocument(),
+    );
+    const call = calls.find((row) => row.path === "/api/content/c1/adaptations/a1/reschedule");
+    expect(call?.method).toBe("POST");
+    expect(JSON.parse(call?.body ?? "")).toEqual({
+      expectedScheduledAt: first,
+      scheduledAt: new Date(secondInput).toISOString(),
+    });
+    expect(adaptationRescheduleSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(
+      JSON.parse(call?.body ?? ""),
+    );
+    expect(served.current.adaptations[1]).toBe(sibling);
   });
 
   /**

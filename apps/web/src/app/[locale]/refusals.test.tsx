@@ -115,6 +115,7 @@ function serve(refuse: (url: string, method: string) => Response | undefined) {
     if (url === `/api/content/${ITEM_ID}/images`) {
       return jsonResponse(200, { images: [], revision: 0 });
     }
+    if (url === `/api/content/${ITEM_ID}/claim-review`) return jsonResponse(200, null);
     if (url === `/api/content/${ITEM_ID}`) return jsonResponse(200, item);
     if (url === `/api/runs/${RUN_ID}`) return jsonResponse(200, run);
     if (url === "/api/brands") return jsonResponse(200, []);
@@ -150,6 +151,56 @@ async function expectShown(ours: string, theServers: string): Promise<void> {
 describe("the post screen", () => {
   const renderItem = (locale: "es" | "ru") =>
     renderAsync(<ContentItemPage params={Promise.resolve({ id: ITEM_ID })} />, { locale });
+
+  it("shows a stale per-channel schedule refusal in Russian beside its time field", async () => {
+    const scheduledAt = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const sentence = "This channel's scheduled time changed; reload before moving it";
+    serve((url, method) => {
+      if (method === "GET" && url === `/api/content/${ITEM_ID}`) {
+        return jsonResponse(200, {
+          ...item,
+          status: "approved",
+          origin: "human",
+          adaptations: [
+            {
+              id: "a1",
+              contentItemId: ITEM_ID,
+              channelId: CHANNEL_ID,
+              body: null,
+              hashtags: [],
+              cta: null,
+              origin: "human",
+              status: "scheduled",
+              deliveryOutcome: "scheduled",
+              scheduledAt,
+              attemptCount: 0,
+              lastError: null,
+              failureReason: null,
+              lateBySeconds: null,
+              externalUrl: null,
+              assertedByName: null,
+              assertedAt: null,
+            },
+          ],
+        });
+      }
+      return method === "POST" && url === `/api/content/${ITEM_ID}/adaptations/a1/reschedule`
+        ? jsonResponse(409, refusalBody(409, "schedule_changed", sentence))
+        : undefined;
+    });
+
+    await renderItem("ru");
+    const resultHeading = await screen.findByRole("heading", { name: ru.Publish.resultsTitle });
+    const results = resultHeading.nextElementSibling as HTMLElement;
+    await userEvent
+      .setup()
+      .click(within(results).getByRole("button", { name: ru.Publish.rescheduleChannel }));
+    await userEvent
+      .setup()
+      .click(within(results).getByRole("button", { name: ru.Publish.rescheduleSave }));
+    expect(await within(results).findByRole("alert")).toHaveTextContent(ru.Errors.schedule_changed);
+    expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+  });
 
   it("says in Spanish why an unread AI draft may not be published", async () => {
     const sentence = "No one has read this AI-written draft yet; open or edit it before approving";

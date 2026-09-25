@@ -6,8 +6,10 @@ import type {
   DraftRevisionProposal,
 } from "@pubrick/shared";
 import {
+  isManualPlatform,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  MIN_RESCHEDULE_LEAD_MS,
   normalizeHashtags,
   type PublishFailureReason,
   REFINE_VERBS,
@@ -264,6 +266,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
+  const [channelSchedule, setChannelSchedule] = useState<{
+    adaptationId: string;
+    expectedScheduledAt: string;
+    value: string;
+  } | null>(null);
+  const [channelScheduleBusy, setChannelScheduleBusy] = useState(false);
+  const [channelScheduleError, setChannelScheduleError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [retractBusy, setRetractBusy] = useState(false);
@@ -845,6 +854,41 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
     } catch (err) {
       handleError(err);
+    }
+  }
+
+  async function rescheduleChannel() {
+    if (!channelSchedule || channelScheduleBusy) return;
+    const chosen = new Date(channelSchedule.value);
+    if (
+      !channelSchedule.value ||
+      !Number.isFinite(chosen.getTime()) ||
+      chosen.getTime() <= Date.now()
+    ) {
+      setChannelScheduleError(te("schedule_in_past"));
+      return;
+    }
+    if (chosen.getTime() <= Date.now() + MIN_RESCHEDULE_LEAD_MS) {
+      setChannelScheduleError(te("schedule_too_close"));
+      return;
+    }
+    setChannelScheduleBusy(true);
+    setChannelScheduleError(null);
+    try {
+      await api(`/api/content/${id}/adaptations/${channelSchedule.adaptationId}/reschedule`, {
+        method: "POST",
+        body: JSON.stringify({
+          expectedScheduledAt: channelSchedule.expectedScheduledAt,
+          scheduledAt: chosen.toISOString(),
+        }),
+      });
+      await reload();
+      setChannelSchedule(null);
+    } catch (err) {
+      setChannelScheduleError(errorMessage(err, t("genericError"), te));
+      await reload();
+    } finally {
+      setChannelScheduleBusy(false);
     }
   }
 
@@ -2434,6 +2478,65 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 <span className="text-sm text-fg-tertiary">
                   {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
                 </span>
+              ))}
+            {a.status === "scheduled" &&
+              a.scheduledAt &&
+              (item.status === "approved" || item.status === "partially_published") &&
+              !isManualPlatform(
+                channels.find((channel) => channel.id === a.channelId)?.platform ?? "",
+              ) &&
+              (channelSchedule?.adaptationId === a.id ? (
+                <div className="flex flex-col gap-2">
+                  <Input
+                    type="datetime-local"
+                    label={t("rescheduleChannelLabel", { channel: channelLabel(a.channelId) })}
+                    value={channelSchedule.value}
+                    min={toDatetimeLocalValue(new Date(Date.now() + MIN_RESCHEDULE_LEAD_MS))}
+                    onChange={(event) =>
+                      setChannelSchedule({ ...channelSchedule, value: event.target.value })
+                    }
+                    disabled={channelScheduleBusy}
+                  />
+                  {channelScheduleError && (
+                    <p role="alert" className="text-sm text-danger">
+                      {channelScheduleError}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => void rescheduleChannel()}
+                      disabled={channelScheduleBusy || !channelSchedule.value}
+                    >
+                      {t("rescheduleSave")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setChannelSchedule(null);
+                        setChannelScheduleError(null);
+                      }}
+                      disabled={channelScheduleBusy}
+                    >
+                      {t("rescheduleCancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setChannelSchedule({
+                      adaptationId: a.id,
+                      expectedScheduledAt: a.scheduledAt as string,
+                      value: toDatetimeLocalValue(new Date(a.scheduledAt as string)),
+                    });
+                    setChannelScheduleError(null);
+                  }}
+                  disabled={channelScheduleBusy}
+                >
+                  {t("rescheduleChannel")}
+                </Button>
               ))}
           </li>
         ))}
