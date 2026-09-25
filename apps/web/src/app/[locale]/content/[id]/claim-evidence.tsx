@@ -461,6 +461,9 @@ export function ClaimEvidence({
             {t(`status.${review.status}`)}
             {review.completedAt ? ` · ${new Date(review.completedAt).toLocaleString(locale)}` : ""}
           </p>
+          <p className="text-sm text-fg-secondary">
+            {t(review.trigger === "automatic" ? "automaticTrigger" : "manualTrigger")}
+          </p>
           {stale && <p className="text-sm text-fg-secondary">{t("stale")}</p>}
           {review.status === "failed" && (
             <p className="text-sm text-danger">

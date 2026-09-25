@@ -108,6 +108,37 @@ describe.skipIf(!url)("brands e2e", () => {
     ).toBeNull();
   });
 
+  it("keeps automatic claim evidence off until a brand manager opts in", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const created = await owner.post("/api/brands").send({ name: "Evidence opt-in" }).expect(201);
+    expect(created.body.automaticClaimEvidence).toBe(false);
+    await other
+      .patch(`/api/brands/${created.body.id}`)
+      .send({ automaticClaimEvidence: true })
+      .expect(404);
+    const enabled = await owner
+      .patch(`/api/brands/${created.body.id}`)
+      .send({ automaticClaimEvidence: true })
+      .expect(200);
+    expect(enabled.body.automaticClaimEvidence).toBe(true);
+    expect(
+      (await owner.get(`/api/brands/${created.body.id}`).expect(200)).body.automaticClaimEvidence,
+    ).toBe(true);
+    await owner.patch(`/api/brands/${created.body.id}`).send({ name: "Renamed" }).expect(200);
+    expect(
+      (await owner.get(`/api/brands/${created.body.id}`).expect(200)).body.automaticClaimEvidence,
+    ).toBe(true);
+    expect(
+      (
+        await owner
+          .patch(`/api/brands/${created.body.id}`)
+          .send({ automaticClaimEvidence: false })
+          .expect(200)
+      ).body.automaticClaimEvidence,
+    ).toBe(false);
+  });
+
   /**
    * A model that answers with one canned JSON body. The V4 usage shape is
    * nested and `finishReason` is an object — a bare string passes vitest and

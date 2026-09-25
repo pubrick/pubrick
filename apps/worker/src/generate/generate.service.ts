@@ -38,6 +38,7 @@ import {
   supportsInlineImages,
   withHashtags,
 } from "@pubrick/shared";
+import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 import {
   type ClaimedRun,
@@ -248,7 +249,10 @@ export class GenerateService {
    * `DELETE /api/brands/:id` cascading to `pipeline_runs` is an ordinary thing
    * for a user to do while a run is in flight.
    */
-  async handle(job: GenerateJobEnvelope): Promise<void> {
+  async handle(
+    job: GenerateJobEnvelope,
+    claimReviewProducer?: Pick<PgBoss, "send">,
+  ): Promise<void> {
     const { runId, orgId } = job.data;
     // `<job id>#<nonce>`: see `GenerateRepository.claim`. pg-boss reuses a job's
     // id across retries, so the job id alone cannot tell "the previous handler
@@ -297,7 +301,7 @@ export class GenerateService {
     }
 
     if (payload === STOPPED) return;
-    await this.finish(orgId, runId, fence, claimed.brandId, payload);
+    await this.finish(orgId, runId, fence, claimed.brandId, payload, claimReviewProducer);
   }
 
   /**
@@ -1118,10 +1122,13 @@ export class GenerateService {
     fence: string,
     brandId: string,
     payload: TerminalPayload,
+    claimReviewProducer?: Pick<PgBoss, "send">,
   ): Promise<void> {
     for (let attempt = 1; attempt <= TERMINAL_WRITE_MAX_ATTEMPTS; attempt++) {
       try {
-        const outcome = await this.repo.finish(orgId, runId, fence, brandId, payload);
+        const outcome = claimReviewProducer
+          ? await this.repo.finish(orgId, runId, fence, brandId, payload, claimReviewProducer)
+          : await this.repo.finish(orgId, runId, fence, brandId, payload);
         if (outcome === "held") {
           this.logger.log(
             `Run ${runId} succeeded with ${payload.adaptations.length} adaptation(s)`,

@@ -46,6 +46,7 @@ export const claimReviewDtoSchema = z.strictObject({
   id: z.uuid(),
   contentItemId: z.uuid(),
   status: z.enum(CLAIM_REVIEW_STATUSES),
+  trigger: z.enum(["manual", "automatic"]),
   stale: z.boolean(),
   claims: z.array(claimReviewClaimSchema),
   errorCode: z.enum(CLAIM_REVIEW_FAILURES).nullable(),

@@ -1,7 +1,8 @@
 # Advisory claim review
 
 Pubrick can check factual claims in a saved draft against public web search
-results. The editor starts each check from the draft screen. The result is an
+results. An editor starts a check from the draft screen, or a brand manager can
+enable automatic checks for newly generated AI drafts. The result is an
 evidence aid, not a certification: search snippets can be incomplete, stale, or
 misleading. Open the linked source pages before changing or approving copy.
 
@@ -13,6 +14,13 @@ misleading. Open the linked source pages before changing or approving copy.
    in **Settings → Search API**. See the [Yandex setup guide](https://aistudio.yandex.ru/en/docs/search-api/quickstart/).
 3. Open a draft, rejected post, or failed post. Save any text changes, then
    select **Check** in the **Claim evidence** card.
+
+For automatic checks, open the brand page and choose **Enable** under
+**Automatic claim evidence**. This is off by default and affects only AI drafts
+saved after it is enabled. Both workspace keys must already be present when the
+draft is saved; without either key, no automatic review is queued. Enabling the
+setting itself makes no provider request. Every automatic review may make up to
+five billable Yandex searches and billed AI calls on the workspace keys.
 
 Search credentials are encrypted at rest and never returned to the browser.
 Neither saving nor removing the key makes a billable search request.
@@ -26,6 +34,11 @@ snippets.
 The card shows the claim, an advisory outcome, and links to the result pages.
 It does not fetch those pages or alter the draft. An empty or failed search is
 never evidence that a claim is true.
+The card identifies whether the review was started by an editor or automatically.
+Automatic checks use the same bounded queue and the same saved-body and
+organization guards as editor-started checks. If the body changes before or
+during a check, the worker stops spending on it and records a stale or failed
+outcome. Neither path rewrites copy or asserts that a claim was verified.
 
 Editing and saving the article makes earlier results **stale**. A stale review
 remains visible for context, and the editor can start a new one for the saved

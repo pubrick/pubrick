@@ -34,6 +34,9 @@ export const claimReviews = pgTable(
       onDelete: "set null",
     }),
     bodyHash: text("body_hash").notNull(),
+    trigger: text("trigger", { enum: ["manual", "automatic"] })
+      .notNull()
+      .default("manual"),
     status: text("status", { enum: CLAIM_REVIEW_STATUSES }).notNull().default("queued"),
     claims: jsonb("claims").$type<ClaimReviewClaim[]>().notNull().default([]),
     errorCode: text("error_code", { enum: CLAIM_REVIEW_FAILURES }),
@@ -57,6 +60,7 @@ export const claimReviews = pgTable(
       .on(t.orgId, t.contentItemId, t.bodyHash)
       .where(sql`${t.status} IN ('queued', 'running')`),
     enumCheck("claim_reviews_status_check", t.status, CLAIM_REVIEW_STATUSES),
+    enumCheck("claim_reviews_trigger_check", t.trigger, ["manual", "automatic"]),
     check("claim_reviews_body_hash_check", sql`length(${t.bodyHash}) = 64`),
     check("claim_reviews_unrecorded_calls_check", sql`${t.unrecordedCalls} >= 0`),
     check(

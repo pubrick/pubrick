@@ -26,6 +26,7 @@ function review(overrides: Record<string, unknown> = {}) {
     id: "2fc5fc2d-94bc-4703-9cd2-f68eff876874",
     contentItemId: itemId,
     status: "ready",
+    trigger: "manual",
     stale: false,
     claims: [
       {
@@ -95,6 +96,15 @@ describe("claim evidence", () => {
     request.mockReset();
     voidRequest.mockReset();
     voidRequest.mockResolvedValue(undefined);
+  });
+
+  it("labels an automatically started review as advisory evidence", async () => {
+    request.mockImplementation(async (path) =>
+      path === correctionEndpoint ? null : review({ trigger: "automatic" }),
+    );
+    await renderAsync(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
+    expect(await screen.findByText(en.ClaimEvidence.automaticTrigger)).toBeVisible();
+    expect(screen.getByText(en.ClaimEvidence.hint)).toBeVisible();
   });
 
   it("starts from the exact saved draft and displays advisory source results", async () => {

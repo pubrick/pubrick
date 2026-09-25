@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { brandUpdateSchema } from "./brands.js";
 
 describe("brand link policy input", () => {
+  it("keeps paid automatic evidence opt-in and rejects non-boolean values", () => {
+    expect(brandUpdateSchema.parse({})).toEqual({ contentLanguage: "en" });
+    expect(brandUpdateSchema.parse({ automaticClaimEvidence: true })).toEqual({
+      automaticClaimEvidence: true,
+      contentLanguage: "en",
+    });
+    expect(brandUpdateSchema.safeParse({ automaticClaimEvidence: "true" }).success).toBe(false);
+  });
   it("defaults optional link fields when enabled and permits disabling", () => {
     expect(
       brandUpdateSchema.parse({ linkPolicy: { website: "https://example.com" } }).linkPolicy,

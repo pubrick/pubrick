@@ -118,7 +118,12 @@
     "remove": "Eliminar",
     "removeCancel": "Cancelar",
     "removeConfirmHint": "Escribe el nombre exacto para eliminar {name} (ID {id}). Esta acción no se puede deshacer.",
-    "removeConfirmLabel": "Nombre de la marca: {name}"
+    "removeConfirmLabel": "Nombre de la marca: {name}",
+    "automaticClaimEvidenceTitle": "Evidencia automática de afirmaciones",
+    "automaticClaimEvidenceHint": "Para cada nuevo borrador de IA, inicia una búsqueda orientativa sobre el texto guardado cuando estén disponibles ambas claves del espacio de trabajo. No edita ni certifica el borrador.",
+    "automaticClaimEvidenceCost": "Cada borrador puede usar hasta cinco búsquedas de Yandex de pago y llamadas de IA facturables con las claves del espacio de trabajo. Desactivado por defecto.",
+    "automaticClaimEvidenceEnable": "Activar",
+    "automaticClaimEvidenceDisable": "Desactivar"
   },
   "BrandAccess": {
     "roleOwner": "Propietario",
@@ -1205,7 +1210,7 @@
     "title": "API de búsqueda",
     "back": "Volver a ajustes",
     "provider": "Yandex Search API",
-    "hint": "Guarda una clave de la organización y un ID de carpeta. Pubrick busca solo cuando un editor solicita revisar afirmaciones.",
+    "hint": "Guarda una clave de la organización y un ID de carpeta. Las búsquedas empiezan cuando un editor solicita una revisión o una marca tiene activada la evidencia automática de afirmaciones.",
     "costHint": "Yandex cobra las búsquedas por separado. Revisar afirmaciones también usa tu clave de IA para extraerlas y compararlas.",
     "setupGuide": "Guía de configuración de Yandex",
     "configured": "Hay una clave de búsqueda guardada. Su valor no se puede volver a mostrar.",
@@ -1290,7 +1295,9 @@
       "evidence_conflicts": "Los fragmentos encontrados contradicen esta afirmación. Lee las páginas y edita el borrador si hace falta.",
       "insufficient": "Estos resultados no resuelven la afirmación.",
       "search_unavailable": "La búsqueda no estuvo disponible para esta afirmación."
-    }
+    },
+    "automaticTrigger": "Iniciada automáticamente",
+    "manualTrigger": "Iniciada por un editor"
   },
   "Webhooks": {
     "title": "Webhooks salientes",

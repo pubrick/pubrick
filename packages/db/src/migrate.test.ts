@@ -498,6 +498,7 @@ const NON_ENUM_CHECKS = [
   "search_requests_status_check",
   "search_requests_result_check",
   "claim_reviews_status_check",
+  "claim_reviews_trigger_check",
   "claim_reviews_body_hash_check",
   "claim_reviews_error_code_check",
   "claim_reviews_unrecorded_calls_check",
@@ -636,7 +637,8 @@ async function snapshotRows(pool: pg.Pool): Promise<Record<string, pg.QueryResul
 /**
  * Every value a row held before the migrations is still exactly that value
  * after them. New columns are null on pre-existing rows unless an explicit,
- * safe default is part of their contract (VK background reads are opt-in).
+ * safe default is part of their contract (VK background reads and paid claim
+ * evidence are opt-in).
  *
  * A plain `toEqual` of the two snapshots said the same thing while 0009 was the
  * only migration under test — it adds no columns, which is what let one seed
@@ -670,6 +672,9 @@ function expectNoRowRewritten(
       const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
       expect(
         added.filter((key) => {
+          if (table === "brands" && key === "automatic_claim_evidence") {
+            return afterRow[key] !== false;
+          }
           if (table === "channels" && key === "metrics_auto_refresh") {
             return afterRow[key] !== false;
           }

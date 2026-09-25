@@ -743,6 +743,13 @@
       "when": 1790373635832,
       "tag": "0106_manual-publication-channels",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1790375510567,
+      "tag": "0107_automatic_claim_evidence",
+      "breakpoints": true
     }
   ]
 }

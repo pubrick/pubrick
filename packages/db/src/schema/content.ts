@@ -27,6 +27,8 @@ export const brands = pgTable(
     audience: text("audience"),
     contentLanguage: text("content_language").notNull().default("en"),
     linkPolicy: jsonb("link_policy").$type<BrandLinkPolicy>(),
+    /** Explicit paid, advisory evidence review after an AI draft is saved. */
+    automaticClaimEvidence: boolean("automatic_claim_evidence").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())

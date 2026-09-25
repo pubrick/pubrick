@@ -450,7 +450,7 @@ export class QueueService {
     // from the job's own id, and `signal` is aborted at the expiry that makes a
     // second live handler possible (see GenerateService.handle).
     await boss.work<GenerateJob>(names.generate, { ...GENERATE_WORK_OPTIONS }, async ([job]) => {
-      if (job) await this.generate.handle({ id: job.id, data: job.data, signal: job.signal });
+      if (job) await this.generate.handle({ id: job.id, data: job.data, signal: job.signal }, boss);
     });
     // Retries exhausted: the run is stuck with nothing left to move it.
     await boss.work<GenerateJob>(names.generateDeadLetter, { batchSize: 1 }, async ([job]) => {

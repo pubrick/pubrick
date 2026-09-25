@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
@@ -16,6 +16,7 @@ import {
 import { newsRankScore, schema, withImageCallLock } from "@pubrick/db";
 import {
   adaptationLimit,
+  CLAIM_REVIEW_QUEUE,
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
   IMAGE_CALL_STEPS,
@@ -48,6 +49,7 @@ import {
   type SQLWrapper,
   sql,
 } from "drizzle-orm";
+import { fromDrizzle, type PgBoss } from "pg-boss";
 import sharp from "sharp";
 import { db, pool } from "../db";
 import { env } from "../env";
@@ -1187,11 +1189,11 @@ export class GenerateRepository {
    *
    * WHAT THIS TRANSACTION LOCKS, in statement order:
    *
-   *   1. `brands` — `FOR KEY SHARE` on the run's brand. Nothing is read from
-   *      the row; the lock is the point. The `content_items` INSERT at step 4
-   *      takes exactly this lock anyway, for `content_items.brand_id`, four
-   *      statements later — this takes it up front instead, where the canonical
-   *      order (`docs/lock-order.md`) wants it.
+   *   1. `brands` — `FOR KEY SHARE` on the run's brand. Its automatic-review
+   *      opt-in is read for this draft's terminal transaction. The
+   *      `content_items` INSERT at step 4 takes exactly this lock anyway, for
+   *      `content_items.brand_id`, four statements later — this takes it up
+   *      front instead, where the canonical order (`docs/lock-order.md`) wants it.
    *   2. `pipeline_runs` — `FOR UPDATE` on the run, with the status and fence
    *      re-checked under it. Still before every write, which is the property
    *      that makes a second content item impossible; see above.
@@ -1251,6 +1253,7 @@ export class GenerateRepository {
     fence: string,
     brandId: string,
     payload: TerminalPayload,
+    claimReviewProducer?: Pick<PgBoss, "send">,
   ): Promise<TerminalOutcome> {
     try {
       return await db.transaction(async (tx) => {
@@ -1258,17 +1261,12 @@ export class GenerateRepository {
         // `content_items` INSERT's own foreign-key lock, taken four statements
         // early so that it is taken in the canonical order.
         //
-        // Its RESULT is deliberately not read, and there is no "brand is gone"
-        // branch here. There cannot be a useful one: a brand this select does
-        // not find is a brand whose delete has committed, and that delete's
-        // cascade took this run's row with it, so the fence check on the very
-        // next statement returns `gone` for exactly the same event. A branch
-        // here would be unreachable by outcome — measured: removing it changes
-        // no test — and it would swallow the one case the two DO differ on, a
-        // caller passing a `brandId` that never existed, which is a bug and
-        // should keep failing loudly on the foreign key.
-        await tx
-          .select({ id: schema.brands.id })
+        // The opt-in comes from this row in the same transaction as the new
+        // draft. There is no separate "brand is gone" branch: a committed
+        // deletion cascades to the run, and the fence check below returns
+        // `gone`. An invalid brand id should still fail loudly on the FK.
+        const [brand] = await tx
+          .select({ automaticClaimEvidence: schema.brands.automaticClaimEvidence })
           .from(schema.brands)
           .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
           .limit(1)
@@ -1445,6 +1443,43 @@ export class GenerateRepository {
         if (updated.length === 0) throw new TerminalFenceLost();
 
         await enqueueNotification(tx, orgId, "draft_ready", runId, contentItemId);
+
+        // Opt-in only: the review and its job commit with the exact saved draft.
+        // Missing BYOK credentials make automatic review unavailable without
+        // losing a paid generation run; the editor can start a review later.
+        if (brand?.automaticClaimEvidence) {
+          if (!claimReviewProducer) {
+            throw new Error("Automatic claim review producer is unavailable");
+          }
+          const [searchKey] = await tx
+            .select({ orgId: schema.searchCredentials.orgId })
+            .from(schema.searchCredentials)
+            .where(eq(schema.searchCredentials.orgId, orgId))
+            .limit(1);
+          const [aiKey] = await tx
+            .select({ id: schema.aiCredentials.id })
+            .from(schema.aiCredentials)
+            .where(eq(schema.aiCredentials.orgId, orgId))
+            .limit(1);
+          if (searchKey && aiKey) {
+            const [review] = await tx
+              .insert(schema.claimReviews)
+              .values({
+                orgId,
+                contentItemId,
+                bodyHash: createHash("sha256").update(payload.body, "utf8").digest("hex"),
+                trigger: "automatic",
+              })
+              .returning({ id: schema.claimReviews.id });
+            if (!review) throw new Error("Automatic claim review insert returned no row");
+            const jobId = await claimReviewProducer.send(
+              CLAIM_REVIEW_QUEUE,
+              { orgId, reviewId: review.id },
+              { id: review.id, group: { id: orgId }, db: fromDrizzle(tx, sql) },
+            );
+            if (jobId === null) throw new Error("Automatic claim review job was not enqueued");
+          }
+        }
 
         return "held";
       });

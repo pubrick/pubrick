@@ -118,7 +118,12 @@
     "remove": "Remove",
     "removeCancel": "Cancel",
     "removeConfirmHint": "Type the exact name to remove {name} (ID {id}). This cannot be undone.",
-    "removeConfirmLabel": "Brand name: {name}"
+    "removeConfirmLabel": "Brand name: {name}",
+    "automaticClaimEvidenceTitle": "Automatic claim evidence",
+    "automaticClaimEvidenceHint": "For each new AI draft, start an advisory search on its saved text when both workspace keys are available. This does not edit or certify the draft.",
+    "automaticClaimEvidenceCost": "Each draft can use up to five billable Yandex searches and billed AI calls on your workspace keys. Off by default.",
+    "automaticClaimEvidenceEnable": "Enable",
+    "automaticClaimEvidenceDisable": "Disable"
   },
   "BrandAccess": {
     "roleOwner": "Owner",
@@ -552,7 +557,11 @@
     "autoMetricsOff": "Metrics: off",
     "autoMetricsHint": "Opt in to hourly checks of recent VK posts. Each post is checked at most once per day after a successful read.",
     "testOk": "OK — connected as {account}, can post to {target}",
-    "health": { "ok": "Checked OK", "failed": "Last check failed", "unknown": "Not checked" },
+    "health": {
+      "ok": "Checked OK",
+      "failed": "Last check failed",
+      "unknown": "Not checked"
+    },
     "scheduledDependents": "{count, plural, one {# scheduled post depends on this channel} other {# scheduled posts depend on this channel}}",
     "genericError": "Something went wrong. Please try again.",
     "empty": "No channels yet.",
@@ -1201,7 +1210,7 @@
     "title": "Search API",
     "back": "Back to settings",
     "provider": "Yandex Search API",
-    "hint": "Save an organization key and folder ID. Pubrick searches only when an editor explicitly requests claim review.",
+    "hint": "Save an organization key and folder ID. Searches start when an editor requests a review or when a brand has automatic claim evidence enabled.",
     "costHint": "Yandex bills search requests separately. Claim review also uses your AI provider key for claim extraction and comparison.",
     "setupGuide": "Yandex setup guide",
     "configured": "A search key is saved. Its value cannot be shown again.",
@@ -1286,7 +1295,9 @@
       "evidence_conflicts": "Search snippets conflict with this claim. Read the linked pages and edit the draft if needed.",
       "insufficient": "These results do not settle this claim.",
       "search_unavailable": "Search was unavailable for this claim."
-    }
+    },
+    "automaticTrigger": "Started automatically",
+    "manualTrigger": "Started by an editor"
   },
   "Webhooks": {
     "title": "Outgoing webhooks",
