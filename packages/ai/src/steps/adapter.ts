@@ -54,7 +54,7 @@ const stepChannelSchema = z.object({
 });
 
 export type AdapterInput = { body: string };
-export type AdaptationOutput = { body: string };
+export type AdaptationOutput = { body: string; hashtags?: string[]; cta?: string };
 
 /**
  * Was this failure the body being too long?
@@ -137,6 +137,21 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
       .max(limit, {
         message: `the body must be at most ${limit} characters to fit this channel`,
       }),
+    hashtags: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(80)
+          .refine((tag) => !tag.includes("\0")),
+      )
+      .max(10)
+      .optional(),
+    cta: z
+      .string()
+      .max(500)
+      .refine((text) => !text.includes("\0"))
+      .optional(),
   });
 
   const step = defineStep<AdapterInput, AdaptationOutput>({
@@ -147,7 +162,8 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
       `You rewrite an approved draft for one channel: ${name}, on ${platform}.`,
       `The result must be at most ${limit} characters — characters, not words or tokens, counted including spaces, punctuation and any link.`,
       "Fitting the limit matters more than keeping every detail: cut the least important point rather than going over, and never end mid-sentence to make room.",
-      "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make, and do not add hashtags or emoji unless the draft already uses them.",
+      "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make or add emoji unless the draft already uses them.",
+      "If useful, return up to 10 hashtags in the separate hashtags array, without # in the body. The body plus hashtag suffix must fit the channel limit. A call to action may be returned in cta as an editorial suggestion only; it is not sent unless a human writes it into the body.",
     ],
     material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
   });

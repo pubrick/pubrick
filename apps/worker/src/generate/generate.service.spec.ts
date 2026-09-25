@@ -2151,6 +2151,56 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(script.adaptedChannels().sort()).toEqual([...seeded.channelNames].sort());
     }, 30_000);
 
+    it("stores generated hashtags in the exact channel text and CTA as editorial metadata", async () => {
+      const seeded = await seed();
+      const script = scriptedModel({
+        adapter: () => ({
+          body: "A generated channel post.",
+          hashtags: [" #new product ", "launch"],
+          cta: "Ask a question",
+        }),
+      });
+      await serviceFor(script).handle({
+        id: "job-channel-metadata",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const item = (await itemsOf(seeded.orgId))[0];
+      const adaptations = await db
+        .select()
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.contentItemId, item?.id as string));
+      expect(adaptations[0]).toMatchObject({
+        body: "A generated channel post.\n\n#new_product #launch",
+        hashtags: ["new_product", "launch"],
+        cta: "Ask a question",
+      });
+      const versions = await db
+        .select()
+        .from(schema.contentVersions)
+        .where(eq(schema.contentVersions.adaptationId, adaptations[0]?.id as string));
+      expect(versions[0]).toMatchObject({
+        body: adaptations[0]?.body,
+        hashtags: adaptations[0]?.hashtags,
+        cta: "Ask a question",
+      });
+    }, 30_000);
+
+    it("fails generation when a hashtag suffix would exceed the channel limit", async () => {
+      const seeded = await seed();
+      const script = scriptedModel({
+        adapter: () => ({ body: "x".repeat(4095), hashtags: ["tag"] }),
+      });
+      await serviceFor(script).handle({
+        id: "job-overlong-tags",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+      expect(await runRow(seeded.runId)).toMatchObject({
+        status: "failed",
+        error: "too_long_for_channel",
+      });
+    }, 30_000);
+
     it("survives a channel deleted mid-run, writing the draft for the ones that remain", async () => {
       // `adaptations.channel_id` is NOT NULL and the run's channel list is a
       // snapshot taken minutes earlier, so a channel deleted while the run worked

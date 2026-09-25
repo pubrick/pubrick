@@ -550,6 +550,11 @@ function expectNoRowRewritten(
           if (table === "content_items" && key === "is_safe_to_delete") {
             return afterRow[key] !== false;
           }
+          // 0077 keeps existing channel text byte-for-byte while giving old
+          // adaptations and their versions an explicitly empty tag list.
+          if ((table === "adaptations" || table === "content_versions") && key === "hashtags") {
+            return JSON.stringify(afterRow[key]) !== "[]";
+          }
           return afterRow[key] !== null;
         }),
         `${table}: a column added after the seed was backfilled over an existing row`,
@@ -1647,7 +1652,9 @@ describe.skipIf(!url)("runMigrations", () => {
       );
       await after.end();
 
-      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, failure_reason: null })));
+      expect(rows.rows).toEqual(
+        seeded.map((row) => ({ ...row, failure_reason: null, hashtags: [], cta: null })),
+      );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
         data_type: "text",

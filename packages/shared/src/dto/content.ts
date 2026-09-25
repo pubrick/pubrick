@@ -452,10 +452,42 @@ export const contentUpdateSchema = z
   });
 export type ContentUpdate = z.infer<typeof contentUpdateSchema>;
 
-export const adaptationUpdateSchema = z.object({
-  /** `null` clears the override; this channel then ships the item's own body. */
-  body: bodyText.nullable(),
-});
+export const adaptationUpdateSchema = z
+  .object({
+    /** Authored text without managed hashtags; `null` clears the override. */
+    body: bodyText.nullable().optional(),
+    hashtags: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(80)
+          .refine((tag) => !hasNulByte(tag)),
+      )
+      .max(10)
+      .optional(),
+    /** Compare-and-swap guard required whenever hashtags are changed. */
+    expectedHashtags: z.array(z.string().max(80)).max(10).optional(),
+    cta: z
+      .string()
+      .max(500)
+      .refine((text) => !hasNulByte(text))
+      .nullable()
+      .optional(),
+    /** Compare-and-swap guard required whenever the editorial CTA is changed. */
+    expectedCta: z.string().max(500).nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.body === undefined && data.hashtags === undefined && data.cta === undefined) {
+      ctx.addIssue({ code: "custom", message: "At least one channel field is required" });
+    }
+    if (data.hashtags !== undefined && data.expectedHashtags === undefined) {
+      ctx.addIssue({ code: "custom", message: "Expected hashtags are required" });
+    }
+    if (data.cta !== undefined && data.expectedCta === undefined) {
+      ctx.addIssue({ code: "custom", message: "Expected CTA is required" });
+    }
+  });
 export type AdaptationUpdate = z.infer<typeof adaptationUpdateSchema>;
 
 /**
@@ -696,6 +728,8 @@ export const adaptationDtoSchema = z.strictObject({
   channelId: z.string().uuid(),
   /** The per-channel override, or `null` when this channel ships the item's own body. */
   body: z.string().nullable(),
+  hashtags: z.array(z.string()),
+  cta: z.string().nullable(),
   status: z.enum(ADAPTATION_STATUSES),
   origin: z.enum(CONTENT_ORIGINS),
   scheduledAt: z.string().nullable(),
@@ -769,6 +803,8 @@ export const contentVersionDtoSchema = z.strictObject({
   id: z.string().uuid(),
   adaptationId: z.string().uuid().nullable(),
   body: z.string(),
+  hashtags: z.array(z.string()),
+  cta: z.string().nullable(),
   origin: z.enum(CONTENT_ORIGINS),
   createdAt: z.string(),
 });
@@ -780,10 +816,17 @@ export const contentVersionListQuerySchema = z.object({
 });
 export type ContentVersionListQuery = z.infer<typeof contentVersionListQuerySchema>;
 
-export const contentVersionRestoreSchema = z.object({
-  /** The text the reader saw; a newer save must not be silently overwritten. */
-  expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
-});
+export const contentVersionRestoreSchema = z
+  .object({
+    /** The text the reader saw; a newer save must not be silently overwritten. */
+    expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+    /** Channel restores supply both metadata expectations; master restores supply neither. */
+    expectedHashtags: z.array(z.string().max(80)).max(10).optional(),
+    expectedCta: z.string().max(500).nullable().optional(),
+  })
+  .refine((data) => (data.expectedHashtags === undefined) === (data.expectedCta === undefined), {
+    message: "Channel restore requires both metadata expectations",
+  });
 export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
 
 /**

@@ -258,6 +258,8 @@ describe("the post screen", () => {
           contentItemId: ITEM_ID,
           channelId: CHANNEL_ID,
           body: null,
+          hashtags: [],
+          cta: null,
           status: "failed",
           deliveryOutcome: "unknown",
           origin: "human",

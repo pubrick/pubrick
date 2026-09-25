@@ -13,6 +13,9 @@ type VersionHistoryProps = {
   adaptationId?: string;
   currentBody: string | null;
   draftBody: string | null;
+  currentHashtags?: string[];
+  currentCta?: string | null;
+  unsavedMetadata?: boolean;
   editable: boolean;
   onRestored: (body: string) => Promise<void>;
 };
@@ -23,6 +26,9 @@ export function VersionHistory({
   adaptationId,
   currentBody,
   draftBody,
+  currentHashtags,
+  currentCta,
+  unsavedMetadata = false,
   editable,
   onRestored,
 }: VersionHistoryProps) {
@@ -78,8 +84,13 @@ export function VersionHistory({
     }
   }
 
-  const hasUnsavedText = draftBody !== currentBody;
+  const hasUnsavedText = draftBody !== currentBody || unsavedMetadata;
   const canRestore = editable && !hasUnsavedText;
+  const selectedIsCurrent =
+    selected?.body === currentBody &&
+    (!adaptationId ||
+      (JSON.stringify(selected.hashtags) === JSON.stringify(currentHashtags ?? []) &&
+        selected.cta === (currentCta ?? null)));
 
   async function restore() {
     if (!selected || !canRestore || restoring) return;
@@ -88,7 +99,12 @@ export function VersionHistory({
     try {
       await api(`/api/content/${itemId}/versions/${selected.id}/restore`, {
         method: "POST",
-        body: JSON.stringify(contentVersionRestoreSchema.parse({ expectedBody: currentBody })),
+        body: JSON.stringify(
+          contentVersionRestoreSchema.parse({
+            expectedBody: currentBody,
+            ...(adaptationId ? { expectedHashtags: currentHashtags, expectedCta: currentCta } : {}),
+          }),
+        ),
       });
       await onRestored(selected.body);
       setSelected(null);
@@ -171,10 +187,7 @@ export function VersionHistory({
             <Button variant="secondary" onClick={() => setSelected(null)}>
               {t("versionCancel")}
             </Button>
-            <Button
-              disabled={!canRestore || selected?.body === currentBody || restoring}
-              onClick={restore}
-            >
+            <Button disabled={!canRestore || selectedIsCurrent || restoring} onClick={restore}>
               {restoring ? t("versionRestoring") : t("versionRestore")}
             </Button>
           </>
@@ -187,13 +200,23 @@ export function VersionHistory({
                 ? t("versionPinned")
                 : hasUnsavedText
                   ? t("versionSaveFirst")
-                  : selected.body === currentBody
+                  : selectedIsCurrent
                     ? t("versionAlreadyCurrent")
                     : t("versionRestoreConfirm")}
             </p>
             <div className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-control bg-bg-sunken p-3 text-sm text-fg">
               {selected.body}
             </div>
+            {adaptationId && selected.hashtags.length > 0 && (
+              <p className="mt-3 text-sm text-fg-secondary">
+                {t("hashtagsLabel")}: {selected.hashtags.map((tag) => `#${tag}`).join(" ")}
+              </p>
+            )}
+            {adaptationId && selected.cta && (
+              <p className="mt-2 text-sm text-fg-secondary">
+                {t("ctaLabel")}: {selected.cta} {t("ctaEditorialOnly")}
+              </p>
+            )}
           </>
         )}
       </Modal>

@@ -8,10 +8,13 @@ import type {
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  normalizeHashtags,
   type PublishFailureReason,
   REFINE_VERBS,
   type RefineProposal,
   type RefineVerb,
+  stripHashtagSuffix,
+  withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -21,6 +24,7 @@ import { AppShell } from "@/components/app-shell";
 import { FeedEntryAction } from "@/components/feed-controls";
 import { MediaLibrary } from "@/components/media-library";
 import { OriginBadge } from "@/components/origin-badge";
+import { Advanced } from "@/components/ui/advanced";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
@@ -61,6 +65,8 @@ type Adaptation = {
   contentItemId: string;
   channelId: string;
   body: string | null;
+  hashtags: string[];
+  cta: string | null;
   status: AdaptationStatus;
   /**
    * What happened to this channel's post — the api's verdict, not one this
@@ -251,6 +257,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
+  const [ctaDrafts, setCtaDrafts] = useState<Record<string, string>>({});
+  const tagBaselines = useRef<Record<string, string[]>>({});
+  const ctaBaselines = useRef<Record<string, string | null>>({});
+  const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -404,14 +415,56 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     if (seededFor.current !== item.id) {
       seededFor.current = item.id;
       setBodyDraft(item.body);
-      setOverrideDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.body ?? ""])));
+      setOverrideDrafts(
+        Object.fromEntries(
+          item.adaptations.map((a) => [
+            a.id,
+            a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags),
+          ]),
+        ),
+      );
+      setTagDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags.join(", ")])));
+      setCtaDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta ?? ""])));
+      tagBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags]));
+      ctaBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta]));
+      bodyBaselines.current = Object.fromEntries(
+        item.adaptations.map((a) => [
+          a.id,
+          a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags),
+        ]),
+      );
       return;
     }
     setOverrideDrafts((prev) => {
       const added = item.adaptations.filter((a) => !(a.id in prev));
       if (added.length === 0) return prev;
-      return { ...prev, ...Object.fromEntries(added.map((a) => [a.id, a.body ?? ""])) };
+      return {
+        ...prev,
+        ...Object.fromEntries(
+          added.map((a) => [a.id, a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags)]),
+        ),
+      };
     });
+    setTagDrafts((prev) => ({
+      ...Object.fromEntries(
+        item.adaptations.filter((a) => !(a.id in prev)).map((a) => [a.id, a.hashtags.join(", ")]),
+      ),
+      ...prev,
+    }));
+    setCtaDrafts((prev) => ({
+      ...Object.fromEntries(
+        item.adaptations.filter((a) => !(a.id in prev)).map((a) => [a.id, a.cta ?? ""]),
+      ),
+      ...prev,
+    }));
+    for (const adaptation of item.adaptations) {
+      if (!(adaptation.id in tagBaselines.current)) {
+        tagBaselines.current[adaptation.id] = adaptation.hashtags;
+        ctaBaselines.current[adaptation.id] = adaptation.cta;
+        bodyBaselines.current[adaptation.id] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+      }
+    }
   }, [item]);
 
   /**
@@ -618,12 +671,62 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   async function saveOverride(adaptationId: string) {
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
+    const tagValue = tagDrafts[adaptationId] ?? "";
+    const hashtags = normalizeHashtags(tagValue.split(","));
+    const cta = ctaDrafts[adaptationId] ?? "";
+    const saved = item?.adaptations.find((adaptation) => adaptation.id === adaptationId);
+    const baselineTags = tagBaselines.current[adaptationId] ?? saved?.hashtags ?? [];
+    const baselineCta =
+      adaptationId in ctaBaselines.current
+        ? ctaBaselines.current[adaptationId]
+        : (saved?.cta ?? null);
+    const tagsChanged = JSON.stringify(hashtags) !== JSON.stringify(baselineTags);
+    const ctaChanged = cta !== (baselineCta ?? "");
+    const metadataChanged = tagsChanged || ctaChanged;
+    const canSaveMetadataWithoutReplacingBody =
+      metadataChanged &&
+      saved?.body !== null &&
+      saved !== undefined &&
+      value === bodyBaselines.current[adaptationId];
     try {
-      await api(`/api/content/${id}/adaptations/${adaptationId}`, {
+      const persisted = await api<Adaptation>(`/api/content/${id}/adaptations/${adaptationId}`, {
         method: "PATCH",
-        body: JSON.stringify({ body: value.trim() === "" ? null : value }),
+        body: JSON.stringify({
+          ...(canSaveMetadataWithoutReplacingBody
+            ? {}
+            : {
+                body:
+                  value.trim() === ""
+                    ? hashtags.length > 0 || cta.trim()
+                      ? bodyDraft
+                      : null
+                    : value,
+              }),
+          ...(tagsChanged ? { hashtags, expectedHashtags: baselineTags } : {}),
+          ...(ctaChanged ? { cta, expectedCta: baselineCta } : {}),
+        }),
       });
       await reload();
+      const persistedText =
+        persisted.body === null ? "" : stripHashtagSuffix(persisted.body, persisted.hashtags);
+      setOverrideDrafts((current) =>
+        (current[adaptationId] ?? "") === value
+          ? { ...current, [adaptationId]: persistedText }
+          : current,
+      );
+      setTagDrafts((current) =>
+        (current[adaptationId] ?? "") === tagValue
+          ? { ...current, [adaptationId]: persisted.hashtags.join(", ") }
+          : current,
+      );
+      setCtaDrafts((current) =>
+        (current[adaptationId] ?? "") === cta
+          ? { ...current, [adaptationId]: persisted.cta ?? "" }
+          : current,
+      );
+      bodyBaselines.current[adaptationId] = persistedText;
+      tagBaselines.current[adaptationId] = persisted.hashtags;
+      ctaBaselines.current[adaptationId] = persisted.cta;
     } catch (err) {
       handleError(err);
     }
@@ -668,8 +771,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
       applyToItem(() => updated);
       const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
-      if (adaptation)
-        setOverrideDrafts((drafts) => ({ ...drafts, [adaptationId]: adaptation.body ?? "" }));
+      if (adaptation) {
+        bodyBaselines.current[adaptationId] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+        setOverrideDrafts((drafts) => ({
+          ...drafts,
+          [adaptationId]:
+            adaptation.body === null
+              ? ""
+              : stripHashtagSuffix(adaptation.body, adaptation.hashtags),
+        }));
+      }
     } catch (err) {
       handleError(err);
       await reload();
@@ -1099,11 +1211,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
     const channel = channels.find((c) => c.id === adaptation.channelId);
-    const override = overrideDrafts[adaptation.id] ?? adaptation.body ?? "";
+    const override =
+      overrideDrafts[adaptation.id] ??
+      (adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags));
+    const tags = normalizeHashtags(
+      (tagDrafts[adaptation.id] ?? adaptation.hashtags.join(", ")).split(","),
+    );
     const usesMaster = override.trim() === "";
-    const previewText = usesMaster ? bodyDraft : override;
+    const previewText =
+      usesMaster && tags.length === 0
+        ? bodyDraft
+        : withHashtags(usesMaster ? bodyDraft : override, tags);
     const unsaved =
-      override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
+      previewText !== (adaptation.body ?? currentItem.body) ||
+      (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
@@ -1719,6 +1840,41 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               showCount
               rows={4}
             />
+            <Advanced
+              label={t("channelMetadata")}
+              dirty={
+                (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
+                (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
+              }
+              className="mt-3"
+            >
+              <div className="space-y-3">
+                <Input
+                  label={t("hashtagsLabel")}
+                  value={tagDrafts[a.id] ?? ""}
+                  onChange={(event) =>
+                    setTagDrafts((current) => ({ ...current, [a.id]: event.target.value }))
+                  }
+                  placeholder={t("hashtagsPlaceholder")}
+                  disabled={isArchived || !canEditChannel(item, a)}
+                />
+                <Input
+                  label={t("ctaLabel")}
+                  value={ctaDrafts[a.id] ?? ""}
+                  onChange={(event) =>
+                    setCtaDrafts((current) => ({ ...current, [a.id]: event.target.value }))
+                  }
+                  maxLength={500}
+                  disabled={isArchived || !canEditChannel(item, a)}
+                />
+                <p className="text-xs text-fg-tertiary">{t("ctaEditorialOnly")}</p>
+                {a.body === null &&
+                  (normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length > 0 ||
+                    (ctaDrafts[a.id] ?? "").trim()) && (
+                    <p className="text-xs text-fg-tertiary">{t("channelCopyHint")}</p>
+                  )}
+              </div>
+            </Advanced>
             {reviewPreview(a, item)}
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -1736,14 +1892,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 disabled={
                   readaptBusy !== null ||
                   draftMoved ||
-                  (overrideDrafts[a.id] ?? "") !== (a.body ?? "") ||
+                  (overrideDrafts[a.id] ?? "") !==
+                    (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags)) ||
                   !canEditChannel(item, a)
                 }
               >
                 {readaptBusy === a.id ? t("readaptWorking") : t("readaptAction")}
               </Button>
             </div>
-            {(draftMoved || (overrideDrafts[a.id] ?? "") !== (a.body ?? "")) && (
+            {(draftMoved ||
+              (overrideDrafts[a.id] ?? "") !==
+                (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))) && (
               <p className="mt-2 text-sm text-fg-tertiary">{t("readaptSaveFirst")}</p>
             )}
             {!canEditChannel(item, a) && (
@@ -1777,7 +1936,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                           stale ||
                           draftMoved ||
                           !canEditChannel(item, a) ||
-                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                          (overrideDrafts[a.id] ?? "") !==
+                            (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))
                         }
                       >
                         {t("readaptAccept")}
@@ -1790,7 +1950,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                           readaptBusy !== null ||
                           draftMoved ||
                           !canEditChannel(item, a) ||
-                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                          (overrideDrafts[a.id] ?? "") !==
+                            (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))
                         }
                       >
                         {t("refineRetry")}
@@ -1811,12 +1972,47 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               itemId={id}
               adaptationId={a.id}
               currentBody={a.body}
+              currentHashtags={a.hashtags}
+              currentCta={a.cta}
+              unsavedMetadata={
+                (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
+                (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
+              }
               draftBody={
-                (overrideDrafts[a.id] ?? "").trim() === "" ? null : (overrideDrafts[a.id] ?? "")
+                (overrideDrafts[a.id] ?? "").trim() === "" &&
+                normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length === 0
+                  ? null
+                  : withHashtags(
+                      (overrideDrafts[a.id] ?? "").trim() === ""
+                        ? bodyDraft
+                        : (overrideDrafts[a.id] ?? ""),
+                      normalizeHashtags((tagDrafts[a.id] ?? "").split(",")),
+                    )
               }
               editable={canEditChannel(item, a)}
-              onRestored={async (body) => {
-                setOverrideDrafts((current) => ({ ...current, [a.id]: body }));
+              onRestored={async () => {
+                const updated = await api<ContentItem>(`/api/content/${id}`);
+                const restored = updated.adaptations.find((row) => row.id === a.id);
+                if (restored) {
+                  bodyBaselines.current[a.id] =
+                    restored.body === null
+                      ? ""
+                      : stripHashtagSuffix(restored.body, restored.hashtags);
+                  tagBaselines.current[a.id] = restored.hashtags;
+                  ctaBaselines.current[a.id] = restored.cta;
+                }
+                setOverrideDrafts((current) => ({
+                  ...current,
+                  [a.id]:
+                    restored?.body === null || !restored
+                      ? ""
+                      : stripHashtagSuffix(restored.body, restored.hashtags),
+                }));
+                setTagDrafts((current) => ({
+                  ...current,
+                  [a.id]: restored?.hashtags.join(", ") ?? "",
+                }));
+                setCtaDrafts((current) => ({ ...current, [a.id]: restored?.cta ?? "" }));
                 await reload();
               }}
             />
