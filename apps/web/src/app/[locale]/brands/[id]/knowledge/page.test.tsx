@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
-import { renderAsync, screen, waitFor, within } from "@/test/render";
+import { act, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -65,6 +65,113 @@ describe("brand knowledge screen", () => {
     expect(screen.getByText("Partner note")).toBeInTheDocument();
     expect(screen.queryByText("Product note")).toBeNull();
     expect(screen.getByText("Retail Partners · Active · Vector indexed")).toBeInTheDocument();
+  });
+
+  it("clears the filter after removing its last note", async () => {
+    const custom = {
+      id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+      title: "Partner note",
+      content: "Facts",
+      category: "Retail Partners",
+      tags: [],
+      isActive: true,
+      hasEmbedding: false,
+    };
+    const preset = {
+      ...custom,
+      id: "e45c3e74-1b58-409b-a1c2-91e610ab5995",
+      title: "Product note",
+      category: "product_info",
+    };
+    let notes = [custom, preset];
+    mockApi.mockImplementation(async (path, init) => {
+      if (String(path).startsWith("/api/knowledge?")) return notes as never;
+      if (String(path).includes(custom.id) && init?.method === "DELETE") notes = [preset];
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText("Partner note");
+    const user = userEvent.setup();
+    const filter = screen.getByRole("combobox", { name: en.Knowledge.filterCategory });
+    await user.selectOptions(filter, "Retail Partners");
+    await user.click(screen.getByRole("button", { name: en.Knowledge.remove }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: en.Knowledge.remove }),
+    );
+    await screen.findByText("Product note");
+    await waitFor(() => expect(filter).toHaveValue(""));
+    expect(screen.queryByRole("option", { name: "Retail Partners" })).toBeNull();
+  });
+
+  it("clears the filter after reclassifying its last note", async () => {
+    let note = {
+      id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+      title: "Partner note",
+      content: "Facts",
+      category: "Retail Partners",
+      tags: [],
+      isActive: true,
+      hasEmbedding: true,
+    };
+    mockApi.mockImplementation(async (path, init) => {
+      if (String(path).startsWith("/api/knowledge?")) return [note] as never;
+      if (String(path).includes(note.id) && init?.method === "PATCH") {
+        note = { ...note, category: "product_info" };
+      }
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText("Partner note");
+    const user = userEvent.setup();
+    const filter = screen.getByRole("combobox", { name: en.Knowledge.filterCategory });
+    await user.selectOptions(filter, "Retail Partners");
+    await user.click(screen.getByRole("button", { name: en.Knowledge.edit }));
+    const dialog = within(screen.getByRole("dialog"));
+    await user.selectOptions(
+      dialog.getByRole("combobox", { name: en.Knowledge.categoryLabel }),
+      "product_info",
+    );
+    await user.click(dialog.getByRole("button", { name: en.Knowledge.save }));
+    await waitFor(() => expect(filter).toHaveValue(""));
+    expect(screen.getByText("Partner note")).toBeInTheDocument();
+  });
+
+  it("clears the filter when navigating to another brand", async () => {
+    const otherBrandId = "ed460d4c-33b3-4a8b-8296-f30cd560f157";
+    const custom = {
+      id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+      title: "Partner note",
+      content: "Facts",
+      category: "Retail Partners",
+      tags: [],
+      isActive: true,
+      hasEmbedding: false,
+    };
+    const other = {
+      ...custom,
+      id: "e45c3e74-1b58-409b-a1c2-91e610ab5995",
+      title: "Other brand note",
+      category: "product_info",
+    };
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?")) {
+        return (String(path).includes(otherBrandId) ? [other] : [custom]) as never;
+      }
+      return {} as never;
+    });
+    const view = await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText("Partner note");
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: en.Knowledge.filterCategory }),
+      "Retail Partners",
+    );
+    await act(async () => {
+      view.rerender(<KnowledgePage params={Promise.resolve({ id: otherBrandId })} />);
+    });
+    await screen.findByText("Other brand note");
+    expect(screen.getByRole("combobox", { name: en.Knowledge.filterCategory })).toHaveValue("");
+    expect(screen.queryByText("Partner note")).toBeNull();
   });
 
   it("creates a note with an explicitly entered custom category", async () => {
