@@ -5181,6 +5181,71 @@ describe.skipIf(!url)("content e2e", () => {
       ).toEqual(topic);
     });
 
+    it("archives a rejected post after a scheduled send was canceled", async () => {
+      const owner = await orgAgent();
+      const { brandId, topicId, itemId } = await linkedDraft(owner);
+      await owner
+        .post(`/api/content/${itemId}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+        .expect(200);
+      const rejected = await owner.post(`/api/content/${itemId}/reject`).expect(200);
+      expect(rejected.body).toMatchObject({ status: "rejected" });
+      expect(rejected.body.adaptations[0]).toMatchObject({ status: "pending", attemptCount: 1 });
+
+      const archived = await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "No longer suitable" })
+        .expect(200);
+      expect(archived.body).toMatchObject({ status: "archived", archivedFromStatus: "rejected" });
+      const topic = (await owner.get(`/api/topics?brandId=${brandId}`).expect(200)).body.find(
+        (row: { id: string }) => row.id === topicId,
+      );
+      expect(topic).toMatchObject({ status: "archived", blockReason: "No longer suitable" });
+      expect((await owner.post(`/api/content/${itemId}/restore`).expect(200)).body.status).toBe(
+        "rejected",
+      );
+    });
+
+    it.each(["failed", "unknown"] as const)(
+      "refuses a rejected post with a %s delivery receipt",
+      async (receiptStatus) => {
+        const owner = await orgAgent();
+        const linked = await linkedDraft(owner);
+        await owner.post(`/api/content/${linked.itemId}/reject`).expect(200);
+        const orgId = await orgOf(linked.itemId);
+        const { createDb, schema } = await import("@pubrick/db");
+        const { db, pool } = createDb(url as string);
+        try {
+          const [adaptation] = await db
+            .select({ channelId: schema.adaptations.channelId })
+            .from(schema.adaptations)
+            .where(eq(schema.adaptations.id, linked.adaptationId));
+          if (!adaptation) throw new Error("Expected adaptation");
+          await db.insert(schema.publications).values({
+            orgId,
+            adaptationId: linked.adaptationId,
+            channelId: adaptation.channelId,
+            status: receiptStatus,
+            error: "Previous delivery outcome",
+          });
+          const refused = await owner
+            .post(`/api/content/${linked.itemId}/block-topic`)
+            .send({ reason: "Veto" })
+            .expect(409);
+          expect(refused.body.code).toBe("content_topic_veto_has_delivery_history");
+          expect((await owner.get(`/api/content/${linked.itemId}`).expect(200)).body.status).toBe(
+            "rejected",
+          );
+          const topic = (
+            await owner.get(`/api/topics?brandId=${linked.brandId}`).expect(200)
+          ).body.find((row: { id: string }) => row.id === linked.topicId);
+          expect(topic).toMatchObject({ status: "idea", blockedAt: null });
+        } finally {
+          await pool.end();
+        }
+      },
+    );
+
     it("refuses unlinked drafts and rolls back when delivery has begun", async () => {
       const owner = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(owner);

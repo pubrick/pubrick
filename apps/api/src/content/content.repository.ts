@@ -5058,6 +5058,7 @@ export class ContentRepository {
         .select({
           brandId: schema.contentItems.brandId,
           status: schema.contentItems.status,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -5065,17 +5066,40 @@ export class ContentRepository {
       if (!item || item.brandId !== candidate.brandId) {
         throw notFound("content_not_found", "Content item not found");
       }
-      if (item.status !== "draft") {
-        throw conflict("content_topic_veto_not_draft", "Only a draft can be vetoed with its topic");
+      if (item.status !== "draft" && item.status !== "rejected") {
+        throw conflict(
+          "content_topic_veto_not_draft",
+          "Only an unpublished draft or rejected post can be vetoed with its topic",
+        );
       }
-      if (
-        adaptations.some(
-          (adaptation) => adaptation.status !== "pending" || adaptation.attemptCount > 0,
-        )
-      ) {
+      if (adaptations.some((adaptation) => adaptation.status !== "pending")) {
         throw conflict(
           "content_archive_delivery_active",
-          "Stop every delivery before blocking this draft's topic",
+          "Stop every active delivery before blocking this post's topic",
+        );
+      }
+      // Reject increments attemptCount when it cancels a scheduled job, even
+      // before any platform call. A receipt is actual delivery history. The
+      // marker also catches a receipt orphaned by channel deletion.
+      const [receipt] = adaptations.length
+        ? await tx
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(
+              and(
+                eq(schema.publications.orgId, orgId),
+                inArray(
+                  schema.publications.adaptationId,
+                  adaptations.map((adaptation) => adaptation.id),
+                ),
+              ),
+            )
+            .limit(1)
+        : [];
+      if (receipt || !item.isSafeToDelete) {
+        throw conflict(
+          "content_topic_veto_has_delivery_history",
+          "A post with delivery history cannot be vetoed with its topic",
         );
       }
 
@@ -5101,7 +5125,7 @@ export class ContentRepository {
       }
       await tx
         .update(schema.contentItems)
-        .set({ status: "archived", archivedFromStatus: "draft" })
+        .set({ status: "archived", archivedFromStatus: item.status })
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
     });
     return this.get(orgId, id);
