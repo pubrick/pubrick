@@ -1557,6 +1557,45 @@ describe.skipIf(!url)("content e2e", () => {
     }
   });
 
+  it("waits for a worker claim before deciding whether approval can be undone", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Claim race", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const worker = await pool.connect();
+    try {
+      await worker.query("BEGIN");
+      // The claim is invisible outside this transaction, but already owns the
+      // adaptation row. Undo must wait rather than reading the old queued state.
+      await worker.query("UPDATE adaptations SET status = 'publishing' WHERE id = $1", [
+        adaptationId,
+      ]);
+      const retract = Promise.resolve(agent.post(`/api/content/${itemId}/retract-approval`).send());
+      try {
+        await waitForAdaptationLockWaiters(db, 1);
+      } finally {
+        await worker.query("COMMIT");
+      }
+      const refused = await retract;
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("approval_retraction_delivery_started");
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("approved");
+      expect(after.body.adaptations[0].status).toBe("publishing");
+    } finally {
+      worker.release();
+      await pool.end();
+    }
+  });
+
   it("enqueues exactly one publish job per adaptation, even when approve is called twice", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
