@@ -31,10 +31,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { channelLabel } from "@/lib/platform";
 import type { Run } from "@/lib/runs";
+import {
+  importTranscript,
+  MAX_TRANSCRIPT_FILE_BYTES,
+  TranscriptImportError,
+} from "@/lib/transcript-import";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
+type SourcePreview = SourceExtractionResponse & { origin: "article" | "transcript" };
 
 const FORM_ID = "new-content-form";
 const SOURCE_HELP_ID = "source-help";
@@ -62,10 +68,12 @@ export default function NewContentPage() {
   const [seoOptionsOpen, setSeoOptionsOpen] = useState(false);
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<SourcePreview | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [fetchingSource, setFetchingSource] = useState(false);
+  const [readingTranscript, setReadingTranscript] = useState(false);
   const sourceRequestId = useRef(0);
+  const transcriptRequestId = useRef(0);
   // `null` until the first answer: neither Generate nor the "add a key" hint
   // should flash while we still do not know which of the two is true.
   const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
@@ -192,6 +200,8 @@ export default function NewContentPage() {
       setSourceError(t("sourceUrlNotHttp"));
       return;
     }
+    transcriptRequestId.current += 1;
+    setReadingTranscript(false);
     const requestId = ++sourceRequestId.current;
     setSourcePreview(null);
     setFetchingSource(true);
@@ -200,7 +210,9 @@ export default function NewContentPage() {
         method: "POST",
         body: JSON.stringify(parsed.data),
       });
-      if (requestId === sourceRequestId.current) setSourcePreview(preview);
+      if (requestId === sourceRequestId.current) {
+        setSourcePreview({ ...preview, origin: "article" });
+      }
     } catch (err) {
       if (err instanceof ApiError && err.noActiveOrg) {
         router.replace(`/${locale}/onboarding`);
@@ -210,7 +222,36 @@ export default function NewContentPage() {
         setSourceError(errorMessage(err, t("genericError"), te));
       }
     } finally {
-      setFetchingSource(false);
+      if (requestId === sourceRequestId.current) setFetchingSource(false);
+    }
+  }
+
+  async function selectTranscript(file: File) {
+    sourceRequestId.current += 1;
+    setFetchingSource(false);
+    const requestId = ++transcriptRequestId.current;
+    setSourcePreview(null);
+    setSourceError(null);
+    if (file.size > MAX_TRANSCRIPT_FILE_BYTES) {
+      setSourceError(t("transcriptTooLarge"));
+      return;
+    }
+    setReadingTranscript(true);
+    try {
+      const preview = await importTranscript(file.name, await file.text());
+      if (requestId === transcriptRequestId.current) {
+        setSourcePreview({ ...preview, origin: "transcript" });
+      }
+    } catch (err) {
+      if (requestId === transcriptRequestId.current) {
+        setSourceError(
+          err instanceof TranscriptImportError
+            ? t(err.code === "empty" ? "transcriptEmpty" : "transcriptInvalid")
+            : t("transcriptReadFailed"),
+        );
+      }
+    } finally {
+      if (requestId === transcriptRequestId.current) setReadingTranscript(false);
     }
   }
 
@@ -237,11 +278,10 @@ export default function NewContentPage() {
     // this never is.
     //
     // The condition is `Advanced`'s own `dirty` expression, character for
-    // character (see the disclosure below). A dot that says "there is something
-    // in here" beside a primary action that silently deletes that something is
-    // the disagreement the three named predicates exist to make impossible —
-    // and a link is a value someone typed just as much as a paste is.
-    if (hasMaterial || hasSourceUrl) {
+    // character (see the disclosure below). An unaccepted transcript preview
+    // has no URL or material yet, but is still work the primary action must
+    // not silently discard.
+    if (hasMaterial || hasSourceUrl || sourcePreview !== null) {
       setError(t(canGenerate ? "sourceBlocksCreate" : "sourceBlocksCreateNoAi"));
       // ...and put what the sentence is about on screen beside it.
       setSourceOpen(true);
@@ -603,7 +643,7 @@ export default function NewContentPage() {
           */}
           <Advanced
             label={t("sourceTitle")}
-            dirty={hasMaterial || hasSourceUrl}
+            dirty={hasMaterial || hasSourceUrl || sourcePreview !== null}
             open={sourceOpen}
             onOpenChange={setSourceOpen}
           >
@@ -631,8 +671,11 @@ export default function NewContentPage() {
                 value={sourceUrl}
                 onChange={(e) => {
                   sourceRequestId.current += 1;
+                  setFetchingSource(false);
                   setSourceUrl(e.target.value);
-                  setSourcePreview(null);
+                  setSourcePreview((preview) =>
+                    preview?.origin === "transcript" ? preview : null,
+                  );
                   setSourceError(null);
                 }}
                 placeholder={t("sourceUrlPlaceholder")}
@@ -649,6 +692,36 @@ export default function NewContentPage() {
                   {t(fetchingSource ? "fetchingSource" : "fetchSource")}
                 </Button>
               </div>
+              <div>
+                <label
+                  htmlFor="transcriptFile"
+                  className="mb-1.5 block text-sm font-medium text-fg"
+                >
+                  {t("transcriptLabel")}
+                </label>
+                <input
+                  id="transcriptFile"
+                  type="file"
+                  accept=".srt,.vtt,.txt,text/plain,text/vtt,application/x-subrip"
+                  disabled={readingTranscript}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    // Allow choosing the same corrected file after an error.
+                    event.target.value = "";
+                    if (file) void selectTranscript(file);
+                  }}
+                  aria-describedby="transcript-help"
+                  className="block min-h-11 w-full rounded-control border border-border px-3 py-2 text-sm text-fg file:mr-3 file:rounded-control file:border-0 file:bg-bg-sunken file:px-3 file:py-1 file:text-fg-secondary"
+                />
+                <p id="transcript-help" className="mt-1 text-sm text-fg-tertiary">
+                  {t("transcriptHelp")}
+                </p>
+                {readingTranscript && (
+                  <p role="status" className="mt-1 text-sm text-fg-secondary">
+                    {t("readingTranscript")}
+                  </p>
+                )}
+              </div>
               {sourceError && (
                 <p role="alert" className="text-sm text-danger">
                   {sourceError}
@@ -659,7 +732,13 @@ export default function NewContentPage() {
                   className="rounded-control border border-border bg-bg-sunken p-4"
                   aria-live="polite"
                 >
-                  <p className="text-sm font-semibold text-fg">{t("sourcePreviewTitle")}</p>
+                  <p className="text-sm font-semibold text-fg">
+                    {t(
+                      sourcePreview.origin === "transcript"
+                        ? "transcriptPreviewTitle"
+                        : "sourcePreviewTitle",
+                    )}
+                  </p>
                   {sourcePreview.title && (
                     <p className="mt-1 text-sm text-fg-secondary">{sourcePreview.title}</p>
                   )}

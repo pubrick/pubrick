@@ -18,6 +18,22 @@ returns only text, capped at 8,000 characters, and tells the user if it was
 shortened.
 
 Pages that require login, client-side rendering, or contain no readable article
-text need a manual paste. This workflow does not extract YouTube transcripts or
-newsletter inbox contents. The URL is never treated as proof that a claim is
-true or current; review the draft before publishing.
+text need a manual paste.
+
+## Import a video transcript
+
+On the same **New post → Source** screen, choose a UTF-8 `.srt`, `.vtt`, or
+`.txt` transcript (up to 2 MiB). Pubrick reads it in the browser. For caption
+files, it uses [`media-captions`](https://github.com/vidstack/captions)
+(MIT licensed) to extract cue text without timestamps, cue numbers, or styling.
+Unlike a small custom parser, the library handles the WebVTT cue format and
+SubRip timing rules. The file is not uploaded or sent to an API. A preview
+shows the first 8,000 characters and tells you if it was shortened. Choose
+**Use this text** to place it in the editable source field before generating.
+You may enter the video URL above as attribution; generation still uses the
+accepted text, not the remote URL. The 2 MiB limit applies before reading and
+the 8,000-character limit applies to material sent to the run.
+
+Pubrick does not fetch transcripts from YouTube or newsletter inboxes. A URL
+is never treated as proof that a claim is true or current; review the draft
+before publishing.
