@@ -1,0 +1,1 @@
+CREATE INDEX "usage_ledger_org_recent_idx" ON "usage_ledger" USING btree ("org_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);
