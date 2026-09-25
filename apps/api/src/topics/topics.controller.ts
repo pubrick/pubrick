@@ -26,6 +26,7 @@ import {
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { TopicsRepository } from "./topics.repository";
@@ -42,6 +43,7 @@ export class TopicsController {
   }
 
   @Post()
+  @EditorialCapability("author")
   @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
@@ -77,11 +79,13 @@ export class TopicsController {
   }
 
   @Post("suggestions")
+  @EditorialCapability("author")
   requestSuggestions(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
     return this.topics.requestSuggestions(orgId, brandId);
   }
 
   @Post("from-news/:newsItemId")
+  @EditorialCapability("author")
   fromNews(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -91,6 +95,7 @@ export class TopicsController {
   }
 
   @Patch("news/:newsItemId/feedback")
+  @EditorialCapability("author")
   feedback(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -101,6 +106,7 @@ export class TopicsController {
   }
 
   @Patch(":id")
+  @EditorialCapability("author")
   update(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -111,6 +117,7 @@ export class TopicsController {
   }
 
   @Post(":id/block")
+  @EditorialCapability("author")
   block(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -121,6 +128,7 @@ export class TopicsController {
   }
 
   @Post(":id/unblock")
+  @EditorialCapability("author")
   unblock(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -130,6 +138,7 @@ export class TopicsController {
   }
 
   @Delete(":id")
+  @EditorialCapability("author")
   delete(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -139,6 +148,7 @@ export class TopicsController {
   }
 
   @Post(":id/run")
+  @EditorialCapability("author")
   run(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,

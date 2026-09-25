@@ -12,6 +12,7 @@ import {
 import { type RunCreate, runCreateSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
@@ -39,6 +40,7 @@ export class RunsController {
   }
 
   @Post()
+  @EditorialCapability("author")
   @BrandScope({ kind: "brand", source: "body" })
   create(@OrgId() orgId: string, @Body(new ZodValidationPipe(runCreateSchema)) body: RunCreate) {
     return this.runs.create(orgId, body);
@@ -60,12 +62,14 @@ export class RunsController {
    * newly created run.
    */
   @Post(":id/retry")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "run" })
   retry(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.runs.retry(orgId, id);
   }
 
   @Post(":id/cancel")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "run" })
   @HttpCode(200)
   cancel(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
@@ -73,6 +77,7 @@ export class RunsController {
   }
 
   @Post(":id/dismiss")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "run" })
   @HttpCode(200)
   dismiss(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {

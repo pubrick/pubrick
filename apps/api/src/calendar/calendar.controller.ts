@@ -21,6 +21,7 @@ import {
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { CalendarRepository } from "./calendar.repository";
@@ -41,6 +42,7 @@ export class CalendarController {
   }
 
   @Post()
+  @EditorialCapability("editor")
   @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
@@ -50,6 +52,7 @@ export class CalendarController {
   }
 
   @Post("bulk")
+  @EditorialCapability("editor")
   @BrandScope({ kind: "brand", source: "body" })
   createBulk(
     @OrgId() orgId: string,
@@ -59,6 +62,7 @@ export class CalendarController {
   }
 
   @Patch(":id")
+  @EditorialCapability("editor")
   update(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
@@ -69,6 +73,7 @@ export class CalendarController {
   }
 
   @Delete(":id")
+  @EditorialCapability("editor")
   delete(
     @OrgId() orgId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,

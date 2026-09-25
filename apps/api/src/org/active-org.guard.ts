@@ -20,6 +20,10 @@ import {
   type BrandResource,
   type BrandScopeMetadata,
 } from "./brand-scope.decorator";
+import {
+  EDITORIAL_CAPABILITY_KEY,
+  type EditorialCapability,
+} from "./editorial-capability.decorator";
 
 // Same shape auth.api.getSession() resolves to — the global AuthGuard (from
 // @thallesp/nestjs-better-auth) awaits exactly that call and assigns the result to
@@ -32,6 +36,7 @@ type ScopedRequest = {
   params?: Record<string, unknown>;
   query?: Record<string, unknown>;
   body?: Record<string, unknown>;
+  method?: string;
   orgId?: string;
   brandId?: string;
   visibleBrandIds?: string[] | null;
@@ -186,15 +191,51 @@ export class ActiveOrgGuard implements CanActivate {
     // to managers too, so a new route cannot accidentally inherit broad access.
     if (!scope) throw new ForbiddenException("Brand scope is required for this route");
     const manager = membership[0]?.role === "owner" || membership[0]?.role === "admin";
+    const role = membership[0]?.role;
+    const checkEditorialMutation = () => {
+      if (role !== "author" && role !== "editor") return;
+      if (request.method === "GET" || request.method === "HEAD") return;
+      const capability = this.reflector.getAllAndOverride<EditorialCapability>(
+        EDITORIAL_CAPABILITY_KEY,
+        [context.getHandler()],
+      );
+      if (!capability || (capability === "editor" && role !== "editor")) {
+        throw new ForbiddenException("Editorial role cannot perform this action");
+      }
+    };
     if (scope.kind === "org-list") {
       request.visibleBrandIds = manager
         ? null
         : await this.brandAccess.visibleBrandIds(orgId, session.user.id);
+      // A list has no single brand to authorize. Editorial mutations must use
+      // a concrete brand or resource scope, even if someone adds metadata.
+      if (
+        (role === "author" || role === "editor") &&
+        !["GET", "HEAD"].includes(request.method ?? "")
+      ) {
+        throw new ForbiddenException("Editorial role cannot perform this action");
+      }
       return true;
     }
     if (scope.kind === "org") {
       if (scope.roles === "manager" && !manager) {
         throw new ForbiddenException("Organization owner or admin required");
+      }
+      if (
+        (role === "author" || role === "editor") &&
+        !["GET", "HEAD"].includes(request.method ?? "")
+      ) {
+        // Only read-like POSTs with a declared brand can use this exception.
+        // Other org-wide mutations have no grant to check and remain closed.
+        if (!scope.editorialBrand) {
+          throw new ForbiddenException("Editorial role cannot perform this action");
+        }
+        const brandId = scopedId(request, scope.editorialBrand.source, scope.editorialBrand.key);
+        if (!(await this.brandAccess.hasAccess(orgId, brandId, session.user.id))) {
+          throw notFound("brand_not_found", "Brand not found");
+        }
+        request.brandId = brandId;
+        checkEditorialMutation();
       }
       return true;
     }
@@ -214,7 +255,10 @@ export class ActiveOrgGuard implements CanActivate {
           : "Brand not found";
       throw code ? notFound(code, message) : new NotFoundException(message);
     }
-    if (scope.roles === "manager" && !manager) {
+    // Preserve the legacy member's manager-only 403 on an ungranted brand.
+    // Dedicated editorial roles keep the hidden-resource 404 promise before
+    // their capability is considered.
+    if (scope.roles === "manager" && !manager && role !== "author" && role !== "editor") {
       throw new ForbiddenException("Organization owner or admin required");
     }
     if (!(await this.brandAccess.hasAccess(orgId, brandId, session.user.id))) {
@@ -226,6 +270,10 @@ export class ActiveOrgGuard implements CanActivate {
       throw notFound(code ?? "brand_not_found", message);
     }
     request.brandId = brandId;
+    if (scope.roles === "manager" && !manager) {
+      throw new ForbiddenException("Organization owner or admin required");
+    }
+    checkEditorialMutation();
     return true;
   }
 }
