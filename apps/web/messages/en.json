@@ -873,6 +873,14 @@
     "stale": "This result belongs to an older draft. Refresh it for the current text.",
     "noClaims": "No time-sensitive factual claims were found. Read the draft yourself before publishing.",
     "failed": "The claim review did not finish. Try again.",
+    "failure": {
+      "no_ai_key": "The AI key is no longer available. Add one in Settings.",
+      "no_search_key": "The search key is no longer available. Add one in Settings.",
+      "source_changed": "The saved draft changed before this check began. Refresh for the current text.",
+      "provider_unavailable": "The AI or search provider was unavailable. Try again later.",
+      "invalid_response": "The AI provider returned an unusable answer. Try again.",
+      "internal_error": "The check stopped unexpectedly. Try again."
+    },
     "missingSearchKey": "Add a Yandex Search API key to search for evidence.",
     "missingAiKey": "Add an AI provider key to extract and compare claims.",
     "settings": "Open settings",

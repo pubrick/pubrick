@@ -873,6 +873,14 @@
     "stale": "Este resultado corresponde a un borrador anterior. Actualízalo para el texto actual.",
     "noClaims": "No se encontraron afirmaciones factuales actuales. Lee el borrador antes de publicarlo.",
     "failed": "La revisión de afirmaciones no terminó. Inténtalo de nuevo.",
+    "failure": {
+      "no_ai_key": "La clave de IA ya no está disponible. Añade una en Ajustes.",
+      "no_search_key": "La clave de búsqueda ya no está disponible. Añade una en Ajustes.",
+      "source_changed": "El borrador guardado cambió antes de iniciar la revisión. Repítela para el texto actual.",
+      "provider_unavailable": "El proveedor de IA o búsqueda no estaba disponible. Inténtalo más tarde.",
+      "invalid_response": "El proveedor de IA devolvió una respuesta inutilizable. Inténtalo de nuevo.",
+      "internal_error": "La revisión se detuvo inesperadamente. Inténtalo de nuevo."
+    },
     "missingSearchKey": "Añade una clave de Yandex Search API para buscar fuentes.",
     "missingAiKey": "Añade una clave de proveedor de IA para extraer y comparar afirmaciones.",
     "settings": "Abrir ajustes",

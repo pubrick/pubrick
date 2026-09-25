@@ -153,6 +153,16 @@ describe("claim evidence", () => {
     );
   });
 
+  it("explains a missing key recorded by a failed background job", async () => {
+    request.mockResolvedValue(review({ status: "failed", errorCode: "no_search_key" }));
+    await renderAsync(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
+    expect(await screen.findByText(en.ClaimEvidence.failure.no_search_key)).toBeVisible();
+    expect(screen.getByRole("link", { name: en.ClaimEvidence.settings })).toHaveAttribute(
+      "href",
+      "/en/settings/search",
+    );
+  });
+
   it("does not make a non-web result URL clickable", async () => {
     request.mockResolvedValue(
       review({

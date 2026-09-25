@@ -141,7 +141,22 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
             {review.completedAt ? ` · ${new Date(review.completedAt).toLocaleString(locale)}` : ""}
           </p>
           {stale && <p className="text-sm text-fg-secondary">{t("stale")}</p>}
-          {review.status === "failed" && <p className="text-sm text-danger">{t("failed")}</p>}
+          {review.status === "failed" && (
+            <p className="text-sm text-danger">
+              {review.errorCode ? t(`failure.${review.errorCode}`) : t("failed")}
+              {(review.errorCode === "no_search_key" || review.errorCode === "no_ai_key") && (
+                <>
+                  {" "}
+                  <Link
+                    href={`/${locale}/settings${review.errorCode === "no_search_key" ? "/search" : ""}`}
+                    className="underline"
+                  >
+                    {t("settings")}
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
           {review.status === "ready" && review.claims.length === 0 && (
             <p className="text-sm text-fg-secondary">{t("noClaims")}</p>
           )}

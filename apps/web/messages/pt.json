@@ -873,6 +873,14 @@
     "stale": "Este resultado pertence a um rascunho anterior. Atualize-o para o texto atual.",
     "noClaims": "Não foram encontradas afirmações factuais atuais. Leia o rascunho antes de publicar.",
     "failed": "A revisão de afirmações não terminou. Tente novamente.",
+    "failure": {
+      "no_ai_key": "A chave de IA já não está disponível. Adicione uma nas Definições.",
+      "no_search_key": "A chave de pesquisa já não está disponível. Adicione uma nas Definições.",
+      "source_changed": "O rascunho guardado mudou antes da verificação começar. Repita-a para o texto atual.",
+      "provider_unavailable": "O fornecedor de IA ou pesquisa não estava disponível. Tente mais tarde.",
+      "invalid_response": "O fornecedor de IA devolveu uma resposta inutilizável. Tente novamente.",
+      "internal_error": "A verificação parou inesperadamente. Tente novamente."
+    },
     "missingSearchKey": "Adicione uma chave Yandex Search API para procurar fontes.",
     "missingAiKey": "Adicione uma chave de fornecedor de IA para extrair e comparar afirmações.",
     "settings": "Abrir definições",
