@@ -110,6 +110,90 @@ describe("brand access navigation", () => {
   });
 });
 
+describe("brand removal", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "admin" }] },
+      isPending: false,
+    } as never);
+  });
+
+  it("does not offer the destructive action to a regular member", async () => {
+    installHandlers([]);
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+      isPending: false,
+    } as never);
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(screen.queryByRole("button", { name: en.Brands.removeTitle })).not.toBeInTheDocument();
+  });
+
+  it("requires the exact brand name and leaves the brand intact on cancel", async () => {
+    const deletes: string[] = [];
+    installHandlers([], (url, init) => {
+      if (init?.method === "DELETE") {
+        deletes.push(url);
+        return jsonResponse(200, { ok: true });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Brands.removeTitle }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.removeTitle }));
+    expect(dialog.getByText(/Acme \(ID b1\)/)).toBeInTheDocument();
+    const confirm = dialog.getByRole("textbox", { name: "Brand name: Acme" });
+    const remove = dialog.getByRole("button", { name: en.Brands.removeTitle });
+    expect(remove).toBeDisabled();
+    await user.type(confirm, "acme");
+    expect(remove).toBeDisabled();
+    await user.clear(confirm);
+    await user.type(confirm, "Acme");
+    expect(remove).toBeEnabled();
+    await user.click(dialog.getByRole("button", { name: en.Brands.removeCancel }));
+    expect(screen.queryByRole("dialog", { name: en.Brands.removeTitle })).not.toBeInTheDocument();
+    expect(deletes).toEqual([]);
+  });
+
+  it("deletes once and returns to the brand list only after confirmation", async () => {
+    const deletes: string[] = [];
+    installHandlers([], (url, init) => {
+      if (init?.method === "DELETE") {
+        deletes.push(url);
+        return jsonResponse(200, { ok: true });
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Brands.removeTitle }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.removeTitle }));
+    await user.type(dialog.getByRole("textbox", { name: "Brand name: Acme" }), "Acme");
+    await user.click(dialog.getByRole("button", { name: en.Brands.removeTitle }));
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/brands"));
+    expect(routerMock.refresh).toHaveBeenCalled();
+    expect(deletes).toEqual(["/api/brands/b1"]);
+  });
+
+  it("keeps the confirmation open and shows a refusal when deletion fails", async () => {
+    installHandlers([], (url, init) =>
+      url.endsWith("/api/brands/b1") && init?.method === "DELETE"
+        ? jsonResponse(500, { message: "Delete unavailable" })
+        : undefined,
+    );
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Brands.removeTitle }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Brands.removeTitle }));
+    await user.type(dialog.getByRole("textbox", { name: "Brand name: Acme" }), "Acme");
+    await user.click(dialog.getByRole("button", { name: en.Brands.removeTitle }));
+    expect(await dialog.findByRole("alert")).toBeInTheDocument();
+    expect(dialog.getByRole("textbox", { name: "Brand name: Acme" })).toHaveValue("Acme");
+    expect(routerMock.replace).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * Serves GET /api/brands/:id and GET /api/channels?brandId=:id out of fixed
  * data; `extra` answers anything else (POST channel test, etc). Mirrors the

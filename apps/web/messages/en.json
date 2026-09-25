@@ -112,7 +112,13 @@
     "knowledgeOpen": "Open knowledge",
     "mediaLink": "Media library",
     "analyticsLink": "Results",
-    "accessLink": "Team access"
+    "accessLink": "Team access",
+    "removeTitle": "Remove brand",
+    "removeHint": "Permanently removes this brand, its sources, topics, drafts, knowledge, media, and scheduled work. Posts already published on external channels remain there.",
+    "remove": "Remove",
+    "removeCancel": "Cancel",
+    "removeConfirmHint": "Type the exact name to remove {name} (ID {id}). This cannot be undone.",
+    "removeConfirmLabel": "Brand name: {name}"
   },
   "BrandAccess": {
     "title": "Team access",

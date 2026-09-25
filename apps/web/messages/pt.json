@@ -112,7 +112,13 @@
     "knowledgeOpen": "Abrir conhecimento",
     "mediaLink": "Biblioteca de mídia",
     "analyticsLink": "Resultados",
-    "accessLink": "Acesso da equipe"
+    "accessLink": "Acesso da equipe",
+    "removeTitle": "Remover marca",
+    "removeHint": "Remove permanentemente esta marca, suas fontes, tópicos, rascunhos, conhecimentos, mídias e tarefas agendadas. Publicações já enviadas a canais externos permanecem lá.",
+    "remove": "Remover",
+    "removeCancel": "Cancelar",
+    "removeConfirmHint": "Digite o nome exato para remover {name} (ID {id}). Esta ação não pode ser desfeita.",
+    "removeConfirmLabel": "Nome da marca: {name}"
   },
   "BrandAccess": {
     "title": "Acesso da equipe",
