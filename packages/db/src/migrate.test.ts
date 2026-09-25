@@ -448,6 +448,10 @@ const NON_ENUM_CHECKS = [
   "prompt_decision_revisions_version_positive_check",
   // 0076 adds explicit opt-in for publication reply sampling.
   "publication_comment_collection_configs_revision_check",
+  // 0084: the accepted Telegram cover and pending reply must remain a coherent receipt.
+  // The nullable enum pin is exercised against real rows by the worker repository spec.
+  "publications_partial_followup_outcome_check",
+  "publications_partial_telegram_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

@@ -1237,6 +1237,32 @@ describe("an outcome nobody knows, on the list (Finding 2)", () => {
   const unknownDelivery = () =>
     adaptation({ status: "failed", deliveryOutcome: "unknown", lastError: workerSentence });
 
+  it("shows a known live Telegram cover as partial and points to recovery", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      () => [
+        item("c1", "Covered post", "failed", [
+          adaptation({ status: "failed", deliveryOutcome: "partial", lastError: workerSentence }),
+        ]),
+      ],
+      [{ id: "ch1", platform: "telegram", name: "Main channel" }],
+    );
+    render(<ContentQueuePage />);
+    const link = await screen.findByRole("link", { name: "Covered post" });
+    const row = link.closest("li");
+    if (!row) throw new Error("content item <li> not found");
+    expect(within(row).getByText(en.Content.adaptationStatus.partial)).toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        en.Content.partialOutcome.replace("{channel}", "Telegram · Main channel"),
+      ),
+    ).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: en.Content.tryAgain })).toBeNull();
+    expect(link.className).not.toContain("text-danger");
+    expect(screen.queryByText(workerSentence)).not.toBeInTheDocument();
+  });
+
   it("reads 'Outcome unknown' and carries the advice, not the worker's log line", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => [item("c1", "Launch post", "failed", [unknownDelivery()])]);

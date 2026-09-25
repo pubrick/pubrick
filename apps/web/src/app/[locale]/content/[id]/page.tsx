@@ -78,6 +78,12 @@ type Adaptation = {
    * send may actually have landed reads `unknown`.
    */
   deliveryOutcome: DeliveryOutcome;
+  partialTelegram?: {
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -987,7 +993,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * adaptation, the item's own status and the sentence this row will print, and
    * the api returns all three together.
    */
-  async function assertDelivery(adaptationId: string, delivered: boolean) {
+  async function assertDelivery(
+    adaptationId: string,
+    delivered: boolean,
+    partialResolution?: "completed" | "removed",
+  ) {
     setActionError(null);
     // BOTH VERDICTS CLOSE WHILE ONE IS IN FLIGHT, per row. They are
     // contradictory answers to one question, so a second press of EITHER is a
@@ -1000,7 +1010,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}/delivery`, {
         method: "POST",
-        body: JSON.stringify({ delivered }),
+        body: JSON.stringify({ delivered, ...(partialResolution ? { partialResolution } : {}) }),
       });
       await reload();
     } catch (err) {
@@ -2408,18 +2418,66 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               a second copy.
 
               It NAMES the channel, and that is the whole of what this screen
-              can say about where the post went: an unknown delivery carries no
-              link, by construction — the answer that would have carried one
-              never arrived. The name is also next to it on the row, but this
-              paragraph is a `role="alert"`, announced on its own, and an alert
-              telling someone to go and check a channel it does not name is an
-              instruction they cannot follow.
+              can say about where the post went for a generic unknown: its
+              answer never returned with a link. A partial Telegram receipt has
+              its accepted photo link and frozen reply in the separate branch.
             */}
-            {a.deliveryOutcome === "unknown" && (
+            {(a.deliveryOutcome === "unknown" || a.deliveryOutcome === "partial") && (
               <>
-                <p role="alert" className="text-sm text-[var(--status-review-fg)]">
-                  {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
-                </p>
+                {a.partialTelegram ? (
+                  <div className="space-y-3">
+                    <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                      {t("partialTelegramWarning", { channel: channelLabel(a.channelId) })}
+                    </p>
+                    {a.partialTelegram.photoUrl && isLinkableUrl(a.partialTelegram.photoUrl) && (
+                      <a
+                        href={a.partialTelegram.photoUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-accent hover:underline"
+                      >
+                        {t("partialTelegramViewPhoto")}
+                      </a>
+                    )}
+                    {!a.partialTelegram.photoUrl && a.partialTelegram.photoId && (
+                      <p className="text-sm text-fg-tertiary">
+                        {t("partialTelegramPhotoId", { id: a.partialTelegram.photoId })}
+                      </p>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-fg">
+                        {t("partialTelegramMissingText")}
+                      </p>
+                      <pre className="whitespace-pre-wrap break-words rounded-md border border-border p-3 text-sm text-fg">
+                        {a.partialTelegram.followupText}
+                      </pre>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          copyManualField(
+                            `${a.id}:partialTelegram`,
+                            a.partialTelegram?.followupText ?? "",
+                          )
+                        }
+                      >
+                        {copiedManualField === `${a.id}:partialTelegram`
+                          ? t("copied")
+                          : t("partialTelegramCopyText")}
+                      </Button>
+                    </div>
+                    <p className="text-sm text-fg-tertiary">
+                      {a.partialTelegram.followupOutcome === "unknown" ||
+                      a.partialTelegram.followupOutcome === "pending"
+                        ? t("partialTelegramVerifyReply")
+                        : t("partialTelegramReplyNotSent")}
+                    </p>
+                  </div>
+                ) : (
+                  <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                    {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
+                  </p>
+                )}
                 {/*
                   THE WAY OUT OF "nobody knows", and the only one there is. The
                   paragraph above tells the reader to go and look; these record
@@ -2436,22 +2494,28 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   should say so before it is pressed, not after.
                 */}
                 <p className="text-sm text-fg-tertiary">
-                  {t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
+                  {a.partialTelegram
+                    ? t("partialTelegramRecoveryHint")
+                    : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="secondary"
-                    onClick={() => assertDelivery(a.id, true)}
+                    onClick={() =>
+                      assertDelivery(a.id, true, a.partialTelegram ? "completed" : undefined)
+                    }
                     disabled={isArchived || deliveryBusy === a.id}
                   >
-                    {t("markDelivered")}
+                    {a.partialTelegram ? t("partialTelegramConfirmComplete") : t("markDelivered")}
                   </Button>
                   <Button
                     variant="secondary"
-                    onClick={() => assertDelivery(a.id, false)}
+                    onClick={() =>
+                      assertDelivery(a.id, false, a.partialTelegram ? "removed" : undefined)
+                    }
                     disabled={isArchived || deliveryBusy === a.id}
                   >
-                    {t("markNotDelivered")}
+                    {a.partialTelegram ? t("partialTelegramConfirmRemoved") : t("markNotDelivered")}
                   </Button>
                 </div>
               </>

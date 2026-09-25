@@ -1345,6 +1345,69 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
   });
 
+  it("durably freezes an accepted Telegram photo and tail on this tenant's claim", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const attempt = await repo.markPublishing(orgId, adaptationId, null);
+    const claim = (await repo.claimSend(orgId, adaptationId)) as SendClaim;
+    const partial = {
+      photoId: "4711",
+      photoUrl: "https://t.me/mychannel/4711",
+      followupText: "Frozen missing reply",
+      followupOutcome: "pending" as const,
+    };
+
+    expect(await repo.markTelegramPhotoAccepted(strangerOrgId, adaptationId, claim, partial)).toBe(
+      false,
+    );
+    expect(await repo.markTelegramPhotoAccepted(orgId, adaptationId, claim, partial)).toBe(true);
+    const [checkpoint] = await db
+      .select({
+        status: schema.publications.status,
+        photoId: schema.publications.partialPhotoId,
+        photoUrl: schema.publications.partialPhotoUrl,
+        followup: schema.publications.partialFollowupText,
+        outcome: schema.publications.partialFollowupOutcome,
+      })
+      .from(schema.publications)
+      .where(eq(schema.publications.id, claim.id));
+    expect(checkpoint).toEqual({
+      status: "in_flight",
+      photoId: "4711",
+      photoUrl: "https://t.me/mychannel/4711",
+      followup: "Frozen missing reply",
+      outcome: "pending",
+    });
+
+    expect(
+      await repo.markFailed(
+        orgId,
+        adaptationId,
+        "Reply refused",
+        "outcome_unknown",
+        { status: "publishing", attemptCount: attempt as number },
+        "unknown",
+        claim,
+        { ...partial, followupOutcome: "rejected" },
+      ),
+    ).toBe(true);
+    const [finished] = await db
+      .select({
+        status: schema.publications.status,
+        photoId: schema.publications.partialPhotoId,
+        followup: schema.publications.partialFollowupText,
+        outcome: schema.publications.partialFollowupOutcome,
+      })
+      .from(schema.publications)
+      .where(eq(schema.publications.id, claim.id));
+    expect(finished).toEqual({
+      status: "unknown",
+      photoId: "4711",
+      followup: "Frozen missing reply",
+      outcome: "rejected",
+    });
+    expect(await repo.markTelegramPhotoAccepted(orgId, adaptationId, claim, partial)).toBe(false);
+  });
+
   it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markFailed(orgId, adaptationId, "first attempt", "platform_rejected", {

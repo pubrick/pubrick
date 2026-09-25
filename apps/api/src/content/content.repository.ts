@@ -641,12 +641,9 @@ const ADAPTATION_COLUMNS = {
    * codebase — the literal column/table names here are the actual db names
    * from packages/db/src/schema/content-items.ts, not TS property names.
    *
-   * Scoped to `published` and deliberately NOT widened to the `unknown`
-   * receipts `deliveryOutcome` below reads: an unknown delivery has no link and
-   * cannot have one — the worker writes `external_url = null` on every one of
-   * them, because the answer that would have carried the id never arrived. That
-   * absence IS the outcome, and the screens say where the post may have gone by
-   * naming the CHANNEL, which they know without asking this subquery.
+   * Scoped to `published` and deliberately NOT widened to `unknown` receipts.
+   * A generic unknown has no confirmed link; a partial Telegram receipt may
+   * have a confirmed photo link, which `partialTelegram` exposes separately.
    *
    * The `order by`/`limit 1` are shape, not choice, and a mutation of either is
    * an equivalent one: `publications_one_published_per_adaptation` is a unique
@@ -666,7 +663,7 @@ const ADAPTATION_COLUMNS = {
   )`,
   /**
    * WHAT HAPPENED TO THIS CHANNEL'S POST — `DeliveryOutcome`, the field the web
-   * labels a delivery from. Its seven values are documented on the union in
+   * labels a delivery from. Its values are documented on the union in
    * `@pubrick/shared`; this is where the seventh is computed.
    *
    * The adaptation column has six: `failed` is its only
@@ -675,7 +672,9 @@ const ADAPTATION_COLUMNS = {
    * `failed` too. The distinction lives on the `publications` receipt the
    * worker writes per attempt, whose status is `unknown` for exactly that
    * ending (`PublishService.recordUnknownOutcome`, and `sweepAbandoned` for an
-   * attempt that died holding its in-flight claim). Rounding it back to
+   * attempt that died holding its in-flight claim). A confirmed Telegram cover
+   * adds frozen partial data to that receipt and reads as `partial`. Rounding
+   * either case back to
    * `failed` invites the re-approval that posts a SECOND copy, which is the
    * whole reason the distinction exists.
    *
@@ -704,15 +703,42 @@ const ADAPTATION_COLUMNS = {
    */
   deliveryOutcome: sql<DeliveryOutcome>`(
     case
-      when adaptations.status = 'failed' and (
-        select p.status from publications p
+      when adaptations.status = 'failed' then coalesce((
+        select case
+          when p.status = 'unknown' and p.partial_followup_text is not null then 'partial'
+          when p.status = 'unknown' then 'unknown'
+          else null
+        end
+        from publications p
         where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
         order by p.created_at desc
         limit 1
-      ) = 'unknown'
-      then 'unknown'
+      ), adaptations.status)
       else adaptations.status
     end
+  )`,
+  /** The last unresolved Telegram cover receipt, never reconstructed from log prose. */
+  partialTelegram: sql<{
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null>`(
+    select case
+      when adaptations.status = 'failed' and p.status = 'unknown'
+        and p.partial_followup_text is not null
+      then json_build_object(
+        'photoId', p.partial_photo_id,
+        'photoUrl', p.partial_photo_url,
+        'followupText', p.partial_followup_text,
+        'followupOutcome', p.partial_followup_outcome
+      )
+      else null
+    end
+    from publications p
+    where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+    order by p.created_at desc
+    limit 1
   )`,
   /**
    * WHO SAID THIS POST WAS DELIVERED, when no platform did — and WHEN they
@@ -1838,6 +1864,26 @@ export class ContentRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const pinned = pinnedItemRefusal(item.status);
     if (pinned) throw pinned;
+    // Keep the reviewed text stable while a confirmed Telegram photo is live
+    // and its reply still needs a human verdict. This also covers a channel
+    // that inherits the item body rather than storing its own override.
+    const partial = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, id),
+          eq(ADAPTATION_COLUMNS.deliveryOutcome, "partial"),
+        ),
+      )
+      .limit(1);
+    if (partial.length > 0) {
+      throw conflict(
+        "partial_telegram_unresolved",
+        "Resolve the partial Telegram post before editing its reviewed text",
+      );
+    }
     return { body: item.body, status: item.status };
   }
 
@@ -4023,7 +4069,11 @@ export class ContentRepository {
       .select({ id: schema.adaptations.id, deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome })
       .from(schema.adaptations)
       .where(and(eq(schema.adaptations.orgId, orgId), inArray(schema.adaptations.id, ids)));
-    return new Set(rows.filter((row) => row.deliveryOutcome === "unknown").map((row) => row.id));
+    return new Set(
+      rows
+        .filter((row) => row.deliveryOutcome === "unknown" || row.deliveryOutcome === "partial")
+        .map((row) => row.id),
+    );
   }
 
   /**
@@ -4918,6 +4968,7 @@ export class ContentRepository {
     adaptationId: string,
     delivered: boolean,
     userId: string,
+    partialResolution?: "completed" | "removed",
   ) {
     await db.transaction(async (tx) => {
       // `adaptations` first — the product's one lock order. One row, by primary
@@ -4945,6 +4996,7 @@ export class ContentRepository {
             status: schema.adaptations.status,
             attemptCount: schema.adaptations.attemptCount,
             deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
+            partialTelegram: ADAPTATION_COLUMNS.partialTelegram,
           })
           .from(schema.adaptations)
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
@@ -4974,10 +5026,23 @@ export class ContentRepository {
           PINNED_ADAPTATION_MESSAGE[current.status],
         );
       }
-      if (current.deliveryOutcome !== "unknown") {
+      if (current.deliveryOutcome !== "unknown" && current.deliveryOutcome !== "partial") {
         throw conflict(
           "delivery_outcome_already_known",
           "This delivery's outcome is already known, so there is nothing to say about it",
+        );
+      }
+      if (current.partialTelegram) {
+        if (partialResolution !== (delivered ? "completed" : "removed")) {
+          throw conflict(
+            "delivery_outcome_unknown",
+            "Confirm the full Telegram reply was posted, or that the partial photo was removed",
+          );
+        }
+      } else if (partialResolution !== undefined) {
+        throw conflict(
+          "delivery_outcome_already_known",
+          "This delivery has no partial Telegram post",
         );
       }
 
@@ -5006,13 +5071,11 @@ export class ContentRepository {
         adaptationId,
         channelId: current.channelId,
         status: delivered ? "published" : "failed",
-        // No id and no link, on purpose and on both verdicts: nobody has one.
-        // The answer that would have carried them never arrived, and a caller
-        // is deliberately given no way to supply one — a caller that could
-        // would be authoring the product's evidence that a platform accepted a
-        // post.
-        externalId: null,
-        externalUrl: null,
+        // A partial Telegram receipt already has the platform-confirmed photo
+        // id and URL. The person attests completion of its tail, not its photo.
+        // Generic unknown outcomes still have no id or link.
+        externalId: delivered ? (current.partialTelegram?.photoId ?? null) : null,
+        externalUrl: delivered ? (current.partialTelegram?.photoUrl ?? null) : null,
         error: null,
         attempt: current.attemptCount,
         // WHO, AND WHEN — and the two are written together because only the

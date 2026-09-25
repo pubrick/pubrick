@@ -64,6 +64,7 @@ export const DELIVERY_BADGE_STATUS: Record<DeliveryOutcome, StatusBadgeStatus> =
   published: "published",
   failed: "failed",
   unknown: "review",
+  partial: "review",
 };
 
 /**

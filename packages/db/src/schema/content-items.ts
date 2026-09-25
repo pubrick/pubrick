@@ -4,6 +4,7 @@ import {
   CONTENT_STATUSES,
   PUBLICATION_STATUSES,
   PUBLISH_FAILURE_REASONS,
+  TELEGRAM_FOLLOWUP_OUTCOMES,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -434,6 +435,13 @@ export const publications = pgTable(
     externalId: text("external_id"),
     externalUrl: text("external_url"),
     error: text("error"),
+    /** Frozen evidence after Telegram accepted a cover before its reply was confirmed. */
+    partialPhotoId: text("partial_photo_id"),
+    partialPhotoUrl: text("partial_photo_url"),
+    partialFollowupText: text("partial_followup_text"),
+    partialFollowupOutcome: text("partial_followup_outcome", {
+      enum: TELEGRAM_FOLLOWUP_OUTCOMES,
+    }),
     /**
      * WHO SAID SO, when no platform did.
      *
@@ -558,5 +566,18 @@ export const publications = pgTable(
      * nothing, and lets a redelivered attempt send again.
      */
     enumCheck("publications_status_check", t.status, PUBLICATION_STATUSES),
+    enumCheck(
+      "publications_partial_followup_outcome_check",
+      t.partialFollowupOutcome,
+      TELEGRAM_FOLLOWUP_OUTCOMES,
+    ),
+    check(
+      "publications_partial_telegram_check",
+      sql`(${t.partialFollowupText} is null and ${t.partialPhotoId} is null and ${t.partialPhotoUrl} is null and ${t.partialFollowupOutcome} is null)
+        or (${t.status} in ('in_flight', 'unknown') and ${t.partialFollowupText} is not null
+          and length(${t.partialFollowupText}) between 1 and 4096
+          and ${t.partialFollowupOutcome} is not null
+          and ${t.partialFollowupOutcome} in ('pending', 'not_sent', 'rejected', 'unknown'))`,
+    ),
   ],
 );

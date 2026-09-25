@@ -53,6 +53,12 @@ type Adaptation = {
   cta: string | null;
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
+  partialTelegram?: {
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -2345,6 +2351,70 @@ describe("settling a delivery nobody can speak for", () => {
       adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
     });
   }
+
+  it.each([
+    ["partialTelegramConfirmComplete", true, "completed"],
+    ["partialTelegramConfirmRemoved", false, "removed"],
+  ] as const)(
+    "shows the accepted cover and frozen reply before %s",
+    async (label, delivered, partialResolution) => {
+      const calls: Call[] = [];
+      const served = {
+        current: makeItem({
+          status: "failed",
+          adaptations: [
+            makeAdaptation({
+              status: "failed",
+              deliveryOutcome: "partial",
+              partialTelegram: {
+                photoId: "4711",
+                photoUrl: "https://t.me/mychannel/4711",
+                followupText: "Frozen missing reply",
+                followupOutcome: "unknown",
+              },
+            }),
+          ],
+        }),
+      };
+      installBaseHandlers(served, calls, (path, method) => {
+        if (path === "/api/content/c1/adaptations/a1/delivery" && method === "POST") {
+          served.current = makeItem({
+            status: delivered ? "published" : "failed",
+            adaptations: [makeAdaptation({ status: delivered ? "published" : "failed" })],
+          });
+          return served.current;
+        }
+        return undefined;
+      });
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      const results = resultsList();
+      expect(
+        within(results).getByRole("link", { name: en.Publish.partialTelegramViewPhoto }),
+      ).toHaveAttribute("href", "https://t.me/mychannel/4711");
+      expect(within(results).getByText("Frozen missing reply")).toBeInTheDocument();
+      expect(within(results).getByText(en.Publish.partialTelegramVerifyReply)).toBeInTheDocument();
+      const copy = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: copy },
+      });
+      await user.click(
+        within(results).getByRole("button", { name: en.Publish.partialTelegramCopyText }),
+      );
+      expect(copy).toHaveBeenCalledWith("Frozen missing reply");
+      expect(within(results).queryByRole("button", { name: en.Publish.markDelivered })).toBeNull();
+      expect(
+        within(results).queryByRole("button", { name: en.Publish.markNotDelivered }),
+      ).toBeNull();
+      await user.click(within(results).getByRole("button", { name: en.Publish[label] }));
+      const call = calls.find((entry) => entry.path === "/api/content/c1/adaptations/a1/delivery");
+      const body = { delivered, partialResolution };
+      expect(call?.body).toBe(JSON.stringify(body));
+      expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(body);
+    },
+  );
 
   it("offers both verdicts, and says what pressing one asserts", async () => {
     installBaseHandlers({ current: unknownRow() }, []);

@@ -407,7 +407,14 @@ export class ContentController {
     @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
     @Body(new ZodValidationPipe(deliveryAssertionSchema)) body: DeliveryAssertion,
   ) {
-    return this.content.assertDelivery(orgId, id, adaptationId, body.delivered, userId);
+    return this.content.assertDelivery(
+      orgId,
+      id,
+      adaptationId,
+      body.delivered,
+      userId,
+      body.partialResolution,
+    );
   }
 
   @Post(":id/adaptations/:adaptationId/manual-publication")

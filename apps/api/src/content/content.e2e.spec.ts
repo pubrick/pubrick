@@ -7896,6 +7896,20 @@ describe.skipIf(!url)("content e2e", () => {
       await pool.end();
     }
 
+    async function seedPartialTelegram(adaptationId: string) {
+      await seedDelivery(adaptationId, "unknown");
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE publications SET partial_photo_id = '4711',
+           partial_photo_url = 'https://t.me/mychannel/4711',
+           partial_followup_text = 'Frozen missing reply',
+           partial_followup_outcome = 'rejected'
+         WHERE adaptation_id = '${adaptationId}' AND status = 'unknown'`,
+      );
+      await pool.end();
+    }
+
     /** The receipts of one adaptation, oldest first — what was actually filed. */
     async function receipts(adaptationId: string) {
       const { createDb } = await import("@pubrick/db");
@@ -7971,6 +7985,70 @@ describe.skipIf(!url)("content e2e", () => {
         channelId,
       };
     }
+
+    it.each([
+      [true, "completed", "published"],
+      [false, "removed", "failed"],
+    ] as const)(
+      "requires explicit %s recovery for a Telegram partial delivery",
+      async (delivered, partialResolution, expectedStatus) => {
+        const agent = await orgAgent();
+        const { itemId, adaptationId } = await oneChannel(agent);
+        await seedPartialTelegram(adaptationId);
+
+        const detail = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(detail.body.adaptations[0].partialTelegram).toEqual({
+          photoId: "4711",
+          photoUrl: "https://t.me/mychannel/4711",
+          followupText: "Frozen missing reply",
+          followupOutcome: "rejected",
+        });
+        expect(detail.body.adaptations[0].deliveryOutcome).toBe("partial");
+        const frozenItem = await agent
+          .patch(`/api/content/${itemId}`)
+          .send({ body: "Changed after the photo went live" })
+          .expect(409);
+        expect(frozenItem.body.code).toBe("partial_telegram_unresolved");
+        const frozenChannel = await agent
+          .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+          .send({ body: "Changed after the photo went live" })
+          .expect(409);
+        expect(frozenChannel.body.code).toBe("partial_telegram_unresolved");
+        const premature = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(premature.body.code).toBe("delivery_outcome_unknown");
+        expect(await publishJobCount(adaptationId)).toBe(0);
+
+        await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered })
+          .expect(409);
+        await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered, partialResolution: delivered ? "removed" : "completed" })
+          .expect(409);
+
+        const settled = await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered, partialResolution })
+          .expect(200);
+        expect(settled.body.adaptations[0].status).toBe(expectedStatus);
+        expect(settled.body.adaptations[0].partialTelegram).toBeNull();
+        expect(settled.body.adaptations[0].externalUrl).toBe(
+          delivered ? "https://t.me/mychannel/4711" : null,
+        );
+        expect((await receipts(adaptationId)).map((receipt) => receipt.status)).toEqual([
+          "unknown",
+          expectedStatus,
+        ]);
+        if (delivered) {
+          await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+          expect(await publishJobCount(adaptationId)).toBe(0);
+        } else {
+          await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+          expect(await publishJobCount(adaptationId)).toBe(1);
+        }
+      },
+    );
 
     /**
      * THE SKIP IS PER ROW, and this is the test that says so.
