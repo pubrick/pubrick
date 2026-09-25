@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { previewRoleTemplate, RoleTemplateError } from "@pubrick/ai";
+import {
+  builtInRoleTemplateSource,
+  previewRoleTemplate,
+  previewRoleTemplateInstruction,
+  RoleTemplateError,
+} from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   PROMPT_ROLES,
@@ -37,7 +42,9 @@ function revisionDto(row: {
 
 function validatedPreview(role: PromptRole, source: string) {
   try {
-    return previewRoleTemplate(role, source);
+    const rendered = previewRoleTemplate(role, source);
+    const { instructionBytes } = previewRoleTemplateInstruction(role, source);
+    return { rendered, instructionBytes };
   } catch (error) {
     if (error instanceof RoleTemplateError) {
       const location = error.position === undefined ? "" : ` at position ${error.position}`;
@@ -57,7 +64,7 @@ function headDto(
     activeRevisionId: head?.activeRevisionId ?? null,
     activeVersion,
     generation: head?.generation ?? 0,
-    builtInSource: null,
+    builtInSource: builtInRoleTemplateSource(role),
   };
 }
 
@@ -130,13 +137,13 @@ export class RoleTemplatesRepository {
   }
 
   preview(_orgId: string, role: PromptRole, source: string): RoleTemplatePreviewDto {
-    const rendered = validatedPreview(role, source);
+    const { rendered, instructionBytes } = validatedPreview(role, source);
     return {
       source: rendered.source,
       renderedBody: rendered.text,
       variables: rendered.variables,
       renderedBodyBytes: Buffer.byteLength(rendered.text, "utf8"),
-      sampleInstructionBytes: null,
+      sampleInstructionBytes: instructionBytes,
     };
   }
 
@@ -146,7 +153,7 @@ export class RoleTemplatesRepository {
     source: string,
     userId: string,
   ): Promise<RoleTemplateRevisionDto> {
-    const validated = validatedPreview(role, source);
+    const { rendered: validated } = validatedPreview(role, source);
     const sourceSha256 = createHash("sha256").update(validated.source).digest("hex");
     return db.transaction(async (tx) => {
       // This lock serializes version allocation with activation and first claim.

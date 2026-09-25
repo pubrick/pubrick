@@ -29,8 +29,7 @@ export const roleTemplateHeadDtoSchema = z.object({
   activeRevisionId: z.string().uuid().nullable(),
   activeVersion: z.number().int().positive().nullable(),
   generation: z.number().int().nonnegative(),
-  /** Built-in source is unavailable until the default-body manifest is extracted. */
-  builtInSource: z.string().nullable(),
+  builtInSource: z.string(),
 });
 export type RoleTemplateHeadDto = z.infer<typeof roleTemplateHeadDtoSchema>;
 
@@ -45,7 +44,6 @@ export const roleTemplatePreviewDtoSchema = z.object({
   renderedBody: z.string(),
   variables: z.array(z.string()),
   renderedBodyBytes: z.number().int().nonnegative(),
-  /** Filled when the code-owned full-instruction composer is available. */
-  sampleInstructionBytes: z.number().int().nonnegative().nullable(),
+  sampleInstructionBytes: z.number().int().nonnegative(),
 });
 export type RoleTemplatePreviewDto = z.infer<typeof roleTemplatePreviewDtoSchema>;

@@ -82,6 +82,7 @@ describe.skipIf(!url)("role template manager API", () => {
         role: "writer",
         activeRevisionId: null,
         generation: 0,
+        builtInSource: expect.stringContaining("You write the master draft"),
       }),
     );
     const source = "Use {{content_language}}. Write for {{content_type}}.";
@@ -93,7 +94,9 @@ describe.skipIf(!url)("role template manager API", () => {
       source,
       renderedBody: "Use en. Write for social_post.",
       variables: ["content_language", "content_type"],
+      sampleInstructionBytes: expect.any(Number),
     });
+    expect(preview.body.sampleInstructionBytes).toBeGreaterThan(preview.body.renderedBodyBytes);
     expect(
       (await owner.agent.get("/api/prompts/writer/templates/revisions").expect(200)).body.rows,
     ).toEqual([]);
