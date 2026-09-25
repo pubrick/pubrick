@@ -338,6 +338,30 @@ Migrations apply on boot; back up the `pgdata` and `media` volumes before major
 upgrades. Keep them together: post cover references live in Postgres and image
 bytes live in `media` (see [Media library](media-library.md)).
 
+### Enable role-template activation after the worker upgrade
+
+The role-template editor can save and preview drafts immediately after the
+upgrade. Activating a revision is held behind a database gate so an older worker
+cannot start a generation run with instructions that it cannot pin. For a
+single-host Compose install, finish `docker compose up -d --build`, confirm the
+old worker container has stopped and the new worker is running, then enable the
+gate once in PostgreSQL:
+
+```sql
+UPDATE role_template_activation_gate
+SET release_epoch = release_epoch + 1, activation_enabled = true,
+    updated_at = now()
+WHERE id = 1 AND activation_enabled = false;
+```
+
+On a multi-host installation, first drain every older worker and confirm the
+new worker build supports complete role snapshots before running that statement.
+Already-started generation runs retain their built-in instruction baseline;
+newly claimed runs use the active template revisions. If an old worker is still
+handling generation jobs, leave the gate closed. See
+[Versioned role templates](specs/0003-versioned-role-templates.md) for the
+snapshot and activation contract.
+
 The topic format upgrade (migration 0081) adds three `NOT VALID` checks for
 topic formats and editorial SEO keywords. They reject invalid new writes as
 soon as the upgrade commits. Existing rows receive safe defaults, so the
