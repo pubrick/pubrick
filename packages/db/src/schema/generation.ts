@@ -196,6 +196,8 @@ export const usageLedger = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    /** Set on new paid reply calls; legacy unattributed spend remains null. */
+    brandId: uuid("brand_id"),
     /**
      * Null for calls made outside a run (the editor's refine verbs). `set null`
      * on delete, never cascade: the money was spent whatever happened to the run,
@@ -256,6 +258,7 @@ export const usageLedger = pgTable(
       .on(t.analysisAdmissionId)
       .where(sql`${t.analysisAdmissionId} is not null`),
     index("usage_ledger_org_id_idx").on(t.orgId),
+    index("usage_ledger_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     // Brand history reads the newest org calls before checking live brand links.
     // Match ORDER BY created_at DESC, id DESC (PostgreSQL defaults to NULLS
     // FIRST for DESC, even though both columns are non-nullable).

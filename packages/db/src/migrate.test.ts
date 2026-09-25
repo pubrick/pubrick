@@ -114,6 +114,7 @@ const ZONED_COLUMNS = [
   "autopilot_scan_events.finished_at",
   "autopilot_scan_events.started_at",
   "brand_feeds.created_at",
+  "brand_paid_reply_settings.updated_at",
   "brands.created_at",
   "brands.updated_at",
   "calendar_slots.created_at",
@@ -173,6 +174,14 @@ const ZONED_COLUMNS = [
   "notification_settings.updated_at",
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
+  "organization_paid_reply_settings.updated_at",
+  "paid_reply_analysis_attempts.completed_at",
+  "paid_reply_analysis_attempts.created_at",
+  "paid_reply_analysis_attempts.day_end_utc",
+  "paid_reply_analysis_attempts.day_start_utc",
+  "paid_reply_analysis_attempts.dispatch_started_at",
+  "paid_reply_analysis_handoffs.created_at",
+  "paid_reply_analysis_handoffs.updated_at",
   "prompt_decision_revisions.decided_at",
   "prompt_decisions.created_at",
   "prompt_revisions.created_at",
@@ -846,6 +855,147 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("backfills saved reply versions and consumes an old manual admission without opting in", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0092_bent_arclight");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId: string;
+      let admittedItem: string;
+      let untouchedItem: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('paid_old', 'Paid old', 'paid-old')",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('paid_old', 'Brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const sourceId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_sources (org_id, brand_id, name, url) VALUES ('paid_old', $1, 'Feed', 'https://example.com/feed') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        const insertItem = async (title: string) =>
+          (
+            await pool.query<{ id: string }>(
+              "INSERT INTO news_items (org_id, brand_id, source_id, title, url, comments_status, comments_checked_at) VALUES ('paid_old', $1, $2, $3, $4, 'available', now()) RETURNING id",
+              [brandId, sourceId, title, `https://example.com/${title}`],
+            )
+          ).rows[0]?.id as string;
+        admittedItem = await insertItem("admitted");
+        untouchedItem = await insertItem("untouched");
+        for (const itemId of [admittedItem, untouchedItem]) {
+          await pool.query(
+            "INSERT INTO news_comments (org_id, brand_id, item_id, telegram_message_id, body, published_at) VALUES ('paid_old', $1, $2, 1, 'Saved reply', now())",
+            [brandId, itemId],
+          );
+        }
+        await pool.query(
+          "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('paid_old', 'source_comment', $1, now(), now() + interval '2 minutes')",
+          [admittedItem],
+        );
+        await pool.query(
+          "UPDATE news_items SET comments_status = 'error', comments_error_code = 'provider_unavailable' WHERE id = $1",
+          [admittedItem],
+        );
+        await pool.query(
+          "INSERT INTO news_comment_analyses (item_id, org_id, brand_id, sample_checked_at, result, sample_size) VALUES ($1, 'paid_old', $2, now() - interval '1 day', '{}'::jsonb, 1)",
+          [admittedItem, brandId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const settings = await after.query<{
+          source_enabled: boolean;
+          publication_enabled: boolean;
+          timezone: string;
+        }>(
+          "SELECT b.source_enabled, b.publication_enabled, o.timezone FROM brand_paid_reply_settings b JOIN organization_paid_reply_settings o USING (org_id) WHERE b.brand_id = $1",
+          [brandId],
+        );
+        expect(settings.rows).toEqual([
+          { source_enabled: false, publication_enabled: false, timezone: "UTC" },
+        ]);
+        const rows = await after.query<{
+          id: string;
+          comments_sample_version: string;
+          origin: string | null;
+          status: string | null;
+        }>(
+          "SELECT i.id, i.comments_sample_version, a.origin, a.status FROM news_items i LEFT JOIN paid_reply_analysis_attempts a ON a.target_id = i.id WHERE i.id IN ($1, $2) ORDER BY i.id",
+          [admittedItem, untouchedItem],
+        );
+        expect(rows.rows).toHaveLength(2);
+        expect(rows.rows.every((row) => typeof row.comments_sample_version === "string")).toBe(
+          true,
+        );
+        expect(rows.rows.find((row) => row.id === admittedItem)).toMatchObject({
+          origin: "legacy",
+          status: "legacy_consumed",
+        });
+        expect(
+          (
+            await after.query<{ sample_version: string }>(
+              "SELECT sample_version FROM news_comment_analyses WHERE item_id = $1",
+              [admittedItem],
+            )
+          ).rows[0]?.sample_version,
+        ).toBe(rows.rows.find((row) => row.id === admittedItem)?.comments_sample_version);
+        expect(rows.rows.find((row) => row.id === untouchedItem)).toMatchObject({
+          origin: null,
+          status: null,
+        });
+        const consumed = rows.rows.find((row) => row.id === admittedItem);
+        expect(
+          await refusal(
+            after,
+            "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, origin, status, completed_at) VALUES ('paid_old', $1, 'source_comment', $2, $3, 'legacy', 'legacy_consumed', now())",
+            [brandId, admittedItem, consumed?.comments_sample_version],
+          ),
+        ).toBe("23505");
+        expect(
+          await refusal(
+            after,
+            "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, origin, status) VALUES ('paid_old', $1, 'source_comment', $2, gen_random_uuid(), 'manual', 'queued')",
+            [brandId, untouchedItem],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          (await after.query("SELECT id FROM paid_reply_analysis_handoffs")).rows,
+        ).toHaveLength(0);
+        expect(
+          await refusal(
+            after,
+            "UPDATE brand_paid_reply_settings SET source_revision = -1 WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await after.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('paid_new', 'Paid new', 'paid-new')",
+        );
+        expect(
+          (
+            await after.query(
+              "SELECT timezone FROM organization_paid_reply_settings WHERE org_id = 'paid_new'",
+            )
+          ).rows,
+        ).toEqual([{ timezone: "UTC" }]);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
   beforeAll(readZonelessAsUtc);
 
   it("applies migrations and enables pgvector", async () => {

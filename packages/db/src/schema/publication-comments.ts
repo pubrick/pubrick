@@ -63,6 +63,8 @@ export const publicationCommentSamples = pgTable(
     requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
     /** Last completed attempt; prior comment rows may survive a later error. */
     checkedAt: timestamp("checked_at", { withTimezone: true }),
+    /** Identity of the persisted reply rows; refresh errors keep this value. */
+    sampleVersion: uuid("sample_version"),
     errorCode: text("error_code"),
   },
   (t) => [
@@ -130,6 +132,7 @@ export const publicationCommentAnalyses = pgTable(
     orgId: text("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
     sampleCheckedAt: timestamp("sample_checked_at", { withTimezone: true }).notNull(),
+    sampleVersion: uuid("sample_version"),
     sampleSize: integer("sample_size").notNull(),
     result: jsonb("result").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

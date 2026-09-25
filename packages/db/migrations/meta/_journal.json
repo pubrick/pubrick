@@ -638,6 +638,13 @@
       "when": 1790342679892,
       "tag": "0091_advisory_editor_score",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790345979258,
+      "tag": "0092_bent_arclight",
+      "breakpoints": true
     }
   ]
 }
