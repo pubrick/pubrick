@@ -90,11 +90,16 @@ describe.skipIf(!url)("autopilot dispatch e2e", () => {
       .where(eq(schema.autopilotDispatches.topicId, topicId));
     expect(dispatch?.topicId).toBe(topicId);
     const [run] = await db
-      .select({ status: schema.pipelineRuns.status, input: schema.pipelineRuns.input })
+      .select({
+        status: schema.pipelineRuns.status,
+        topicId: schema.pipelineRuns.topicId,
+        input: schema.pipelineRuns.input,
+      })
       .from(schema.pipelineRuns)
       .where(eq(schema.pipelineRuns.id, dispatch?.runId as string));
     expect(run).toEqual({
       status: "queued",
+      topicId,
       input: {
         kind: "brief",
         text: "A useful subject\n\nFacts to review",

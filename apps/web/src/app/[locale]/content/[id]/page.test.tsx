@@ -94,6 +94,7 @@ type ContentItem = {
   aiVersionBodies: { item: string[]; adaptations: Record<string, string[]> };
   /** The run that generated this item, or null for a hand-written one. */
   runId: string | null;
+  topicId: string | null;
   linkPolicyWebsite: string | null;
   /** The one staged refine proposal, or null. The API returns the key either way. */
   refineProposal: RefineProposal | null;
@@ -158,6 +159,7 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     // the key either way, so a fixture that omitted it would be a payload the
     // API cannot produce.
     runId: null as string | null,
+    topicId: null as string | null,
     linkPolicyWebsite: null as string | null,
     // Same rule for the staged proposal: `GET /api/content/:id` always carries
     // the key, and `null` is what an item with nothing staged holds.
@@ -317,6 +319,13 @@ describe("editorial roles on content detail", () => {
     expect(await screen.findByRole("button", { name: en.Publish.restore })).toBeEnabled();
     expect(screen.getByRole("button", { name: en.Publish.delete })).toBeEnabled();
     expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+  });
+
+  it("offers a linked draft topic veto to an author", async () => {
+    roleAs("author");
+    installBaseHandlers({ current: makeItem({ topicId: "topic-1", runId: "run-1" }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.blockTopicAction })).toBeEnabled();
   });
 
   it("still offers an editor the delivery decision", async () => {
@@ -1218,6 +1227,108 @@ describe("undo approval", () => {
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     expect(
       screen.queryByRole("button", { name: en.Publish.retractApproval }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("draft source topic veto", () => {
+  it("blocks a linked topic and archives its draft only after a reason and confirmation", async () => {
+    const served = { current: makeItem({ topicId: "topic-1", runId: "run-1" }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/block-topic") {
+        served.current = { ...served.current, status: "archived", archivedFromStatus: "draft" };
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.blockTopicAction }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Publish.blockTopicTitle }));
+    expect(calls.some((call) => call.path.endsWith("/block-topic"))).toBe(false);
+    await user.click(dialog.getByRole("button", { name: en.Publish.blockTopicAction }));
+    expect(dialog.getByRole("alert")).toHaveTextContent(en.Publish.blockTopicReasonInvalid);
+    await user.type(dialog.getByLabelText(en.Publish.blockTopicReasonLabel), "Off-brand claim");
+    await user.click(dialog.getByRole("button", { name: en.Publish.blockTopicAction }));
+    await screen.findByText(en.Publish.blockTopicSuccess);
+    expect(screen.getByText(en.Publish.archivedHint)).toBeInTheDocument();
+    expect(calls.filter((call) => call.path === "/api/content/c1/block-topic")).toEqual([
+      {
+        path: "/api/content/c1/block-topic",
+        method: "POST",
+        body: JSON.stringify({ reason: "Off-brand claim" }),
+      },
+    ]);
+  });
+
+  it("shows a localized refusal when the topic link disappeared", async () => {
+    installBaseHandlers(
+      { current: makeItem({ topicId: "topic-1", runId: "run-1" }) },
+      [],
+      (path, method) => {
+        if (method === "POST" && path === "/api/content/c1/block-topic") {
+          throw new ApiError(409, "Topic is no longer linked", false, "content_topic_unlinked");
+        }
+        return undefined;
+      },
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, {
+      locale: "ru",
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: ru.Publish.blockTopicAction }));
+    const dialog = within(screen.getByRole("dialog", { name: ru.Publish.blockTopicTitle }));
+    await user.type(dialog.getByLabelText(ru.Publish.blockTopicReasonLabel), "Не подходит бренду");
+    await user.click(dialog.getByRole("button", { name: ru.Publish.blockTopicAction }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent(ru.Errors.content_topic_unlinked);
+    expect(screen.queryByText("Topic is no longer linked")).not.toBeInTheDocument();
+  });
+
+  it("does not offer a topic veto for an unlinked post", async () => {
+    const served = { current: makeItem() };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.blockTopicAction }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer a topic veto for a published post", async () => {
+    installBaseHandlers({ current: makeItem({ topicId: "topic-1", status: "published" }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.blockTopicAction }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers a safe rejected draft but hides a retained delivery history", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          topicId: "topic-1",
+          status: "rejected",
+          isSafeToDelete: true,
+        }),
+      },
+      [],
+    );
+    const view = await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.getByRole("button", { name: en.Publish.blockTopicAction })).toBeEnabled();
+    view.unmount();
+    installBaseHandlers(
+      {
+        current: makeItem({
+          topicId: "topic-1",
+          status: "rejected",
+          isSafeToDelete: false,
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.blockTopicAction }),
     ).not.toBeInTheDocument();
   });
 });

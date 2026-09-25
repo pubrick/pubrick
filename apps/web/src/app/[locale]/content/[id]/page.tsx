@@ -21,6 +21,7 @@ import {
   richBodySchema,
   stripHashtagSuffix,
   telegramPostParts,
+  topicBlockSchema,
   withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -39,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
 import { Modal } from "@/components/ui/modal";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { Textarea } from "@/components/ui/textarea";
 import { usePoll } from "@/hooks/use-poll";
 import {
   type AdaptationStatus,
@@ -174,6 +176,7 @@ type ContentItem = {
    * cannot go stale against it.
    */
   runId: string | null;
+  topicId?: string | null;
   linkPolicyWebsite: string | null;
   /**
    * The one refine proposal staged against this draft, or `null`.
@@ -313,6 +316,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [retractBusy, setRetractBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [blockTopicOpen, setBlockTopicOpen] = useState(false);
+  const [blockTopicReason, setBlockTopicReason] = useState("");
+  const [blockTopicBusy, setBlockTopicBusy] = useState(false);
+  const [blockTopicError, setBlockTopicError] = useState<string | null>(null);
+  const [blockTopicNotice, setBlockTopicNotice] = useState(false);
+  const closeBlockTopic = useCallback(() => {
+    if (!blockTopicBusy) setBlockTopicOpen(false);
+  }, [blockTopicBusy]);
   const closeDelete = useCallback(() => {
     if (!deleteBusy) setDeleteOpen(false);
   }, [deleteBusy]);
@@ -1098,6 +1109,38 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function blockSourceTopic() {
+    if (
+      !canManageDraft ||
+      !item?.topicId ||
+      !item.isSafeToDelete ||
+      !["draft", "rejected"].includes(item.status)
+    )
+      return;
+    const parsed = topicBlockSchema.safeParse({ reason: blockTopicReason });
+    if (!parsed.success) {
+      setBlockTopicError(t("blockTopicReasonInvalid"));
+      return;
+    }
+    setBlockTopicBusy(true);
+    setBlockTopicError(null);
+    try {
+      await api(`/api/content/${id}/block-topic`, {
+        method: "POST",
+        body: JSON.stringify(parsed.data),
+      });
+      setBlockTopicOpen(false);
+      setBlockTopicReason("");
+      setBlockTopicNotice(true);
+      await reload();
+    } catch (err) {
+      setBlockTopicError(errorMessage(err, t("genericError"), te));
+      await reload();
+    } finally {
+      setBlockTopicBusy(false);
+    }
+  }
+
   /**
    * WHAT THE READER FOUND WHEN THEY OPENED THE CHANNEL.
    *
@@ -1798,6 +1841,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {error}
         </p>
       )}
+      {blockTopicNotice && (
+        <p role="status" className="mb-4 text-sm text-fg-secondary">
+          {t("blockTopicSuccess")}
+        </p>
+      )}
       {/*
         A failed read says so. Without this the only visible consequence of a
         dead `GET /api/channels` is that every channel is labelled with its own
@@ -2418,6 +2466,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         both: it is the action that works here.
       */}
       {canManageDraft &&
+        item.topicId &&
+        item.isSafeToDelete &&
+        ["draft", "rejected"].includes(item.status) && (
+          <Card className="mb-6">
+            <p className="mb-3 text-sm text-fg-secondary">{t("blockTopicHint")}</p>
+            <Button variant="danger" onClick={() => setBlockTopicOpen(true)}>
+              {t("blockTopicAction")}
+            </Button>
+          </Card>
+        )}
+
+      {canManageDraft &&
         (isArchived ? (
           <Card className="mb-6">
             <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
@@ -2524,6 +2584,37 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
         </Modal>
       )}
+
+      <Modal
+        open={blockTopicOpen}
+        onClose={closeBlockTopic}
+        title={t("blockTopicTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeBlockTopic} disabled={blockTopicBusy}>
+              {t("deleteCancel")}
+            </Button>
+            <Button variant="danger" onClick={blockSourceTopic} disabled={blockTopicBusy}>
+              {t("blockTopicAction")}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-fg-secondary">{t("blockTopicBody")}</p>
+        {blockTopicError && (
+          <p role="alert" className="mb-3 text-sm text-danger">
+            {blockTopicError}
+          </p>
+        )}
+        <Textarea
+          label={t("blockTopicReasonLabel")}
+          value={blockTopicReason}
+          onChange={(event) => setBlockTopicReason(event.target.value)}
+          maxLength={500}
+          required
+          disabled={blockTopicBusy}
+        />
+      </Modal>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>

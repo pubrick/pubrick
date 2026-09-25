@@ -942,6 +942,8 @@ export const contentDetailDtoSchema = contentListItemDtoSchema
     linkPolicyWebsite: z.string().url().nullable(),
     archivedFromStatus: z.enum(CONTENT_STATUSES).nullable(),
     isSafeToDelete: z.boolean(),
+    /** Server-verified topic lineage for generated drafts; absent on old and manual items. */
+    topicId: z.string().uuid().nullable(),
   })
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;

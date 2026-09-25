@@ -52,6 +52,8 @@ import {
   NEXT_CURSOR_HEADER,
   type RefineRequest,
   refineRequestSchema,
+  type TopicBlock,
+  topicBlockSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
@@ -553,6 +555,17 @@ export class ContentController {
   @HttpCode(200)
   archive(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.archive(orgId, id);
+  }
+
+  @Post(":id/block-topic")
+  @EditorialCapability("author")
+  @HttpCode(200)
+  blockTopic(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(topicBlockSchema)) body: TopicBlock,
+  ) {
+    return this.content.blockTopicAndArchive(orgId, id, body.reason);
   }
 
   @Post(":id/restore")

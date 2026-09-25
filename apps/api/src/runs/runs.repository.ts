@@ -426,7 +426,7 @@ export class RunsRepository {
    * count taken outside would be stale by the time the insert commits, which is
    * the same reason it is taken under the advisory lock.
    */
-  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<void>) {
+  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<string>) {
     await this.resolveChannels(orgId, data);
 
     // The SAME two expressions `runCreateSchema`'s cross-field refine uses, read
@@ -449,7 +449,9 @@ export class RunsRepository {
 
     const id = await db.transaction(async (tx) => {
       await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
-      if (beforeInsert) await beforeInsert(tx);
+      // A topic id can only come from a server-side check under this same
+      // transaction. The public RunCreate body has no topicId field.
+      const topicId = beforeInsert ? await beforeInsert(tx) : null;
       // Capture a bounded, deterministic by-value snapshot under the same
       // transaction as admission and enqueue. Both sides of the join carry the
       // tenant predicate; the item supplies the brand boundary.
@@ -482,6 +484,7 @@ export class RunsRepository {
         .values({
           orgId,
           brandId: data.brandId,
+          topicId,
           // MATERIAL decides the kind: a brief is an instruction ABOUT the
           // material, not a second thing to work from, so a request carrying
           // both is a source run with `text` set. A `sourceUrl` with no material
@@ -558,7 +561,11 @@ export class RunsRepository {
    */
   async retry(orgId: string, id: string) {
     const rows = await db
-      .select({ brandId: schema.pipelineRuns.brandId, input: schema.pipelineRuns.input })
+      .select({
+        brandId: schema.pipelineRuns.brandId,
+        topicId: schema.pipelineRuns.topicId,
+        input: schema.pipelineRuns.input,
+      })
       .from(schema.pipelineRuns)
       .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, id)))
       .limit(1);
@@ -568,6 +575,7 @@ export class RunsRepository {
     if (!row) throw notFound("run_not_found", "Run not found");
 
     const stored = parseStoredInput.transform(row.input);
+    const originalTopicId = row.topicId;
     // `?? undefined` on both nullable members, and it is the same defect twice:
     // the STORED shape spells "absent" as `null` while the REQUEST spells it as
     // an omitted key, and `z.string().optional()` refuses `null` on the type
@@ -588,6 +596,27 @@ export class RunsRepository {
           : {}),
         channelIds: stored.channelIds,
       }),
+      originalTopicId
+        ? async (tx) => {
+            // Retry keeps the original input snapshot, but an editor's veto
+            // takes effect immediately: never enqueue a new run for a topic
+            // that is no longer approved.
+            const [topic] = await tx
+              .select({ status: schema.topics.status })
+              .from(schema.topics)
+              .where(
+                and(
+                  eq(schema.topics.id, originalTopicId),
+                  eq(schema.topics.orgId, orgId),
+                  eq(schema.topics.brandId, row.brandId),
+                ),
+              )
+              .for("share");
+            if (topic?.status !== "approved")
+              throw conflict("topic_not_approved", "Approve this topic before generating");
+            return originalTopicId;
+          }
+        : undefined,
     );
   }
 

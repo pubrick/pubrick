@@ -572,6 +572,7 @@ export class TopicsRepository {
             "topic_changed",
             "This topic changed after review. Refresh it before generating",
           );
+        return id;
       },
     );
   }

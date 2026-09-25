@@ -5102,6 +5102,235 @@ describe.skipIf(!url)("content e2e", () => {
     });
   });
 
+  describe("linked topic veto", () => {
+    async function linkedDraft(agent: request.Agent) {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const topic = await agent
+        .post("/api/topics")
+        .send({ brandId, title: "A topic to veto" })
+        .expect(201);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db.insert(schema.pipelineRuns).values({
+          orgId,
+          brandId,
+          topicId: topic.body.id,
+          contentItemId: itemId,
+          input: { kind: "brief", text: "Draft this topic", channelIds: [channelId] },
+          status: "succeeded",
+        });
+      } finally {
+        await pool.end();
+      }
+      return {
+        brandId,
+        topicId: topic.body.id as string,
+        itemId,
+        adaptationId: created.body.adaptations[0].id as string,
+      };
+    }
+
+    it("blocks its server-linked topic and archives the draft in one decision", async () => {
+      const owner = await orgAgent();
+      const otherOrg = await orgAgent();
+      const { brandId, topicId, itemId } = await linkedDraft(owner);
+      expect((await owner.get(`/api/content/${itemId}`).expect(200)).body.topicId).toBe(topicId);
+      await otherOrg
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "Outside scope" })
+        .expect(404);
+      await owner.post(`/api/content/${itemId}/block-topic`).send({ reason: " " }).expect(400);
+      await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "x".repeat(501) })
+        .expect(400);
+      const blocked = await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "  Outside scope  " })
+        .expect(200);
+      expect(contentDetailDtoSchema.parse(blocked.body)).toMatchObject({
+        status: "archived",
+        archivedFromStatus: "draft",
+        topicId,
+      });
+      const topic = (await owner.get(`/api/topics?brandId=${brandId}`).expect(200)).body.find(
+        (row: { id: string }) => row.id === topicId,
+      );
+      expect(topic).toMatchObject({
+        status: "archived",
+        blockReason: "Outside scope",
+        revision: 2,
+      });
+      expect(topic.blockedAt).toBeTruthy();
+      const repeat = await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "Different reason" })
+        .expect(409);
+      expect(repeat.body.code).toBe("content_topic_veto_not_draft");
+      expect(
+        (await owner.get(`/api/topics?brandId=${brandId}`).expect(200)).body.find(
+          (row: { id: string }) => row.id === topicId,
+        ),
+      ).toEqual(topic);
+    });
+
+    it("archives a rejected post after a scheduled send was canceled", async () => {
+      const owner = await orgAgent();
+      const { brandId, topicId, itemId } = await linkedDraft(owner);
+      await owner
+        .post(`/api/content/${itemId}/approve`)
+        .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+        .expect(200);
+      const rejected = await owner.post(`/api/content/${itemId}/reject`).expect(200);
+      expect(rejected.body).toMatchObject({ status: "rejected" });
+      expect(rejected.body.adaptations[0]).toMatchObject({ status: "pending", attemptCount: 1 });
+
+      const archived = await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "No longer suitable" })
+        .expect(200);
+      expect(archived.body).toMatchObject({ status: "archived", archivedFromStatus: "rejected" });
+      const topic = (await owner.get(`/api/topics?brandId=${brandId}`).expect(200)).body.find(
+        (row: { id: string }) => row.id === topicId,
+      );
+      expect(topic).toMatchObject({ status: "archived", blockReason: "No longer suitable" });
+      expect((await owner.post(`/api/content/${itemId}/restore`).expect(200)).body.status).toBe(
+        "rejected",
+      );
+    });
+
+    it.each(["failed", "unknown"] as const)(
+      "refuses a rejected post with a %s delivery receipt",
+      async (receiptStatus) => {
+        const owner = await orgAgent();
+        const linked = await linkedDraft(owner);
+        await owner.post(`/api/content/${linked.itemId}/reject`).expect(200);
+        const orgId = await orgOf(linked.itemId);
+        const { createDb, schema } = await import("@pubrick/db");
+        const { db, pool } = createDb(url as string);
+        try {
+          const [adaptation] = await db
+            .select({ channelId: schema.adaptations.channelId })
+            .from(schema.adaptations)
+            .where(eq(schema.adaptations.id, linked.adaptationId));
+          if (!adaptation) throw new Error("Expected adaptation");
+          await db.insert(schema.publications).values({
+            orgId,
+            adaptationId: linked.adaptationId,
+            channelId: adaptation.channelId,
+            status: receiptStatus,
+            error: "Previous delivery outcome",
+          });
+          const refused = await owner
+            .post(`/api/content/${linked.itemId}/block-topic`)
+            .send({ reason: "Veto" })
+            .expect(409);
+          expect(refused.body.code).toBe("content_topic_veto_has_delivery_history");
+          expect((await owner.get(`/api/content/${linked.itemId}`).expect(200)).body.status).toBe(
+            "rejected",
+          );
+          const topic = (
+            await owner.get(`/api/topics?brandId=${linked.brandId}`).expect(200)
+          ).body.find((row: { id: string }) => row.id === linked.topicId);
+          expect(topic).toMatchObject({ status: "idea", blockedAt: null });
+        } finally {
+          await pool.end();
+        }
+      },
+    );
+
+    it("refuses unlinked drafts and rolls back when delivery has begun", async () => {
+      const owner = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(owner);
+      const unlinked = await owner
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      expect(unlinked.body.topicId).toBeNull();
+      const missing = await owner
+        .post(`/api/content/${unlinked.body.id}/block-topic`)
+        .send({ reason: "Do not repeat" })
+        .expect(409);
+      expect(missing.body.code).toBe("content_topic_unlinked");
+
+      const linked = await linkedDraft(owner);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.adaptations)
+          .set({ status: "queued", attemptCount: 1 })
+          .where(eq(schema.adaptations.id, linked.adaptationId));
+        const refused = await owner
+          .post(`/api/content/${linked.itemId}/block-topic`)
+          .send({ reason: "Do not repeat" })
+          .expect(409);
+        expect(refused.body.code).toBe("content_archive_delivery_active");
+        expect((await owner.get(`/api/content/${linked.itemId}`).expect(200)).body.status).toBe(
+          "draft",
+        );
+        const topic = (
+          await owner.get(`/api/topics?brandId=${linked.brandId}`).expect(200)
+        ).body.find((row: { id: string }) => row.id === linked.topicId);
+        expect(topic).toMatchObject({
+          status: "idea",
+          blockedAt: null,
+          blockReason: null,
+          revision: 1,
+        });
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("does not reveal or mutate a topic linked across organizations", async () => {
+      const owner = await orgAgent();
+      const stranger = await orgAgent();
+      const linked = await linkedDraft(owner);
+      const strangerBrand = await stranger
+        .post("/api/brands")
+        .send({ name: "Elsewhere" })
+        .expect(201);
+      const strangerTopic = await stranger
+        .post("/api/topics")
+        .send({ brandId: strangerBrand.body.id, title: "Private topic" })
+        .expect(201);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.pipelineRuns)
+          .set({ topicId: strangerTopic.body.id })
+          .where(eq(schema.pipelineRuns.contentItemId, linked.itemId));
+        expect(
+          (await owner.get(`/api/content/${linked.itemId}`).expect(200)).body.topicId,
+        ).toBeNull();
+        const refused = await owner
+          .post(`/api/content/${linked.itemId}/block-topic`)
+          .send({ reason: "Veto" })
+          .expect(409);
+        expect(refused.body.code).toBe("content_topic_unlinked");
+        expect((await owner.get(`/api/content/${linked.itemId}`).expect(200)).body.status).toBe(
+          "draft",
+        );
+        const foreignTopic = (
+          await stranger.get(`/api/topics?brandId=${strangerBrand.body.id}`).expect(200)
+        ).body.find((row: { id: string }) => row.id === strangerTopic.body.id);
+        expect(foreignTopic).toMatchObject({ status: "idea", blockedAt: null, revision: 1 });
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
   /**
    * WHAT A QUEUE CARD IS, AND IN WHAT ORDER THE CARDS ARRIVE — the two halves
    * of design 0009's first commit that a caller can see.

@@ -1519,13 +1519,27 @@ export class ContentRepository {
   private async runFor(
     orgId: string,
     contentItemId: string,
-  ): Promise<{ id: string; input: RunInput } | null> {
+    brandId: string,
+  ): Promise<{ id: string; input: RunInput; topicId: string | null } | null> {
     const rows = await db
-      .select({ id: schema.pipelineRuns.id, input: schema.pipelineRuns.input })
+      .select({
+        id: schema.pipelineRuns.id,
+        input: schema.pipelineRuns.input,
+        topicId: schema.topics.id,
+      })
       .from(schema.pipelineRuns)
+      .leftJoin(
+        schema.topics,
+        and(
+          eq(schema.topics.id, schema.pipelineRuns.topicId),
+          eq(schema.topics.orgId, orgId),
+          eq(schema.topics.brandId, brandId),
+        ),
+      )
       .where(
         and(
           eq(schema.pipelineRuns.orgId, orgId),
+          eq(schema.pipelineRuns.brandId, brandId),
           eq(schema.pipelineRuns.contentItemId, contentItemId),
         ),
       )
@@ -1556,7 +1570,7 @@ export class ContentRepository {
     ] = await Promise.all([
       this.adaptationsFor(orgId, item.id),
       this.aiVersionRows(orgId, item.id),
-      this.runFor(orgId, item.id),
+      this.runFor(orgId, item.id, item.brandId),
       this.stagedProposal(orgId, item.id),
       this.stagedDraftRevision(orgId, item.id),
       this.stagedAdaptationProposals(orgId, item.id),
@@ -1611,6 +1625,7 @@ export class ContentRepository {
        * — the ordinary case — and for one whose run row is gone.
        */
       runId: run?.id ?? null,
+      topicId: run?.topicId ?? null,
       /**
        * What that run was asked for, so the draft can say where it came from —
        * "drafted from pasted text", with the host of the source as attribution
@@ -4955,6 +4970,158 @@ export class ContentRepository {
           "content_archive_delivery_active",
           "Stop every active delivery before archiving this content",
         );
+      }
+      await tx
+        .update(schema.contentItems)
+        .set({ status: "archived", archivedFromStatus: item.status })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    });
+    return this.get(orgId, id);
+  }
+
+  /**
+   * One editorial veto: suppress the source topic and retire its still-unsent
+   * draft together. The first run is the same deterministic lineage displayed
+   * by get(); user input never supplies a topic ID.
+   *
+   * Lock the brand before the topic, then the run, adaptations and item. Topic
+   * deletion's SET NULL foreign key can lock a run after its topic, so taking
+   * the topic first also prevents a delete/veto cycle. The run link is read
+   * without a lock first and verified again after acquiring its lock.
+   */
+  async blockTopicAndArchive(orgId: string, id: string, reason: string) {
+    await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({ brandId: schema.contentItems.brandId })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1);
+      if (!candidate) throw notFound("content_not_found", "Content item not found");
+
+      // Matches the existing topic-block path's brand lock and serializes
+      // concurrent topic planning/suggestion completion before the veto.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, candidate.brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("content_not_found", "Content item not found");
+
+      const [lineage] = await tx
+        .select({ id: schema.pipelineRuns.id, topicId: schema.pipelineRuns.topicId })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, candidate.brandId),
+            eq(schema.pipelineRuns.contentItemId, id),
+          ),
+        )
+        .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
+        .limit(1);
+      if (!lineage?.topicId) {
+        throw conflict("content_topic_unlinked", "This draft has no linked topic to block");
+      }
+
+      const [topic] = await tx
+        .select({ id: schema.topics.id, blockedAt: schema.topics.blockedAt })
+        .from(schema.topics)
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, candidate.brandId),
+            eq(schema.topics.id, lineage.topicId),
+          ),
+        )
+        .for("update");
+      if (!topic)
+        throw conflict("content_topic_unlinked", "This draft's linked topic is unavailable");
+
+      const [run] = await tx
+        .select({ topicId: schema.pipelineRuns.topicId })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.id, lineage.id),
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, candidate.brandId),
+            eq(schema.pipelineRuns.contentItemId, id),
+          ),
+        )
+        .for("update");
+      if (!run || run.topicId !== topic.id) {
+        throw conflict("content_topic_unlinked", "This draft's linked topic changed");
+      }
+
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          brandId: schema.contentItems.brandId,
+          status: schema.contentItems.status,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .for("update");
+      if (!item || item.brandId !== candidate.brandId) {
+        throw notFound("content_not_found", "Content item not found");
+      }
+      if (item.status !== "draft" && item.status !== "rejected") {
+        throw conflict(
+          "content_topic_veto_not_draft",
+          "Only an unpublished draft or rejected post can be vetoed with its topic",
+        );
+      }
+      if (adaptations.some((adaptation) => adaptation.status !== "pending")) {
+        throw conflict(
+          "content_archive_delivery_active",
+          "Stop every active delivery before blocking this post's topic",
+        );
+      }
+      // Reject increments attemptCount when it cancels a scheduled job, even
+      // before any platform call. A receipt is actual delivery history. The
+      // marker also catches a receipt orphaned by channel deletion.
+      const [receipt] = adaptations.length
+        ? await tx
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(
+              and(
+                eq(schema.publications.orgId, orgId),
+                inArray(
+                  schema.publications.adaptationId,
+                  adaptations.map((adaptation) => adaptation.id),
+                ),
+              ),
+            )
+            .limit(1)
+        : [];
+      if (receipt || !item.isSafeToDelete) {
+        throw conflict(
+          "content_topic_veto_has_delivery_history",
+          "A post with delivery history cannot be vetoed with its topic",
+        );
+      }
+
+      // Use the topic route's idempotent block semantics, including its
+      // revision and archived status. Both writes roll back on either failure.
+      if (!topic.blockedAt) {
+        await tx
+          .update(schema.topics)
+          .set({
+            blockedAt: new Date(),
+            blockReason: reason,
+            status: "archived",
+            revision: sql`${schema.topics.revision} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(schema.topics.orgId, orgId),
+              eq(schema.topics.brandId, candidate.brandId),
+              eq(schema.topics.id, topic.id),
+            ),
+          );
       }
       await tx
         .update(schema.contentItems)
