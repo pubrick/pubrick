@@ -57,3 +57,8 @@ fragment with the new title. The original AI full anchor and human publication
 gate remain in place. This action does not regenerate images, add a summary
 field, or verify factual claims. Image regeneration and claim review remain
 separate, explicitly metered editor actions.
+
+Proposals staged before title snapshots were introduced have no saved title
+anchor. A proposal for a currently titled draft is treated as stale and can
+be discarded; Pubrick does not guess what title the reviewer originally saw.
+An untitled legacy proposal can still be accepted without changing its title.
