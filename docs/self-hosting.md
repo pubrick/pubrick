@@ -102,6 +102,10 @@ change the one port entry already in this file rather than adding a second
 one.
 
 Database migrations run automatically when the api container starts.
+On an existing installation, the recent AI spend history index is prepared
+concurrently before transactional migrations. A large usage ledger can make
+startup take longer, but metering writes can continue while PostgreSQL builds
+the index. An interrupted build is retried at the next startup.
 
 ## Rotating `APP_ENCRYPTION_KEY`
 

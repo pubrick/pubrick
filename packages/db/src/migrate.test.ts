@@ -2942,4 +2942,37 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("builds the recent usage index while upgrading an existing ledger", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0082_exotic_warstar");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const missing = await pool.query(
+          "SELECT 1 FROM pg_indexes WHERE indexname = 'usage_ledger_org_recent_idx'",
+        );
+        expect(missing.rowCount).toBe(0);
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const built = await after.query<{ indisvalid: boolean; indexdef: string }>(
+          `SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) AS indexdef
+           FROM pg_index i WHERE i.indexrelid = to_regclass('public.usage_ledger_org_recent_idx')`,
+        );
+        expect(built.rows[0]?.indisvalid).toBe(true);
+        expect(built.rows[0]?.indexdef).toContain("created_at DESC");
+        expect(built.rows[0]?.indexdef).toContain("id DESC");
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
 });

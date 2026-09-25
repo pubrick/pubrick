@@ -257,8 +257,13 @@ export const usageLedger = pgTable(
       .where(sql`${t.analysisAdmissionId} is not null`),
     index("usage_ledger_org_id_idx").on(t.orgId),
     // Brand history reads the newest org calls before checking live brand links.
-    // This keeps the 50-row view from sorting the entire organization ledger.
-    index("usage_ledger_org_recent_idx").on(t.orgId, t.createdAt.desc(), t.id.desc()),
+    // Match ORDER BY created_at DESC, id DESC (PostgreSQL defaults to NULLS
+    // FIRST for DESC, even though both columns are non-nullable).
+    index("usage_ledger_org_recent_idx").on(
+      t.orgId,
+      t.createdAt.desc().nullsFirst(),
+      t.id.desc().nullsFirst(),
+    ),
     /** The finished draft shows a cost summed over one run's rows. */
     index("usage_ledger_run_id_idx").on(t.runId),
     /**
