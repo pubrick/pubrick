@@ -694,6 +694,13 @@
       "when": 1790353101648,
       "tag": "0099_claim_correction_proposals",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790353995883,
+      "tag": "0100_accepted_claim_corrections",
+      "breakpoints": true
     }
   ]
 }

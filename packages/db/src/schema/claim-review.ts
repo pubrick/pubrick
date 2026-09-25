@@ -19,6 +19,7 @@ import {
 import { organization } from "./auth.js";
 import { contentItems } from "./content-items.js";
 import { enumCheck } from "./enum-check.js";
+import { contentVersions } from "./generation.js";
 
 /** One explicit evidence review of an exact saved article body. */
 export const claimReviews = pgTable(
@@ -118,6 +119,63 @@ export const claimCorrectionProposals = pgTable(
     ),
     check(
       "claim_correction_proposals_evidence_check",
+      sql`jsonb_typeof(${t.evidence}) = 'array' AND jsonb_array_length(${t.evidence}) BETWEEN 1 AND 5`,
+    ),
+  ],
+);
+
+/** Durable evidence of an editor accepting one AI correction fragment. */
+export const acceptedClaimCorrections = pgTable(
+  "accepted_claim_corrections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    contentItemId: uuid("content_item_id")
+      .notNull()
+      .references(() => contentItems.id, { onDelete: "cascade" }),
+    reviewId: uuid("review_id")
+      .notNull()
+      .references(() => claimReviews.id, { onDelete: "cascade" }),
+    fragmentVersionId: uuid("fragment_version_id")
+      .notNull()
+      .references(() => contentVersions.id, { onDelete: "cascade" }),
+    claimIndex: integer("claim_index").notNull(),
+    sourceBodyHash: text("source_body_hash").notNull(),
+    claim: text("claim").notNull(),
+    replacement: text("replacement").notNull(),
+    reason: text("reason").notNull(),
+    evidence: jsonb("evidence").$type<ClaimReviewEvidence[]>().notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("accepted_claim_corrections_fragment_version_idx").on(t.fragmentVersionId),
+    index("accepted_claim_corrections_org_item_recent_idx").on(
+      t.orgId,
+      t.contentItemId,
+      t.acceptedAt.desc().nullsFirst(),
+      t.id.desc().nullsFirst(),
+    ),
+    check("accepted_claim_corrections_claim_index_check", sql`${t.claimIndex} >= 0`),
+    check(
+      "accepted_claim_corrections_source_hash_check",
+      sql`${t.sourceBodyHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "accepted_claim_corrections_claim_check",
+      sql`length(btrim(${t.claim})) BETWEEN 1 AND 1000`,
+    ),
+    check(
+      "accepted_claim_corrections_replacement_check",
+      sql`length(btrim(${t.replacement})) BETWEEN 1 AND 1000`,
+    ),
+    check(
+      "accepted_claim_corrections_reason_check",
+      sql`length(btrim(${t.reason})) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "accepted_claim_corrections_evidence_check",
       sql`jsonb_typeof(${t.evidence}) = 'array' AND jsonb_array_length(${t.evidence}) BETWEEN 1 AND 5`,
     ),
   ],

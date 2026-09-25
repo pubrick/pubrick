@@ -86,3 +86,26 @@ export const claimCorrectionProposalDtoSchema = z.strictObject({
   createdAt: z.iso.datetime(),
 });
 export type ClaimCorrectionProposalDto = z.infer<typeof claimCorrectionProposalDtoSchema>;
+
+/** Accepted correction survives dismissal of its staged proposal. */
+export const acceptedClaimCorrectionDtoSchema = claimCorrectionProposalDtoSchema
+  .omit({ sourceBody: true, createdAt: true })
+  .extend({
+    fragmentVersionId: z.uuid(),
+    sourceBodyHash: z.string().regex(/^[0-9a-f]{64}$/),
+    acceptedAt: z.iso.datetime(),
+  });
+export type AcceptedClaimCorrectionDto = z.infer<typeof acceptedClaimCorrectionDtoSchema>;
+
+export const acceptedClaimCorrectionListQuerySchema = z.strictObject({
+  cursor: z.uuid().optional(),
+});
+export type AcceptedClaimCorrectionListQuery = z.infer<
+  typeof acceptedClaimCorrectionListQuerySchema
+>;
+
+export const acceptedClaimCorrectionListDtoSchema = z.strictObject({
+  rows: z.array(acceptedClaimCorrectionDtoSchema),
+  nextCursor: z.uuid().nullable(),
+});
+export type AcceptedClaimCorrectionListDto = z.infer<typeof acceptedClaimCorrectionListDtoSchema>;

@@ -105,6 +105,61 @@ describe.skipIf(!url)("claim correction proposal persistence", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("preserves accepted evidence after stage deletion and a later review", async () => {
+    await insert();
+    const version = await pool.query<{ id: string }>(
+      `INSERT INTO content_versions
+       (org_id, content_item_id, body, origin, scope, unit_delta)
+       VALUES ($1, $2, 'The museum opened in 2023.', 'ai', 'fragment', 0) RETURNING id`,
+      [orgId, itemId],
+    );
+    const fragmentVersionId = version.rows[0]?.id;
+    const values = [
+      orgId,
+      itemId,
+      reviewId,
+      fragmentVersionId,
+      hash,
+      body,
+      "The museum opened in 2023.",
+      "The cited archive gives a different year.",
+      JSON.stringify(evidence),
+    ];
+    const acceptedSql = `INSERT INTO accepted_claim_corrections
+      (org_id, content_item_id, review_id, fragment_version_id, claim_index,
+       source_body_hash, claim, replacement, reason, evidence)
+      VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9) RETURNING id`;
+    await expect(pool.query(acceptedSql, [otherOrgId, ...values.slice(1)])).rejects.toMatchObject({
+      code: "23514",
+    });
+    await expect(
+      pool.query(acceptedSql, [...values.slice(0, 7), "Invented reason", values[8]]),
+    ).rejects.toMatchObject({ code: "23514" });
+    const accepted = await pool.query<{ id: string }>(acceptedSql, values);
+    const receiptId = accepted.rows[0]?.id;
+    expect(receiptId).toBeDefined();
+    await expect(pool.query(acceptedSql, values)).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      pool.query("UPDATE accepted_claim_corrections SET reason = 'Changed' WHERE id = $1", [
+        receiptId,
+      ]),
+    ).rejects.toMatchObject({ code: "23514" });
+
+    await pool.query("DELETE FROM claim_correction_proposals WHERE content_item_id = $1", [itemId]);
+    await pool.query(
+      `INSERT INTO claim_reviews (org_id, content_item_id, body_hash, status, claims, completed_at)
+       VALUES ($1, $2, $3, 'ready', '[]'::jsonb, now())`,
+      [orgId, itemId, hash],
+    );
+    const receipt = await pool.query<{ claim: string; reason: string }>(
+      "SELECT claim, reason FROM accepted_claim_corrections WHERE id = $1",
+      [receiptId],
+    );
+    expect(receipt.rows).toEqual([
+      { claim: body, reason: "The cited archive gives a different year." },
+    ]);
+  });
+
   it("stages once, rejects mutation, and cascades with its item", async () => {
     const proposal = await insert();
     const id = proposal.rows[0]?.id;
@@ -118,5 +173,10 @@ describe.skipIf(!url)("claim correction proposal persistence", () => {
       id,
     ]);
     expect(remaining.rows).toEqual([]);
+    const receipts = await pool.query(
+      "SELECT id FROM accepted_claim_corrections WHERE content_item_id = $1",
+      [itemId],
+    );
+    expect(receipts.rows).toEqual([]);
   });
 });
