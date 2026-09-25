@@ -1,5 +1,6 @@
 import {
   newsItemListQuerySchema,
+  newsRerankRequestSchema,
   newsSourceCreateSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
@@ -33,7 +34,12 @@ describe("watched sources page", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  function install(items: unknown[] = [], sources: unknown[] = [], analysis?: unknown) {
+  function install(
+    items: unknown[] = [],
+    sources: unknown[] = [],
+    analysis?: unknown,
+    rerankResults: unknown[] = [],
+  ) {
     const calls: { url: string; method: string; body: unknown }[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
@@ -41,6 +47,11 @@ describe("watched sources page", () => {
       const body = init?.body ? JSON.parse(String(init.body)) : null;
       calls.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/sources/items/rerank?"))
+        return response(
+          200,
+          rerankResults.shift() ?? { processed: 0, changed: 0, nextCursor: null },
+        );
       if (url.includes("/api/sources/items?")) return response(200, items);
       if (url.includes("/comment-analysis?"))
         return response(
@@ -98,6 +109,38 @@ describe("watched sources page", () => {
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     expect(await screen.findByText(en.Sources.aiScore.replace("{score}", "70"))).toBeVisible();
     expect(screen.getByText(en.Sources.rankScore.replace("{score}", "82"))).toBeVisible();
+  });
+
+  it("updates saved-feedback rankings in bounded pages without requesting AI scoring", async () => {
+    const cursor = { createdAt: "2026-09-23T12:00:00.000Z", id: ITEM_ID };
+    const calls = install([], [], undefined, [
+      { processed: 50, changed: 3, nextCursor: cursor },
+      { processed: 4, changed: 1, nextCursor: null },
+    ]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    expect(screen.getByText(en.Sources.rerankHint)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: en.Sources.rerank }));
+    expect(await screen.findByRole("button", { name: en.Sources.rerankContinue })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("50");
+    await user.click(screen.getByRole("button", { name: en.Sources.rerankContinue }));
+    expect(await screen.findByRole("button", { name: en.Sources.rerank })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("4");
+    const requests = calls.filter((call) => call.url.includes("/api/sources/items/rerank?"));
+    expect(requests).toEqual([
+      { url: expect.stringContaining(`brandId=${BRAND_ID}`), method: "POST", body: { days: 30 } },
+      {
+        url: expect.stringContaining(`brandId=${BRAND_ID}`),
+        method: "POST",
+        body: { days: 30, cursor },
+      },
+    ]);
+    for (const request of requests) {
+      expect(newsRerankRequestSchema.parse(request.body)).toEqual(request.body);
+    }
+    expect(
+      calls.some((call) => call.url.includes("/score?") || call.url.includes("/api/usage")),
+    ).toBe(false);
   });
 
   it("adds a brand-scoped feed from the header form", async () => {
@@ -276,10 +319,14 @@ describe("watched sources page", () => {
       publishedAt: null,
       createdAt: "2026-09-23T12:00:00.000Z",
     };
-    const calls = install([item]);
+    const calls = install([item], [], undefined, [
+      { processed: 50, changed: 2, nextCursor: { createdAt: item.createdAt, id: ITEM_ID } },
+    ]);
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     await waitFor(() => expect(document.body.textContent).toContain(item.title));
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.rerank }));
+    expect(await screen.findByRole("button", { name: en.Sources.rerankContinue })).toBeVisible();
     await user.click(screen.getByRole("button", { name: en.Sources.more }));
     await user.click(screen.getByRole("menuitem", { name: en.Sources.saveTopic }));
     await waitFor(() =>
@@ -298,6 +345,8 @@ describe("watched sources page", () => {
         body: { signal: "relevant" },
       }),
     );
+    expect(screen.getByRole("status")).toHaveTextContent(en.Sources.feedbackSaved);
+    expect(screen.getByRole("button", { name: en.Sources.rerank })).toBeVisible();
   });
 
   it("requests ranked articles and queues an unscored item without changing editor feedback", async () => {
