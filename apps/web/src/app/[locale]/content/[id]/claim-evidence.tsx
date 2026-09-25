@@ -1,6 +1,11 @@
 "use client";
 
-import { type ClaimReviewDto, claimReviewStartSchema } from "@pubrick/shared";
+import {
+  type ClaimCorrectionProposalDto,
+  type ClaimReviewDto,
+  claimCorrectionRequestSchema,
+  claimReviewStartSchema,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, api, errorMessage } from "@/lib/api";
+import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 import { isHttpUrl } from "@/lib/external-url";
 
 type Props = {
@@ -16,19 +21,40 @@ type Props = {
   savedBody: string;
   draftBody: string;
   editable: boolean;
+  unsavedFormatting?: boolean;
+  onAccepted?: (body: string) => Promise<void>;
 };
 
-export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props) {
+export function ClaimEvidence({
+  itemId,
+  savedBody,
+  draftBody,
+  editable,
+  unsavedFormatting = false,
+  onAccepted,
+}: Props) {
   const t = useTranslations("ClaimEvidence");
   const te = useTranslations("Errors");
   const locale = useLocale();
   const [review, setReview] = useState<ClaimReviewDto | null | undefined>(undefined);
+  const [proposal, setProposal] = useState<ClaimCorrectionProposalDto | null | undefined>(
+    undefined,
+  );
   const [busy, setBusy] = useState(false);
+  const [correctionBusy, setCorrectionBusy] = useState<"propose" | "accept" | "discard" | null>(
+    null,
+  );
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
   const [missingKey, setMissingKey] = useState<"search" | "ai" | null>(null);
   const loadGeneration = useRef(0);
+  const proposalGeneration = useRef(0);
+  const proposalHeading = useRef<HTMLHeadingElement>(null);
+  const focusProposal = useRef(false);
   const endpoint = `/api/content/${itemId}/claim-review`;
-  const hasUnsavedText = draftBody !== savedBody;
+  const correctionEndpoint = `/api/content/${itemId}/claim-correction`;
+  const hasUnsavedText = draftBody !== savedBody || unsavedFormatting;
 
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
@@ -43,13 +69,34 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
     }
   }, [endpoint, t, te]);
 
+  const loadProposal = useCallback(async () => {
+    const generation = ++proposalGeneration.current;
+    try {
+      const result = await api<ClaimCorrectionProposalDto | null>(correctionEndpoint);
+      if (generation !== proposalGeneration.current) return;
+      setProposal(result);
+      setProposalError(null);
+    } catch (err) {
+      if (generation !== proposalGeneration.current) return;
+      setProposalError(errorMessage(err, t("proposalError"), te));
+    }
+  }, [correctionEndpoint, t, te]);
+
   // The server computes staleness against the persisted body, so saving an edit
   // must refresh even if the endpoint and load callback have not changed.
   // biome-ignore lint/correctness/useExhaustiveDependencies: savedBody is a deliberate refresh trigger.
   useEffect(() => {
     setReview(undefined);
+    setProposal(undefined);
     void load();
-  }, [load, savedBody]);
+    void loadProposal();
+  }, [load, loadProposal, savedBody]);
+
+  useEffect(() => {
+    if (!proposal || !focusProposal.current) return;
+    focusProposal.current = false;
+    proposalHeading.current?.focus();
+  }, [proposal]);
 
   useEffect(() => {
     if (review?.status !== "queued" && review?.status !== "running") return;
@@ -69,6 +116,7 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
       // A saved edit may have completed while POST was in flight. Re-read the
       // current article's review instead of trusting the old POST snapshot.
       await load();
+      await loadProposal();
     } catch (err) {
       if (err instanceof ApiError && err.code === "claim_review_no_search_key") {
         setError(t("missingSearchKey"));
@@ -84,8 +132,192 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
     }
   }
 
+  async function propose(claimIndex: number) {
+    if (
+      correctionBusy ||
+      !editable ||
+      hasUnsavedText ||
+      review?.status !== "ready" ||
+      review.stale ||
+      (proposal !== null &&
+        (proposal === undefined ||
+          proposalStale ||
+          proposal.reviewId !== review.id ||
+          proposal.claimIndex !== claimIndex))
+    )
+      return;
+    const claim = review.claims[claimIndex];
+    if (
+      claim?.outcome !== "evidence_conflicts" ||
+      !claim.evidence.some((source) => isHttpUrl(source.url))
+    )
+      return;
+    setCorrectionBusy("propose");
+    setProposalError(null);
+    setNotice(null);
+    proposalGeneration.current += 1;
+    try {
+      const request = claimCorrectionRequestSchema.parse({
+        expectedBody: savedBody,
+        reviewId: review.id,
+        claimIndex,
+      });
+      const next = await api<ClaimCorrectionProposalDto>(correctionEndpoint, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      setProposal(next);
+      setNotice(t("proposalReady"));
+      focusProposal.current = true;
+    } catch (err) {
+      setProposalError(errorMessage(err, t("proposalError"), te));
+    } finally {
+      setCorrectionBusy(null);
+    }
+  }
+
+  async function accept() {
+    if (!proposal || correctionBusy || !editable || hasUnsavedText || proposalStale) return;
+    setCorrectionBusy("accept");
+    setProposalError(null);
+    setNotice(null);
+    proposalGeneration.current += 1;
+    try {
+      const updated = await api<{ body: string }>(`${correctionEndpoint}/${proposal.id}/accept`, {
+        method: "POST",
+      });
+      setProposal(null);
+      setNotice(t("accepted"));
+      await onAccepted?.(updated.body);
+      await load();
+    } catch (err) {
+      setProposalError(errorMessage(err, t("proposalError"), te));
+    } finally {
+      setCorrectionBusy(null);
+    }
+  }
+
+  async function discard() {
+    if (!proposal || correctionBusy) return;
+    setCorrectionBusy("discard");
+    setProposalError(null);
+    setNotice(null);
+    proposalGeneration.current += 1;
+    try {
+      await apiVoid(`${correctionEndpoint}/${proposal.id}`, { method: "DELETE" });
+      setProposal(null);
+      setNotice(t("discarded"));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "claim_correction_not_found") {
+        setProposal(null);
+        setNotice(t("discarded"));
+      } else {
+        setProposalError(errorMessage(err, t("proposalError"), te));
+      }
+    } finally {
+      setCorrectionBusy(null);
+    }
+  }
+
   const stale = review?.stale || hasUnsavedText;
   const active = !stale && (review?.status === "queued" || review?.status === "running");
+  const proposalClaim =
+    proposal && review?.status === "ready" && review.id === proposal.reviewId
+      ? review.claims[proposal.claimIndex]
+      : null;
+  const proposalStale =
+    proposal !== null &&
+    proposal !== undefined &&
+    (proposal.sourceBody !== savedBody ||
+      review?.status !== "ready" ||
+      review.stale ||
+      proposalClaim?.outcome !== "evidence_conflicts" ||
+      proposalClaim?.claim !== proposal.claim);
+
+  function proposalView() {
+    if (!proposal) return null;
+    return (
+      <section
+        className="mt-3 rounded-control border border-border-soft p-4"
+        aria-label={t("proposalTitle")}
+      >
+        <h3
+          ref={proposalHeading}
+          tabIndex={-1}
+          className="text-sm font-semibold text-fg focus:outline-none"
+        >
+          {t("proposalTitle")}
+        </h3>
+        <p className="mt-1 text-sm text-fg-secondary">{t("proposalHint")}</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div>
+            <h4 className="text-sm font-medium text-fg">{t("before")}</h4>
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg-secondary">
+              {proposal.claim}
+            </p>
+          </div>
+          <div>
+            <h4 className="text-sm font-medium text-fg">{t("after")}</h4>
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg">
+              {proposal.replacement}
+            </p>
+          </div>
+        </div>
+        <p className="mt-3 text-sm text-fg-secondary">{proposal.reason}</p>
+        {proposal.evidence.length > 0 && (
+          <div className="mt-3">
+            <p className="text-sm font-medium text-fg">{t("sourceResults")}</p>
+            <ul className="mt-2 space-y-2">
+              {proposal.evidence.map((source) =>
+                isHttpUrl(source.url) ? (
+                  <li key={`${source.url}:${source.snippet}`} className="text-sm">
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent underline"
+                    >
+                      {source.title || source.url}
+                    </a>
+                    <p className="mt-1 text-fg-secondary">{source.snippet}</p>
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          </div>
+        )}
+        {proposalStale && <p className="mt-3 text-sm text-danger">{t("proposalStale")}</p>}
+        {hasUnsavedText && <p className="mt-3 text-sm text-fg-secondary">{t("saveFirst")}</p>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!!correctionBusy || !editable || hasUnsavedText || proposalStale}
+            onClick={() => void accept()}
+          >
+            {t("accept")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!!correctionBusy || !editable || hasUnsavedText || proposalStale}
+            onClick={() => void propose(proposal.claimIndex)}
+          >
+            {correctionBusy === "propose" ? t("proposing") : t("tryAgain")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!!correctionBusy}
+            onClick={() => void discard()}
+          >
+            {t("discard")}
+          </Button>
+        </div>
+        <p className="mt-2 text-sm text-fg-tertiary">{t("proposalCostHint")}</p>
+      </section>
+    );
+  }
 
   return (
     <Card className="mb-6">
@@ -165,7 +397,7 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
             <p className="text-sm text-fg-secondary">{t("noClaims")}</p>
           )}
           {review.status === "ready" &&
-            review.claims.map((claim) => (
+            review.claims.map((claim, claimIndex) => (
               <div key={claim.claim} className="border-t border-border pt-3">
                 <p className="text-sm font-medium text-fg">{claim.claim}</p>
                 <p className="mt-1 text-sm text-fg-secondary">{t(`outcome.${claim.outcome}`)}</p>
@@ -189,8 +421,63 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
                     })}
                   </ul>
                 )}
+                {claim.outcome === "evidence_conflicts" &&
+                  claim.evidence.some((source) => isHttpUrl(source.url)) &&
+                  proposal === null &&
+                  editable &&
+                  !review.stale && (
+                    <div className="mt-3">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={hasUnsavedText || correctionBusy !== null}
+                        onClick={() => void propose(claimIndex)}
+                      >
+                        {correctionBusy === "propose" ? t("proposing") : t("propose")}
+                      </Button>
+                      <p className="mt-1 text-sm text-fg-tertiary">{t("proposalCostHint")}</p>
+                    </div>
+                  )}
+                {proposal?.reviewId === review.id &&
+                  proposal.claimIndex === claimIndex &&
+                  proposalView()}
               </div>
             ))}
+        </div>
+      )}
+      {proposal &&
+        review !== undefined &&
+        !(
+          review?.status === "ready" &&
+          proposal.reviewId === review.id &&
+          review.claims[proposal.claimIndex]
+        ) &&
+        proposalView()}
+      {notice && (
+        <p role="status" className="mt-3 text-sm text-fg-secondary">
+          {notice}
+        </p>
+      )}
+      {correctionBusy === "propose" && (
+        <p role="status" className="mt-3 text-sm text-fg-secondary">
+          {t("proposing")}
+        </p>
+      )}
+      {proposalError && (
+        <div className="mt-3">
+          <p role="alert" className="text-sm text-danger">
+            {proposalError}
+          </p>
+          {proposal === undefined && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-2"
+              onClick={() => void loadProposal()}
+            >
+              {t("retry")}
+            </Button>
+          )}
         </div>
       )}
     </Card>
