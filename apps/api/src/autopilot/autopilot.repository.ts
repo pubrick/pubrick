@@ -3,8 +3,10 @@ import { schema } from "@pubrick/db";
 import {
   type AutopilotConfig,
   type AutopilotManualAttempt,
+  type AutopilotScanQuery,
   autopilotDefaults,
   autopilotManualAttemptSchema,
+  autopilotScanPageSchema,
   LIVE_RUN_STATUSES,
 } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -34,6 +36,15 @@ const ATTEMPT_COLUMNS = {
   createdAt: schema.autopilotManualAttempts.createdAt,
   startedAt: schema.autopilotManualAttempts.startedAt,
   completedAt: schema.autopilotManualAttempts.completedAt,
+};
+
+const SCAN_COLUMNS = {
+  id: schema.autopilotScanEvents.id,
+  status: schema.autopilotScanEvents.status,
+  decision: schema.autopilotScanEvents.decision,
+  runId: schema.autopilotScanEvents.runId,
+  startedAt: schema.autopilotScanEvents.startedAt,
+  finishedAt: schema.autopilotScanEvents.finishedAt,
 };
 
 function attemptDto(
@@ -452,5 +463,57 @@ export class AutopilotRepository {
       )
       .limit(20);
     return rows.map(attemptDto);
+  }
+
+  /** Scheduled admission decisions; independent of manual attempts and run outcomes. */
+  async scanHistory(orgId: string, brandId: string, query: AutopilotScanQuery) {
+    await this.requireBrand(orgId, brandId);
+    let cursor: { id: string; finishedAt: Date } | undefined;
+    if (query.cursor) {
+      const [found] = await db
+        .select({
+          id: schema.autopilotScanEvents.id,
+          finishedAt: schema.autopilotScanEvents.finishedAt,
+        })
+        .from(schema.autopilotScanEvents)
+        .where(
+          and(
+            eq(schema.autopilotScanEvents.orgId, orgId),
+            eq(schema.autopilotScanEvents.brandId, brandId),
+            eq(schema.autopilotScanEvents.id, query.cursor),
+            query.status ? eq(schema.autopilotScanEvents.status, query.status) : undefined,
+          ),
+        )
+        .limit(1);
+      if (!found) throw badRequest("invalid_request", "Scheduled-check cursor is unavailable");
+      cursor = found;
+    }
+    const rows = await db
+      .select(SCAN_COLUMNS)
+      .from(schema.autopilotScanEvents)
+      .where(
+        and(
+          eq(schema.autopilotScanEvents.orgId, orgId),
+          eq(schema.autopilotScanEvents.brandId, brandId),
+          query.status ? eq(schema.autopilotScanEvents.status, query.status) : undefined,
+          cursor
+            ? sql`(${schema.autopilotScanEvents.finishedAt}, ${schema.autopilotScanEvents.id}) < (${cursor.finishedAt}, ${cursor.id}::uuid)`
+            : undefined,
+        ),
+      )
+      .orderBy(desc(schema.autopilotScanEvents.finishedAt), desc(schema.autopilotScanEvents.id))
+      .limit(query.limit + 1);
+    const page = rows.slice(0, query.limit);
+    return autopilotScanPageSchema.parse({
+      rows: page.map((row) => ({
+        id: row.id,
+        status: row.status,
+        decision: row.decision,
+        runId: row.runId,
+        startedAt: row.startedAt.toISOString(),
+        finishedAt: row.finishedAt.toISOString(),
+      })),
+      nextCursor: rows.length > query.limit ? page.at(-1)?.id : null,
+    });
   }
 }

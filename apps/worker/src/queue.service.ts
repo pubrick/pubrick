@@ -449,8 +449,8 @@ export class QueueService {
       });
       await boss.createQueue("autopilot-scan");
       await boss.schedule("autopilot-scan", "*/5 * * * *");
-      await boss.work("autopilot-scan", { batchSize: 1 }, async () => {
-        await this.autopilot?.scan(boss);
+      await boss.work("autopilot-scan", { batchSize: 1 }, async ([job]) => {
+        if (job) await this.autopilot?.scan(boss, job.id);
       });
     }
   }

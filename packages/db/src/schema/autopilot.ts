@@ -1,4 +1,8 @@
-import { AUTOPILOT_DECISIONS, AUTOPILOT_MANUAL_STATUSES } from "@pubrick/shared";
+import {
+  AUTOPILOT_DECISIONS,
+  AUTOPILOT_MANUAL_STATUSES,
+  AUTOPILOT_SCAN_STATUSES,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -117,5 +121,36 @@ export const autopilotDispatches = pgTable(
     uniqueIndex("autopilot_dispatches_topic_idx").on(t.topicId),
     uniqueIndex("autopilot_dispatches_run_idx").on(t.runId),
     index("autopilot_dispatches_brand_day_idx").on(t.orgId, t.brandId, t.localDate),
+  ],
+);
+
+/** One terminal admission decision for one enabled brand in one scheduled scan. */
+export const autopilotScanEvents = pgTable(
+  "autopilot_scan_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    scanJobId: uuid("scan_job_id").notNull(),
+    status: text("status", { enum: AUTOPILOT_SCAN_STATUSES }).notNull(),
+    decision: text("decision", { enum: AUTOPILOT_DECISIONS }).notNull(),
+    runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("autopilot_scan_events_job_brand_idx").on(t.scanJobId, t.brandId),
+    index("autopilot_scan_events_brand_finished_idx").on(t.orgId, t.brandId, t.finishedAt, t.id),
+    index("autopilot_scan_events_retention_idx").on(t.finishedAt, t.id),
+    enumCheck("autopilot_scan_events_status_check", t.status, AUTOPILOT_SCAN_STATUSES),
+    enumCheck("autopilot_scan_events_decision_check", t.decision, AUTOPILOT_DECISIONS),
+    check(
+      "autopilot_scan_events_terminal_check",
+      sql`(${t.status} = 'dispatched' AND ${t.decision} = 'dispatched' AND ${t.runId} IS NOT NULL) OR (${t.status} = 'failed' AND ${t.decision} = 'worker_failed' AND ${t.runId} IS NULL) OR (${t.status} = 'skipped' AND ${t.decision} NOT IN ('dispatched', 'worker_failed') AND ${t.runId} IS NULL)`,
+    ),
   ],
 );

@@ -80,6 +80,29 @@ export const AUTOPILOT_DECISIONS = [
   "worker_failed",
 ] as const;
 export const AUTOPILOT_MANUAL_STATUSES = ["queued", "running", "completed", "failed"] as const;
+/** A scheduled scan records admission, not the eventual generation result. */
+export const AUTOPILOT_SCAN_STATUSES = ["skipped", "dispatched", "failed"] as const;
+export const AUTOPILOT_SCAN_DECISIONS = AUTOPILOT_DECISIONS;
+export const autopilotScanQuerySchema = z.object({
+  status: z.enum(AUTOPILOT_SCAN_STATUSES).optional(),
+  cursor: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+export type AutopilotScanQuery = z.infer<typeof autopilotScanQuerySchema>;
+export const autopilotScanEventSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(AUTOPILOT_SCAN_STATUSES),
+  decision: z.enum(AUTOPILOT_SCAN_DECISIONS),
+  runId: z.uuid().nullable(),
+  startedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime(),
+});
+export type AutopilotScanEvent = z.infer<typeof autopilotScanEventSchema>;
+export const autopilotScanPageSchema = z.object({
+  rows: z.array(autopilotScanEventSchema),
+  nextCursor: z.uuid().nullable(),
+});
+export type AutopilotScanPage = z.infer<typeof autopilotScanPageSchema>;
 export const autopilotManualAttemptSchema = z.object({
   id: z.uuid(),
   status: z.enum(AUTOPILOT_MANUAL_STATUSES),

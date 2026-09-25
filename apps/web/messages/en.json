@@ -1448,6 +1448,20 @@
     "quietStart": "Quiet hours start",
     "quietEnd": "Quiet hours end",
     "quietHint": "The window may cross midnight. Set the same start and end to disable quiet hours.",
+    "scanTitle": "Scheduled checks",
+    "scanHint": "A check records the scheduler decision when it ran. A dispatched draft is still generating and may fail later. Only enabled brands are checked. Recent checks are kept for 14 days.",
+    "scanFilter": "Decision",
+    "scanFilterStatus": {
+      "all": "All",
+      "skipped": "Skipped",
+      "dispatched": "Dispatched",
+      "failed": "Failed"
+    },
+    "scanLoading": "Checking…",
+    "scanEmpty": "No scheduled checks yet.",
+    "scanLoadMore": "Load more",
+    "scanError": "Could not load scheduled checks. Try again.",
+    "scanStatus": { "skipped": "Skipped", "dispatched": "Draft queued", "failed": "Check failed" },
     "history": "Automatic runs",
     "emptyHistory": "No automatic runs yet. Approve a topic and enable scheduled generation.",
     "runLink": "Run on {date}",
@@ -1511,7 +1525,7 @@
     "emptyWaiting": "No approved undated topics await a run. Review the topic bank.",
     "openTopics": "Open topics",
     "moreWaiting": "And {count} more waiting topics.",
-    "diagnosticsLimit": "This is an observed snapshot, not a prediction of the next scheduler decision. Reasons for skipped scans are not recorded."
+    "diagnosticsLimit": "This is an observed snapshot, not a prediction of the next scheduler decision."
   },
   "Media": {
     "title": "Media library",

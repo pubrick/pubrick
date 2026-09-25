@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  AUTOPILOT_DECISIONS,
   GENERATE_QUEUE,
   LIVE_RUN_STATUSES,
   MAX_BRIEF_LENGTH,
@@ -15,19 +16,9 @@ import { db } from "../db";
 import { quietHour } from "./rules";
 
 const SCAN_LIMIT = 100;
-export type AutopilotDecision =
-  | "disabled"
-  | "before_start"
-  | "quiet_hours"
-  | "quota_full"
-  | "budget_full"
-  | "unpriced_spend"
-  | "run_in_progress"
-  | "org_busy"
-  | "channels_missing"
-  | "no_approved_topic"
-  | "invalid_brief"
-  | "dispatched";
+const RETENTION_BATCH = 500;
+export type AutopilotDecision = (typeof AUTOPILOT_DECISIONS)[number];
+type ScanContext = { jobId: string; startedAt: Date };
 
 @Injectable()
 export class AutopilotService {
@@ -83,7 +74,8 @@ export class AutopilotService {
   }
 
   /** Global discovery only; each brand is rechecked under its org's admission lock. */
-  async scan(boss: PgBoss): Promise<void> {
+  async scan(boss: PgBoss, scanJobId: string): Promise<void> {
+    await this.pruneHistory();
     let after: string | null = null;
     for (;;) {
       const configs = await db
@@ -98,11 +90,27 @@ export class AutopilotService {
         .orderBy(asc(schema.autopilotConfigs.brandId))
         .limit(SCAN_LIMIT);
       for (const config of configs) {
+        const scan: ScanContext = { jobId: scanJobId, startedAt: new Date() };
         try {
-          await this.trigger(boss, config.orgId, config.brandId);
-        } catch (error) {
-          this.logger.error(`Autopilot scan failed for brand ${config.brandId}`, error);
-          throw error;
+          await this.trigger(boss, config.orgId, config.brandId, undefined, scan);
+        } catch {
+          // Admission rolled back, including any run, dispatch and queue job.
+          // Store only a closed failure code; exception text may hold secrets.
+          await db
+            .insert(schema.autopilotScanEvents)
+            .values({
+              orgId: config.orgId,
+              brandId: config.brandId,
+              scanJobId,
+              status: "failed",
+              decision: "worker_failed",
+              startedAt: scan.startedAt,
+              finishedAt: sql`clock_timestamp()`,
+            })
+            .onConflictDoNothing({
+              target: [schema.autopilotScanEvents.scanJobId, schema.autopilotScanEvents.brandId],
+            });
+          this.logger.error(`Autopilot scan failed for brand ${config.brandId}`);
         }
       }
       if (configs.length < SCAN_LIMIT) return;
@@ -110,11 +118,26 @@ export class AutopilotService {
     }
   }
 
+  /** One indexed, bounded deletion per scan; repeated scans drain old history. */
+  async pruneHistory(): Promise<void> {
+    await db.execute(sql`
+      WITH oldest AS (
+        SELECT id FROM autopilot_scan_events
+        WHERE finished_at < clock_timestamp() - interval '14 days'
+        ORDER BY finished_at, id
+        LIMIT ${RETENTION_BATCH}
+      )
+      DELETE FROM autopilot_scan_events AS events
+      USING oldest WHERE events.id = oldest.id
+    `);
+  }
+
   async trigger(
     boss: PgBoss,
     orgId: string,
     brandId: string,
     attemptId?: string,
+    scan?: ScanContext,
   ): Promise<AutopilotDecision> {
     return db.transaction(async (tx) => {
       // The same org lock as manual and calendar generation. It serializes
@@ -122,6 +145,20 @@ export class AutopilotService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      if (scan) {
+        const [existing] = await tx
+          .select({ decision: schema.autopilotScanEvents.decision })
+          .from(schema.autopilotScanEvents)
+          .where(
+            and(
+              eq(schema.autopilotScanEvents.orgId, orgId),
+              eq(schema.autopilotScanEvents.brandId, brandId),
+              eq(schema.autopilotScanEvents.scanJobId, scan.jobId),
+            ),
+          )
+          .limit(1);
+        if (existing) return existing.decision;
+      }
       if (attemptId) {
         const [attempt] = await tx
           .select({ status: schema.autopilotManualAttempts.status })
@@ -137,7 +174,7 @@ export class AutopilotService {
         if (attempt?.status !== "running") return "disabled";
       }
       const finish = async (
-        decision: AutopilotDecision,
+        decision: Exclude<AutopilotDecision, "worker_failed">,
         runId?: string,
       ): Promise<AutopilotDecision> => {
         if (attemptId) {
@@ -159,6 +196,18 @@ export class AutopilotService {
             )
             .returning({ id: schema.autopilotManualAttempts.id });
           if (!updated[0]) throw new Error("Manual Autopilot attempt lost its worker claim");
+        }
+        if (scan) {
+          await tx.insert(schema.autopilotScanEvents).values({
+            orgId,
+            brandId,
+            scanJobId: scan.jobId,
+            status: decision === "dispatched" ? "dispatched" : "skipped",
+            decision,
+            runId: runId ?? null,
+            startedAt: scan.startedAt,
+            finishedAt: sql`clock_timestamp()`,
+          });
         }
         return decision;
       };
