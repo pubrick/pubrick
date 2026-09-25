@@ -5,7 +5,6 @@ import { encryptJson } from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { QueueService } from "../queue/queue.service";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -137,6 +136,8 @@ describe.skipIf(!url)("paid relevance recheck admission", () => {
     expect(priced.body.estimatedCostUsd).toBeGreaterThan(0);
     expect(JSON.stringify(priced.body)).not.toContain("test-secret");
     await first.agent.post(route).send({ days: 7, maxItems: 1 }).expect(409);
+    // QueueService imports env.ts; load it only after beforeAll installs DATABASE_URL.
+    const { QueueService } = await import("../queue/queue.service");
     const enqueue = vi
       .spyOn(app.get(QueueService), "enqueueRelevanceBatch")
       .mockRejectedValueOnce(new Error("queue unavailable"));
