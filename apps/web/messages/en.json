@@ -123,7 +123,7 @@
   "Sources": {
     "autoCommentsTitle": "Automatic story comments",
     "autoCommentsDescription": "Each hour, sample replies to eligible public Telegram stories. Collection uses your connected Telegram account and does not run AI analysis or incur AI charges.",
-    "autoCommentsLimits": "Stories must be at least 6 hours old with a raw match score of 0.7 or higher. At most 50 stories per brand per hour and 50 replies per story are sampled.",
+    "autoCommentsLimits": "Stories must be at least 6 hours old with an unadjusted relevance score of 0.7 or higher. At most 50 stories per brand per hour and 50 replies per story are sampled.",
     "autoCommentsConnection": "Connect a Telegram account before collection can run.",
     "autoCommentsOn": "Automatic collection is on",
     "autoCommentsOff": "Automatic collection is off",

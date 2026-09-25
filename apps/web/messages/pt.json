@@ -123,7 +123,7 @@
   "Sources": {
     "autoCommentsTitle": "Comentários automáticos de notícias",
     "autoCommentsDescription": "A cada hora, é coletada uma amostra de respostas a notícias públicas elegíveis do Telegram. Usa a conta conectada e não executa análise de IA nem gera custos de IA.",
-    "autoCommentsLimits": "As notícias devem ter pelo menos 6 horas e pontuação original de relevância de 0,7 ou mais. São coletadas até 50 notícias por marca por hora e 50 respostas por notícia.",
+    "autoCommentsLimits": "As notícias devem ter pelo menos 6 horas e pontuação de relevância sem ajustes de 0,7 ou mais. São coletadas até 50 notícias por marca por hora e 50 respostas por notícia.",
     "autoCommentsConnection": "Conecte uma conta do Telegram para iniciar a coleta.",
     "autoCommentsOn": "A coleta automática está ativada",
     "autoCommentsOff": "A coleta automática está desativada",
