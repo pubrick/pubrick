@@ -351,7 +351,7 @@ export const commentAnalysisDtoSchema = commentAnalysisLegacyDtoSchema.and(
           "ready",
         ]),
         sampleVersion: z.string().nullable(),
-        collectionStatus: z.string().optional(),
+        collectionStatus: z.string().nullable().optional(),
         reason: z
           .enum([
             "hourly_limit",

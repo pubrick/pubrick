@@ -1346,7 +1346,7 @@ describe.skipIf(!url)("runMigrations", () => {
 
         await pool.query("DELETE FROM news_items WHERE id = $1", [newsItemId]);
         await pool.query("DELETE FROM publications WHERE id = $1", [publicationId]);
-        const canceled = await pool.query<{
+        const deleted = await pool.query<{
           id: string;
           status: string;
           prompt_encrypted: string | null;
@@ -1356,11 +1356,12 @@ describe.skipIf(!url)("runMigrations", () => {
           "SELECT id, status, prompt_encrypted, failure_code, completed_at FROM paid_reply_analysis_attempts WHERE id IN ($1, $2) ORDER BY id",
           [sourceAttemptId, publicationAttemptId],
         );
-        expect(canceled.rows).toHaveLength(2);
+        expect(deleted.rows).toHaveLength(2);
+        expect(deleted.rows.find((row) => row.id === sourceAttemptId)?.status).toBe("canceled");
+        expect(deleted.rows.find((row) => row.id === publicationAttemptId)?.status).toBe("unknown");
         expect(
-          canceled.rows.every(
+          deleted.rows.every(
             (row) =>
-              row.status === "canceled" &&
               row.prompt_encrypted === null &&
               row.failure_code === "target_deleted" &&
               row.completed_at instanceof Date,
