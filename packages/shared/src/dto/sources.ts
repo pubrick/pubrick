@@ -26,15 +26,19 @@ const feedUrl = z
   .max(2048)
   .refine(
     (value) => {
-      const parsed = new URL(value);
-      return (
-        !parsed.username &&
-        !parsed.password &&
-        !(
-          ["t.me", "telegram.me", "telegram.dog"].includes(parsed.hostname.toLowerCase()) &&
-          /^\/(?:\+|joinchat\/)/i.test(parsed.pathname)
-        )
-      );
+      try {
+        const parsed = new URL(value);
+        return (
+          !parsed.username &&
+          !parsed.password &&
+          !(
+            ["t.me", "telegram.me", "telegram.dog"].includes(parsed.hostname.toLowerCase()) &&
+            /^\/(?:\+|joinchat\/)/i.test(parsed.pathname)
+          )
+        );
+      } catch {
+        return false;
+      }
     },
     { message: "Feed URL must not contain credentials or a Telegram invite" },
   );
