@@ -19,6 +19,7 @@ import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, errorMessage } from "@/lib/api";
+import { RoleTemplateOutcomes } from "./outcomes";
 
 const FORM_ID = "role-template-form";
 
@@ -365,6 +366,9 @@ export default function RoleTemplatesPage() {
           </Button>
         )}
       </Advanced>
+      {head && (
+        <RoleTemplateOutcomes templateRole={role} activeRevisionId={head.activeRevisionId} />
+      )}
       <Modal
         open={pendingRole !== null}
         onClose={() => setPendingRole(null)}

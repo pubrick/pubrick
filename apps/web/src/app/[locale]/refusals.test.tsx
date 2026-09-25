@@ -11,6 +11,7 @@ import BrandsPage from "./brands/page";
 import ContentItemPage from "./content/[id]/page";
 import NewContentPage from "./content/new/page";
 import RunPage from "./content/runs/[id]/page";
+import { RoleTemplateOutcomes } from "./settings/prompts/templates/outcomes";
 
 /**
  * WHAT A SPANISH OR RUSSIAN READER IS ACTUALLY TOLD WHEN THE API SAYS NO.
@@ -563,5 +564,23 @@ describe("no active organization, read off the code", () => {
 
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/ru/onboarding"));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("role template outcomes", () => {
+  it("translates a scoped outcomes refusal in Spanish", async () => {
+    const sentence = "Not a member of the active organization";
+    serve((url) => {
+      if (url === "/api/brands") return jsonResponse(200, [{ id: BRAND_ID, name: "Acme" }]);
+      if (url.includes("/templates/outcomes?")) {
+        return jsonResponse(403, { statusCode: 403, error: "Forbidden", message: sentence });
+      }
+      return undefined;
+    });
+    render(<RoleTemplateOutcomes templateRole="researcher" activeRevisionId={null} />, {
+      locale: "es",
+    });
+    await userEvent.setup().click(screen.getByText(es.RoleTemplates.outcomesTitle));
+    await expectShown(es.Errors.forbidden, sentence);
   });
 });
