@@ -104,6 +104,16 @@ export {
   type WriterInput,
 } from "./steps/index.js";
 export {
+  digest,
+  InvalidTemplateSnapshotError,
+  MAX_PINNED_INSTRUCTION_BYTES,
+  pinnedInstructionMap,
+  receiptDigest,
+  TEMPLATE_ENGINE_VERSION,
+  type TemplateSnapshot,
+  validateTemplateSnapshot,
+} from "./template-snapshot.js";
+export {
   type CostSource,
   callOutcomeOf,
   type MeteredCall,
