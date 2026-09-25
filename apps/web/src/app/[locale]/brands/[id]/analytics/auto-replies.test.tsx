@@ -77,6 +77,23 @@ describe("automatic publication reply setting", () => {
     expect(screen.getByText(en.Analytics.autoRepliesWaitingConnection)).toBeInTheDocument();
   });
 
+  it("keeps the off switch available when the optional connection check fails", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/telegram-connection")) throw new Error("status unavailable");
+      return response(200, {
+        enabled: init?.method !== "PUT",
+        updatedAt: "2026-09-25T00:00:00.000Z",
+      });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<AutoReplies brandId={brandId} />);
+    expect(await screen.findByText(en.Analytics.autoRepliesConnectionUnknown)).toBeInTheDocument();
+    expect(screen.getByText(en.Analytics.autoRepliesOn)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: en.Analytics.autoRepliesDisable }));
+    expect(await screen.findByText(en.Analytics.autoRepliesOff)).toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true);
+  });
+
   it("shows a Spanish load failure and offers a retry", async () => {
     let attempts = 0;
     const fetcher = vi.fn(async (url: string) => {

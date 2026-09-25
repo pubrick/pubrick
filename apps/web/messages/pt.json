@@ -1595,6 +1595,7 @@
     "autoRepliesOff": "A coleta automática está desativada",
     "autoRepliesConnection": "Um proprietário ou administrador deve conectar uma conta do Telegram em Configurações para iniciar a coleta.",
     "autoRepliesWaitingConnection": "A coleta aguarda um proprietário ou administrador conectar uma conta do Telegram em Configurações.",
+    "autoRepliesConnectionUnknown": "Não foi possível verificar a conexão do Telegram. Confirme a conta em Configurações; a opção de coleta continua disponível.",
     "autoRepliesEnable": "Ativar coleta",
     "autoRepliesDisable": "Desativar coleta",
     "autoRepliesSaving": "Salvando…",

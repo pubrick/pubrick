@@ -1595,6 +1595,7 @@
     "autoRepliesOff": "Automatic collection is off",
     "autoRepliesConnection": "A workspace owner or admin must connect a Telegram account in Settings before collection can run.",
     "autoRepliesWaitingConnection": "Collection is waiting for a workspace owner or admin to connect a Telegram account in Settings.",
+    "autoRepliesConnectionUnknown": "Telegram connection status could not be checked. Confirm the account in Settings; the collection setting is still available.",
     "autoRepliesEnable": "Enable collection",
     "autoRepliesDisable": "Disable collection",
     "autoRepliesSaving": "Saving…",
