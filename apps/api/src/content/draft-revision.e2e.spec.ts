@@ -9,9 +9,8 @@ import {
 import { and, eq, isNull } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { DraftRevisionCaller } from "./draft-revision.caller";
+import { DraftRevisionCaller, type DraftRevisionOutcome } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
-import type { RefineOutcome } from "./refine.caller";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -19,10 +18,11 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
   let app: INestApplication;
   let db: ReturnType<typeof createDb>["db"];
   let pool: ReturnType<typeof createDb>["pool"];
-  const calls: { body: string; instruction: string }[] = [];
-  let outcome: RefineOutcome;
+  const calls: { title: string | null; body: string; instruction: string }[] = [];
+  let outcome: DraftRevisionOutcome;
   const source = "First fact. Second fact.";
   const replacement = "First fact, then the second fact.";
+  const revisedTitle = "A clearer example";
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -33,7 +33,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DraftRevisionCaller)
       .useValue({
-        run: async (args: { body: string; instruction: string }) => {
+        run: async (args: { title: string | null; body: string; instruction: string }) => {
           calls.push(args);
           return outcome;
         },
@@ -54,6 +54,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     calls.length = 0;
     outcome = {
       ok: true,
+      title: revisedTitle,
       text: replacement,
       reason: "Joined the two facts without adding one.",
       usage: [
@@ -143,12 +144,12 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     const handwritten = await draft(visitor, orgId, false);
     await visitor
       .post(`/api/content/${handwritten}/draft-revision`)
-      .send({ expectedBody: source, instruction: "Tighten this" })
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Tighten this" })
       .expect(409);
     const ai = await draft(visitor, orgId);
     const stale = await visitor
       .post(`/api/content/${ai}/draft-revision`)
-      .send({ expectedBody: "Old draft", instruction: "Tighten this" })
+      .send({ expectedBody: "Old draft", expectedTitle: "Example", instruction: "Tighten this" })
       .expect(409);
     expect(stale.body.code).toBe("draft_revision_stale");
     expect(calls).toHaveLength(0);
@@ -166,20 +167,25 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
       .post(`/api/client-review/${link.body.token}/verdict`)
       .send({ verdict: "approved" })
       .expect(200);
-    const requestBody = { expectedBody: source, noteId: note.body.id };
+    const requestBody = { expectedBody: source, expectedTitle: "Example", noteId: note.body.id };
     expect(draftRevisionRequestSchema.parse(requestBody)).toEqual(requestBody);
     const staged = await visitor
       .post(`/api/content/${id}/draft-revision`)
       .send(requestBody)
       .expect(201);
-    expect(calls).toMatchObject([{ body: source, instruction: "Make the opening flow better." }]);
+    expect(calls).toMatchObject([
+      { title: "Example", body: source, instruction: "Make the opening flow better." },
+    ]);
     expect(staged.body).toMatchObject({
       sourceBody: source,
+      sourceTitle: "Example",
       proposal: replacement,
+      proposedTitle: revisedTitle,
       instruction: "Make the opening flow better.",
     });
     expect((await visitor.get(`/api/content/${id}`).expect(200)).body).toMatchObject({
       body: source,
+      title: "Example",
       draftRevisionProposal: { id: staged.body.id },
     });
     const ledger = await db
@@ -198,6 +204,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
       .expect(200);
     expect(accepted.body).toMatchObject({
       body: replacement,
+      title: revisedTitle,
       status: "draft",
       draftRevisionProposal: null,
       bodyIsAiVerbatim: true,
@@ -205,6 +212,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     const versions = await db
       .select({
         body: schema.contentVersions.body,
+        title: schema.contentVersions.title,
         scope: schema.contentVersions.scope,
         unitDelta: schema.contentVersions.unitDelta,
       })
@@ -218,7 +226,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
       );
     expect(versions.filter((row) => row.scope === "full")).toHaveLength(1);
     expect(versions.filter((row) => row.scope === "fragment")).toEqual([
-      { body: replacement, scope: "fragment", unitDelta: -1 },
+      { body: replacement, title: revisedTitle, scope: "fragment", unitDelta: -1 },
     ]);
     expect(allSentencesAi(replacement, versions, source)).toBe(true);
     expect(
@@ -234,7 +242,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     const id = await draft(visitor, orgId);
     const staged = await visitor
       .post(`/api/content/${id}/draft-revision`)
-      .send({ expectedBody: source, instruction: "Make it clearer" })
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Make it clearer" })
       .expect(201);
     await visitor.patch(`/api/content/${id}`).send({ body: "Human edit." }).expect(200);
     const refused = await visitor
@@ -247,6 +255,113 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     await visitor.delete(`/api/content/${id}/draft-revision/${staged.body.id}`).expect(204);
   });
 
+  it("rejects a concurrent title edit without applying either proposed field", async () => {
+    const { visitor, orgId } = await agent();
+    const id = await draft(visitor, orgId);
+    const initial = await visitor
+      .post(`/api/content/${id}/draft-revision`)
+      .send({ expectedBody: source, expectedTitle: "Outdated", instruction: "Make it clearer" })
+      .expect(409);
+    expect(initial.body.code).toBe("draft_revision_stale");
+    expect(calls).toHaveLength(0);
+    const staged = await visitor
+      .post(`/api/content/${id}/draft-revision`)
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Make it clearer" })
+      .expect(201);
+    await visitor.patch(`/api/content/${id}`).send({ title: "Human title" }).expect(200);
+    const refused = await visitor
+      .post(`/api/content/${id}/draft-revision/${staged.body.id}/accept`)
+      .expect(409);
+    expect(refused.body.code).toBe("draft_revision_stale");
+    expect((await visitor.get(`/api/content/${id}`).expect(200)).body).toMatchObject({
+      title: "Human title",
+      body: source,
+      draftRevisionProposal: { id: staged.body.id },
+    });
+    const fragments = await db
+      .select({ id: schema.contentVersions.id })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.contentItemId, id),
+          eq(schema.contentVersions.scope, "fragment"),
+        ),
+      );
+    expect(fragments).toHaveLength(0);
+  });
+
+  it("keeps a pre-upgrade titled proposal discardable without guessing its old title", async () => {
+    const { visitor, orgId } = await agent();
+    const id = await draft(visitor, orgId);
+    const staged = await visitor
+      .post(`/api/content/${id}/draft-revision`)
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Make it clearer" })
+      .expect(201);
+    await db
+      .update(schema.draftRevisionProposals)
+      .set({ sourceTitle: null, proposedTitle: null })
+      .where(eq(schema.draftRevisionProposals.id, staged.body.id));
+    const refused = await visitor
+      .post(`/api/content/${id}/draft-revision/${staged.body.id}/accept`)
+      .expect(409);
+    expect(refused.body.code).toBe("draft_revision_stale");
+    expect((await visitor.get(`/api/content/${id}`).expect(200)).body).toMatchObject({
+      title: "Example",
+      body: source,
+      draftRevisionProposal: { id: staged.body.id },
+    });
+    await visitor.delete(`/api/content/${id}/draft-revision/${staged.body.id}`).expect(204);
+  });
+
+  it("accepts a title revision when the model leaves the body unchanged", async () => {
+    const { visitor, orgId } = await agent();
+    const id = await draft(visitor, orgId);
+    const humanBody = "Human opening. Second fact.";
+    await visitor.patch(`/api/content/${id}`).send({ body: humanBody }).expect(200);
+    const link = await visitor.post(`/api/content/${id}/client-review-link`).send({}).expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/client-review/${link.body.token}/verdict`)
+      .send({ verdict: "approved" })
+      .expect(200);
+    outcome = {
+      ok: true,
+      title: revisedTitle,
+      text: humanBody,
+      reason: "Clarified the title.",
+      usage: outcome.usage,
+    };
+    const staged = await visitor
+      .post(`/api/content/${id}/draft-revision`)
+      .send({ expectedBody: humanBody, expectedTitle: "Example", instruction: "Clarify the title" })
+      .expect(201);
+    const accepted = await visitor
+      .post(`/api/content/${id}/draft-revision/${staged.body.id}/accept`)
+      .expect(200);
+    expect(accepted.body).toMatchObject({
+      title: revisedTitle,
+      body: humanBody,
+      bodyIsAiVerbatim: false,
+      draftRevisionProposal: null,
+    });
+    expect(
+      (await visitor.get(`/api/content/${id}/client-review-link`).expect(200)).body.status,
+    ).toBe("stale");
+    const fragments = await db
+      .select({
+        title: schema.contentVersions.title,
+        body: schema.contentVersions.body,
+        unitDelta: schema.contentVersions.unitDelta,
+      })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.contentItemId, id),
+          eq(schema.contentVersions.scope, "fragment"),
+        ),
+      );
+    expect(fragments).toEqual([{ title: revisedTitle, body: "", unitDelta: 0 }]);
+  });
+
   it("replaces a previously human-edited body without crediting old human words to the model", async () => {
     const { visitor, orgId } = await agent();
     const id = await draft(visitor, orgId);
@@ -256,12 +371,20 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     expect(before.body.bodyIsAiVerbatim).toBe(false);
     const staged = await visitor
       .post(`/api/content/${id}/draft-revision`)
-      .send({ expectedBody: humanBody, instruction: "Rewrite the entire post" })
+      .send({
+        expectedBody: humanBody,
+        expectedTitle: "Example",
+        instruction: "Rewrite the entire post",
+      })
       .expect(201);
     const accepted = await visitor
       .post(`/api/content/${id}/draft-revision/${staged.body.id}/accept`)
       .expect(200);
-    expect(accepted.body).toMatchObject({ body: replacement, bodyIsAiVerbatim: true });
+    expect(accepted.body).toMatchObject({
+      title: revisedTitle,
+      body: replacement,
+      bodyIsAiVerbatim: true,
+    });
     const rows = await db
       .select({
         origin: schema.contentVersions.origin,
@@ -289,7 +412,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     outcome = { ok: false, failure: "failed", usage: outcome.usage };
     const failed = await visitor
       .post(`/api/content/${id}/draft-revision`)
-      .send({ expectedBody: source, instruction: "Tighten this" })
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Tighten this" })
       .expect(409);
     expect(failed.body.code).toBe("draft_revision_failed");
     expect(
@@ -314,7 +437,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     );
     const blocked = await visitor
       .post(`/api/content/${id}/draft-revision`)
-      .send({ expectedBody: source, instruction: "Tighten this" })
+      .send({ expectedBody: source, expectedTitle: "Example", instruction: "Tighten this" })
       .expect(409);
     expect(blocked.body.code).toBe("draft_revision_limit_reached");
     expect(calls).toHaveLength(1);

@@ -407,8 +407,10 @@ const PROPOSAL_COLUMNS = {
 const DRAFT_REVISION_COLUMNS = {
   id: schema.draftRevisionProposals.id,
   sourceBody: schema.draftRevisionProposals.sourceBody,
+  sourceTitle: schema.draftRevisionProposals.sourceTitle,
   instruction: schema.draftRevisionProposals.instruction,
   proposal: schema.draftRevisionProposals.proposal,
+  proposedTitle: schema.draftRevisionProposals.proposedTitle,
   reason: schema.draftRevisionProposals.reason,
 };
 
@@ -2066,6 +2068,7 @@ export class ContentRepository {
     orgId: string,
     id: string,
   ): Promise<{
+    title: string | null;
     body: string;
     status: ContentStatus;
     richBody: unknown;
@@ -2075,6 +2078,7 @@ export class ContentRepository {
   }> {
     const rows = await tx
       .select({
+        title: schema.contentItems.title,
         status: schema.contentItems.status,
         body: schema.contentItems.body,
         richBody: schema.contentItems.richBody,
@@ -2406,7 +2410,8 @@ export class ContentRepository {
       );
     }
     const sourceBody = normalizeNewlines(item.body);
-    if (sourceBody !== request.expectedBody) {
+    const sourceTitle = item.title;
+    if (sourceBody !== request.expectedBody || sourceTitle !== request.expectedTitle) {
       throw conflict("draft_revision_stale", "This draft changed; reload before revising it");
     }
     await this.requireAiDraft(orgId, id, "draft_revision");
@@ -2440,6 +2445,7 @@ export class ContentRepository {
     const outcome = await this.draftReviser.run({
       credential,
       brand: await this.brandFor(orgId, item.brandId),
+      title: sourceTitle,
       body: sourceBody,
       instruction,
     });
@@ -2471,8 +2477,10 @@ export class ContentRepository {
           orgId,
           contentItemId: id,
           sourceBody,
+          sourceTitle,
           instruction,
           proposal,
+          proposedTitle: outcome.title,
           reason: outcome.reason,
           createdBy: userId,
         })
@@ -2505,7 +2513,10 @@ export class ContentRepository {
         .for("update");
       if (!proposal)
         throw notFound("draft_revision_proposal_not_found", "That rewrite is no longer staged");
-      if (normalizeNewlines(item.body) !== proposal.sourceBody) {
+      if (
+        normalizeNewlines(item.body) !== proposal.sourceBody ||
+        item.title !== proposal.sourceTitle
+      ) {
         throw conflict(
           "draft_revision_stale",
           "The saved draft changed; discard this rewrite and try again",
@@ -2537,19 +2548,43 @@ export class ContentRepository {
         await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
         await tx
           .update(schema.contentItems)
-          .set({ body: plan.mergedBody, status: "draft" })
+          .set({
+            body: plan.mergedBody,
+            title: proposal.proposedTitle,
+            richBody: null,
+            status: "draft",
+          })
           .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
         await tx.insert(schema.contentVersions).values({
           orgId,
           contentItemId: id,
           adaptationId: null,
           body: plan.fragmentBody,
+          title: proposal.proposedTitle,
           origin: "ai",
           scope: "fragment",
           unitDelta: plan.unitDelta,
           createdBy: null,
         });
         await tx.delete(schema.refineProposals).where(eq(schema.refineProposals.contentItemId, id));
+      } else if (item.title !== proposal.proposedTitle) {
+        await tx
+          .update(schema.contentItems)
+          .set({ title: proposal.proposedTitle, status: "draft" })
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+        // A title-only AI edit still has durable provenance. An empty body
+        // fragment credits no saved body sentence to the model.
+        await tx.insert(schema.contentVersions).values({
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          title: proposal.proposedTitle,
+          body: "",
+          origin: "ai",
+          scope: "fragment",
+          unitDelta: 0,
+          createdBy: null,
+        });
       }
       await tx
         .delete(schema.draftRevisionProposals)
@@ -3010,9 +3045,10 @@ export class ContentRepository {
   private async refinableItem(
     orgId: string,
     id: string,
-  ): Promise<{ body: string; brandId: string; status: ContentStatus }> {
+  ): Promise<{ title: string | null; body: string; brandId: string; status: ContentStatus }> {
     const rows = await db
       .select({
+        title: schema.contentItems.title,
         status: schema.contentItems.status,
         body: schema.contentItems.body,
         brandId: schema.contentItems.brandId,
@@ -3024,7 +3060,7 @@ export class ContentRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const pinned = pinnedItemRefusal(item.status);
     if (pinned) throw pinned;
-    return { body: item.body, brandId: item.brandId, status: item.status };
+    return { title: item.title, body: item.body, brandId: item.brandId, status: item.status };
   }
 
   /**
