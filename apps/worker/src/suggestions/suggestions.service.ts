@@ -12,8 +12,8 @@ import { PermanentError, type TopicSuggestionsJob, TransientError } from "@pubri
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
 import {
+  BLOCKED_TOPIC_EMBEDDING_CALL_LIMIT,
   type BlockedTopicSnapshot,
-  MANUAL_EMBEDDING_CALL_LIMIT,
   SuggestionsRepository,
 } from "./suggestions.repository";
 
@@ -103,7 +103,7 @@ export class SuggestionsService {
     }
     let blocked: BlockedTopicSnapshot | undefined;
     let embeddingKey: string | undefined;
-    if (input.origin === "manual") {
+    if (input.origin === "manual" || input.semanticFilterBlockedTopics) {
       const snapshot = await this.repo.recentBlocked(job.orgId, job.brandId);
       // Refuse before generation: a partial blocked-title sample would make the
       // semantic promise false and permit an expensive but unusable result.
@@ -208,7 +208,7 @@ export class SuggestionsService {
     let suggestions = result.suggestions;
     if (blocked?.titles.length && embeddingKey) {
       const texts = [...suggestions.map((item) => item.title), ...blocked.titles];
-      if (Math.ceil(texts.length / 10) > MANUAL_EMBEDDING_CALL_LIMIT) {
+      if (Math.ceil(texts.length / 10) > BLOCKED_TOPIC_EMBEDDING_CALL_LIMIT) {
         await this.repo.failed(
           job.orgId,
           job.brandId,

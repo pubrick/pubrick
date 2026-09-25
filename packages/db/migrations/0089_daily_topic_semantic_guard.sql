@@ -1,0 +1,2 @@
+ALTER TABLE "autopilot_configs" ADD COLUMN "semantic_filter_blocked_topics" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "topic_suggestion_requests" ADD COLUMN "semantic_filter_blocked_topics" boolean DEFAULT false NOT NULL;

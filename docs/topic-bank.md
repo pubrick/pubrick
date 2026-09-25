@@ -21,7 +21,9 @@ The request status shows queued, running, completed, or failed; zero new ideas
 means the results were repeats or reviewer-blocked near matches, not that the
 model failed.
 
-For a **manual** request, Pubrick also compares proposed titles with every
+For a **manual** request, and for an **automatic** request whose owner or admin
+enabled the paid semantic filter before the scanner queued it, Pubrick also
+compares proposed titles with every
 reviewer-blocked topic from the same brand in the last 90 days, including
 manually created topics. It uses Google's `gemini-embedding-001` with 768
 dimensions and a cosine threshold of 0.88. This needs a Google BYOK key even
@@ -30,12 +32,16 @@ and three physical embedding calls are admitted per request; the calls are
 recorded separately in the usage ledger. A request with blocked titles does not
 buy another provider call on queue redelivery. More than 20 recent blocks, an
 embedding failure, an unavailable ledger, or a changed blocked set fails the
-request without adding ideas. The one-call automatic suggestion path does not
-buy embeddings and still applies only the exact-title check below.
+request without adding ideas. Automatic requests without the opt-in do not
+buy embeddings and still apply only the exact-title check below. The opt-in is
+snapshotted on the request; later setting changes cannot retroactively add
+paid calls. A daily request still buys at most one suggestion-text call, plus
+up to three embedding calls when recent blocks exist. These calls are outside
+the generation spend cap.
 
 An owner or admin can separately enable **Suggest topics daily** in the brand's
 Autopilot settings. After 09:00 in the brand's time zone, it queues at most one
-suggestion request per local day, using at most one physical AI provider call. It
+suggestion request per local day, using at most one physical suggestion-text AI provider call. It
 skips brands without an AI provider key or with at least three AI ideas still waiting
 for review. Daily suggestions follow the same Idea and approval flow as manual
 suggestions; they do not plan a calendar slot, start a draft, or publish.

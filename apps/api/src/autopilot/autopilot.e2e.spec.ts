@@ -62,6 +62,7 @@ describe.skipIf(!url)("autopilot API", () => {
     const initial = await owner.agent.get(configUrl).expect(200);
     expect(initial.body.enabled).toBe(false);
     expect(initial.body.autoSuggestTopics).toBe(false);
+    expect(initial.body.semanticFilterBlockedTopics).toBe(false);
     expect(initial.body.autoPlanTopics).toBe(false);
     expect(initial.body.planningDailyLimit).toBe(1);
     await other.agent.get(configUrl).expect(404);
@@ -90,9 +91,19 @@ describe.skipIf(!url)("autopilot API", () => {
     expect((await owner.agent.get(configUrl).expect(200)).body).toEqual(suggestionsOnly);
     await owner.agent
       .put(configUrl)
-      .send({ ...payload, autoSuggestTopics: undefined })
+      .send({ ...suggestionsOnly, semanticFilterBlockedTopics: true })
+      .expect(200);
+    expect((await owner.agent.get(configUrl).expect(200)).body.semanticFilterBlockedTopics).toBe(
+      true,
+    );
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, autoSuggestTopics: undefined, semanticFilterBlockedTopics: undefined })
       .expect(200);
     expect((await owner.agent.get(configUrl).expect(200)).body.autoSuggestTopics).toBe(true);
+    expect((await owner.agent.get(configUrl).expect(200)).body.semanticFilterBlockedTopics).toBe(
+      true,
+    );
     await owner.agent
       .put(configUrl)
       .send({ ...payload, channelIds: [brand.body.id] })
@@ -101,7 +112,10 @@ describe.skipIf(!url)("autopilot API", () => {
       .put(configUrl)
       .send({ ...payload, timezone: "Mars/Olympus" })
       .expect(400);
-    await owner.agent.put(configUrl).send(payload).expect(200);
+    await owner.agent
+      .put(configUrl)
+      .send({ ...payload, semanticFilterBlockedTopics: false })
+      .expect(200);
     expect((await owner.agent.get(configUrl).expect(200)).body).toEqual(payload);
     await owner.agent
       .put(configUrl)

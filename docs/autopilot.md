@@ -28,7 +28,7 @@ publish content immediately. New slots appear in the brand calendar.
 enable draft generation. After 09:00 in the brand's configured IANA time zone,
 the worker can queue one suggestion request per local day using the
 organization's configured AI key. The request yields up to three ideas, charges
-at most one physical model call, and is skipped if there is no key or at least three AI
+at most one physical suggestion-text model call, and is skipped if there is no key or at least three AI
 ideas already awaiting review. A failed daily attempt is not retried at the
 provider; an owner can still request suggestions manually from the Topic bank
 after the normal 30-minute request cooldown.
@@ -36,11 +36,21 @@ after the normal 30-minute request cooldown.
 Suggested topics remain **Idea**. An editor reviews and approves them before
 generation, and chooses dates and channels through the calendar's reviewed bulk
 planning form. This setting creates no calendar slots, drafts, or publications.
-To preserve the one-call daily budget, automatic suggestions skip exact normalized
-title repeats but do not run the paid semantic blocked-topic check used by manual
-requests; paraphrased blocked ideas can still appear for editor review.
+By default, automatic suggestions skip exact normalized title repeats without
+paid embeddings, so paraphrased blocked ideas can still appear for editor review.
+An owner or admin can explicitly enable **Filter blocked topic paraphrases**
+beneath the daily suggestions setting. The opt-in is copied onto each request
+when the scanner queues it: changing the setting later cannot add paid calls to
+an existing request. With recent reviewer-blocked topics, the request needs a
+Google AI key, even if its suggestion-text provider is OpenRouter. It compares
+at most 20 recent blocked titles using at most three separately metered Google
+embedding calls in addition to the single suggestion-text call. A missing key,
+provider or ledger failure, blocked-set change, or queue redelivery cannot
+admit unverified ideas. Each call is recorded before suggestions are saved.
 The generation spend threshold below covers generation runs; topic suggestion
-calls are recorded separately in the organization usage ledger.
+text and embedding calls are recorded separately in the organization usage
+ledger and are outside that threshold. Embedding prices may be unknown in the
+ledger; the recorded call still shows the spend occurred.
 
 Only an editor-approved topic can be dispatched. The worker takes the same
 organization admission lock as manual and calendar generation, checks the

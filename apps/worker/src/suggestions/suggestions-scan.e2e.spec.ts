@@ -89,6 +89,11 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
   it("honors opt-in, brand-local 09:00 and tenant-scoped AI key", async () => {
     expect(await service.trigger(boss, orgId, brandId)).toBe("disabled");
     expect(await service.trigger(boss, "another-organization", brandId)).toBe("disabled");
+    const [defaults] = await db
+      .select({ semanticFilterBlockedTopics: schema.autopilotConfigs.semanticFilterBlockedTopics })
+      .from(schema.autopilotConfigs)
+      .where(eq(schema.autopilotConfigs.brandId, brandId));
+    expect(defaults?.semanticFilterBlockedTopics).toBe(false);
     await db
       .update(schema.autopilotConfigs)
       .set({ autoSuggestTopics: true, timezone: zoneFor((hour) => hour < 9) })
@@ -211,6 +216,10 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
   });
 
   it("inserts one daily request and job atomically, even under concurrent scans", async () => {
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ semanticFilterBlockedTopics: true })
+      .where(eq(schema.autopilotConfigs.brandId, brandId));
     const failedBoss = { send: vi.fn().mockResolvedValue(null) };
     await expect(service.trigger(failedBoss as unknown as PgBoss, orgId, brandId)).rejects.toThrow(
       "was not enqueued",
@@ -245,7 +254,13 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
           eq(schema.topicSuggestionRequests.origin, "automatic"),
         ),
       );
-    expect(request).toMatchObject({ orgId, brandId, origin: "automatic", status: "queued" });
+    expect(request).toMatchObject({
+      orgId,
+      brandId,
+      origin: "automatic",
+      status: "queued",
+      semanticFilterBlockedTopics: true,
+    });
     expect(request?.localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const decisionsForDay = await db
       .select({
@@ -274,8 +289,13 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
       }),
     ).rejects.toMatchObject({ cause: { code: "23505" } });
     expect(await repository.claim("wrong-org", brandId, request?.id as string)).toBeNull();
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ semanticFilterBlockedTopics: false })
+      .where(eq(schema.autopilotConfigs.brandId, brandId));
     expect(await repository.claim(orgId, brandId, request?.id as string)).toMatchObject({
       origin: "automatic",
+      semanticFilterBlockedTopics: true,
     });
     await repository.failed(orgId, brandId, request?.id as string, "model_failed");
     expect(await repository.claim(orgId, brandId, request?.id as string)).toBeNull();
@@ -292,6 +312,42 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
     expect((await repository.claim(orgId, brandId, id))?.origin).toBe("manual");
     expect((await repository.claim(orgId, brandId, id))?.origin).toBe("manual");
     expect(await repository.claim(orgId, brandId, id)).toBeNull();
+  });
+
+  it("does not add paid semantic calls to a queued request after a later opt-in", async () => {
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Later opt-in" })
+      .returning({ id: schema.brands.id });
+    if (!brand) throw new Error("Brand seed failed");
+    await db.insert(schema.autopilotConfigs).values({
+      orgId,
+      brandId: brand.id,
+      autoSuggestTopics: true,
+      timezone: zoneFor((hour) => hour >= 9),
+    });
+    expect(await service.trigger(boss, orgId, brand.id)).toBe("queued");
+    const [request] = await db
+      .select({
+        id: schema.topicSuggestionRequests.id,
+        semanticFilterBlockedTopics: schema.topicSuggestionRequests.semanticFilterBlockedTopics,
+      })
+      .from(schema.topicSuggestionRequests)
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brand.id),
+        ),
+      );
+    expect(request?.semanticFilterBlockedTopics).toBe(false);
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ semanticFilterBlockedTopics: true })
+      .where(eq(schema.autopilotConfigs.brandId, brand.id));
+    expect(await repository.claim(orgId, brand.id, request?.id as string)).toMatchObject({
+      semanticFilterBlockedTopics: false,
+    });
+    await db.delete(schema.brands).where(eq(schema.brands.id, brand.id));
   });
 
   it("recovers a dead first claim while preserving a live handler's heartbeat", async () => {

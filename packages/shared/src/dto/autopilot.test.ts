@@ -3,6 +3,7 @@ import { autopilotConfigSchema, autopilotDefaults } from "./autopilot.js";
 
 describe("autopilot configuration", () => {
   it("keeps topic suggestions independent of automatic draft generation", () => {
+    expect(autopilotDefaults.semanticFilterBlockedTopics).toBe(false);
     expect(
       autopilotConfigSchema.parse({
         ...autopilotDefaults,
@@ -52,6 +53,7 @@ describe("autopilot configuration", () => {
       autopilotConfigSchema.safeParse({
         ...autopilotDefaults,
         autoPlanTopics: undefined,
+        semanticFilterBlockedTopics: undefined,
         planningDailyLimit: undefined,
       }).success,
     ).toBe(true);

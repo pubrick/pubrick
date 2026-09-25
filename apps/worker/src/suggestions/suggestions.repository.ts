@@ -16,9 +16,9 @@ export function topicKey(title: string): string {
 export type Suggestion = { title: string; description: string; newsItemId: string | null };
 
 // Three proposal titles and all twenty recent reviewer blocks fit in three
-// ten-text embedding calls. Overflow refuses the manual request before AI spend.
-export const MANUAL_BLOCKED_TOPIC_LIMIT = 20;
-export const MANUAL_EMBEDDING_CALL_LIMIT = 3;
+// ten-text embedding calls. Overflow refuses a semantic request before AI spend.
+export const BLOCKED_TOPIC_LIMIT = 20;
+export const BLOCKED_TOPIC_EMBEDDING_CALL_LIMIT = 3;
 export type BlockedTopicSnapshot = { titles: string[]; state: string };
 
 function blockedState(
@@ -58,6 +58,7 @@ export class SuggestionsRepository {
         id: schema.topicSuggestionRequests.id,
         origin: schema.topicSuggestionRequests.origin,
         localDate: schema.topicSuggestionRequests.localDate,
+        semanticFilterBlockedTopics: schema.topicSuggestionRequests.semanticFilterBlockedTopics,
         attempts: schema.topicSuggestionRequests.attempts,
       });
     if (!claimed[0]) return null;
@@ -122,6 +123,7 @@ export class SuggestionsRepository {
     return {
       origin: claimed[0].origin,
       localDate: claimed[0].localDate,
+      semanticFilterBlockedTopics: claimed[0].semanticFilterBlockedTopics,
       attempt: claimed[0].attempts,
       brand: brands[0],
       topics,
@@ -171,8 +173,8 @@ export class SuggestionsRepository {
         ),
       )
       .orderBy(desc(schema.topics.blockedAt), desc(schema.topics.id))
-      .limit(MANUAL_BLOCKED_TOPIC_LIMIT + 1);
-    if (rows.length > MANUAL_BLOCKED_TOPIC_LIMIT) return null;
+      .limit(BLOCKED_TOPIC_LIMIT + 1);
+    if (rows.length > BLOCKED_TOPIC_LIMIT) return null;
     return { titles: rows.map((row) => row.title), state: blockedState(rows) };
   }
 
@@ -307,9 +309,9 @@ export class SuggestionsRepository {
             ),
           )
           .orderBy(desc(schema.topics.blockedAt), desc(schema.topics.id))
-          .limit(MANUAL_BLOCKED_TOPIC_LIMIT + 1);
+          .limit(BLOCKED_TOPIC_LIMIT + 1);
         if (
-          current.length > MANUAL_BLOCKED_TOPIC_LIMIT ||
+          current.length > BLOCKED_TOPIC_LIMIT ||
           blockedState(current) !== blockedSnapshot.state
         ) {
           await tx

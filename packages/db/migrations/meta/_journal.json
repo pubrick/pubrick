@@ -617,6 +617,13 @@
       "when": 1790338340960,
       "tag": "0088_topic_suggestion_scan_decisions",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1790338930313,
+      "tag": "0089_daily_topic_semantic_guard",
+      "breakpoints": true
     }
   ]
 }

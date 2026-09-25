@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   date,
   foreignKey,
@@ -87,6 +88,8 @@ export const topicSuggestionRequests = pgTable(
       .notNull()
       .default("manual"),
     localDate: text("local_date"),
+    /** Enqueue-time opt-in snapshot; never consult mutable settings in the handler. */
+    semanticFilterBlockedTopics: boolean("semantic_filter_blocked_topics").notNull().default(false),
     errorCode: text("error_code", { enum: ["no_api_key", "unreadable_key", "model_failed"] }),
     suggestionCount: integer("suggestion_count").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),

@@ -1589,6 +1589,8 @@
     "enabledHint": "Solo se usan temas que hayas aprobado. Desactiva esta opción para detener nuevos trabajos.",
     "autoSuggestTopics": "Sugerir temas cada día",
     "autoSuggestTopicsHint": "Después de las 09:00 en la zona horaria de la marca, solicita hasta tres ideas una vez al día como máximo con tu clave de IA configurada. Se omite si hay tres ideas de IA pendientes o no hay clave. Las ideas requieren aprobación.",
+    "semanticFilterBlockedTopics": "Filtrar paráfrasis de temas bloqueados",
+    "semanticFilterBlockedTopicsHint": "Para las sugerencias diarias, compara los títulos nuevos con hasta 20 temas bloqueados recientemente. Si hay bloqueos, requiere una clave de Google AI y añade hasta 3 llamadas de pago a embeddings de Google además de la llamada de texto para sugerencias. Estas llamadas quedan fuera del límite de gasto de generación; el registro puede desconocer su precio. Si la comprobación falla, no se guardan ideas.",
     "autoPlanTopics": "Planificar automáticamente temas aprobados con fecha",
     "autoPlanTopicsHint": "Cada hora coloca en el calendario, a las 10:00 hora local, los temas aprobados con fecha prevista en los próximos 14 días. Usa los canales seleccionados y respeta el límite diario. Desactivarlo detiene nuevas entradas; elimina las ya creadas por separado. Los borradores siguen sujetos a revisión humana.",
     "planningDailyLimit": "Entradas de calendario por día",
