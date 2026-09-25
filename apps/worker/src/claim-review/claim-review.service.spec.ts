@@ -115,6 +115,24 @@ describe("ClaimReviewService", () => {
     ]);
   });
 
+  it.each(["evidence_supports", "evidence_conflicts"] as const)(
+    "downgrades a title-only %s verdict to insufficient",
+    async (verdict) => {
+      const titleOnly = { ...hit, snippet: "" };
+      const { service, repo } = harness(
+        [
+          { claims: [quote] },
+          { decisions: [{ claimIndex: 0, outcome: verdict, evidenceIds: ["C1-S1"] }] },
+        ],
+        [titleOnly],
+      );
+      await service.handle(job);
+      expect(repo.ready).toHaveBeenCalledWith(job.orgId, job.reviewId, expect.any(String), [
+        { claim: quote, outcome: "insufficient", evidence: [titleOnly] },
+      ]);
+    },
+  );
+
   it("marks a failed search unavailable without claiming evidence", async () => {
     const { SearchProviderError } = await import("@pubrick/search");
     const { service, repo, search } = harness([{ claims: [quote] }]);

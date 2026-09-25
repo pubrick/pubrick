@@ -85,7 +85,8 @@ export function reconcileEvidence(
       .filter((hit) => ids.has(hit.id))
       .map(({ title, url, snippet }) => ({ title, url, snippet }));
     const outcome =
-      decision.outcome !== "insufficient" && evidence.length === 0
+      decision.outcome !== "insufficient" &&
+      !evidence.some((source) => source.snippet.trim().length > 0)
         ? ("insufficient" as const)
         : decision.outcome;
     return { claim: input.claim, outcome, evidence };
