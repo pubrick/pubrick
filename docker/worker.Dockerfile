@@ -15,6 +15,7 @@ COPY packages/shared/package.json packages/shared/package.json
 COPY packages/integrations/package.json packages/integrations/package.json
 COPY packages/ai/package.json packages/ai/package.json
 COPY packages/db/package.json packages/db/package.json
+COPY packages/search/package.json packages/search/package.json
 COPY packages/telegram/package.json packages/telegram/package.json
 RUN pnpm install --frozen-lockfile
 
@@ -22,7 +23,7 @@ FROM deps AS build
 # node_modules from the deps stage above is not in the build context (see
 # .dockerignore), so this COPY layers source on top without touching it.
 COPY . .
-RUN pnpm build
+RUN pnpm --filter @pubrick/worker... build
 RUN pnpm --filter @pubrick/worker deploy --prod --legacy /out
 
 FROM node:22-slim
