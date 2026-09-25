@@ -1467,6 +1467,7 @@
     "content_archive_delivery_active": "Esta publicación tiene una entrega pendiente. Termínala o cancélala antes de archivarla.",
     "content_topic_unlinked": "Este borrador ya no está vinculado a un tema. Actualiza la página antes de intentarlo de nuevo.",
     "content_topic_veto_not_draft": "Solo un borrador sin publicar o una publicación rechazada puede bloquear su tema de origen desde aquí.",
+    "content_topic_veto_has_delivery_history": "Esta publicación tiene historial de entrega. Decide sobre el tema por separado de este registro.",
     "content_delete_requires_archive": "Archiva esta publicación antes de eliminarla.",
     "content_delete_has_delivery_history": "Esta publicación tiene historial de entrega y no se puede eliminar. Consérvala en el archivo.",
     "content_delete_not_draft": "Solo se pueden eliminar borradores archivados que nunca se enviaron.",

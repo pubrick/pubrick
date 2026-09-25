@@ -1301,6 +1301,36 @@ describe("draft source topic veto", () => {
       screen.queryByRole("button", { name: en.Publish.blockTopicAction }),
     ).not.toBeInTheDocument();
   });
+
+  it("offers a safe rejected draft but hides a retained delivery history", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          topicId: "topic-1",
+          status: "rejected",
+          isSafeToDelete: true,
+        }),
+      },
+      [],
+    );
+    const view = await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.getByRole("button", { name: en.Publish.blockTopicAction })).toBeEnabled();
+    view.unmount();
+    installBaseHandlers(
+      {
+        current: makeItem({
+          topicId: "topic-1",
+          status: "rejected",
+          isSafeToDelete: false,
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.blockTopicAction }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("archive and restore", () => {

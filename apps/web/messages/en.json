@@ -1463,6 +1463,7 @@
     "content_archive_delivery_active": "This post has a pending delivery. Finish or cancel it before archiving.",
     "content_topic_unlinked": "This draft is no longer linked to a topic. Reload before trying again.",
     "content_topic_veto_not_draft": "Only an unpublished draft or rejected post can block its source topic from here.",
+    "content_topic_veto_has_delivery_history": "This post has delivery history. Keep the topic decision separate from its publication record.",
     "content_delete_requires_archive": "Archive this post before deleting it.",
     "content_delete_has_delivery_history": "This post has delivery history and cannot be deleted. Keep it in the archive.",
     "content_delete_not_draft": "Only archived drafts that were never sent can be deleted.",

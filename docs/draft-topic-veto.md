@@ -5,7 +5,8 @@ made from a saved topic and choose **Block topic and archive draft**. A required
 reason (1–500 characters) is recorded on the topic. The confirmation explains
 both effects before the request is sent. The action is available only when the
 content detail response contains a proven `topicId` and the item is a draft or
-rejected post.
+rejected post without delivery history. A canceled scheduled send with no
+platform receipt is still eligible; an actual or uncertain delivery is not.
 
 `POST /api/content/:id/block-topic` performs the topic block and draft archive
 in one transaction. It checks the active organization, brand, topic link,

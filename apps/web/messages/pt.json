@@ -1467,6 +1467,7 @@
     "content_archive_delivery_active": "Esta publicação tem uma entrega pendente. Conclua ou cancele antes de arquivar.",
     "content_topic_unlinked": "Este rascunho já não está associado a um tema. Atualize a página antes de tentar novamente.",
     "content_topic_veto_not_draft": "Só um rascunho não publicado ou uma publicação rejeitada pode bloquear o tema de origem aqui.",
+    "content_topic_veto_has_delivery_history": "Esta publicação tem histórico de entrega. Decida sobre o tema separadamente deste registo.",
     "content_delete_requires_archive": "Arquive esta publicação antes de excluí-la.",
     "content_delete_has_delivery_history": "Esta publicação tem histórico de entrega e não pode ser excluída. Mantenha-a no arquivo.",
     "content_delete_not_draft": "Só rascunhos arquivados que nunca foram enviados podem ser excluídos.",

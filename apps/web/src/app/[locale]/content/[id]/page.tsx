@@ -1110,7 +1110,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function blockSourceTopic() {
-    if (!canManageDraft || !item?.topicId || !["draft", "rejected"].includes(item.status)) return;
+    if (
+      !canManageDraft ||
+      !item?.topicId ||
+      !item.isSafeToDelete ||
+      !["draft", "rejected"].includes(item.status)
+    )
+      return;
     const parsed = topicBlockSchema.safeParse({ reason: blockTopicReason });
     if (!parsed.success) {
       setBlockTopicError(t("blockTopicReasonInvalid"));
@@ -2459,14 +2465,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
-      {canManageDraft && item.topicId && ["draft", "rejected"].includes(item.status) && (
-        <Card className="mb-6">
-          <p className="mb-3 text-sm text-fg-secondary">{t("blockTopicHint")}</p>
-          <Button variant="danger" onClick={() => setBlockTopicOpen(true)}>
-            {t("blockTopicAction")}
-          </Button>
-        </Card>
-      )}
+      {canManageDraft &&
+        item.topicId &&
+        item.isSafeToDelete &&
+        ["draft", "rejected"].includes(item.status) && (
+          <Card className="mb-6">
+            <p className="mb-3 text-sm text-fg-secondary">{t("blockTopicHint")}</p>
+            <Button variant="danger" onClick={() => setBlockTopicOpen(true)}>
+              {t("blockTopicAction")}
+            </Button>
+          </Card>
+        )}
 
       {canManageDraft &&
         (isArchived ? (
