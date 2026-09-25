@@ -2423,6 +2423,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       {!isArchived && (
         <DraftRevision
           itemId={id}
+          currentTitle={item.title}
           currentBody={item.body}
           draftBody={bodyDraft}
           eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
