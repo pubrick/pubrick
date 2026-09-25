@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import type { UsageRecord } from "@pubrick/ai";
+import { KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
-import { toLedgerCostUsd } from "@pubrick/shared";
+import { decryptJson, parseStoredAiCredential, toLedgerCostUsd } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
+import { env } from "../env";
 
 export function topicKey(title: string): string {
   return createHash("sha256")
@@ -13,6 +14,20 @@ export function topicKey(title: string): string {
 }
 
 export type Suggestion = { title: string; description: string; newsItemId: string | null };
+
+// Three proposal titles and all twenty recent reviewer blocks fit in three
+// ten-text embedding calls. Overflow refuses the manual request before AI spend.
+export const MANUAL_BLOCKED_TOPIC_LIMIT = 20;
+export const MANUAL_EMBEDDING_CALL_LIMIT = 3;
+export type BlockedTopicSnapshot = { titles: string[]; state: string };
+
+function blockedState(
+  rows: Array<{ id: string; title: string; revision: number; blockedAt: Date | null }>,
+) {
+  return JSON.stringify(
+    rows.map((row) => [row.id, row.title, row.revision, row.blockedAt?.toISOString()]),
+  );
+}
 
 // Provider calls are bounded to 60 seconds; this permits several queue expiry
 // windows before declaring a worker that stopped heartbeating abandoned.
@@ -43,6 +58,7 @@ export class SuggestionsRepository {
         id: schema.topicSuggestionRequests.id,
         origin: schema.topicSuggestionRequests.origin,
         localDate: schema.topicSuggestionRequests.localDate,
+        attempts: schema.topicSuggestionRequests.attempts,
       });
     if (!claimed[0]) return null;
     const brands = await db
@@ -105,6 +121,7 @@ export class SuggestionsRepository {
     return {
       origin: claimed[0].origin,
       localDate: claimed[0].localDate,
+      attempt: claimed[0].attempts,
       brand: brands[0],
       topics,
       news: news
@@ -115,6 +132,61 @@ export class SuggestionsRepository {
         )
         .slice(0, 10),
     };
+  }
+
+  /** A delivery whose attempt was superseded cannot buy another provider call. */
+  async isActive(orgId: string, brandId: string, requestId: string, attempt: number) {
+    const [row] = await db
+      .select({ id: schema.topicSuggestionRequests.id })
+      .from(schema.topicSuggestionRequests)
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brandId),
+          eq(schema.topicSuggestionRequests.id, requestId),
+          eq(schema.topicSuggestionRequests.status, "running"),
+          eq(schema.topicSuggestionRequests.attempts, attempt),
+        ),
+      )
+      .limit(1);
+    return Boolean(row);
+  }
+
+  /** Includes blocked human-created topics; no origin or suggestion-key filter. */
+  async recentBlocked(orgId: string, brandId: string): Promise<BlockedTopicSnapshot | null> {
+    const rows = await db
+      .select({
+        id: schema.topics.id,
+        title: schema.topics.title,
+        revision: schema.topics.revision,
+        blockedAt: schema.topics.blockedAt,
+      })
+      .from(schema.topics)
+      .where(
+        and(
+          eq(schema.topics.orgId, orgId),
+          eq(schema.topics.brandId, brandId),
+          sql`${schema.topics.blockedAt} >= now() - interval '90 days'`,
+        ),
+      )
+      .orderBy(desc(schema.topics.blockedAt), desc(schema.topics.id))
+      .limit(MANUAL_BLOCKED_TOPIC_LIMIT + 1);
+    if (rows.length > MANUAL_BLOCKED_TOPIC_LIMIT) return null;
+    return { titles: rows.map((row) => row.title), state: blockedState(rows) };
+  }
+
+  /** Embeddings need a Google BYOK key even when the text model uses OpenRouter. */
+  async googleKey(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    return row
+      ? parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).apiKey
+      : undefined;
   }
 
   async heartbeatAutomatic(orgId: string, brandId: string, requestId: string): Promise<void> {
@@ -185,6 +257,8 @@ export class SuggestionsRepository {
     requestId: string,
     suggestions: Suggestion[],
     news: Array<{ id: string; url: string }>,
+    expectedAttempt?: number,
+    blockedSnapshot?: BlockedTopicSnapshot,
   ) {
     return db.transaction(async (tx) => {
       // Block/unblock and topic edits take this same lock before touching
@@ -196,7 +270,10 @@ export class SuggestionsRepository {
         .for("no key update");
       if (!brand) return 0;
       const requests = await tx
-        .select({ status: schema.topicSuggestionRequests.status })
+        .select({
+          status: schema.topicSuggestionRequests.status,
+          attempts: schema.topicSuggestionRequests.attempts,
+        })
         .from(schema.topicSuggestionRequests)
         .where(
           and(
@@ -207,6 +284,40 @@ export class SuggestionsRepository {
         )
         .for("update");
       if (!requests[0] || requests[0].status === "succeeded") return 0;
+      if (
+        expectedAttempt !== undefined &&
+        (requests[0].status !== "running" || requests[0].attempts !== expectedAttempt)
+      )
+        return 0;
+      if (blockedSnapshot) {
+        const current = await tx
+          .select({
+            id: schema.topics.id,
+            title: schema.topics.title,
+            revision: schema.topics.revision,
+            blockedAt: schema.topics.blockedAt,
+          })
+          .from(schema.topics)
+          .where(
+            and(
+              eq(schema.topics.orgId, orgId),
+              eq(schema.topics.brandId, brandId),
+              sql`${schema.topics.blockedAt} >= now() - interval '90 days'`,
+            ),
+          )
+          .orderBy(desc(schema.topics.blockedAt), desc(schema.topics.id))
+          .limit(MANUAL_BLOCKED_TOPIC_LIMIT + 1);
+        if (
+          current.length > MANUAL_BLOCKED_TOPIC_LIMIT ||
+          blockedState(current) !== blockedSnapshot.state
+        ) {
+          await tx
+            .update(schema.topicSuggestionRequests)
+            .set({ status: "failed", errorCode: "model_failed", updatedAt: new Date() })
+            .where(eq(schema.topicSuggestionRequests.id, requestId));
+          return 0;
+        }
+      }
       const existing = await tx
         .select({ title: schema.topics.title })
         .from(schema.topics)
@@ -260,6 +371,7 @@ export class SuggestionsRepository {
     brandId: string,
     requestId: string,
     code: "no_api_key" | "unreadable_key" | "model_failed",
+    expectedAttempt?: number,
   ) {
     await db
       .update(schema.topicSuggestionRequests)
@@ -274,8 +386,38 @@ export class SuggestionsRepository {
           eq(schema.topicSuggestionRequests.brandId, brandId),
           eq(schema.topicSuggestionRequests.id, requestId),
           sql`${schema.topicSuggestionRequests.status} <> 'succeeded'`,
+          ...(expectedAttempt === undefined
+            ? []
+            : [eq(schema.topicSuggestionRequests.attempts, expectedAttempt)]),
         ),
       );
+  }
+
+  /** Each batch is one physical call, recorded before any suggestion is saved. */
+  async recordEmbeddingUsage(
+    orgId: string,
+    tokens: number,
+    responseMs: number,
+    status: "ok" | "errored",
+    outcome: "completed" | "refused" | "unknown",
+  ) {
+    await db.insert(schema.usageLedger).values({
+      orgId,
+      step: "topic_block_embedding",
+      provider: "google",
+      modelId: KNOWLEDGE_EMBEDDING_MODEL,
+      attempt: 1,
+      inputTokens: Number.isFinite(tokens) ? tokens : 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      costUsd: null,
+      costSource: "unknown",
+      status,
+      outcome,
+      responseMs,
+      keyOwnership: "byok",
+    });
   }
 
   async recordUsage(orgId: string, record: UsageRecord) {
