@@ -915,6 +915,87 @@ describe.skipIf(!url)("content e2e", () => {
     expect(unchanged.body.adaptations[0].body).toBe(atLimit.body.body);
   });
 
+  it("saves, restores, and approves a 12000-character Telegram adaptation while keeping the master short", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Reviewed master", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const path = `/api/content/${itemId}/adaptations/${adaptationId}`;
+    const longBody = "A".repeat(11_992);
+    const long = await agent
+      .patch(path)
+      .send({ body: longBody, hashtags: ["topic"], expectedHashtags: [] })
+      .expect(200);
+    expect(long.body.body).toHaveLength(12_000);
+    expect(long.body.body).toBe(`${longBody}\n\n#topic`);
+    await agent.patch(path).send({ body: "Shorter channel text" }).expect(200);
+    const versions = await agent
+      .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+      .expect(200);
+    const saved = versions.body.find((row: { body: string }) => row.body === long.body.body);
+    expect(saved).toBeDefined();
+    const restored = await agent
+      .post(`/api/content/${itemId}/versions/${saved.id}/restore`)
+      .send({
+        expectedBody: "Shorter channel text\n\n#topic",
+        expectedHashtags: ["topic"],
+        expectedCta: null,
+      })
+      .expect(200);
+    expect(restored.body.body).toBe("Reviewed master");
+    expect(restored.body.adaptations[0].body).toBe(long.body.body);
+    expect(
+      (await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200)).body.adaptations[0]
+        .status,
+    ).toBe("queued");
+  });
+
+  it("refuses Telegram text that cannot be split into complete graphemes", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Reviewed master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    const oversizedGrapheme = `a${"\u0301".repeat(4096)}`;
+    await agent.patch(path).send({ body: oversizedGrapheme }).expect(400);
+    await agent.patch(path).send({ body: "Unsafe \ud800 surrogate" }).expect(400);
+    expect(
+      (await agent.get(`/api/content/${created.body.id}`).expect(200)).body.adaptations[0].body,
+    ).toBeNull();
+  });
+
+  it("preflights a historic malformed Telegram override before approval enqueues delivery", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Reviewed master", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      await db
+        .update(schema.adaptations)
+        .set({ body: `a${"\u0301".repeat(4096)}` })
+        .where(eq(schema.adaptations.id, adaptationId));
+    } finally {
+      await pool.end();
+    }
+    const refusal = await agent
+      .post(`/api/content/${created.body.id}/approve`)
+      .send({})
+      .expect(409);
+    expect(refusal.body.code).toBe("invalid_request");
+    expect(await publishJobCount(adaptationId)).toBe(0);
+  });
+
   it("rejects tags added to an existing body at the platform boundary", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -9153,6 +9234,25 @@ describe.skipIf(!url)("content e2e", () => {
       await agent.post(`${path}/${staged.body.id}/accept`).expect(400);
       const unchanged = await agent.get(`/api/content/${itemId}`).expect(200);
       expect(unchanged.body.adaptations[0].body).toBe("Earlier channel text\n\n#news");
+    });
+
+    it("accepts a long Telegram re-adaptation only when the complete tagged text fits", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["news"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "x".repeat(11_993),
+        reason: "Detailed channel version",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const accepted = await agent.post(`${path}/${staged.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0].body).toBe(`${readaptOutcome.text}\n\n#news`);
+      expect(accepted.body.adaptations[0].body).toHaveLength(12_000);
     });
 
     it("keeps a paid suggestion on failed retries and refuses stale acceptance", async () => {
