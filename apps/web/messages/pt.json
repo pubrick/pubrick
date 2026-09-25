@@ -695,6 +695,7 @@
     "sourcePreviewNeedsUse": "Use ou descarte a prévia antes de gerar.",
     "transcriptLabel": "Arquivo de transcrição",
     "transcriptHelp": "Escolha um arquivo UTF-8 .srt, .vtt ou .txt de até 2 MB. O arquivo é lido apenas neste navegador; o texto aceito é enviado ao gerar. Você pode informar acima o URL do vídeo para atribuição.",
+    "transcriptReadInProgress": "Aguarde o carregamento da transcrição e depois use ou descarte a prévia.",
     "readingTranscript": "Lendo transcrição…",
     "transcriptPreviewTitle": "Prévia da transcrição",
     "transcriptTooLarge": "Escolha um arquivo de transcrição de até 2 MB.",

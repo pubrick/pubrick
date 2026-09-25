@@ -279,9 +279,9 @@ export default function NewContentPage() {
     //
     // The condition is `Advanced`'s own `dirty` expression, character for
     // character (see the disclosure below). An unaccepted transcript preview
-    // has no URL or material yet, but is still work the primary action must
-    // not silently discard.
-    if (hasMaterial || hasSourceUrl || sourcePreview !== null) {
+    // has no URL or material yet, and an in-flight file read has no preview
+    // yet, but both are work the primary action must not silently discard.
+    if (hasMaterial || hasSourceUrl || sourcePreview !== null || readingTranscript) {
       setError(t(canGenerate ? "sourceBlocksCreate" : "sourceBlocksCreateNoAi"));
       // ...and put what the sentence is about on screen beside it.
       setSourceOpen(true);
@@ -346,6 +346,11 @@ export default function NewContentPage() {
     if (hasSeoKeywords && !seoKeywordsSchema.safeParse(seoKeywords).success) {
       setError(t("seoKeywordsInvalid"));
       setSeoOptionsOpen(true);
+      return;
+    }
+    if (readingTranscript) {
+      setError(t("transcriptReadInProgress"));
+      setSourceOpen(true);
       return;
     }
     if (sourcePreview) {
@@ -643,7 +648,7 @@ export default function NewContentPage() {
           */}
           <Advanced
             label={t("sourceTitle")}
-            dirty={hasMaterial || hasSourceUrl || sourcePreview !== null}
+            dirty={hasMaterial || hasSourceUrl || sourcePreview !== null || readingTranscript}
             open={sourceOpen}
             onOpenChange={setSourceOpen}
           >

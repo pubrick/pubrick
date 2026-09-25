@@ -691,6 +691,7 @@
     "sourcePreviewNeedsUse": "Use or dismiss the preview before generating.",
     "transcriptLabel": "Transcript file",
     "transcriptHelp": "Choose a UTF-8 .srt, .vtt, or .txt file up to 2 MB. The file is read only in this browser; accepted text is sent when you Generate. You can add the video URL above for attribution.",
+    "transcriptReadInProgress": "Wait for the transcript to finish loading, then use or dismiss its preview.",
     "readingTranscript": "Reading transcript…",
     "transcriptPreviewTitle": "Transcript preview",
     "transcriptTooLarge": "Choose a transcript file no larger than 2 MB.",

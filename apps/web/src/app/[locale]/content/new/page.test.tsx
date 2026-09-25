@@ -92,6 +92,16 @@ function installHandlers(
   });
 }
 
+function delayedTranscript() {
+  let finish!: (text: string) => void;
+  const text = new Promise<string>((resolve) => {
+    finish = resolve;
+  });
+  const file = new File(["Video interview notes."], "interview.txt", { type: "text/plain" });
+  Object.defineProperty(file, "text", { value: () => text });
+  return { file, finish };
+}
+
 beforeEach(() => {
   mockApi.mockReset();
   // AppShell (now wrapping this page) reads a session for its sidebar user
@@ -876,6 +886,52 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     expect(calls.some((call) => call.path === "/api/source-extraction")).toBe(false);
   });
 
+  it("waits for transcript reading before starting generation", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        path === "/api/runs" && method === "POST" ? { id: "transcript-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Summarize this interview");
+    await open(user);
+    const pending = delayedTranscript();
+    await user.upload(screen.getByLabelText(en.ContentNew.transcriptLabel), pending.file);
+    expect(screen.getByRole("status")).toHaveTextContent(en.ContentNew.readingTranscript);
+    expect(screen.queryByText(en.ContentNew.transcriptPreviewTitle)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.transcriptReadInProgress);
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+
+    await act(async () => pending.finish("Video interview notes."));
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourcePreviewNeedsUse);
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+    await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/transcript-run"),
+    );
+    const payload = parsedBody(calls.find((call) => call.path === "/api/runs"));
+    expect(payload).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      brief: "Summarize this interview",
+      material: "Video interview notes.",
+    });
+    expect(runCreateSchema.parse(payload)).toEqual(payload);
+  });
+
   it("refuses oversized files before reading them and leaves existing source text intact", async () => {
     const calls: Call[] = [];
     installHandlers(calls, undefined, googleKey);
@@ -1386,6 +1442,33 @@ describe("'Create post' while the Source section holds something (Task 5 Step 3)
     expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
     expect(screen.getByText(en.ContentNew.transcriptPreviewTitle)).toBeVisible();
     expect(calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("refuses to discard a transcript while its file is still being read", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, {});
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    const pending = delayedTranscript();
+    await user.upload(screen.getByLabelText(en.ContentNew.transcriptLabel), pending.file);
+    expect(screen.getByRole("status")).toHaveTextContent(en.ContentNew.readingTranscript);
+    expect(screen.queryByText(en.ContentNew.transcriptPreviewTitle)).not.toBeInTheDocument();
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+
+    await act(async () => pending.finish("Video interview notes."));
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
   });
 
   /**
