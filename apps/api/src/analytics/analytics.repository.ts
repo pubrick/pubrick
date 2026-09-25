@@ -62,6 +62,46 @@ export class AnalyticsRepository {
     if (!found[0]) throw notFound("brand_not_found", "Brand not found");
   }
 
+  async publicationCommentCollection(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .select({
+        enabled: schema.publicationCommentCollectionConfigs.enabled,
+        updatedAt: schema.publicationCommentCollectionConfigs.updatedAt,
+      })
+      .from(schema.publicationCommentCollectionConfigs)
+      .where(
+        and(
+          eq(schema.publicationCommentCollectionConfigs.orgId, orgId),
+          eq(schema.publicationCommentCollectionConfigs.brandId, brandId),
+        ),
+      )
+      .limit(1);
+    return { enabled: row?.enabled ?? false, updatedAt: row?.updatedAt.toISOString() ?? null };
+  }
+
+  async updatePublicationCommentCollection(orgId: string, brandId: string, enabled: boolean) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .insert(schema.publicationCommentCollectionConfigs)
+      .values({ orgId, brandId, enabled, revision: 1 })
+      .onConflictDoUpdate({
+        target: schema.publicationCommentCollectionConfigs.brandId,
+        set: {
+          enabled,
+          revision: sql`${schema.publicationCommentCollectionConfigs.revision} + 1`,
+          updatedAt: sql`now()`,
+        },
+        setWhere: eq(schema.publicationCommentCollectionConfigs.orgId, orgId),
+      })
+      .returning({
+        enabled: schema.publicationCommentCollectionConfigs.enabled,
+        updatedAt: schema.publicationCommentCollectionConfigs.updatedAt,
+      });
+    if (!row) throw notFound("brand_not_found", "Brand not found");
+    return { enabled: row.enabled, updatedAt: row.updatedAt.toISOString() };
+  }
+
   /** A receipt alone is insufficient: its channel/item links may have been erased. */
   private async liveTelegramPublication(orgId: string, brandId: string, publicationId: string) {
     await this.requireBrand(orgId, brandId);

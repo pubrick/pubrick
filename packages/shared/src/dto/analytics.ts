@@ -35,6 +35,13 @@ export const publicationCommentsDtoSchema = z.object({
 });
 export type PublicationCommentsDto = z.infer<typeof publicationCommentsDtoSchema>;
 
+export const publicationCommentCollectionUpdateSchema = z.strictObject({ enabled: z.boolean() });
+export const publicationCommentCollectionDtoSchema = z.object({
+  enabled: z.boolean(),
+  updatedAt: z.iso.datetime().nullable(),
+});
+export type PublicationCommentCollectionDto = z.infer<typeof publicationCommentCollectionDtoSchema>;
+
 export const publicationResultDtoSchema = z.object({
   id: z.uuid(),
   contentItemId: z.uuid().nullable(),

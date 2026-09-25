@@ -1,14 +1,16 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { analyticsDaysSchema } from "@pubrick/shared";
+import { analyticsDaysSchema, publicationCommentCollectionUpdateSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
@@ -20,6 +22,22 @@ import { AnalyticsRepository } from "./analytics.repository";
 @BrandScope({ kind: "brand", source: "param" })
 export class AnalyticsController {
   constructor(private readonly analytics: AnalyticsRepository) {}
+
+  @Get("brands/:brandId/comment-collection")
+  commentCollection(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.analytics.publicationCommentCollection(orgId, brandId);
+  }
+
+  @Put("brands/:brandId/comment-collection")
+  updateCommentCollection(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Body(new ZodValidationPipe(publicationCommentCollectionUpdateSchema)) body: {
+      enabled: boolean;
+    },
+  ) {
+    return this.analytics.updatePublicationCommentCollection(orgId, brandId, body.enabled);
+  }
 
   @Get("brands/:brandId")
   list(

@@ -34,3 +34,21 @@ starting another model call.
 
 Only the organization-scoped analytics endpoints serve this data. The browser
 never calls Telegram or Google AI directly.
+
+## Optional automatic collection
+
+The brand Results screen also has a default-off **Automatic Telegram reply samples**
+setting. With a connected workspace Telegram account, an hourly pass considers
+at most 10 opted-in brands and 50 eligible publications per brand. It checks
+only live, published public Telegram posts at least six hours old with no prior
+sample. Each result contains at most 50 readable replies. A checked publication
+is not collected again automatically; operators can use the manual Collect
+action after its ordinary cooldown. A lost queued job leaves no pending sample
+and can be picked up in a later pass after the queue singleton expires.
+
+Turning the setting off fences queued work, including work already reading
+Telegram; turning it back on increments the fence so the old job stays revoked.
+The final save also checks that the publication still belongs to the same
+brand and channel and that no manual or automatic sample appeared during the
+Telegram read. Automatic collection never invokes Google AI. **Analyze sample**
+remains a separate, explicit paid action.

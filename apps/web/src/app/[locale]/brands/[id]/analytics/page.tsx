@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/modal";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { AutoReplies } from "./auto-replies";
 
 const PERIODS = [7, 30, 90] as const;
 type Period = (typeof PERIODS)[number];
@@ -230,6 +231,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
     >
       <div className="space-y-6">
         <p className="text-sm text-fg-secondary">{t("intro")}</p>
+        <AutoReplies brandId={id} />
         <Segmented
           options={PERIODS.map((value) => ({
             value: String(value),

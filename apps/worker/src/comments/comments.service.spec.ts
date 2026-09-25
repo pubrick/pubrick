@@ -25,6 +25,10 @@ describe("CommentsService", () => {
     saveAuto: vi.fn(),
     failAuto: vi.fn(),
     scanAuto: vi.fn(),
+    scanPublicationsAuto: vi.fn(),
+    eligiblePublicationAuto: vi.fn(),
+    savePublicationAuto: vi.fn(),
+    failPublicationAuto: vi.fn(),
     item: vi.fn(),
     publication: vi.fn(),
     session: vi.fn(),
@@ -40,6 +44,7 @@ describe("CommentsService", () => {
     vi.resetAllMocks();
     repo.item.mockResolvedValue(item);
     repo.eligibleAuto.mockResolvedValue({ url: item.url });
+    repo.eligiblePublicationAuto.mockResolvedValue({ id: "publication-1", url: item.url });
     repo.publication.mockResolvedValue({ id: "publication-1", url: item.url });
     repo.session.mockResolvedValue("encrypted-session");
     repo.save.mockResolvedValue(undefined);
@@ -55,6 +60,24 @@ describe("CommentsService", () => {
     itemId: "item-1",
     revision: 3,
   };
+
+  const publicationAutoJob = {
+    kind: "publication_auto" as const,
+    orgId: "org-1",
+    brandId: "brand-1",
+    publicationId: "publication-1",
+    revision: 1,
+  };
+
+  it("collects an automatic publication without invoking the paid analysis path", async () => {
+    const sample = { status: "available", comments: [] };
+    telegram.comments.mockResolvedValueOnce(sample);
+    await service.handle(publicationAutoJob);
+    expect(repo.eligiblePublicationAuto).toHaveBeenCalledTimes(2);
+    expect(telegram.comments).toHaveBeenCalledOnce();
+    expect(repo.savePublicationAuto).toHaveBeenCalledWith(publicationAutoJob, item.url, sample);
+    expect(repo.savePublication).not.toHaveBeenCalled();
+  });
 
   it("skips a revoked automatic job without Telegram or AI calls", async () => {
     repo.eligibleAuto.mockResolvedValueOnce(null);

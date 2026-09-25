@@ -414,6 +414,8 @@ const NON_ENUM_CHECKS = [
   "autopilot_manual_attempts_status_check",
   "autopilot_manual_attempts_decision_check",
   "autopilot_manual_attempts_terminal_check",
+  // 0076 adds explicit opt-in for publication reply sampling.
+  "publication_comment_collection_configs_revision_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
