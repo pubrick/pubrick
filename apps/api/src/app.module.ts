@@ -17,6 +17,7 @@ import { KnowledgeModule } from "./knowledge/knowledge.module";
 import { MediaModule } from "./media/media.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { OrgModule } from "./org/org.module";
+import { PaidRepliesModule } from "./paid-replies/paid-replies.module";
 import { PromptsModule } from "./prompts/prompts.module";
 import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
@@ -46,6 +47,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     ContentModule,
     FeedsModule,
     OrgModule,
+    PaidRepliesModule,
     PromptsModule,
     PublicApiModule,
     AiCredentialsModule,
