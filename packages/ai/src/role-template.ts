@@ -2,6 +2,7 @@ import {
   adaptationLimit,
   CONTENT_TYPES,
   type ContentType,
+  isPinnedAdaptationLimit,
   PLATFORM_IDS,
   type PlatformId,
   PROMPT_ROLES,
@@ -156,8 +157,8 @@ function assertValues(role: PromptRole, values: RoleTemplateValues): void {
     if (
       typeof platform !== "string" ||
       !(PLATFORM_IDS as readonly string[]).includes(platform) ||
-      !Number.isInteger(limit) ||
-      limit !== adaptationLimit(platform)
+      typeof limit !== "number" ||
+      !isPinnedAdaptationLimit(platform, limit)
     ) {
       throw new RoleTemplateError(
         "invalid_values",

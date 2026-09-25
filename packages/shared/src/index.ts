@@ -162,6 +162,7 @@ export {
 export * from "./link-policy-defaults.js";
 export {
   adaptationLimit,
+  isPinnedAdaptationLimit,
   PLATFORM_MAX_TEXT_LENGTH,
   TELEGRAM_ADAPTER_MAX_TEXT_LENGTH,
 } from "./platform-limits.js";

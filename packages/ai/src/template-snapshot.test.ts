@@ -54,6 +54,24 @@ describe("persisted role template snapshot", () => {
     expect(validateTemplateSnapshot(snapshot)).toEqual(snapshot);
   });
 
+  it("accepts an existing Telegram claim pinned to the former 4096 limit", () => {
+    const snapshot = validSnapshot();
+    const channel = snapshot.receipt.channels[0];
+    if (!channel) throw new Error("Missing channel fixture");
+    channel.limit = 4096;
+    snapshot.receiptSha256 = receiptDigest(snapshot.receipt);
+    expect(validateTemplateSnapshot(snapshot)).toEqual(snapshot);
+  });
+
+  it("refuses an invented pinned Telegram limit even when its receipt is rehashed", () => {
+    const snapshot = validSnapshot();
+    const channel = snapshot.receipt.channels[0];
+    if (!channel) throw new Error("Missing channel fixture");
+    channel.limit = 8192;
+    snapshot.receiptSha256 = receiptDigest(snapshot.receipt);
+    expect(() => validateTemplateSnapshot(snapshot)).toThrow(InvalidTemplateSnapshotError);
+  });
+
   it.each([
     [
       "missing role",

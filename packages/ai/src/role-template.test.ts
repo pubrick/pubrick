@@ -85,6 +85,25 @@ describe("role template scanner", () => {
     expectRoleTemplateError(() => renderRoleTemplate("writer", "Hello", values), "invalid_values");
   });
 
+  it("still renders a pinned old Telegram template with its 4096 limit", () => {
+    const values = {
+      ...writerValues,
+      channel_platform: "telegram" as const,
+      channel_limit: 4096,
+    };
+    expect(renderRoleTemplate("adapter", "Limit {{channel_limit}}", values).text).toBe(
+      "Limit 4096",
+    );
+    expectRoleTemplateError(
+      () =>
+        renderRoleTemplate("adapter", "Limit {{channel_limit}}", {
+          ...values,
+          channel_limit: 8192,
+        }),
+      "invalid_values",
+    );
+  });
+
   it("rejects unknown, malformed, unclosed, and unexpected delimiters at their positions", () => {
     for (const source of [
       "{{ name }}",
@@ -212,7 +231,11 @@ describe("built-in role template inventory", () => {
     expect(
       createHash("sha256")
         .update(
-          builtInAdapterRoleLines({ name: "Example Telegram", platform: "telegram" }).join("\n"),
+          builtInAdapterRoleLines({
+            name: "Example Telegram",
+            platform: "telegram",
+            limit: 4096,
+          }).join("\n"),
         )
         .digest("hex"),
     ).toBe(legacyHashes.adapter);
@@ -237,7 +260,7 @@ describe("built-in role template inventory", () => {
     expect(lines.at(-1)).toContain("Never say or imply that a claim has been checked");
   });
 
-  it("composes every built-in role with byte-identical legacy instructions", () => {
+  it("composes every built-in role with the current channel limit", () => {
     const brand = {
       name: "Example Brand",
       voice: "Clear and practical",
@@ -245,7 +268,7 @@ describe("built-in role template inventory", () => {
       contentLanguage: "en",
     };
     const claimDateUtc = "2026-01-15";
-    const channel = { name: "Example Telegram", platform: "telegram" as const, limit: 4096 };
+    const channel = { name: "Example Telegram", platform: "telegram" as const, limit: 12_000 };
     for (const contentType of CONTENT_TYPES) {
       for (const role of ["researcher", "writer", "editor", "factcheck", "adapter"] as const) {
         const roleLines =

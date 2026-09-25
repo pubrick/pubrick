@@ -45,6 +45,12 @@ describe("the provider is told the bound the reply is held to", () => {
     expect(body.maxLength).toBe(adaptationLimit(channel.platform));
     expect(body.minLength).toBe(1);
   });
+
+  it("adapter: a resumed Telegram claim keeps its pinned provider maxLength", async () => {
+    const telegram = { ...channel, platform: "telegram" as const };
+    expect((await providerSchema(adapterFor(telegram).schema)).maxLength).toBe(12_000);
+    expect((await providerSchema(adapterFor(telegram, 4096).schema)).maxLength).toBe(4096);
+  });
 });
 
 describe("newlines are canonical before the bound is measured", () => {
