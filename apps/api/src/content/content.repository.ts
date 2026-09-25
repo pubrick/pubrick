@@ -50,7 +50,7 @@ import {
   toLedgerCostUsd,
   withHashtags,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
@@ -4772,20 +4772,46 @@ export class ContentRepository {
           "This channel's scheduled time changed; reload before moving it",
         );
       }
-      const [receipt] = await tx
+      // A previous known failure is evidence that nothing was delivered, and
+      // approving its retry already created this scheduled job. A published
+      // receipt or an active claim is different: either can be live outside
+      // Pubrick, so moving the job would hide a second send behind a new slot.
+      const [unsafeReceipt] = await tx
         .select({ id: schema.publications.id })
         .from(schema.publications)
         .where(
           and(
             eq(schema.publications.orgId, orgId),
             eq(schema.publications.adaptationId, adaptationId),
+            inArray(schema.publications.status, ["in_flight", "published"]),
           ),
         )
         .limit(1);
-      if (receipt) {
+      // An unknown result becomes safe only when a later human assertion says
+      // it was not delivered. A subsequent worker failure alone cannot settle
+      // that earlier send, even though it would be the last finished receipt.
+      const [lastUncertainOrResolution] = await tx
+        .select({ status: schema.publications.status })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.adaptationId, adaptationId),
+            or(
+              eq(schema.publications.status, "unknown"),
+              and(
+                eq(schema.publications.status, "failed"),
+                isNotNull(schema.publications.assertedAt),
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(schema.publications.createdAt), desc(schema.publications.id))
+        .limit(1);
+      if (unsafeReceipt || lastUncertainOrResolution?.status === "unknown") {
         throw conflict(
           "schedule_has_history",
-          "This channel has delivery history; inspect it before scheduling again",
+          "This channel has an unresolved or delivered attempt; inspect it before scheduling again",
         );
       }
 
