@@ -1,23 +1,32 @@
 "use client";
 
-import { type ContentVersionDto, contentVersionRestoreSchema } from "@pubrick/shared";
+import {
+  type ContentVersionDto,
+  contentVersionRestoreSchema,
+  type RichBody,
+} from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { api, apiPage, errorMessage } from "@/lib/api";
+import { RichMasterEditor } from "./rich-master-editor";
 
 type VersionHistoryProps = {
   itemId: string;
   adaptationId?: string;
   currentBody: string | null;
   draftBody: string | null;
+  currentBodyRevision?: number;
+  currentRichBody?: RichBody | null;
+  unsavedFormatting?: boolean;
   currentHashtags?: string[];
   currentCta?: string | null;
   unsavedMetadata?: boolean;
   editable: boolean;
   onRestored: (body: string) => Promise<void>;
+  onRichRestored?: (richBody: RichBody | null, bodyRevision?: number) => void;
 };
 
 /** History is deliberately fetched only when this disclosure is opened. */
@@ -26,11 +35,15 @@ export function VersionHistory({
   adaptationId,
   currentBody,
   draftBody,
+  currentBodyRevision,
+  currentRichBody = null,
+  unsavedFormatting = false,
   currentHashtags,
   currentCta,
   unsavedMetadata = false,
   editable,
   onRestored,
+  onRichRestored,
 }: VersionHistoryProps) {
   const t = useTranslations("Publish");
   const te = useTranslations("Errors");
@@ -84,28 +97,38 @@ export function VersionHistory({
     }
   }
 
-  const hasUnsavedText = draftBody !== currentBody || unsavedMetadata;
+  const hasUnsavedText = draftBody !== currentBody || unsavedMetadata || unsavedFormatting;
   const canRestore = editable && !hasUnsavedText;
   const selectedIsCurrent =
     selected?.body === currentBody &&
-    (!adaptationId ||
-      (JSON.stringify(selected.hashtags) === JSON.stringify(currentHashtags ?? []) &&
-        selected.cta === (currentCta ?? null)));
+    (adaptationId
+      ? JSON.stringify(selected.hashtags) === JSON.stringify(currentHashtags ?? []) &&
+        selected.cta === (currentCta ?? null)
+      : JSON.stringify(selected.richBody ?? null) === JSON.stringify(currentRichBody));
 
   async function restore() {
     if (!selected || !canRestore || restoring) return;
     setRestoring(true);
     setError(null);
     try {
-      await api(`/api/content/${itemId}/versions/${selected.id}/restore`, {
-        method: "POST",
-        body: JSON.stringify(
-          contentVersionRestoreSchema.parse({
-            expectedBody: currentBody,
-            ...(adaptationId ? { expectedHashtags: currentHashtags, expectedCta: currentCta } : {}),
-          }),
-        ),
-      });
+      const restored = await api<{ bodyRevision?: number }>(
+        `/api/content/${itemId}/versions/${selected.id}/restore`,
+        {
+          method: "POST",
+          body: JSON.stringify(
+            contentVersionRestoreSchema.parse({
+              expectedBody: currentBody,
+              ...(!adaptationId && currentBodyRevision !== undefined
+                ? { expectedBodyRevision: currentBodyRevision }
+                : {}),
+              ...(adaptationId
+                ? { expectedHashtags: currentHashtags, expectedCta: currentCta }
+                : {}),
+            }),
+          ),
+        },
+      );
+      if (!adaptationId) onRichRestored?.(selected.richBody ?? null, restored?.bodyRevision);
       await onRestored(selected.body);
       setSelected(null);
       setNotice(t("versionRestored"));
@@ -207,6 +230,16 @@ export function VersionHistory({
             <div className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-control bg-bg-sunken p-3 text-sm text-fg">
               {selected.body}
             </div>
+            {!adaptationId && selected.richBody && (
+              <div className="mt-3 max-h-72 overflow-auto">
+                <RichMasterEditor
+                  key={selected.id}
+                  initialDocument={selected.richBody}
+                  onChange={() => {}}
+                  readOnly
+                />
+              </div>
+            )}
             {adaptationId && selected.hashtags.length > 0 && (
               <p className="mt-3 text-sm text-fg-secondary">
                 {t("hashtagsLabel")}: {selected.hashtags.map((tag) => `#${tag}`).join(" ")}

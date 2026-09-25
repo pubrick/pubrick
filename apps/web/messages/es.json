@@ -721,7 +721,13 @@
       "linkUrl": "URL del enlace",
       "applyLink": "Aplicar enlace",
       "cancel": "Cancelar",
-      "invalidLink": "Introduce un enlace HTTP, HTTPS o de correo."
+      "invalidLink": "Introduce un enlace HTTP, HTTPS o de correo.",
+      "formatMode": "Dar formato",
+      "plainMode": "Texto sin formato",
+      "channelPreview": "Vista previa del texto del canal",
+      "formatReset": "Se borró el formato porque cambió el texto. Las versiones anteriores con formato siguen en el historial.",
+      "invalid": "El borrador con formato contiene contenido no admitido o supera el límite de texto. Edítalo antes de guardar.",
+      "unavailable": "Este borrador no se puede convertir sin cambiar su texto. Continúa con texto sin formato."
     },
     "linkPolicyApplied": "Se aplicó la regla de enlaces de marca para {website}. Los enlaces a la página principal en los borradores de canal pueden tener UTM; las fuentes y páginas concretas se conservan. Revisa cada enlace antes de aprobar.",
     "backToQueue": "Volver a la cola",

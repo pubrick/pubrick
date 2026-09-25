@@ -721,7 +721,13 @@
       "linkUrl": "Link URL",
       "applyLink": "Apply link",
       "cancel": "Cancel",
-      "invalidLink": "Enter an HTTP, HTTPS, or email link."
+      "invalidLink": "Enter an HTTP, HTTPS, or email link.",
+      "formatMode": "Format text",
+      "plainMode": "Plain text",
+      "channelPreview": "Channel text preview",
+      "formatReset": "Formatting was cleared because the text changed. Earlier formatted versions remain in history.",
+      "invalid": "This formatted draft contains unsupported content or exceeds the text limit. Edit it before saving.",
+      "unavailable": "This draft cannot be converted without changing its text. Continue in plain text."
     },
     "linkPolicyApplied": "Brand link policy was applied to this draft for {website}. Bare homepage links in channel drafts may have UTM tags; source links and specific pages remain as written. Review every link before approval.",
     "backToQueue": "Back to queue",

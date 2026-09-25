@@ -721,7 +721,13 @@
       "linkUrl": "URL do link",
       "applyLink": "Aplicar link",
       "cancel": "Cancelar",
-      "invalidLink": "Digite um link HTTP, HTTPS ou de e-mail."
+      "invalidLink": "Digite um link HTTP, HTTPS ou de e-mail.",
+      "formatMode": "Formatar texto",
+      "plainMode": "Texto simples",
+      "channelPreview": "Prévia do texto do canal",
+      "formatReset": "A formatação foi removida porque o texto mudou. As versões formatadas anteriores permanecem no histórico.",
+      "invalid": "O rascunho formatado contém conteúdo não suportado ou ultrapassa o limite de texto. Edite antes de salvar.",
+      "unavailable": "Este rascunho não pode ser convertido sem alterar o texto. Continue no editor de texto simples."
     },
     "linkPolicyApplied": "A regra de links da marca foi aplicada a este rascunho para {website}. Links para a página inicial nos rascunhos de canal podem ter UTM; fontes e páginas específicas permanecem como escritas. Revise cada link antes de aprovar.",
     "backToQueue": "Voltar à fila",

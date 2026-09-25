@@ -5,6 +5,7 @@ import type {
   DeliveryOutcome,
   PublishFailureReason,
   RefineProposal,
+  RichBody,
   RunInput,
 } from "@pubrick/shared";
 import {
@@ -77,6 +78,9 @@ type ContentItem = {
   videoMediaId: string | null;
   title: string | null;
   body: string;
+  richBody?: RichBody | null;
+  richBodyHtml?: string | null;
+  bodyRevision?: number;
   status: ContentStatus;
   archivedFromStatus: ContentStatus | null;
   isSafeToDelete: boolean;
@@ -259,6 +263,57 @@ beforeEach(() => {
   // block; the aliased auth-client stub defaults to signed-out, so a page
   // whose own tests don't care about that content still opts in explicitly.
   signedInSession();
+});
+
+describe("rich master integration", () => {
+  it("offers formatting only when the API advertises support and saves with the original revision", async () => {
+    const served = { current: makeItem({ richBody: null, richBodyHtml: null, bodyRevision: 0 }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method, init) => {
+      if (method !== "PATCH" || path !== "/api/content/c1") return undefined;
+      const payload = JSON.parse(String(init?.body)) as { body: string; richBody: RichBody };
+      served.current = {
+        ...served.current,
+        body: payload.body,
+        richBody: payload.richBody,
+        bodyRevision: 1,
+        richBodyHtml: "<p>Hello world</p>",
+      };
+      return served.current;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.richEditor.formatMode }));
+    expect(await screen.findByRole("textbox", { name: en.Publish.richEditor.label })).toBeVisible();
+    expect(
+      screen.getByRole("textbox", { name: en.Publish.richEditor.channelPreview }),
+    ).toHaveAttribute("readonly");
+    await user.click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === "PATCH" && call.path === "/api/content/c1")).toBe(
+        true,
+      ),
+    );
+    const sent = calls.find((call) => call.method === "PATCH" && call.path === "/api/content/c1");
+    expect(JSON.parse(sent?.body ?? "{}")).toMatchObject({
+      body: "Hello world",
+      expectedBody: "Hello world",
+      expectedBodyRevision: 0,
+      richBody: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Hello world" }] }],
+      },
+    });
+  });
+
+  it("keeps the existing plain editor for an older API", async () => {
+    installBaseHandlers({ current: makeItem() }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.richEditor.formatMode }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toBeVisible();
+  });
 });
 
 describe("rendering by adaptation status (Step 1)", () => {
