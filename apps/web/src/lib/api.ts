@@ -152,6 +152,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_pinned_published: "content_pinned_published",
   content_archived: "content_archived",
   content_archive_delivery_active: "content_archive_delivery_active",
+  content_topic_unlinked: "content_topic_unlinked",
+  content_topic_veto_not_draft: "content_topic_veto_not_draft",
   content_delete_requires_archive: "content_delete_requires_archive",
   content_delete_has_delivery_history: "content_delete_has_delivery_history",
   content_delete_has_generation_history: "content_delete_has_generation_history",
