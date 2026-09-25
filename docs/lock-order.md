@@ -79,6 +79,13 @@ edits, version restoration, refine acceptance, and approval already serialize
 on that same item lock; the body update trigger prevents any writer from
 leaving an image beyond the last paragraph. Slot inserts also take
 `FOR KEY SHARE` on referenced `media_assets` rows.
+Regenerating one saved inline image checks the organization and item under
+`FOR KEY SHARE` before calling Gemini. It holds no database lock during the
+provider call. Afterward, a short transaction locks the organization
+`FOR KEY SHARE`, item `FOR UPDATE`, and new media asset `FOR KEY SHARE`, then
+updates the selected slot. It rechecks the item's state, image revision, and
+slot identity under those locks. If any changed, the generated asset remains
+in the media library and the slot stays untouched.
 Media deletion checks cover, inline, and public feed references, then deletes
 the asset; its foreign-key fallback turns a concurrent attachment into a 409.
 It never takes a content-item row lock after touching media, so this path cannot
