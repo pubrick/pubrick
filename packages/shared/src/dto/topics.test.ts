@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { topicCreateSchema, topicDtoSchema, topicUpdateSchema } from "./topics.js";
+import { topicCreateSchema, topicDtoSchema, topicRunSchema, topicUpdateSchema } from "./topics.js";
 
 const brandId = "00000000-0000-4000-8000-000000000001";
 
@@ -48,10 +48,48 @@ describe("dated topic planning contract", () => {
         origin: "manual",
         plannedDate: "2026-10-11",
         priority: 5,
+        contentType: "social_post",
+        seoKeywords: [],
         revision: 2,
         createdAt: "2026-09-24T00:00:00.000Z",
         updatedAt: "2026-09-24T00:00:00.000Z",
       }),
     ).toMatchObject({ plannedDate: "2026-10-11", priority: 5 });
+  });
+
+  it("bounds saved expert keywords and permits clearing them", () => {
+    expect(
+      topicCreateSchema.parse({
+        brandId,
+        title: "Guide",
+        contentType: "expert_article",
+        seoKeywords: ["  local guide  "],
+      }).seoKeywords,
+    ).toEqual(["local guide"]);
+    expect(topicUpdateSchema.parse({ seoKeywords: [] })).toEqual({ seoKeywords: [] });
+    expect(
+      topicCreateSchema.safeParse({
+        brandId,
+        title: "Post",
+        contentType: "social_post",
+        seoKeywords: ["local guide"],
+      }).success,
+    ).toBe(false);
+    expect(
+      topicUpdateSchema.safeParse({ contentType: "comparison", seoKeywords: ["local guide"] })
+        .success,
+    ).toBe(false);
+    expect(
+      topicCreateSchema.safeParse({ brandId, title: "Case", contentType: "case_study" }).success,
+    ).toBe(false);
+  });
+
+  it("permits a keyword override when the stored topic format is resolved server-side", () => {
+    expect(
+      topicRunSchema.parse({ channelIds: [brandId], seoKeywords: ["local guide"] }).seoKeywords,
+    ).toEqual(["local guide"]);
+    expect(topicRunSchema.parse({ channelIds: [brandId], seoKeywords: [] }).seoKeywords).toEqual(
+      [],
+    );
   });
 });

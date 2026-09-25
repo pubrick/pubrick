@@ -147,6 +147,53 @@ describe("topic bank page", () => {
     expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
   });
 
+  it("shows saved expert keywords and can clear them for one run", async () => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url, method, body });
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?"))
+        return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            id: TOPIC_ID,
+            title: "Expert guide",
+            description: "Facts",
+            status: "approved",
+            origin: "manual",
+            contentType: "expert_article",
+            seoKeywords: ["local guide"],
+            plannedDate: null,
+            priority: 5,
+          },
+        ]);
+      if (url.includes("/run?"))
+        return response(201, { id: "c8c29afd-6316-4e39-a7f1-3399d7063b80" });
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Topics.generate }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Topics.runTitle }));
+    expect(dialog.getByLabelText(en.Topics.runFormat)).toHaveValue("expert_article");
+    expect(dialog.getByLabelText(en.Topics.seoKeywordsLabel)).toBeVisible();
+    await user.clear(dialog.getByLabelText(en.Topics.seoKeywordsLabel));
+    await user.click(dialog.getByRole("checkbox", { name: /Updates/ }));
+    await user.click(dialog.getByRole("button", { name: en.Topics.generate }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        url: expect.stringContaining(`/api/topics/${TOPIC_ID}/run?brandId=${BRAND_ID}`),
+        method: "POST",
+        body: { channelIds: [CHANNEL_ID], seoKeywords: [] },
+      }),
+    );
+  });
+
   it("saves an optional target date and priority without generating or approving", async () => {
     const requests: Array<{ url: string; method: string; body: unknown }> = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
@@ -170,6 +217,8 @@ describe("topic bank page", () => {
     });
     await user.clear(screen.getByLabelText(en.Topics.priority));
     await user.type(screen.getByLabelText(en.Topics.priority), "8");
+    await user.selectOptions(screen.getByLabelText(en.Topics.runFormat), "expert_article");
+    await user.type(screen.getByLabelText(en.Topics.seoKeywordsLabel), "local launch guide");
     await user.click(screen.getByRole("button", { name: en.Topics.add }));
     await waitFor(() =>
       expect(
@@ -180,6 +229,8 @@ describe("topic bank page", () => {
         title: "Product launch",
         plannedDate: "2026-10-10",
         priority: 8,
+        contentType: "expert_article",
+        seoKeywords: ["local launch guide"],
       }),
     );
     expect(requests.some((entry) => entry.url.includes("/run"))).toBe(false);

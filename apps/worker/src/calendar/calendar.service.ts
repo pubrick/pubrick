@@ -72,6 +72,7 @@ export class CalendarService {
           generateCover: schema.calendarSlots.generateCover,
           generateInlineImages: schema.calendarSlots.generateInlineImages,
           contentType: schema.calendarSlots.contentType,
+          seoKeywords: schema.calendarSlots.seoKeywords,
         })
         .from(schema.calendarSlots)
         .where(
@@ -100,6 +101,8 @@ export class CalendarService {
             title: schema.topics.title,
             description: schema.topics.description,
             sourceUrl: schema.topics.sourceUrl,
+            contentType: schema.topics.contentType,
+            seoKeywords: schema.topics.seoKeywords,
             updatedAt: schema.topics.updatedAt,
             revision: schema.topics.revision,
           })
@@ -117,6 +120,8 @@ export class CalendarService {
           topic.title !== slot.topicTitle ||
           topic.description !== slot.topicDescription ||
           topic.sourceUrl !== slot.topicSourceUrl ||
+          topic.contentType !== slot.contentType ||
+          JSON.stringify(topic.seoKeywords) !== JSON.stringify(slot.seoKeywords) ||
           topic.updatedAt.getTime() !== slot.topicUpdatedAt?.getTime() ||
           topic.revision !== slot.topicRevision
         ) {
@@ -174,6 +179,7 @@ export class CalendarService {
       }
       if (
         contentTypeRequiresMaterial(slot.contentType) ||
+        (slot.seoKeywords.length > 0 && slot.contentType !== "expert_article") ||
         (slot.generateInlineImages && !supportsInlineImages(slot.contentType))
       ) {
         await tx
@@ -228,6 +234,7 @@ export class CalendarService {
               ...(slot.generateCover && { generateCover: true }),
               ...(slot.generateInlineImages && { generateInlineImages: true }),
               ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
+              ...(slot.seoKeywords.length && { seoKeywords: slot.seoKeywords }),
             }
           : {
               kind: "brief",
@@ -236,6 +243,7 @@ export class CalendarService {
               ...(slot.generateCover && { generateCover: true }),
               ...(slot.generateInlineImages && { generateInlineImages: true }),
               ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
+              ...(slot.seoKeywords.length && { seoKeywords: slot.seoKeywords }),
             };
       if (!runInputSchema.safeParse(input).success) {
         await tx

@@ -426,7 +426,7 @@ export class RunsRepository {
    * count taken outside would be stale by the time the insert commits, which is
    * the same reason it is taken under the advisory lock.
    */
-  async create(orgId: string, data: RunCreate) {
+  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<void>) {
     await this.resolveChannels(orgId, data);
 
     // The SAME two expressions `runCreateSchema`'s cross-field refine uses, read
@@ -449,6 +449,7 @@ export class RunsRepository {
 
     const id = await db.transaction(async (tx) => {
       await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
+      if (beforeInsert) await beforeInsert(tx);
       // Capture a bounded, deterministic by-value snapshot under the same
       // transaction as admission and enqueue. Both sides of the join carry the
       // tenant predicate; the item supplies the brand boundary.

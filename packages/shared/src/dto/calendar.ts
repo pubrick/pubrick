@@ -50,10 +50,13 @@ export const calendarSlotCreateSchema = slotFields
     message: "this format requires source material",
     path: ["contentType"],
   })
-  .refine((v) => !v.generateInlineImages || supportsInlineImages(v.contentType), {
-    message: "inline images require an article format",
-    path: ["generateInlineImages"],
-  });
+  .refine(
+    (v) => !v.generateInlineImages || Boolean(v.topicId) || supportsInlineImages(v.contentType),
+    {
+      message: "inline images require an article format",
+      path: ["generateInlineImages"],
+    },
+  );
 export const calendarSlotsBulkCreateSchema = z.object({
   brandId: z.uuid(),
   slots: z

@@ -397,6 +397,7 @@ export const API_ERROR_CODES = [
   "topic_not_found",
   "news_item_not_found",
   "topic_not_approved",
+  "topic_changed",
   "topic_suggestions_cooldown",
   "topic_planning_disabled",
   "topic_planning_cooldown",

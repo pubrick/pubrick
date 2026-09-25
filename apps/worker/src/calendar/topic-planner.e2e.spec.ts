@@ -106,6 +106,21 @@ describe.skipIf(!url)("approved topic calendar planning", () => {
     expect(slot?.runId).toBeNull();
   });
 
+  it("copies an approved article format and editorial keywords into automatic slots", async () => {
+    const { brandId } = await brand();
+    const topicId = await topic(brandId, "2026-09-25");
+    await db
+      .update(schema.topics)
+      .set({ contentType: "expert_article", seoKeywords: ["local guide"] })
+      .where(eq(schema.topics.id, topicId));
+    expect(await planner.planBrand(orgId, brandId, new Date("2026-09-24T08:00:00Z"))).toBe(1);
+    expect((await slots(brandId))[0]).toMatchObject({
+      topicId,
+      contentType: "expert_article",
+      seoKeywords: ["local guide"],
+    });
+  });
+
   it("counts manual slots in the local day cap and chooses higher priority first", async () => {
     const { brandId, channelId } = await brand({ planningDailyLimit: 2 });
     const now = new Date("2026-09-24T08:00:00Z");

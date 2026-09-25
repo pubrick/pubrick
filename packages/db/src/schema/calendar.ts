@@ -31,6 +31,7 @@ export const calendarSlots = pgTable(
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     brief: text("brief").notNull(),
     contentType: text("content_type", { enum: CONTENT_TYPES }).default("social_post").notNull(),
+    seoKeywords: jsonb("seo_keywords").$type<string[]>().notNull().default([]),
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "no action" }),
     topicTitle: text("topic_title"),
     topicDescription: text("topic_description"),
@@ -63,5 +64,9 @@ export const calendarSlots = pgTable(
     ),
     enumCheck("calendar_slots_error_code_check", t.errorCode, CALENDAR_SLOT_ERRORS),
     enumCheck("calendar_slots_content_type_check", t.contentType, CONTENT_TYPES),
+    check(
+      "calendar_slots_seo_keywords_check",
+      sql`jsonb_typeof(${t.seoKeywords}) = 'array' and jsonb_array_length(${t.seoKeywords}) <= 8 and (${t.contentType} = 'expert_article' or ${t.seoKeywords} = '[]'::jsonb)`,
+    ),
   ],
 );

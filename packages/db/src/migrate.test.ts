@@ -370,6 +370,7 @@ const NON_ENUM_CHECKS = [
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
   "calendar_slots_content_type_check",
+  "calendar_slots_seo_keywords_check",
   "calendar_slots_topic_snapshot_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
@@ -382,6 +383,8 @@ const NON_ENUM_CHECKS = [
   // seed. The topic API e2e writes real rows and proves both reject off-list
   // values with SQLSTATE 23514.
   "topics_status_check",
+  "topics_content_type_check",
+  "topics_seo_keywords_check",
   // 0033's late enum pins are exercised by the topic API and suggestion worker
   // e2e suites; this pre-0009 seed has no topic or request rows to update.
   "topics_origin_check",
@@ -2837,6 +2840,73 @@ describe.skipIf(!url)("runMigrations", () => {
           [brandId],
         );
         expect(inserted.rows[0]?.images_revision).toBe(0);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("preserves existing topic and slot content while defaulting their new format metadata", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0081_topic_format_seo");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      let slotId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const oldColumns = await pool.query(
+          "SELECT table_name, column_name FROM information_schema.columns WHERE table_name IN ('topics', 'calendar_slots') AND column_name = 'seo_keywords'",
+        );
+        expect(oldColumns.rows).toHaveLength(0);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_format_old', 'Topic old', 'topic-format-old')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_format_old', 'Legacy brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id as string;
+        const topic = await pool.query<{ id: string; updated_at: Date; revision: number }>(
+          "INSERT INTO topics (org_id, brand_id, title, description, status) VALUES ('topic_format_old', $1, 'Reviewed topic', 'Known details', 'approved') RETURNING id, updated_at, revision",
+          [brandId],
+        );
+        topicId = topic.rows[0]?.id as string;
+        const slot = await pool.query<{ id: string }>(
+          "INSERT INTO calendar_slots (org_id, brand_id, scheduled_at, brief, topic_id, topic_title, topic_description, topic_updated_at, topic_revision, channel_ids) VALUES ('topic_format_old', $1, now() + interval '1 day', 'Reviewed topic\\n\\nKnown details', $2, 'Reviewed topic', 'Known details', $3, $4, '[]'::jsonb) RETURNING id",
+          [brandId, topicId, topic.rows[0]?.updated_at, topic.rows[0]?.revision],
+        );
+        slotId = slot.rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const topic = await after.query(
+          "SELECT title, description, status, content_type, seo_keywords FROM topics WHERE id = $1",
+          [topicId],
+        );
+        expect(topic.rows[0]).toMatchObject({
+          title: "Reviewed topic",
+          description: "Known details",
+          status: "approved",
+          content_type: "social_post",
+          seo_keywords: [],
+        });
+        const slot = await after.query(
+          "SELECT brief, topic_id, content_type, seo_keywords FROM calendar_slots WHERE id = $1",
+          [slotId],
+        );
+        expect(slot.rows[0]).toMatchObject({
+          topic_id: topicId,
+          content_type: "social_post",
+          seo_keywords: [],
+        });
+        expect(slot.rows[0]?.brief).toContain("Reviewed topic");
       } finally {
         await after.end();
       }

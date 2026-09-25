@@ -228,6 +228,150 @@ describe.skipIf(!url)("topic bank e2e", () => {
     ).toEqual([]);
   });
 
+  it("saves a topic format and keywords, uses them for direct runs, and revokes approval on edits", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Guides" }).expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const created = await owner.agent
+      .post("/api/topics")
+      .send({
+        brandId: brand.body.id,
+        title: "Neighborhood guide",
+        contentType: "expert_article",
+        seoKeywords: ["market guide"],
+      })
+      .expect(201);
+    expect(topicDtoSchema.parse(created.body)).toMatchObject({
+      contentType: "expert_article",
+      seoKeywords: ["market guide"],
+    });
+    await expect(
+      db.execute(sql`update topics set content_type = 'social_post' where id = ${created.body.id}`),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
+    await expect(
+      db.execute(
+        sql`update topics set content_type = 'case_study', seo_keywords = '[]'::jsonb where id = ${created.body.id}`,
+      ),
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
+    await other.agent
+      .patch(`/api/topics/${created.body.id}?brandId=${brand.body.id}`)
+      .send({ seoKeywords: [] })
+      .expect(404);
+    await owner.agent
+      .patch(`/api/topics/${created.body.id}?brandId=${brand.body.id}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const first = await owner.agent
+      .post(`/api/topics/${created.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [channel.body.id] })
+      .expect(201);
+    expect(first.body.input).toMatchObject({
+      contentType: "expert_article",
+      seoKeywords: ["market guide"],
+    });
+    const withoutSeo = await owner.agent
+      .post(`/api/topics/${created.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [channel.body.id], seoKeywords: [] })
+      .expect(201);
+    expect(withoutSeo.body.input.contentType).toBe("expert_article");
+    expect(withoutSeo.body.input.seoKeywords).toBeUndefined();
+    const edited = await owner.agent
+      .patch(`/api/topics/${created.body.id}?brandId=${brand.body.id}`)
+      .send({ seoKeywords: [] })
+      .expect(200);
+    expect(edited.body).toMatchObject({ status: "idea", seoKeywords: [] });
+    expect(edited.body.revision).toBeGreaterThan(created.body.revision);
+    await owner.agent
+      .post(`/api/topics/${created.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [channel.body.id] })
+      .expect(409);
+    await owner.agent
+      .patch(`/api/topics/${created.body.id}?brandId=${brand.body.id}`)
+      .send({ contentType: "social_post" })
+      .expect(200);
+    await owner.agent
+      .patch(`/api/topics/${created.body.id}?brandId=${brand.body.id}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const second = await owner.agent
+      .post(`/api/topics/${created.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [channel.body.id] })
+      .expect(201);
+    expect(second.body.input.contentType).toBe("social_post");
+    expect(second.body.input.seoKeywords).toBeUndefined();
+  });
+
+  it("refuses a direct run if the approved topic changes after its first read", async () => {
+    const owner = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Race guard" }).expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Main",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const topic = await owner.agent
+      .post("/api/topics")
+      .send({
+        brandId: brand.body.id,
+        title: "Reviewed",
+        contentType: "expert_article",
+        seoKeywords: ["first phrase"],
+      })
+      .expect(201);
+    await owner.agent
+      .patch(`/api/topics/${topic.body.id}?brandId=${brand.body.id}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const { TopicsRepository } = await import("./topics.repository");
+    const repository = app.get(TopicsRepository);
+    const originalGet = repository.get.bind(repository);
+    let signalRead = () => {};
+    let releaseRead = () => {};
+    const read = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    repository.get = async (orgId, brandId, id) => {
+      const snapshot = await originalGet(orgId, brandId, id);
+      signalRead();
+      await release;
+      return snapshot;
+    };
+    try {
+      const pending = owner.agent
+        .post(`/api/topics/${topic.body.id}/run?brandId=${brand.body.id}`)
+        .send({ channelIds: [channel.body.id] });
+      const result = pending.then((response) => response);
+      await read;
+      await owner.agent
+        .patch(`/api/topics/${topic.body.id}?brandId=${brand.body.id}`)
+        .send({ seoKeywords: ["second phrase"] })
+        .expect(200);
+      releaseRead();
+      const response = await result;
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe("topic_changed");
+    } finally {
+      releaseRead();
+      repository.get = originalGet;
+    }
+  });
+
   it("scopes dated topic plans and keeps approval when only date or priority changes", async () => {
     const owner = await orgAgent();
     const other = await orgAgent();

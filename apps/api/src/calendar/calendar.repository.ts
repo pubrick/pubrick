@@ -18,6 +18,7 @@ const SLOT_COLUMNS = {
   scheduledAt: schema.calendarSlots.scheduledAt,
   brief: schema.calendarSlots.brief,
   contentType: schema.calendarSlots.contentType,
+  seoKeywords: schema.calendarSlots.seoKeywords,
   topicId: schema.calendarSlots.topicId,
   topicTitle: schema.calendarSlots.topicTitle,
   topicDescription: schema.calendarSlots.topicDescription,
@@ -128,6 +129,8 @@ export class CalendarRepository {
               title: schema.topics.title,
               description: schema.topics.description,
               sourceUrl: schema.topics.sourceUrl,
+              contentType: schema.topics.contentType,
+              seoKeywords: schema.topics.seoKeywords,
               status: schema.topics.status,
               updatedAt: schema.topics.updatedAt,
               revision: schema.topics.revision,
@@ -145,6 +148,10 @@ export class CalendarRepository {
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (topic && data.contentType && data.contentType !== topic.contentType)
+        throw badRequest("invalid_request", "A linked topic supplies its own format");
+      if (topic && data.generateInlineImages && !supportsInlineImages(topic.contentType))
+        throw badRequest("invalid_request", "Inline images require an article format");
       if (data.topicId) {
         const [planned] = await tx
           .select({ id: schema.calendarSlots.id })
@@ -169,7 +176,8 @@ export class CalendarRepository {
           brandId: data.brandId,
           scheduledAt: new Date(data.scheduledAt),
           brief,
-          contentType: data.contentType ?? "social_post",
+          contentType: topic?.contentType ?? data.contentType ?? "social_post",
+          seoKeywords: topic?.seoKeywords ?? [],
           topicId: data.topicId ?? null,
           topicTitle: topic?.title ?? null,
           topicDescription: topic?.description ?? null,
@@ -226,6 +234,8 @@ export class CalendarRepository {
           title: schema.topics.title,
           description: schema.topics.description,
           sourceUrl: schema.topics.sourceUrl,
+          contentType: schema.topics.contentType,
+          seoKeywords: schema.topics.seoKeywords,
           status: schema.topics.status,
           updatedAt: schema.topics.updatedAt,
           revision: schema.topics.revision,
@@ -284,6 +294,8 @@ export class CalendarRepository {
               topicSourceUrl: topic.sourceUrl,
               topicUpdatedAt: topic.updatedAt,
               topicRevision: topic.revision,
+              contentType: topic.contentType,
+              seoKeywords: topic.seoKeywords,
               channelIds: slot.channelIds,
             };
           }),
@@ -317,6 +329,7 @@ export class CalendarRepository {
           generateCover: schema.calendarSlots.generateCover,
           generateInlineImages: schema.calendarSlots.generateInlineImages,
           contentType: schema.calendarSlots.contentType,
+          seoKeywords: schema.calendarSlots.seoKeywords,
         })
         .from(schema.calendarSlots)
         .where(
@@ -330,14 +343,7 @@ export class CalendarRepository {
       if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
       if (existing.runId)
         throw conflict("calendar_slot_started", "Generation has already started for this slot");
-      const contentType = data.contentType ?? existing.contentType;
       const generateInlineImages = data.generateInlineImages ?? existing.generateInlineImages;
-      if (
-        contentTypeRequiresMaterial(contentType) ||
-        (generateInlineImages && !supportsInlineImages(contentType))
-      ) {
-        throw badRequest("invalid_request", "This calendar format cannot generate inline images");
-      }
       if (data.channelIds || data.generateCover === true || data.generateInlineImages === true) {
         await this.requireChannels(
           orgId,
@@ -357,6 +363,8 @@ export class CalendarRepository {
               title: schema.topics.title,
               description: schema.topics.description,
               sourceUrl: schema.topics.sourceUrl,
+              contentType: schema.topics.contentType,
+              seoKeywords: schema.topics.seoKeywords,
               status: schema.topics.status,
               updatedAt: schema.topics.updatedAt,
               revision: schema.topics.revision,
@@ -374,6 +382,21 @@ export class CalendarRepository {
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (topic && data.contentType && data.contentType !== topic.contentType)
+        throw badRequest("invalid_request", "A linked topic supplies its own format");
+      if (
+        existing.topicId &&
+        data.topicId === undefined &&
+        data.contentType &&
+        data.contentType !== existing.contentType
+      )
+        throw badRequest("invalid_request", "Unlink the topic before changing its format");
+      const contentType = topic?.contentType ?? data.contentType ?? existing.contentType;
+      if (
+        contentTypeRequiresMaterial(contentType) ||
+        (generateInlineImages && !supportsInlineImages(contentType))
+      )
+        throw badRequest("invalid_request", "This calendar format cannot generate inline images");
       if (data.topicId) {
         const [planned] = await tx
           .select({ id: schema.calendarSlots.id })
@@ -404,7 +427,8 @@ export class CalendarRepository {
           channelIds: data.channelIds,
           generateCover: data.generateCover,
           generateInlineImages: data.generateInlineImages,
-          contentType: data.contentType,
+          contentType,
+          seoKeywords: data.topicId === null ? [] : topic?.seoKeywords,
           notes: data.notes,
           errorCode: null,
           retryAfter: null,

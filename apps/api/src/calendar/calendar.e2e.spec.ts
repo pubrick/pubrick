@@ -158,6 +158,84 @@ describe.skipIf(!url)("calendar API", () => {
     });
   });
 
+  it("snapshots reviewed topic format and keywords for manual and bulk plans", async () => {
+    const owner = await agent();
+    const { brandId, channelId } = await brandChannel(owner);
+    const article = await owner
+      .post("/api/topics")
+      .send({
+        brandId,
+        title: "Long guide",
+        contentType: "expert_article",
+        seoKeywords: ["local guide"],
+      })
+      .expect(201);
+    const short = await owner
+      .post("/api/topics")
+      .send({ brandId, title: "Short update" })
+      .expect(201);
+    const approvedArticle = await owner
+      .patch(`/api/topics/${article.body.id}?brandId=${brandId}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const approvedShort = await owner
+      .patch(`/api/topics/${short.body.id}?brandId=${brandId}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const scheduledAt = new Date(Date.now() + 86_400_000).toISOString();
+    const manual = await owner
+      .post("/api/calendar/slots")
+      .send({
+        brandId,
+        topicId: article.body.id,
+        scheduledAt,
+        channelIds: [channelId],
+      })
+      .expect(201);
+    expect(manual.body).toMatchObject({
+      contentType: "expert_article",
+      seoKeywords: ["local guide"],
+    });
+    const bulk = await owner
+      .post("/api/calendar/slots/bulk")
+      .send({
+        brandId,
+        slots: [
+          {
+            topicId: short.body.id,
+            expectedTopicRevision: approvedShort.body.revision,
+            scheduledAt,
+            channelIds: [channelId],
+          },
+        ],
+      })
+      .expect(201);
+    expect(bulk.body[0]).toMatchObject({ contentType: "social_post", seoKeywords: [] });
+    const changed = await owner
+      .patch(`/api/topics/${article.body.id}?brandId=${brandId}`)
+      .send({ seoKeywords: [] })
+      .expect(200);
+    expect(changed.body.status).toBe("idea");
+    const refreshed = await owner
+      .patch(`/api/topics/${article.body.id}?brandId=${brandId}`)
+      .send({ status: "approved" })
+      .expect(200);
+    const resnapshot = await owner
+      .patch(`/api/calendar/slots/${manual.body.id}?brandId=${brandId}`)
+      .send({ topicId: article.body.id })
+      .expect(200);
+    expect(resnapshot.body).toMatchObject({
+      topicRevision: refreshed.body.revision,
+      seoKeywords: [],
+    });
+    const unlinked = await owner
+      .patch(`/api/calendar/slots/${manual.body.id}?brandId=${brandId}`)
+      .send({ topicId: null, brief: "Independent brief" })
+      .expect(200);
+    expect(unlinked.body).toMatchObject({ topicId: null, seoKeywords: [] });
+    expect(approvedArticle.body.contentType).toBe("expert_article");
+  });
+
   it("validates every bulk row before inserting any slot", async () => {
     const owner = await agent();
     const { brandId, channelId } = await brandChannel(owner);

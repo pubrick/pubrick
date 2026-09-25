@@ -8,7 +8,7 @@ import {
   type TopicUpdate,
 } from "@pubrick/shared";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
-import { conflict, notFound } from "../api-error";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 import { RunsRepository } from "../runs/runs.repository";
@@ -20,6 +20,8 @@ const COLUMNS = {
   title: schema.topics.title,
   description: schema.topics.description,
   sourceUrl: schema.topics.sourceUrl,
+  contentType: schema.topics.contentType,
+  seoKeywords: schema.topics.seoKeywords,
   status: schema.topics.status,
   plannedDate: schema.topics.plannedDate,
   priority: schema.topics.priority,
@@ -162,6 +164,8 @@ export class TopicsRepository {
         title: data.title,
         description: data.description ?? "",
         sourceUrl: data.sourceUrl ?? null,
+        contentType: data.contentType ?? "social_post",
+        seoKeywords: data.seoKeywords ?? [],
         plannedDate: data.plannedDate ?? null,
         priority: data.priority ?? 5,
       })
@@ -218,7 +222,11 @@ export class TopicsRepository {
   async update(orgId: string, brandId: string, id: string, data: TopicUpdate) {
     // A changed brief needs a new human approval before it can spend model tokens.
     const resetsApproval =
-      data.title !== undefined || data.description !== undefined || data.sourceUrl !== undefined;
+      data.title !== undefined ||
+      data.description !== undefined ||
+      data.sourceUrl !== undefined ||
+      data.contentType !== undefined ||
+      data.seoKeywords !== undefined;
     return db.transaction(async (tx) => {
       // Serialize planning metadata edits with the automatic and manual planners.
       const [brand] = await tx
@@ -228,7 +236,12 @@ export class TopicsRepository {
         .for("no key update");
       if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [topic] = await tx
-        .select({ plannedDate: schema.topics.plannedDate, priority: schema.topics.priority })
+        .select({
+          plannedDate: schema.topics.plannedDate,
+          priority: schema.topics.priority,
+          contentType: schema.topics.contentType,
+          seoKeywords: schema.topics.seoKeywords,
+        })
         .from(schema.topics)
         .where(
           and(
@@ -239,6 +252,11 @@ export class TopicsRepository {
         )
         .for("update");
       if (!topic) throw notFound("topic_not_found", "Topic not found");
+      const contentType = data.contentType ?? topic.contentType;
+      const seoKeywords = data.seoKeywords ?? topic.seoKeywords;
+      if (seoKeywords.length && contentType !== "expert_article") {
+        throw badRequest("invalid_request", "SEO keywords require the expert article format");
+      }
       const planningChanged =
         (data.plannedDate !== undefined && data.plannedDate !== topic.plannedDate) ||
         (data.priority !== undefined && data.priority !== topic.priority);
@@ -336,16 +354,55 @@ export class TopicsRepository {
     const topic = await this.get(orgId, brandId, id);
     if (topic.status !== "approved")
       throw conflict("topic_not_approved", "Approve this topic before generating");
+    const contentType = data.contentType ?? topic.contentType;
+    const seoKeywords =
+      data.seoKeywords ?? (contentType === "expert_article" ? topic.seoKeywords : []);
+    if (seoKeywords.length && contentType !== "expert_article")
+      throw badRequest("invalid_request", "SEO keywords require the expert article format");
     return this.runs.create(
       orgId,
       runCreateSchema.parse({
         brandId,
         channelIds: data.channelIds,
-        ...(data.contentType && { contentType: data.contentType }),
-        ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
+        contentType,
+        ...(seoKeywords.length && { seoKeywords }),
         material: `${topic.title}\n\n${topic.description}`.trim(),
         ...(topic.sourceUrl ? { sourceUrl: topic.sourceUrl } : {}),
       }),
+      async (tx) => {
+        const [current] = await tx
+          .select({
+            status: schema.topics.status,
+            revision: schema.topics.revision,
+            title: schema.topics.title,
+            description: schema.topics.description,
+            sourceUrl: schema.topics.sourceUrl,
+            contentType: schema.topics.contentType,
+            seoKeywords: schema.topics.seoKeywords,
+          })
+          .from(schema.topics)
+          .where(
+            and(
+              eq(schema.topics.orgId, orgId),
+              eq(schema.topics.brandId, brandId),
+              eq(schema.topics.id, id),
+            ),
+          )
+          .for("share");
+        if (
+          current?.status !== "approved" ||
+          current.revision !== topic.revision ||
+          current.title !== topic.title ||
+          current.description !== topic.description ||
+          current.sourceUrl !== topic.sourceUrl ||
+          current.contentType !== topic.contentType ||
+          JSON.stringify(current.seoKeywords) !== JSON.stringify(topic.seoKeywords)
+        )
+          throw conflict(
+            "topic_changed",
+            "This topic changed after review. Refresh it before generating",
+          );
+      },
     );
   }
 }
