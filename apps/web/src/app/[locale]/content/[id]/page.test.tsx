@@ -393,7 +393,7 @@ describe("rich master integration", () => {
   it("offers formatting only when the API advertises support and saves with the original revision", async () => {
     const served = { current: makeItem({ richBody: null, richBodyHtml: null, bodyRevision: 0 }) };
     const calls: Call[] = [];
-    installBaseHandlers(served, calls, (path, method) => {
+    installBaseHandlers(served, calls, (path, method, init) => {
       if (method !== "PATCH" || path !== "/api/content/c1") return undefined;
       const payload = JSON.parse(String(init?.body)) as { body: string; richBody: RichBody };
       served.current = {
@@ -463,7 +463,7 @@ describe("rich master integration", () => {
   it("saves pending formatting after switching to the plain preview", async () => {
     const served = { current: makeItem({ richBody: null, bodyRevision: 0 }) };
     const calls: Call[] = [];
-    installBaseHandlers(served, calls, (path, method) => {
+    installBaseHandlers(served, calls, (path, method, init) => {
       if (path !== "/api/content/c1" || method !== "PATCH") return undefined;
       const payload = JSON.parse(String(init?.body)) as { richBody: RichBody };
       served.current = { ...served.current, richBody: payload.richBody, bodyRevision: 1 };
