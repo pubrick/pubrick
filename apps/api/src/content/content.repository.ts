@@ -4671,8 +4671,7 @@ export class ContentRepository {
         !item.isSafeToDelete ||
         adaptations.length === 0 ||
         adaptations.some(
-          (adaptation) =>
-            !["pending", "manual_ready", "scheduled", "queued"].includes(adaptation.status),
+          (adaptation) => !["pending", "scheduled", "queued"].includes(adaptation.status),
         )
       ) {
         throw conflict(

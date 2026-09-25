@@ -861,6 +861,24 @@ describe("undo approval", () => {
       screen.queryByRole("button", { name: en.Publish.retractApproval }),
     ).not.toBeInTheDocument();
   });
+
+  it("does not offer undo for a manually prepared post that may already be live", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "approved",
+          adaptations: [makeAdaptation({ status: "manual_ready" })],
+        }),
+      },
+      [],
+      undefined,
+      [{ ...channel, platform: "vc_ru" }],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.retractApproval }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("archive and restore", () => {

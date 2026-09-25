@@ -5,12 +5,13 @@ queue when none of its deliveries has started. The item and all of its channel
 adaptations are checked under the publishing lock order. Any queued or scheduled
 publish jobs are cancelled in the same database transaction that resets the
 adaptations to `pending`; their attempt counters advance so a later approval
-gets fresh job IDs. A manually prepared VC.ru adaptation returns to `pending`
-without a queue cancellation.
+gets fresh job IDs.
 
 The endpoint refuses a post with a recorded delivery attempt, a publishing or
-published adaptation, or an erased adaptation history. It also refuses when the
-item is no longer approved. A refusal changes neither the post nor its jobs.
+published adaptation, or an erased adaptation history. A `manual_ready` VC.ru
+post is also refused: it may already be live outside Pubrick before its URL is
+recorded here. The endpoint refuses when the item is no longer approved. A
+refusal changes neither the post nor its jobs.
 The visible **Undo approval** action is offered only while the saved state
 looks unsent; the server rechecks it because a worker may claim a job after the
 screen loads.

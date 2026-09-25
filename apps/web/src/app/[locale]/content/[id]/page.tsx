@@ -1362,7 +1362,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     item.isSafeToDelete &&
     item.adaptations.length > 0 &&
     item.adaptations.every((adaptation) =>
-      ["pending", "manual_ready", "scheduled", "queued"].includes(adaptation.status),
+      ["pending", "scheduled", "queued"].includes(adaptation.status),
     );
   const manualAdaptations = item.adaptations.filter(
     (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
