@@ -1,3 +1,4 @@
+import type { ContentImageAlignment } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -30,6 +31,7 @@ export const contentImageSlots = pgTable(
     afterParagraph: integer("after_paragraph").notNull(),
     alt: text("alt").notNull(),
     caption: text("caption"),
+    alignment: text("alignment").$type<ContentImageAlignment>().notNull().default("center"),
     needsReview: boolean("needs_review").notNull().default(false),
   },
   (t) => [
@@ -51,6 +53,10 @@ export const contentImageSlots = pgTable(
       "content_image_slots_caption_check",
       sql`${t.caption} IS NULL OR length(${t.caption}) <= 500`,
     ),
+    check(
+      "content_image_slots_alignment_check",
+      sql`${t.alignment} in ('left', 'center', 'right')`,
+    ),
   ],
 );
 
@@ -68,6 +74,7 @@ export const feedEntryImages = pgTable(
     afterParagraph: integer("after_paragraph").notNull(),
     alt: text("alt").notNull(),
     caption: text("caption"),
+    alignment: text("alignment").$type<ContentImageAlignment>().notNull().default("center"),
     position: integer("position").notNull(),
   },
   (t) => [
@@ -91,5 +98,6 @@ export const feedEntryImages = pgTable(
       "feed_entry_images_caption_check",
       sql`${t.caption} IS NULL OR length(${t.caption}) <= 500`,
     ),
+    check("feed_entry_images_alignment_check", sql`${t.alignment} in ('left', 'center', 'right')`),
   ],
 );

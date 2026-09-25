@@ -111,6 +111,7 @@ export class FeedsRepository {
             afterParagraph: schema.contentImageSlots.afterParagraph,
             alt: schema.contentImageSlots.alt,
             caption: schema.contentImageSlots.caption,
+            alignment: schema.contentImageSlots.alignment,
           })
           .from(schema.contentImageSlots)
           .where(
@@ -191,6 +192,7 @@ export class FeedsRepository {
             afterParagraph: schema.feedEntryImages.afterParagraph,
             alt: schema.feedEntryImages.alt,
             caption: schema.feedEntryImages.caption,
+            alignment: schema.feedEntryImages.alignment,
           })
           .from(schema.feedEntryImages)
           .where(
@@ -245,6 +247,7 @@ export class FeedsRepository {
         afterParagraph: schema.feedEntryImages.afterParagraph,
         alt: schema.feedEntryImages.alt,
         caption: schema.feedEntryImages.caption,
+        alignment: schema.feedEntryImages.alignment,
       })
       .from(schema.feedEntryImages)
       .where(

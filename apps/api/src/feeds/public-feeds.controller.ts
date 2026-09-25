@@ -17,6 +17,7 @@ type InlineImage = {
   afterParagraph: number;
   alt: string;
   caption: string | null;
+  alignment: "left" | "center" | "right";
 };
 
 function imageUrl(orgId: string, token: string, entryId: string, imageId: string): string {
@@ -42,7 +43,12 @@ function paragraphs(
           const caption = image.caption
             ? `<figcaption>${escapeHtml(xmlSafe(image.caption))}</figcaption>`
             : "";
-          return `<figure><img src="${escapeHtml(imageUrl(orgId, token, entryId, image.id))}" alt="${escapeHtml(xmlSafe(image.alt))}" loading="lazy">${caption}</figure>`;
+          const margin = {
+            left: "1.5rem auto 1.5rem 0",
+            center: "1.5rem auto",
+            right: "1.5rem 0 1.5rem auto",
+          }[image.alignment];
+          return `<figure style="max-width:32rem;margin:${margin}"><img src="${escapeHtml(imageUrl(orgId, token, entryId, image.id))}" alt="${escapeHtml(xmlSafe(image.alt))}" loading="lazy">${caption}</figure>`;
         })
         .join("");
       return copy + figures;
@@ -117,7 +123,7 @@ export class PublicFeedsController {
     @Param("entryId", ParseUUIDPipe) entryId: string,
   ) {
     const article = await this.feeds.publicArticle(orgId, token, entryId);
-    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}figure{margin:2rem 0}figure img{display:block;max-width:100%;height:auto;border-radius:.4rem}figcaption{font-size:.9rem;color:#625e5a;margin-top:.4rem}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body, article.images, orgId, token, entryId)}</main></body></html>`;
+    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}figure img{display:block;max-width:100%;height:auto;border-radius:.4rem}figcaption{font-size:.9rem;color:#625e5a;margin-top:.4rem}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body, article.images, orgId, token, entryId)}</main></body></html>`;
   }
 
   @Get("articles/:entryId/images/:imageId")

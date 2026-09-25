@@ -118,6 +118,7 @@ describe.skipIf(!url)("article image slots e2e", () => {
             afterParagraph: 0,
             alt: "Opening illustration",
             caption: "Opening",
+            alignment: "right",
           },
         ],
       })
@@ -126,8 +127,21 @@ describe.skipIf(!url)("article image slots e2e", () => {
       saved.body.images.map((slot: { afterParagraph: number }) => slot.afterParagraph),
     ).toEqual([0, 2]);
     expect(contentImagesStateSchema.safeParse(saved.body).success).toBe(true);
+    expect(saved.body.images.map((slot: { alignment: string }) => slot.alignment)).toEqual([
+      "right",
+      "center",
+    ]);
     expect(saved.body.revision).toBe(1);
     expect((await owner.get(uri).expect(200)).body).toEqual(saved.body);
+    await owner
+      .put(uri)
+      .send({
+        expectedRevision: 1,
+        images: [
+          { mediaId: imageA.body.id, afterParagraph: 0, alt: "Unsafe", alignment: "float:evil" },
+        ],
+      })
+      .expect(400);
     expect((await owner.get(`/api/content/${item.body.id}`).expect(200)).body.body).toBe(
       "First.\n\nSecond.\n\nThird.",
     );

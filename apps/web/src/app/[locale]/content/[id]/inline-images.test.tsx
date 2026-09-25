@@ -189,6 +189,12 @@ describe("article image slots", () => {
     await userEvent
       .setup()
       .type(screen.getByRole("textbox", { name: "Caption (optional)" }), "The result");
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByRole("combobox", { name: "Image alignment" }), "right");
+    expect(
+      screen.getByRole("region", { name: "Article preview" }).querySelector("figure"),
+    ).toHaveClass("ml-auto");
     await userEvent.setup().click(screen.getByRole("button", { name: "Save images" }));
     await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
     const put = calls.find((call) => call.method === "PUT");
@@ -200,6 +206,7 @@ describe("article image slots", () => {
           afterParagraph: 1,
           alt: "A helpful diagram",
           caption: "The result",
+          alignment: "right",
         },
       ],
     });
@@ -249,7 +256,9 @@ describe("article image slots", () => {
     expect(puts[0]).toEqual({
       expectedRevision: 1,
       reviewGeneratedImages: true,
-      images: [{ mediaId: image.id, afterParagraph: 0, alt: "Green landscape" }],
+      images: [
+        { mediaId: image.id, afterParagraph: 0, alt: "Green landscape", alignment: "center" },
+      ],
     });
     await waitFor(() =>
       expect(screen.queryByText("Image review required")).not.toBeInTheDocument(),
@@ -323,7 +332,14 @@ describe("article image slots", () => {
     expect(JSON.parse(calls.find((call) => call.method === "PUT")?.body ?? "")).toEqual({
       expectedRevision: 5,
       reviewGeneratedImages: true,
-      images: [{ mediaId: "image-2", afterParagraph: 0, alt: "New illustration to review" }],
+      images: [
+        {
+          mediaId: "image-2",
+          afterParagraph: 0,
+          alt: "New illustration to review",
+          alignment: "center",
+        },
+      ],
     });
   });
 
