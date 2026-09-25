@@ -182,6 +182,8 @@ const ZONED_COLUMNS = [
   "paid_reply_analysis_attempts.dispatch_started_at",
   "paid_reply_analysis_handoffs.created_at",
   "paid_reply_analysis_handoffs.updated_at",
+  "paid_reply_backfill_state.completed_at",
+  "paid_reply_backfill_state.started_at",
   "prompt_decision_revisions.decided_at",
   "prompt_decisions.created_at",
   "prompt_revisions.created_at",

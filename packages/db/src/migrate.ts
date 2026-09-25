@@ -276,7 +276,18 @@ export async function runMigrations(connectionString: string): Promise<void> {
   try {
     const client = await pool.connect();
     try {
-      await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
+      // A blocking advisory-lock query remains in a virtual transaction while
+      // waiting. CREATE INDEX CONCURRENTLY in the lock holder then waits for
+      // that transaction, producing a deadlock. Poll with completed statements
+      // so waiting migrators never keep a transaction open.
+      for (;;) {
+        const lock = await client.query<{ acquired: boolean }>(
+          "SELECT pg_try_advisory_lock($1) AS acquired",
+          [MIGRATION_LOCK_ID],
+        );
+        if (lock.rows[0]?.acquired) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       try {
         await prepareUsageHistoryIndex(client);
         await migrate(drizzle(client), { migrationsFolder: migrationsFolder() });
