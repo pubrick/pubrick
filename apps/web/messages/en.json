@@ -554,6 +554,8 @@
     "filterLabel": "Status",
     "filterAll": "All",
     "untitled": "(untitled)",
+    "qualityScore": "Editor self-rating {score}%",
+    "qualityScoreHint": "The AI editor's advisory self-rating at generation time. It is not updated after edits or verified by fact review.",
     "status": {
       "draft": "Draft",
       "approved": "Approved",
@@ -1849,6 +1851,8 @@
     "overviewError": "Could not load the activity overview.",
     "overviewDrafts": "Drafts created",
     "overviewDraftDetail": "{ai} AI · {human} human. Current status: {draft} draft, {approved} approved, {rejected} rejected, {published} published, {other} other.",
+    "overviewEditorScore": "AI editor self-rating average: {score}% ({count, plural, one {# scored draft} other {# scored drafts}})",
+    "overviewEditorScoreHint": "Average of available editor model self-ratings at generation time for drafts created in this period. Missing ratings are excluded. This does not measure verified quality after fact review.",
     "overviewRuns": "Generation runs created",
     "overviewRunDetail": "{success} succeeded · {failed} failed · {active} active · {cancelled} cancelled",
     "overviewDecisions": "Human review decisions",

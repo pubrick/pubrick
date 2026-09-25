@@ -554,6 +554,8 @@
     "filterLabel": "Estado",
     "filterAll": "Todos",
     "untitled": "(sin título)",
+    "qualityScore": "Autoevaluación del editor {score}%",
+    "qualityScoreHint": "Autoevaluación orientativa del editor de IA al generar el borrador. No se actualiza tras los cambios ni verifica los hechos.",
     "status": {
       "draft": "Borrador",
       "approved": "Aprobado",
@@ -1849,6 +1851,8 @@
     "overviewError": "No se pudo cargar el resumen de actividad.",
     "overviewDrafts": "Borradores creados",
     "overviewDraftDetail": "{ai} IA · {human} humanos. Estado actual: {draft} borradores, {approved} aprobados, {rejected} rechazados, {published} publicados, {other} otros.",
+    "overviewEditorScore": "Media de autoevaluación del editor de IA: {score}% ({count, plural, one {# borrador evaluado} other {# borradores evaluados}})",
+    "overviewEditorScoreHint": "Media de las autoevaluaciones del modelo editor al generar borradores en este período. Excluye las ausentes. No mide la calidad verificada tras revisar los hechos.",
     "overviewRuns": "Generaciones creadas",
     "overviewRunDetail": "{success} correctas · {failed} fallidas · {active} activas · {cancelled} canceladas",
     "overviewDecisions": "Decisiones humanas",

@@ -860,6 +860,7 @@ export class GenerateService {
 
     return {
       body: edited.body,
+      qualityScore: edited.qualityScore ?? null,
       adaptations,
       coverMediaId,
       inlineImages,

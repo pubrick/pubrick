@@ -22,6 +22,9 @@ export const editSchema = z.object({
   // `overwrite`, not `transform().pipe()` — see writer.ts.
   body: z.string().overwrite(normalizeNewlines).min(1).max(MAX_BODY_LENGTH),
   changes: z.array(z.string().min(1)),
+  // Older checkpoints have no score. A malformed optional rating must not
+  // discard an otherwise usable paid edit or trigger another model call.
+  qualityScore: z.number().finite().min(0).max(1).optional().catch(undefined),
 });
 export type EditOutput = z.infer<typeof editSchema>;
 
@@ -44,6 +47,7 @@ export const EDITOR: Step<EditorInput, EditOutput, RunStepContext> = defineStep(
     "Produce:",
     "- body: the edited post, complete, ready to read.",
     "- changes: what you changed, one short plain-language line each, for the human who approves this. If you changed nothing, return an empty list rather than inventing an edit.",
+    "- qualityScore: optional number from 0 to 1, your own advisory assessment of the edited draft's clarity and fit to the brief. This is not a fact check or a publishing verdict. Omit it if you cannot assess it.",
   ],
   material: (ctx: RunStepContext, input) => {
     // The editor keeps the person's ask in force at the edit, so it gets the

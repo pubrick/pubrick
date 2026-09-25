@@ -118,6 +118,7 @@ type ContentItem = {
    * needs a verdict, not the text behind it.
    */
   bodyIsAiVerbatim: boolean;
+  qualityScore: number | null;
   adaptations: Adaptation[];
 };
 
@@ -764,6 +765,11 @@ export default function ContentQueuePage() {
             {item.title || t("untitled")}
           </Link>
           <OriginBadge origin={deriveOrigin(item)} />
+          {item.qualityScore !== null && (
+            <span className="text-[12px] text-fg-tertiary" title={t("qualityScoreHint")}>
+              {t("qualityScore", { score: Math.round(item.qualityScore * 100) })}
+            </span>
+          )}
           {failed && (
             <Link
               href={`/${locale}/content/${item.id}`}

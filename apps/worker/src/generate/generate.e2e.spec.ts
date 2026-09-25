@@ -282,7 +282,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   it("drives all five roles to a real draft, its adaptations and their first ai versions", async () => {
     const seeded = await seed(2);
     active = scriptedModel({
-      editor: () => ({ body: EDITED, changes: ["Tightened the opening."] }),
+      editor: () => ({ body: EDITED, changes: ["Tightened the opening."], qualityScore: 0.84 }),
     });
 
     const jobId = await enqueue(seeded.runId, seeded.orgId);
@@ -308,7 +308,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .select()
       .from(schema.contentItems)
       .where(eq(schema.contentItems.id, run?.contentItemId as string));
-    expect(item).toMatchObject({ body: EDITED, status: "draft", origin: "ai" });
+    expect(item).toMatchObject({ body: EDITED, status: "draft", origin: "ai", qualityScore: 0.84 });
 
     const adaptations = await db
       .select()
@@ -978,6 +978,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .from(schema.contentItems)
       .where(eq(schema.contentItems.id, run?.contentItemId as string));
     expect(item?.body).toBe(EDITED);
+    expect(item?.qualityScore).toBeNull();
     // Only the two calls it actually made are billed to this run.
     const ledger = await db
       .select()

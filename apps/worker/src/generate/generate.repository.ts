@@ -169,6 +169,7 @@ export type RunContext = {
 /** What one finished run writes: the master body plus one body per channel. */
 export type TerminalPayload = {
   body: string;
+  qualityScore?: number | null;
   adaptations: ReadonlyArray<{
     channelId: string;
     body: string;
@@ -1137,6 +1138,7 @@ export class GenerateRepository {
             orgId,
             brandId,
             body: payload.body,
+            qualityScore: payload.qualityScore ?? null,
             status: "draft",
             origin: "ai",
             coverMediaId: payload.coverMediaId ?? null,

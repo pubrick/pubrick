@@ -85,6 +85,8 @@ export class AnalyticsRepository {
         total: sql<string>`count(*)`,
         ai: sql<string>`count(*) filter (where ${d.origin} = 'ai')`,
         human: sql<string>`count(*) filter (where ${d.origin} = 'human')`,
+        averageEditorScore: sql<string | null>`avg(${d.qualityScore})`,
+        scoredCount: sql<string>`count(${d.qualityScore})`,
         draft: sql<string>`count(*) filter (where ${d.status} = 'draft')`,
         approved: sql<string>`count(*) filter (where ${d.status} = 'approved')`,
         rejected: sql<string>`count(*) filter (where ${d.status} = 'rejected')`,
@@ -215,6 +217,9 @@ export class AnalyticsRepository {
         total: count(drafts?.total),
         ai: count(drafts?.ai),
         human: count(drafts?.human),
+        averageEditorScore:
+          drafts?.averageEditorScore == null ? null : Number(drafts.averageEditorScore),
+        scoredCount: count(drafts?.scoredCount),
         draft: count(drafts?.draft),
         approved: count(drafts?.approved),
         rejected: count(drafts?.rejected),

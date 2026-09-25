@@ -60,6 +60,7 @@ type ContentItem = {
   status: ContentStatus;
   origin: ContentOrigin;
   bodyIsAiVerbatim: boolean;
+  qualityScore: number | null;
   adaptations: Adaptation[];
 };
 
@@ -92,7 +93,7 @@ function item(
   origin: ContentOrigin = "human",
   bodyIsAiVerbatim = true,
 ): ContentItem {
-  return { id, title, status, origin, bodyIsAiVerbatim, adaptations };
+  return { id, title, status, origin, bodyIsAiVerbatim, qualityScore: null, adaptations };
 }
 
 const BRAND_ID = "66666666-6666-4666-8666-666666666666";
@@ -289,6 +290,18 @@ describe("filtering (Step 2)", () => {
 });
 
 describe("row links (Step 2)", () => {
+  it("shows the editor self-rating only when the draft carries one", async () => {
+    const rated = { ...item("rated", "Rated post", "draft", [], "ai"), qualityScore: 0.84 };
+    installHandlers([], () => [rated, item("human", "Human post", "draft")]);
+    render(<ContentQueuePage />);
+
+    expect(await screen.findByText("Editor self-rating 84%")).toHaveAttribute(
+      "title",
+      en.Content.qualityScoreHint,
+    );
+    expect(screen.getAllByText(/Editor self-rating/)).toHaveLength(1);
+  });
+
   it("links each row to its own content item", async () => {
     const calls: Call[] = [];
     const all = [item("c1", "First post", "draft"), item("c2", "Second post", "draft")];

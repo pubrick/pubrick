@@ -554,6 +554,8 @@
     "filterLabel": "Status",
     "filterAll": "Todos",
     "untitled": "(sem título)",
+    "qualityScore": "Autoavaliação do editor {score}%",
+    "qualityScoreHint": "Autoavaliação consultiva do editor de IA ao gerar o rascunho. Não é atualizada após edições nem verifica os fatos.",
     "status": {
       "draft": "Rascunho",
       "approved": "Aprovado",
@@ -1849,6 +1851,8 @@
     "overviewError": "Não foi possível carregar o resumo da atividade.",
     "overviewDrafts": "Rascunhos criados",
     "overviewDraftDetail": "{ai} IA · {human} humanos. Estado atual: {draft} rascunhos, {approved} aprovados, {rejected} rejeitados, {published} publicados, {other} outros.",
+    "overviewEditorScore": "Média da autoavaliação do editor de IA: {score}% ({count, plural, one {# rascunho avaliado} other {# rascunhos avaliados}})",
+    "overviewEditorScoreHint": "Média das autoavaliações do modelo editor ao gerar rascunhos no período. Exclui notas ausentes. Não mede qualidade verificada após a revisão dos fatos.",
     "overviewRuns": "Gerações criadas",
     "overviewRunDetail": "{success} concluídas · {failed} falhadas · {active} ativas · {cancelled} canceladas",
     "overviewDecisions": "Decisões humanas",
