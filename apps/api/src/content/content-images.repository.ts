@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile, unlink } from "node:fs/promises";
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import type {
@@ -14,6 +13,7 @@ import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { IMAGE_MAX_UPLOAD_BYTES, mediaPath } from "../media/media.repository";
 import { MediaImageService } from "../media/media-image.service";
+import { writeCropFile } from "./content-image-file";
 
 const COLUMNS = {
   id: schema.contentImageSlots.id,
@@ -278,8 +278,7 @@ export class ContentImagesRepository {
         }
         const id = randomUUID();
         const target = mediaPath(id);
-        await mkdir(path.dirname(target), { recursive: true });
-        await writeFile(target, output, { flag: "wx", mode: 0o600 });
+        await writeCropFile(target, output);
         createdPath = target;
         await tx.insert(schema.mediaAssets).values({
           id,

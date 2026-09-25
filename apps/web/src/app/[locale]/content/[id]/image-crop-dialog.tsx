@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useCallback, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import Cropper, { type Area } from "react-easy-crop";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -20,11 +20,13 @@ export function ImageCropDialog({
   onSave: (area: Area) => void;
 }) {
   const t = useTranslations("InlineImages");
+  const instructionsId = useId();
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [sourceAspect, setSourceAspect] = useState(4 / 3);
   const [aspectChoice, setAspectChoice] = useState("original");
   const [area, setArea] = useState<Area | null>(null);
+  const [imageError, setImageError] = useState(false);
   const onCropComplete = useCallback((_: Area, pixels: Area) => setArea(pixels), []);
   const aspect = aspectChoice === "original" ? sourceAspect : Number(aspectChoice);
   return (
@@ -40,7 +42,7 @@ export function ImageCropDialog({
             {t("cropCancel")}
           </Button>
           <Button
-            disabled={busy || !area}
+            disabled={busy || !area || imageError}
             onClick={() => {
               if (area) onSave(area);
             }}
@@ -51,6 +53,14 @@ export function ImageCropDialog({
       }
     >
       <p className="mb-3 text-sm text-fg-secondary">{t("cropHint")}</p>
+      <p id={instructionsId} className="mb-3 text-sm text-fg-secondary">
+        {t("cropKeyboardHint")}
+      </p>
+      {imageError && (
+        <p role="alert" className="mb-3 text-sm text-danger">
+          {t("cropSourceUnavailable")}
+        </p>
+      )}
       <div className="relative h-64 overflow-hidden rounded-control bg-bg-sunken sm:h-80">
         <Cropper
           image={`/api/media/${mediaId}/file`}
@@ -60,7 +70,21 @@ export function ImageCropDialog({
           onCropChange={setCrop}
           onZoomChange={setZoom}
           onCropComplete={onCropComplete}
-          onMediaLoaded={(size) => setSourceAspect(size.naturalWidth / size.naturalHeight)}
+          onMediaLoaded={(size) => {
+            setImageError(false);
+            setSourceAspect(size.naturalWidth / size.naturalHeight);
+          }}
+          mediaProps={{
+            onError: () => {
+              setImageError(true);
+              setArea(null);
+            },
+          }}
+          cropperProps={{
+            role: "group",
+            "aria-label": t("cropFrame"),
+            "aria-describedby": instructionsId,
+          }}
           roundCropAreaPixels
           restrictPosition
         />
