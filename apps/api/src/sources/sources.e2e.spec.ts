@@ -527,10 +527,43 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner
       .post(`/api/sources/items/${privateItem.id}/comment-analysis?brandId=${a.body.id}`)
       .expect(409);
+    await db.insert(schema.newsComments).values({
+      orgId: ownerOrgId,
+      brandId: a.body.id,
+      itemId: privateItem.id,
+      telegramMessageId: 1,
+      body: "Earlier member reply",
+      publishedAt: new Date(),
+    });
+    await db
+      .update(schema.newsItems)
+      .set({
+        commentsStatus: "available",
+        commentsSampleVersion: randomUUID(),
+        commentsCheckedAt: new Date(),
+      })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    await db
+      .update(schema.newsItems)
+      .set({ commentsStatus: "private" })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    await db
+      .update(schema.newsItems)
+      .set({ commentsStatus: "error" })
+      .where(eq(schema.newsItems.id, privateItem.id));
+    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "replacement-session", connectedAt: new Date(Date.now() + 1_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, ownerOrgId));
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
     await owner
       .patch(`/api/sources/${privateSource.id}?brandId=${a.body.id}`)
       .send({ isActive: false })
       .expect(200);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
     await owner.post(privateRefresh).expect(409);
     await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await other.get(`/api/sources/items?brandId=${a.body.id}`).expect(404);

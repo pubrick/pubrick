@@ -55,7 +55,7 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
     if (pool) await pool.end();
   });
 
-  it("replaces only this story's sampled replies and retains them when discussion becomes private", async () => {
+  it("clears inaccessible discussions but retains the last sample on a genuine error", async () => {
     const sample = {
       status: "available" as const,
       comments: [
@@ -84,7 +84,7 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       .select({ body: schema.newsComments.body })
       .from(schema.newsComments)
       .where(eq(schema.newsComments.itemId, itemId));
-    expect(rows).toEqual([{ body: "Detailed useful reader response" }]);
+    expect(rows).toEqual([]);
     const [item] = await db
       .select({
         status: schema.newsItems.commentsStatus,
@@ -94,7 +94,34 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       .where(eq(schema.newsItems.id, itemId));
     if (!item) throw new Error("Story was removed unexpectedly");
     expect(item.status).toBe("private");
-    expect(item.version).toBe(saved?.version);
+    expect(item.version).toBeNull();
+    await repo.save(orgId, itemId, itemUrl, sample);
+    const [restored] = await db
+      .select({ version: schema.newsItems.commentsSampleVersion })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, itemId));
+    await repo.fail(orgId, itemId, itemUrl, "telegram_unavailable");
+    expect(
+      await db
+        .select({ body: schema.newsComments.body })
+        .from(schema.newsComments)
+        .where(eq(schema.newsComments.itemId, itemId)),
+    ).toEqual([{ body: "Detailed useful reader response" }]);
+    const [failed] = await db
+      .select({
+        status: schema.newsItems.commentsStatus,
+        version: schema.newsItems.commentsSampleVersion,
+      })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, itemId));
+    expect(failed).toMatchObject({ status: "error", version: restored?.version });
+    await repo.save(orgId, itemId, itemUrl, { status: "unavailable", comments: [] });
+    expect(
+      await db
+        .select({ body: schema.newsComments.body })
+        .from(schema.newsComments)
+        .where(eq(schema.newsComments.itemId, itemId)),
+    ).toEqual([]);
   });
 
   it("rejects an unknown comment status at the database boundary", async () => {
@@ -139,6 +166,113 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       .set({ isActive: false })
       .where(eq(schema.newsSources.id, source.id));
     expect(await repo.item(orgId, story.id)).toBeNull();
+  });
+
+  it("fences private completion after pause, peer change, account swap or disconnect", async () => {
+    const [source] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId,
+        brandId,
+        name: "Fenced member channel",
+        kind: "telegram_private",
+        url: "https://t.me/c/234567",
+        privatePeerEncrypted: "encrypted-peer-before",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!source) throw new Error("Private source fixture was not inserted");
+    const url = "https://t.me/c/234567/42";
+    const [story] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId,
+        sourceId: source.id,
+        title: "Fenced member story",
+        url,
+        commentsStatus: "pending",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!story) throw new Error("Private story fixture was not inserted");
+    await db
+      .insert(schema.telegramSourceAccounts)
+      .values({ orgId, sessionEncrypted: "session-before" })
+      .onConflictDoUpdate({
+        target: schema.telegramSourceAccounts.orgId,
+        set: { sessionEncrypted: "session-before" },
+      });
+    const fence = {
+      brandId,
+      sourceId: source.id,
+      privatePeerEncrypted: "encrypted-peer-before",
+      sessionEncrypted: "session-before",
+    };
+    const sample = {
+      status: "available" as const,
+      comments: [{ messageId: 7, body: "Reply", publishedAt: new Date() }],
+    };
+    const assertPending = async () => {
+      const [state] = await db
+        .select({
+          status: schema.newsItems.commentsStatus,
+          version: schema.newsItems.commentsSampleVersion,
+        })
+        .from(schema.newsItems)
+        .where(eq(schema.newsItems.id, story.id));
+      expect(state).toEqual({ status: "pending", version: null });
+      expect(
+        await db
+          .select({ id: schema.newsComments.id })
+          .from(schema.newsComments)
+          .where(eq(schema.newsComments.itemId, story.id)),
+      ).toEqual([]);
+    };
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: false })
+      .where(eq(schema.newsSources.id, source.id));
+    await repo.save(orgId, story.id, url, sample, fence);
+    await repo.fail(orgId, story.id, url, "telegram_access_denied", fence);
+    await assertPending();
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: true, privatePeerEncrypted: "encrypted-peer-after" })
+      .where(eq(schema.newsSources.id, source.id));
+    await repo.save(orgId, story.id, url, sample, fence);
+    await repo.fail(orgId, story.id, url, "telegram_access_denied", fence);
+    await assertPending();
+    await db
+      .update(schema.newsSources)
+      .set({ privatePeerEncrypted: fence.privatePeerEncrypted })
+      .where(eq(schema.newsSources.id, source.id));
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "session-after" })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    await repo.save(orgId, story.id, url, sample, fence);
+    await repo.fail(orgId, story.id, url, "telegram_access_denied", fence);
+    await assertPending();
+    await db
+      .delete(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    await repo.save(orgId, story.id, url, sample, fence);
+    await repo.fail(orgId, story.id, url, "telegram_access_denied", fence);
+    await assertPending();
+    await db
+      .insert(schema.telegramSourceAccounts)
+      .values({ orgId, sessionEncrypted: fence.sessionEncrypted });
+    await repo.save(orgId, story.id, url, sample, fence);
+    const [saved] = await db
+      .select({ status: schema.newsItems.commentsStatus })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, story.id));
+    expect(saved?.status).toBe("available");
+    await repo.fail(orgId, story.id, url, "telegram_access_denied", fence);
+    const [afterLateFailure] = await db
+      .select({ status: schema.newsItems.commentsStatus })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, story.id));
+    expect(afterLateFailure?.status).toBe("available");
   });
 
   it("retains bounded publication replies across errors, rejects stale jobs and erases them with the brand", async () => {

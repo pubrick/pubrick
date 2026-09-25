@@ -17,6 +17,12 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type AutoJob = Extract<TelegramCommentsJob, { kind: "news_auto" }>;
 type AutoPublicationJob = Extract<TelegramCommentsJob, { kind: "publication_auto" }>;
 type PublicationJob = Extract<TelegramCommentsJob, { kind: "publication" | "publication_auto" }>;
+type PrivateCommentFence = {
+  brandId: string;
+  sourceId: string;
+  privatePeerEncrypted: string;
+  sessionEncrypted: string;
+};
 const MAX_BRANDS_PER_SCAN = 10;
 const MAX_ITEMS_PER_BRAND = 50;
 const publicStoryUrl = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/[1-9]\d*$/;
@@ -868,6 +874,7 @@ export class CommentsRepository {
         id: schema.newsItems.id,
         orgId: schema.newsItems.orgId,
         brandId: schema.newsItems.brandId,
+        sourceId: schema.newsItems.sourceId,
         url: schema.newsItems.url,
         sourceKind: schema.newsSources.kind,
         sourceActive: schema.newsSources.isActive,
@@ -906,27 +913,37 @@ export class CommentsRepository {
     itemId: string,
     itemUrl: string,
     result: ChannelComments,
+    privateFence?: PrivateCommentFence,
   ): Promise<void> {
     await db.transaction(async (tx) => {
-      const rows = await tx
-        .select({ id: schema.newsItems.id, brandId: schema.newsItems.brandId })
-        .from(schema.newsItems)
-        .where(
-          and(
-            eq(schema.newsItems.orgId, orgId),
-            eq(schema.newsItems.id, itemId),
-            eq(schema.newsItems.url, itemUrl),
-          ),
-        )
-        .for("update")
-        .limit(1);
-      const item = rows[0];
+      const item = privateFence
+        ? await this.currentPrivateItem(tx, orgId, itemId, itemUrl, privateFence)
+        : (
+            await tx
+              .select({ id: schema.newsItems.id, brandId: schema.newsItems.brandId })
+              .from(schema.newsItems)
+              .where(
+                and(
+                  eq(schema.newsItems.orgId, orgId),
+                  eq(schema.newsItems.id, itemId),
+                  eq(schema.newsItems.url, itemUrl),
+                ),
+              )
+              .for("update")
+              .limit(1)
+          )[0];
       if (!item) return;
-      if (result.status === "available") {
+      // An inaccessible discussion revokes the saved sample; a transport error
+      // takes the `fail` path below and deliberately keeps the last good sample.
+      if (
+        result.status === "available" ||
+        result.status === "private" ||
+        result.status === "unavailable"
+      ) {
         await tx
           .delete(schema.newsComments)
           .where(and(eq(schema.newsComments.orgId, orgId), eq(schema.newsComments.itemId, itemId)));
-        if (result.comments.length)
+        if (result.status === "available" && result.comments.length)
           await tx.insert(schema.newsComments).values(
             result.comments.map((comment) => ({
               orgId,
@@ -944,13 +961,93 @@ export class CommentsRepository {
           commentsStatus: result.status,
           commentsCheckedAt: new Date(),
           commentsErrorCode: null,
-          ...(result.status === "available" ? { commentsSampleVersion: randomUUID() } : {}),
+          commentsSampleVersion: result.status === "available" ? randomUUID() : null,
         })
         .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.id, itemId)));
     });
   }
 
-  async fail(orgId: string, itemId: string, itemUrl: string, code: string): Promise<void> {
+  private async currentPrivateItem(
+    tx: Tx,
+    orgId: string,
+    itemId: string,
+    itemUrl: string,
+    fence: PrivateCommentFence,
+  ): Promise<{ id: string; brandId: string } | null> {
+    const [org] = await tx
+      .select({ id: schema.organization.id })
+      .from(schema.organization)
+      .where(eq(schema.organization.id, orgId))
+      .for("key share")
+      .limit(1);
+    if (!org) return null;
+    const [account] = await tx
+      .select({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted })
+      .from(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+      .for("update")
+      .limit(1);
+    if (account?.sessionEncrypted !== fence.sessionEncrypted) return null;
+    const [brand] = await tx
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, fence.brandId)))
+      .for("key share")
+      .limit(1);
+    if (!brand) return null;
+    const [source] = await tx
+      .select({ privatePeerEncrypted: schema.newsSources.privatePeerEncrypted })
+      .from(schema.newsSources)
+      .where(
+        and(
+          eq(schema.newsSources.orgId, orgId),
+          eq(schema.newsSources.brandId, fence.brandId),
+          eq(schema.newsSources.id, fence.sourceId),
+          eq(schema.newsSources.kind, "telegram_private"),
+          eq(schema.newsSources.isActive, true),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (source?.privatePeerEncrypted !== fence.privatePeerEncrypted) return null;
+    const [item] = await tx
+      .select({
+        id: schema.newsItems.id,
+        brandId: schema.newsItems.brandId,
+        commentsStatus: schema.newsItems.commentsStatus,
+      })
+      .from(schema.newsItems)
+      .where(
+        and(
+          eq(schema.newsItems.orgId, orgId),
+          eq(schema.newsItems.id, itemId),
+          eq(schema.newsItems.url, itemUrl),
+          eq(schema.newsItems.brandId, fence.brandId),
+          eq(schema.newsItems.sourceId, fence.sourceId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    return item?.commentsStatus === "pending" ? item : null;
+  }
+
+  async fail(
+    orgId: string,
+    itemId: string,
+    itemUrl: string,
+    code: string,
+    privateFence?: PrivateCommentFence,
+  ): Promise<void> {
+    if (privateFence) {
+      await db.transaction(async (tx) => {
+        if (!(await this.currentPrivateItem(tx, orgId, itemId, itemUrl, privateFence))) return;
+        await tx
+          .update(schema.newsItems)
+          .set({ commentsStatus: "error", commentsCheckedAt: new Date(), commentsErrorCode: code })
+          .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.id, itemId)));
+      });
+      return;
+    }
     await db
       .update(schema.newsItems)
       .set({ commentsStatus: "error", commentsCheckedAt: new Date(), commentsErrorCode: code })

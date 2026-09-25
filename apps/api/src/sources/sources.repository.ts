@@ -634,12 +634,22 @@ export class SourcesRepository {
   }
 
   async comments(orgId: string, brandId: string, itemId: string) {
-    await this.requireTelegramItem(orgId, brandId, itemId, true);
-    return db
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
+    if (item.sourceKind === "telegram_private") {
+      if (
+        !item.sourceActive ||
+        !item.commentsSampleVersion ||
+        item.commentsStatus === "private" ||
+        item.commentsStatus === "unavailable"
+      )
+        return [];
+    }
+    const rows = await db
       .select({
         id: schema.newsComments.id,
         body: schema.newsComments.body,
         publishedAt: schema.newsComments.publishedAt,
+        createdAt: schema.newsComments.createdAt,
       })
       .from(schema.newsComments)
       .where(
@@ -651,6 +661,15 @@ export class SourcesRepository {
       )
       .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
       .limit(50);
+    if (item.sourceKind === "telegram_private") {
+      const [account] = await db
+        .select({ connectedAt: schema.telegramSourceAccounts.connectedAt })
+        .from(schema.telegramSourceAccounts)
+        .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+        .limit(1);
+      if (!account || rows.some((row) => row.createdAt < account.connectedAt)) return [];
+    }
+    return rows.map(({ createdAt: _createdAt, ...row }) => row);
   }
 
   async refreshComments(orgId: string, brandId: string, itemId: string) {

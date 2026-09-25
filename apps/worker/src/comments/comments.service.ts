@@ -78,12 +78,40 @@ export class CommentsService {
     }
     const item = await this.comments.item(job.orgId, job.itemId);
     if (!item) return;
+    if (item.sourceKind === "telegram_private") {
+      const session = await this.comments.session(job.orgId);
+      if (!session || !item.privatePeerEncrypted) return;
+      const fence = {
+        brandId: item.brandId,
+        sourceId: item.sourceId,
+        privatePeerEncrypted: item.privatePeerEncrypted,
+        sessionEncrypted: session,
+      };
+      try {
+        const result = await this.telegram.commentsPrivate(
+          item.url,
+          item.privatePeerEncrypted,
+          session,
+        );
+        await this.comments.save(job.orgId, item.id, item.url, result, fence);
+      } catch (error) {
+        if (!(error instanceof TelegramSourceError)) throw error;
+        this.logger.warn(`Comment check failed for story ${item.id}: ${error.code}`);
+        if (error.code === "telegram_access_denied")
+          await this.comments.save(
+            job.orgId,
+            item.id,
+            item.url,
+            { status: "private", comments: [] },
+            fence,
+          );
+        else await this.comments.fail(job.orgId, item.id, item.url, error.code, fence);
+      }
+      return;
+    }
     try {
       const session = await this.comments.session(job.orgId);
-      const result =
-        item.sourceKind === "telegram_private"
-          ? await this.telegram.commentsPrivate(item.url, item.privatePeerEncrypted, session)
-          : await this.telegram.comments(item.url, session);
+      const result = await this.telegram.comments(item.url, session);
       await this.comments.save(job.orgId, item.id, item.url, result);
     } catch (error) {
       if (!(error instanceof TelegramSourceError)) throw error;
