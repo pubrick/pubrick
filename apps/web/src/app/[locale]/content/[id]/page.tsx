@@ -825,11 +825,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  async function approve(withSchedule: boolean, scheduledOverride?: Date) {
+  async function approve(withSchedule: boolean, delayMinutes?: 30) {
     setActionError(null);
-    const chosen = withSchedule
-      ? (scheduledOverride ?? (scheduledAt ? new Date(scheduledAt) : null))
-      : null;
+    const chosen =
+      withSchedule && delayMinutes === undefined && scheduledAt ? new Date(scheduledAt) : null;
     /*
      * Re-checked HERE, at click time, rather than trusted from the button's
      * `disabled` prop: this screen's poll (`usePoll`/`itemSettled`) stops
@@ -845,6 +844,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
      */
     if (
       withSchedule &&
+      delayMinutes === undefined &&
       (!chosen || !Number.isFinite(chosen.getTime()) || chosen.getTime() <= Date.now())
     ) {
       setActionError(te("schedule_in_past"));
@@ -853,7 +853,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     try {
       await api(`/api/content/${id}/approve`, {
         method: "POST",
-        body: JSON.stringify(chosen ? { scheduledAt: chosen.toISOString() } : {}),
+        body: JSON.stringify(
+          delayMinutes === 30
+            ? { delayMinutes }
+            : chosen
+              ? { scheduledAt: chosen.toISOString() }
+              : {},
+        ),
       });
       await reload();
     } catch (err) {
@@ -1477,7 +1483,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const canApproveAfterThirtyMinutes =
     ["draft", "rejected", "failed"].includes(item.status) &&
     item.adaptations.length > 0 &&
-    manualAdaptations.length === 0;
+    !channelsFailed &&
+    item.adaptations.every((adaptation) => {
+      const platform = channels.find((channel) => channel.id === adaptation.channelId)?.platform;
+      return platform !== undefined && !isManualPlatform(platform);
+    });
 
   return (
     <AppShell
@@ -2183,10 +2193,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               {t("approveScheduled")}
             </Button>
             {canApproveAfterThirtyMinutes && (
-              <Button
-                variant="secondary"
-                onClick={() => approve(true, new Date(Date.now() + 30 * 60_000))}
-              >
+              <Button variant="secondary" onClick={() => approve(true, 30)}>
                 {t("approveAfterThirtyMinutes")}
               </Button>
             )}

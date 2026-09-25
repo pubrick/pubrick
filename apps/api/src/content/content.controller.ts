@@ -429,7 +429,12 @@ export class ContentController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(contentApproveSchema)) body: ContentApprove,
   ) {
-    return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
+    return this.content.approve(
+      orgId,
+      id,
+      body.scheduledAt ? new Date(body.scheduledAt) : null,
+      body.delayMinutes ?? null,
+    );
   }
 
   @Post(":id/adaptations/:adaptationId/reschedule")

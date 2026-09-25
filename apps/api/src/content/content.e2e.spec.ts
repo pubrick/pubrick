@@ -2656,6 +2656,41 @@ describe.skipIf(!url)("content e2e", () => {
     expect(fetched.body.adaptations[0].status).toBe("pending");
   });
 
+  it("schedules the explicit 30-minute shortcut from the database clock", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Review before sending", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/approve`;
+    await agent
+      .post(path)
+      .send({ scheduledAt: new Date(Date.now() + 86_400_000).toISOString(), delayMinutes: 30 })
+      .expect(400);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const databaseNow = async () => {
+        const clock = await db.execute(
+          sql`SELECT extract(epoch FROM clock_timestamp()) * 1000 AS now_ms`,
+        );
+        return Number(clock.rows[0]?.now_ms);
+      };
+      const before = await databaseNow();
+      const approved = await agent.post(path).send({ delayMinutes: 30 }).expect(200);
+      const after = await databaseNow();
+      const scheduledAt = new Date(approved.body.adaptations[0].scheduledAt).getTime();
+      expect(approved.body.status).toBe("approved");
+      expect(approved.body.adaptations[0].status).toBe("scheduled");
+      expect(scheduledAt).toBeGreaterThanOrEqual(Math.floor(before) + 30 * 60_000);
+      expect(scheduledAt).toBeLessThanOrEqual(Math.ceil(after) + 30 * 60_000);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("rescheduling: approving an already-scheduled item cancels the old job and enqueues a new one at the new time", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
