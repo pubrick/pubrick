@@ -310,6 +310,22 @@ describe.skipIf(!url)("auth e2e", () => {
           .from(schema.member)
           .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
         expect(membership?.role).toBe(role);
+        const returning = request.agent(app.getHttpServer());
+        await returning
+          .post("/api/auth/sign-in/email")
+          .send({ email, password: "password1234" })
+          .expect(200);
+        const fullOrganization = await returning
+          .get("/api/auth/organization/get-full-organization")
+          .expect(200);
+        expect(fullOrganization.body.id).toBe(orgId);
+        expect(fullOrganization.body.members).toEqual(
+          expect.arrayContaining([expect.objectContaining({ userId, role })]),
+        );
+        await returning
+          .post("/api/auth/organization/invite-member")
+          .send({ email: fresh(), role: "member", organizationId: orgId })
+          .expect(403);
         targetMemberId ||= membership?.id ?? "";
       }
 
