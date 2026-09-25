@@ -859,6 +859,37 @@
     "invalidCredential": "Enter a valid folder ID and API key.",
     "genericError": "The search key could not be saved. Try again."
   },
+  "ClaimEvidence": {
+    "title": "Claim evidence",
+    "hint": "Search public web results for time-sensitive claims in the saved draft. Results are advisory; read the linked pages yourself.",
+    "costHint": "Each run may make up to five billable Yandex searches and billed AI model calls using your workspace keys.",
+    "start": "Check",
+    "runAgain": "Refresh",
+    "working": "Checking…",
+    "saveFirst": "Save the draft text before checking its claims.",
+    "empty": "No claim review yet.",
+    "emptyHint": "Save the draft, then choose Check.",
+    "stale": "This result belongs to an older draft. Refresh it for the current text.",
+    "noClaims": "No time-sensitive factual claims were found. Read the draft yourself before publishing.",
+    "failed": "The claim review did not finish. Try again.",
+    "missingSearchKey": "Add a Yandex Search API key to search for evidence.",
+    "missingAiKey": "Add an AI provider key to extract and compare claims.",
+    "settings": "Open settings",
+    "retry": "Try again",
+    "genericError": "Claim review could not be loaded. Try again.",
+    "status": {
+      "queued": "Queued",
+      "running": "In progress",
+      "ready": "Ready",
+      "failed": "Failed"
+    },
+    "outcome": {
+      "evidence_supports": "Search snippets support this claim. Read the linked pages before relying on it.",
+      "evidence_conflicts": "Search snippets conflict with this claim. Read the linked pages and edit the draft if needed.",
+      "insufficient": "These results do not settle this claim.",
+      "search_unavailable": "Search was unavailable for this claim."
+    }
+  },
   "Webhooks": {
     "title": "Outgoing webhooks",
     "back": "Back to settings",
@@ -1139,6 +1170,10 @@
     "content_media_unsupported": "This attachment is unsupported by the selected channels. Videos currently require Telegram-only targets.",
     "content_image_position_invalid": "Choose a valid paragraph position for every article image.",
     "content_image_body_conflict": "The article text changed and an image no longer has a valid position. Check the placements and save again.",
+    "claim_review_body_changed": "The saved draft changed. Reload it before searching for claim evidence.",
+    "claim_review_not_editable": "This post is no longer an editable draft.",
+    "claim_review_no_search_key": "Add a Yandex Search API key in Settings before searching.",
+    "claim_review_no_ai_key": "Add an AI provider key in Settings before reviewing claims.",
     "content_images_changed": "Images changed in another editor. Reload the latest images before saving your changes.",
     "content_images_need_review": "Review every generated article image and save your changes before approving this draft.",
     "content_media_pinned": "Article images are locked in this post status and cannot be changed.",

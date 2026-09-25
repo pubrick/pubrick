@@ -859,6 +859,32 @@
     "invalidCredential": "Introduza um ID de pasta e uma chave API válidos.",
     "genericError": "Não foi possível guardar a chave de pesquisa. Tente novamente."
   },
+  "ClaimEvidence": {
+    "title": "Fontes sobre afirmações",
+    "hint": "Pesquise resultados web públicos para afirmações atuais do rascunho guardado. São orientativos; leia as páginas ligadas.",
+    "costHint": "Cada revisão pode fazer até cinco pesquisas pagas na Yandex e chamadas pagas ao modelo de IA com as chaves do espaço.",
+    "start": "Consultar",
+    "runAgain": "Atualizar",
+    "working": "Consultando…",
+    "saveFirst": "Guarde o texto do rascunho antes de consultar as afirmações.",
+    "empty": "Ainda não existe uma revisão de afirmações.",
+    "emptyHint": "Guarde o rascunho e escolha Consultar.",
+    "stale": "Este resultado pertence a um rascunho anterior. Atualize-o para o texto atual.",
+    "noClaims": "Não foram encontradas afirmações factuais atuais. Leia o rascunho antes de publicar.",
+    "failed": "A revisão de afirmações não terminou. Tente novamente.",
+    "missingSearchKey": "Adicione uma chave Yandex Search API para procurar fontes.",
+    "missingAiKey": "Adicione uma chave de fornecedor de IA para extrair e comparar afirmações.",
+    "settings": "Abrir definições",
+    "retry": "Tentar novamente",
+    "genericError": "Não foi possível carregar a revisão de afirmações. Tente novamente.",
+    "status": { "queued": "Na fila", "running": "Em curso", "ready": "Pronta", "failed": "Falhou" },
+    "outcome": {
+      "evidence_supports": "Os excertos encontrados apoiam esta afirmação. Leia as páginas ligadas antes de a usar.",
+      "evidence_conflicts": "Os excertos encontrados contradizem esta afirmação. Leia as páginas e edite o rascunho se necessário.",
+      "insufficient": "Estes resultados não resolvem a afirmação.",
+      "search_unavailable": "A pesquisa não esteve disponível para esta afirmação."
+    }
+  },
   "Webhooks": {
     "title": "Webhooks de saída",
     "back": "Voltar às configurações",
@@ -1139,6 +1165,10 @@
     "content_media_unsupported": "Os canais selecionados não aceitam este anexo. Vídeos exigem apenas canais do Telegram.",
     "content_image_position_invalid": "Escolha um parágrafo válido para cada imagem do artigo.",
     "content_image_body_conflict": "O texto mudou e uma imagem ficou sem posição válida. Confira a posição e salve novamente.",
+    "claim_review_body_changed": "O rascunho guardado mudou. Volte a carregá-lo antes de pesquisar fontes.",
+    "claim_review_not_editable": "Esta publicação já não é um rascunho editável.",
+    "claim_review_no_search_key": "Adicione uma chave Yandex Search API nas Definições antes de pesquisar.",
+    "claim_review_no_ai_key": "Adicione uma chave de fornecedor de IA nas Definições antes de rever afirmações.",
     "content_images_changed": "As imagens mudaram em outro editor. Recarregue as imagens atuais antes de salvar.",
     "content_images_need_review": "Revise todas as imagens geradas e salve as alterações antes de aprovar este rascunho.",
     "content_media_pinned": "As imagens do artigo estão bloqueadas neste estado da publicação e não podem ser alteradas.",

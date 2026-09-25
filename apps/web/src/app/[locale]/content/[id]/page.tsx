@@ -45,6 +45,7 @@ import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
+import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
@@ -1556,6 +1557,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         editable={["draft", "rejected", "failed"].includes(item.status)}
         manualVc={manualAdaptations.length > 0}
         onReloadArticle={() => window.location.reload()}
+      />
+
+      <ClaimEvidence
+        itemId={item.id}
+        savedBody={item.body}
+        draftBody={bodyDraft}
+        editable={["draft", "rejected", "failed"].includes(item.status)}
       />
 
       {/*

@@ -859,6 +859,32 @@
     "invalidCredential": "Introduce un ID de carpeta y una clave API válidos.",
     "genericError": "No se pudo guardar la clave de búsqueda. Inténtalo de nuevo."
   },
+  "ClaimEvidence": {
+    "title": "Fuentes sobre afirmaciones",
+    "hint": "Busca resultados web públicos sobre afirmaciones actuales del borrador guardado. Son orientativos; lee las páginas enlazadas.",
+    "costHint": "Cada revisión puede realizar hasta cinco búsquedas de pago en Yandex y llamadas de pago al modelo de IA con las claves del espacio.",
+    "start": "Consultar",
+    "runAgain": "Actualizar",
+    "working": "Consultando…",
+    "saveFirst": "Guarda el texto del borrador antes de consultar sus afirmaciones.",
+    "empty": "Aún no hay una revisión de afirmaciones.",
+    "emptyHint": "Guarda el borrador y elige Consultar.",
+    "stale": "Este resultado corresponde a un borrador anterior. Actualízalo para el texto actual.",
+    "noClaims": "No se encontraron afirmaciones factuales actuales. Lee el borrador antes de publicarlo.",
+    "failed": "La revisión de afirmaciones no terminó. Inténtalo de nuevo.",
+    "missingSearchKey": "Añade una clave de Yandex Search API para buscar fuentes.",
+    "missingAiKey": "Añade una clave de proveedor de IA para extraer y comparar afirmaciones.",
+    "settings": "Abrir ajustes",
+    "retry": "Reintentar",
+    "genericError": "No se pudo cargar la revisión de afirmaciones. Inténtalo de nuevo.",
+    "status": { "queued": "En cola", "running": "En curso", "ready": "Lista", "failed": "Fallida" },
+    "outcome": {
+      "evidence_supports": "Los fragmentos encontrados respaldan esta afirmación. Lee las páginas enlazadas antes de usarla.",
+      "evidence_conflicts": "Los fragmentos encontrados contradicen esta afirmación. Lee las páginas y edita el borrador si hace falta.",
+      "insufficient": "Estos resultados no resuelven la afirmación.",
+      "search_unavailable": "La búsqueda no estuvo disponible para esta afirmación."
+    }
+  },
   "Webhooks": {
     "title": "Webhooks salientes",
     "back": "Volver a ajustes",
@@ -1139,6 +1165,10 @@
     "content_media_unsupported": "Los canales seleccionados no admiten este archivo. Los vídeos requieren solo canales de Telegram.",
     "content_image_position_invalid": "Elige un párrafo válido para cada imagen del artículo.",
     "content_image_body_conflict": "El texto cambió y una imagen ya no tiene una posición válida. Revisa su ubicación y guarda de nuevo.",
+    "claim_review_body_changed": "El borrador guardado cambió. Vuelve a cargarlo antes de buscar fuentes.",
+    "claim_review_not_editable": "Esta publicación ya no es un borrador editable.",
+    "claim_review_no_search_key": "Añade una clave de Yandex Search API en Ajustes antes de buscar.",
+    "claim_review_no_ai_key": "Añade una clave de proveedor de IA en Ajustes antes de revisar afirmaciones.",
     "content_images_changed": "Las imágenes cambiaron en otro editor. Vuelve a cargar las imágenes actuales antes de guardar.",
     "content_images_need_review": "Revisa todas las imágenes generadas y guarda los cambios antes de aprobar este borrador.",
     "content_media_pinned": "Las imágenes del artículo están bloqueadas en este estado de la publicación y no se pueden cambiar.",
