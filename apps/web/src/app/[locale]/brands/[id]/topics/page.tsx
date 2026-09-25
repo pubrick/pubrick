@@ -6,6 +6,7 @@ import {
   TOPIC_CONTENT_TYPES,
   type TopicDto,
   type TopicSuggestionRequestDto,
+  topicBlockSchema,
   topicCreateSchema,
   topicUpdateSchema,
 } from "@pubrick/shared";
@@ -61,6 +62,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const [editContentType, setEditContentType] = useState<ContentType>("social_post");
   const [editSeoKeywordsText, setEditSeoKeywordsText] = useState("");
   const [toDelete, setToDelete] = useState<TopicDto | null>(null);
+  const [toBlock, setToBlock] = useState<TopicDto | null>(null);
+  const [blockReason, setBlockReason] = useState("");
   const [toRun, setToRun] = useState<TopicDto | null>(null);
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
   const [runFormat, setRunFormat] = useState<ContentType>("social_post");
@@ -185,6 +188,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
 
   const closeEdit = useCallback(() => setEditing(null), []);
   const closeDelete = useCallback(() => setToDelete(null), []);
+  const closeBlock = useCallback(() => setToBlock(null), []);
   const closeRun = useCallback(() => setToRun(null), []);
 
   async function saveEdit(event: React.FormEvent) {
@@ -250,6 +254,43 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
       load();
     } catch (err) {
       setDialogError(describeError(err));
+    }
+  }
+
+  async function block() {
+    if (!toBlock) return;
+    const parsed = topicBlockSchema.safeParse({ reason: blockReason });
+    if (!parsed.success) {
+      setDialogError(t("blockReasonInvalid"));
+      return;
+    }
+    setBusy(true);
+    setDialogError(null);
+    try {
+      await api(`/api/topics/${toBlock.id}/block?brandId=${id}`, {
+        method: "POST",
+        body: JSON.stringify(parsed.data),
+      });
+      setToBlock(null);
+      setBlockReason("");
+      load();
+    } catch (err) {
+      setDialogError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unblock(topic: TopicDto) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/topics/${topic.id}/unblock?brandId=${id}`, { method: "POST" });
+      load();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -451,8 +492,16 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
               meta={
                 <span>
                   <StatusBadge status={topic.status === "approved" ? "published" : "draft"}>
-                    {t(`status_${topic.status}`)}
+                    {topic.blockedAt ? t("status_blocked") : t(`status_${topic.status}`)}
                   </StatusBadge>
+                  {topic.blockedAt && (
+                    <>
+                      {" · "}
+                      {t("blockedAt", { date: new Date(topic.blockedAt).toLocaleString(locale) })}
+                      {" · "}
+                      {t("blockedReason", { reason: topic.blockReason ?? "" })}
+                    </>
+                  )}
                   {topic.origin === "ai" && <> · {t("aiSuggestion")}</>}
                   {topic.contentType && topic.contentType !== "social_post" && (
                     <> · {tc(`contentType.${topic.contentType}`)}</>
@@ -494,7 +543,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
               }
               trailing={
                 <>
-                  {topic.status !== "approved" && (
+                  {!topic.blockedAt && topic.status !== "approved" && (
                     <Button
                       size="sm"
                       variant="secondary"
@@ -503,7 +552,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                       {t("approve")}
                     </Button>
                   )}
-                  {topic.status === "approved" && (
+                  {!topic.blockedAt && topic.status === "approved" && (
                     <>
                       <Link
                         className={buttonClasses("secondary", "sm")}
@@ -518,25 +567,37 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                   )}
                   <Menu
                     trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
-                    items={[
-                      { label: t("edit"), onSelect: () => openEdit(topic) },
-                      ...(topic.status === "archived"
-                        ? []
+                    items={
+                      topic.blockedAt
+                        ? [{ label: t("unblock"), onSelect: () => void unblock(topic) }]
                         : [
+                            { label: t("edit"), onSelect: () => openEdit(topic) },
                             {
-                              label: t("archive"),
-                              onSelect: () => void setStatus(topic, "archived"),
+                              label: t("block"),
+                              onSelect: () => {
+                                setToBlock(topic);
+                                setBlockReason("");
+                                setDialogError(null);
+                              },
                             },
-                          ]),
-                      {
-                        label: t("remove"),
-                        danger: true,
-                        onSelect: () => {
-                          setToDelete(topic);
-                          setDialogError(null);
-                        },
-                      },
-                    ]}
+                            ...(topic.status === "archived"
+                              ? []
+                              : [
+                                  {
+                                    label: t("archive"),
+                                    onSelect: () => void setStatus(topic, "archived"),
+                                  },
+                                ]),
+                            {
+                              label: t("remove"),
+                              danger: true,
+                              onSelect: () => {
+                                setToDelete(topic);
+                                setDialogError(null);
+                              },
+                            },
+                          ]
+                    }
                   />
                 </>
               }
@@ -633,6 +694,35 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             </div>
           </Advanced>
         </form>
+      </Modal>
+      <Modal
+        open={toBlock !== null}
+        onClose={closeBlock}
+        title={t("blockTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeBlock}>
+              {t("cancel")}
+            </Button>
+            <Button variant="danger" onClick={block} disabled={busy}>
+              {t("block")}
+            </Button>
+          </>
+        }
+      >
+        {dialogError && (
+          <p role="alert" className="mb-3 text-sm text-danger">
+            {dialogError}
+          </p>
+        )}
+        <p className="mb-3 text-sm text-fg-secondary">{t("blockBody")}</p>
+        <Textarea
+          label={t("blockReasonLabel")}
+          value={blockReason}
+          onChange={(event) => setBlockReason(event.target.value)}
+          maxLength={500}
+          required
+        />
       </Modal>
       <Modal
         open={toDelete !== null}

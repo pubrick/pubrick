@@ -187,6 +187,14 @@ export class SuggestionsRepository {
     news: Array<{ id: string; url: string }>,
   ) {
     return db.transaction(async (tx) => {
+      // Block/unblock and topic edits take this same lock before touching
+      // topics, giving exact-title suppression a stable snapshot.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) return 0;
       const requests = await tx
         .select({ status: schema.topicSuggestionRequests.status })
         .from(schema.topicSuggestionRequests)

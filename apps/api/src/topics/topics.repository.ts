@@ -3,6 +3,7 @@ import { schema } from "@pubrick/db";
 import {
   type NewsFeedback,
   runCreateSchema,
+  type TopicBlock,
   type TopicCreate,
   type TopicRun,
   type TopicUpdate,
@@ -23,6 +24,8 @@ const COLUMNS = {
   contentType: schema.topics.contentType,
   seoKeywords: schema.topics.seoKeywords,
   status: schema.topics.status,
+  blockedAt: schema.topics.blockedAt,
+  blockReason: schema.topics.blockReason,
   plannedDate: schema.topics.plannedDate,
   priority: schema.topics.priority,
   origin: schema.topics.origin,
@@ -241,6 +244,7 @@ export class TopicsRepository {
           priority: schema.topics.priority,
           contentType: schema.topics.contentType,
           seoKeywords: schema.topics.seoKeywords,
+          blockedAt: schema.topics.blockedAt,
         })
         .from(schema.topics)
         .where(
@@ -252,6 +256,8 @@ export class TopicsRepository {
         )
         .for("update");
       if (!topic) throw notFound("topic_not_found", "Topic not found");
+      if (topic.blockedAt)
+        throw conflict("topic_blocked", "Unblock this topic before editing or approving it");
       const contentType = data.contentType ?? topic.contentType;
       const seoKeywords = data.seoKeywords ?? topic.seoKeywords;
       if (seoKeywords.length && contentType !== "expert_article") {
@@ -299,10 +305,18 @@ export class TopicsRepository {
     });
   }
 
-  async delete(orgId: string, brandId: string, id: string) {
+  private async setBlocked(orgId: string, brandId: string, id: string, reason: string | null) {
     return db.transaction(async (tx) => {
+      // Share the brand lock with suggestion completion so a paid result cannot
+      // insert a repeat while a reviewer is blocking the same title.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [topic] = await tx
-        .select({ id: schema.topics.id })
+        .select(COLUMNS)
         .from(schema.topics)
         .where(
           and(
@@ -313,6 +327,51 @@ export class TopicsRepository {
         )
         .for("update");
       if (!topic) throw notFound("topic_not_found", "Topic not found");
+      if (Boolean(topic.blockedAt) === Boolean(reason)) return topic;
+      const [updated] = await tx
+        .update(schema.topics)
+        .set({
+          blockedAt: reason ? new Date() : null,
+          blockReason: reason,
+          status: reason ? "archived" : "idea",
+          revision: sql`${schema.topics.revision} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.id, id),
+          ),
+        )
+        .returning(COLUMNS);
+      return updated;
+    });
+  }
+
+  block(orgId: string, brandId: string, id: string, data: TopicBlock) {
+    return this.setBlocked(orgId, brandId, id, data.reason);
+  }
+
+  unblock(orgId: string, brandId: string, id: string) {
+    return this.setBlocked(orgId, brandId, id, null);
+  }
+
+  async delete(orgId: string, brandId: string, id: string) {
+    return db.transaction(async (tx) => {
+      const [topic] = await tx
+        .select({ id: schema.topics.id, blockedAt: schema.topics.blockedAt })
+        .from(schema.topics)
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.id, id),
+          ),
+        )
+        .for("update");
+      if (!topic) throw notFound("topic_not_found", "Topic not found");
+      if (topic.blockedAt) throw conflict("topic_blocked", "Unblock this topic before deleting it");
       const [linked] = await tx
         .select({ id: schema.calendarSlots.id })
         .from(schema.calendarSlots)

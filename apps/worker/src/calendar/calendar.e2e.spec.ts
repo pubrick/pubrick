@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ContentType } from "@pubrick/shared";
+import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -170,7 +171,13 @@ describe.skipIf(!url)("planned calendar generation", () => {
     const archivedSlot = await makeLinkedSlot();
     await db
       .update(schema.topics)
-      .set({ status: "archived", updatedAt: new Date(Date.now() + 1000) })
+      .set({
+        status: "archived",
+        blockedAt: new Date(),
+        blockReason: "Reviewer veto",
+        revision: sql`${schema.topics.revision} + 1`,
+        updatedAt: new Date(Date.now() + 1000),
+      })
       .where(eq(schema.topics.id, topicId));
     await service.trigger(boss, orgId, archivedSlot);
     const [archived] = await db
@@ -181,7 +188,7 @@ describe.skipIf(!url)("planned calendar generation", () => {
     const changedSlot = await makeLinkedSlot();
     await db
       .update(schema.topics)
-      .set({ status: "approved", title: "Changed" })
+      .set({ status: "approved", blockedAt: null, blockReason: null, title: "Changed" })
       .where(eq(schema.topics.id, topicId));
     await service.trigger(boss, orgId, changedSlot);
     const [changed] = await db

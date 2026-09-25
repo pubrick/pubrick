@@ -41,6 +41,8 @@ export const topics = pgTable(
     seoKeywords: jsonb("seo_keywords").$type<string[]>().notNull().default([]),
     sourceUrl: text("source_url"),
     status: text("status", { enum: TOPIC_STATUSES }).notNull().default("idea"),
+    blockedAt: timestamp("blocked_at", { withTimezone: true }),
+    blockReason: text("block_reason"),
     plannedDate: date("planned_date"),
     priority: integer("priority").notNull().default(5),
     origin: text("origin", { enum: TOPIC_ORIGINS }).notNull().default("manual"),
@@ -54,6 +56,10 @@ export const topics = pgTable(
     uniqueIndex("topics_org_brand_news_item_idx").on(t.orgId, t.brandId, t.newsItemId),
     uniqueIndex("topics_org_brand_suggestion_key_idx").on(t.orgId, t.brandId, t.suggestionKey),
     enumCheck("topics_status_check", t.status, TOPIC_STATUSES),
+    check(
+      "topics_block_state_check",
+      sql`(${t.blockedAt} is null and ${t.blockReason} is null) or (${t.blockedAt} is not null and ${t.status} = 'archived' and ${t.blockReason} is not null and length(${t.blockReason}) between 1 and 500)`,
+    ),
     enumCheck("topics_content_type_check", t.contentType, TOPIC_CONTENT_TYPES),
     check(
       "topics_seo_keywords_check",

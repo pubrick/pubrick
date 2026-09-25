@@ -575,6 +575,13 @@
       "when": 1790319885663,
       "tag": "0082_exotic_warstar",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1790320788621,
+      "tag": "0083_purple_patriot",
+      "breakpoints": true
     }
   ]
 }

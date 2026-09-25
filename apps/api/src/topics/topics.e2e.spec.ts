@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
@@ -32,7 +33,7 @@ describe.skipIf(!url)("topic bank e2e", () => {
   async function orgAgent() {
     const agent = request.agent(app.getHttpServer());
     const uniq = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
-    await agent
+    const signUp = await agent
       .post("/api/auth/sign-up/email")
       .send({ email: `topics${uniq}@example.com`, password: "password1234", name: "U" })
       .expect(200);
@@ -44,7 +45,7 @@ describe.skipIf(!url)("topic bank e2e", () => {
       .post("/api/auth/organization/set-active")
       .send({ organizationId: org.body.id })
       .expect(200);
-    return { agent, orgId: org.body.id as string };
+    return { agent, orgId: org.body.id as string, userId: signUp.body.user.id as string };
   }
 
   it("scopes topics and feedback, imports news once, and runs only approved topics", async () => {
@@ -226,6 +227,92 @@ describe.skipIf(!url)("topic bank e2e", () => {
     expect(
       (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body,
     ).toEqual([]);
+  });
+
+  it("blocks an exact title as a durable tombstone until explicitly unblocked", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const editor = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Editorial" }).expect(201);
+    const second = await owner.agent.post("/api/brands").send({ name: "Other" }).expect(201);
+    const topic = await owner.agent
+      .post("/api/topics")
+      .send({ brandId: brand.body.id, title: "Do not repeat this" })
+      .expect(201);
+    const path = `/api/topics/${topic.body.id}?brandId=${brand.body.id}`;
+    const memberId = randomUUID();
+    await db.insert(schema.member).values({
+      id: memberId,
+      organizationId: owner.orgId,
+      userId: editor.userId,
+      role: "member",
+    });
+    await editor.agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: owner.orgId })
+      .expect(200);
+    await editor.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${brand.body.id}`)
+      .send({ reason: "Reviewed" })
+      .expect(404);
+    await db
+      .insert(schema.brandAccess)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, memberId });
+    await other.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${brand.body.id}`)
+      .send({ reason: "Reviewed" })
+      .expect(404);
+    await owner.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${second.body.id}`)
+      .send({ reason: "Reviewed" })
+      .expect(404);
+    await owner.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${brand.body.id}`)
+      .send({ reason: " " })
+      .expect(400);
+    const blocked = await editor.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${brand.body.id}`)
+      .send({ reason: "Outside editorial scope" })
+      .expect(201);
+    expect(topicDtoSchema.parse(blocked.body)).toMatchObject({
+      status: "archived",
+      blockReason: "Outside editorial scope",
+      revision: topic.body.revision + 1,
+    });
+    expect(blocked.body.blockedAt).toBeTruthy();
+    const again = await owner.agent
+      .post(`/api/topics/${topic.body.id}/block?brandId=${brand.body.id}`)
+      .send({ reason: "Changed reason" })
+      .expect(201);
+    expect(again.body).toEqual(blocked.body);
+    await owner.agent.patch(path).send({ status: "approved" }).expect(409);
+    await owner.agent.patch(path).send({ title: "Erase tombstone" }).expect(409);
+    await owner.agent.delete(path).expect(409);
+    await owner.agent
+      .post(`/api/topics/${topic.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [randomUUID()] })
+      .expect(409);
+    const runs = await db
+      .select({ id: schema.pipelineRuns.id })
+      .from(schema.pipelineRuns)
+      .where(
+        sql`${schema.pipelineRuns.orgId} = ${owner.orgId} and ${schema.pipelineRuns.brandId} = ${brand.body.id}`,
+      );
+    expect(runs).toEqual([]);
+    const unblocked = await owner.agent
+      .post(`/api/topics/${topic.body.id}/unblock?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(unblocked.body).toMatchObject({
+      status: "idea",
+      blockedAt: null,
+      blockReason: null,
+      revision: topic.body.revision + 2,
+    });
+    const unblockedAgain = await owner.agent
+      .post(`/api/topics/${topic.body.id}/unblock?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(unblockedAgain.body).toEqual(unblocked.body);
+    await owner.agent.patch(path).send({ status: "approved" }).expect(200);
   });
 
   it("saves a topic format and keywords, uses them for direct runs, and revokes approval on edits", async () => {

@@ -98,6 +98,9 @@ export const topicUpdateSchema = z
   );
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
 
+export const topicBlockSchema = z.object({ reason: safeText(500) });
+export type TopicBlock = z.infer<typeof topicBlockSchema>;
+
 export const topicRunSchema = z.object({
   contentType: z.enum(TOPIC_CONTENT_TYPES).optional(),
   seoKeywords: storedKeywords.optional(),
@@ -117,6 +120,8 @@ export const topicDtoSchema = z.object({
   description: z.string(),
   sourceUrl: z.string().nullable(),
   status: z.enum(TOPIC_STATUSES),
+  blockedAt: z.string().nullable(),
+  blockReason: z.string().nullable(),
   plannedDate: plannedDate.nullable(),
   priority,
   contentType: z.enum(TOPIC_CONTENT_TYPES),

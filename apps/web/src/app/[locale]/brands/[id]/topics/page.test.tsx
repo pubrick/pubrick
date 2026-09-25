@@ -1,9 +1,11 @@
+import { refusalBody } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
+import es from "../../../../../../messages/es.json";
 import TopicsPage from "./page";
 
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
@@ -145,6 +147,97 @@ describe("topic bank page", () => {
       method: "POST",
     });
     expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
+  });
+
+  it("blocks with a reason and offers only unblock for the blocked topic", async () => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    let blocked = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url, method, body });
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/block?")) blocked = true;
+      if (url.includes("/unblock?")) blocked = false;
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            id: TOPIC_ID,
+            brandId: BRAND_ID,
+            title: "Avoid this",
+            description: "",
+            status: blocked ? "archived" : "idea",
+            blockedAt: blocked ? "2026-09-23T12:00:00Z" : null,
+            blockReason: blocked ? "Off brand" : null,
+            origin: "manual",
+            plannedDate: null,
+            priority: 5,
+            revision: blocked ? 2 : 1,
+          },
+        ]);
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Topics.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Topics.block }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Topics.blockTitle }));
+    await user.type(dialog.getByRole("textbox", { name: en.Topics.blockReasonLabel }), "Off brand");
+    await user.click(dialog.getByRole("button", { name: en.Topics.block }));
+    await waitFor(() => expect(screen.getByText(en.Topics.status_blocked)).toBeInTheDocument());
+    expect(calls).toContainEqual({
+      url: expect.stringContaining(`/api/topics/${TOPIC_ID}/block?brandId=${BRAND_ID}`),
+      method: "POST",
+      body: { reason: "Off brand" },
+    });
+    await user.click(screen.getByRole("button", { name: en.Topics.more }));
+    expect(screen.getByRole("menuitem", { name: en.Topics.unblock })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: en.Topics.remove })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: en.Topics.unblock }));
+    await waitFor(() => expect(screen.getByText(en.Topics.status_idea)).toBeInTheDocument());
+  });
+
+  it("shows a blocked-topic refusal in the reader's language", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            id: TOPIC_ID,
+            brandId: BRAND_ID,
+            title: "Avoid this",
+            description: "",
+            status: "idea",
+            blockedAt: null,
+            blockReason: null,
+            origin: "manual",
+            plannedDate: null,
+            priority: 5,
+            revision: 1,
+          },
+        ]);
+      if (url.includes("/block?") && init?.method === "POST")
+        return response(
+          409,
+          refusalBody(409, "topic_blocked", "Unblock this topic before editing it"),
+        );
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />, { locale: "es" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: es.Topics.more }));
+    await user.click(screen.getByRole("menuitem", { name: es.Topics.block }));
+    const dialog = within(screen.getByRole("dialog", { name: es.Topics.blockTitle }));
+    await user.type(dialog.getByRole("textbox", { name: es.Topics.blockReasonLabel }), "No encaja");
+    await user.click(dialog.getByRole("button", { name: es.Topics.block }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent(es.Errors.topic_blocked);
+    expect(dialog.getByRole("alert")).not.toHaveTextContent("Unblock this topic");
   });
 
   it("shows saved expert keywords and can clear them for one run", async () => {

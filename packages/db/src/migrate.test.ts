@@ -195,6 +195,7 @@ const ZONED_COLUMNS = [
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
   "topic_suggestion_requests.updated_at",
+  "topics.blocked_at",
   "topics.created_at",
   "topics.updated_at",
   "webhook_deliveries.created_at",
@@ -385,6 +386,7 @@ const NON_ENUM_CHECKS = [
   "topics_status_check",
   "topics_content_type_check",
   "topics_seo_keywords_check",
+  "topics_block_state_check",
   // 0033's late enum pins are exercised by the topic API and suggestion worker
   // e2e suites; this pre-0009 seed has no topic or request rows to update.
   "topics_origin_check",

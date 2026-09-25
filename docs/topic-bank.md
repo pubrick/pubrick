@@ -37,6 +37,20 @@ multiple runs.
 Editing an approved topic returns it to **Idea**, so its new text needs a fresh
 approval.
 
+Use **Block** in a topic's More menu to archive it with a required reason and
+time. A blocked topic cannot be edited, approved, deleted, or used for a new
+run. An unstarted calendar slot linked to the old topic revision fails as
+`topic_changed` before it can call the AI provider. Existing drafts and runs
+are unchanged. **Unblock** returns the topic to **Idea** and requires a fresh
+approval; it clears the block reason and time.
+
+AI suggestion completion checks every existing title in that brand, including
+blocked topics, using Unicode NFKC normalization, English lowercase, and
+collapsed whitespace. This skips **exact normalized title repeats**. Similar
+or paraphrased titles may still be suggested. The block action and suggestion
+completion share a brand transaction lock so a completed suggestion cannot
+slip between the block and this check. Blocking itself makes no paid AI call.
+
 All topic and article actions are scoped to organization and brand. Deleting a
 source removes its collected articles, but leaves saved topics and existing
 drafts. Deleting a topic leaves earlier generation runs and drafts. The article
