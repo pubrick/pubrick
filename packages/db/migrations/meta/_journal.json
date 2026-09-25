@@ -512,6 +512,13 @@
       "when": 1790298190725,
       "tag": "0073_heavy_kate_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1790300102678,
+      "tag": "0074_sturdy_gambit",
+      "breakpoints": true
     }
   ]
 }

@@ -52,6 +52,15 @@ export const MANUAL_TOPIC_PLAN_QUEUE_OPTIONS = {
   retryDelay: 30,
   expireInSeconds: 120,
 } as const;
+/** An operator-requested check uses the scheduled admission service unchanged. */
+export const MANUAL_AUTOPILOT_QUEUE = "autopilot-manual";
+export const MANUAL_AUTOPILOT_DLQ = "autopilot-manual-dlq";
+export type ManualAutopilotJob = { orgId: string; brandId: string; attemptId: string };
+export const MANUAL_AUTOPILOT_QUEUE_OPTIONS = {
+  retryLimit: 0,
+  expireInSeconds: 120,
+  deadLetter: MANUAL_AUTOPILOT_DLQ,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";

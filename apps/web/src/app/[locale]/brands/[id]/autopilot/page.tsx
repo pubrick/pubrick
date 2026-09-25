@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutopilotDiagnostics } from "./diagnostics";
+import { AutopilotManualTrigger } from "./manual-trigger";
 
 type Channel = { id: string; name: string; platform: string };
 type Dispatch = {
@@ -338,6 +339,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
         </Card>
       )}
       <AutopilotDiagnostics brandId={id} />
+      <AutopilotManualTrigger brandId={id} disabled={busy || dirty || !persistedConfig} />
       <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>
         {history.length === 0 ? (

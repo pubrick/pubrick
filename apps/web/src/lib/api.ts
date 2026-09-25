@@ -196,6 +196,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   topic_suggestions_cooldown: "topic_suggestions_cooldown",
   topic_planning_disabled: "topic_planning_disabled",
   topic_planning_cooldown: "topic_planning_cooldown",
+  autopilot_trigger_cooldown: "autopilot_trigger_cooldown",
   brand_not_found: "brand_not_found",
   knowledge_not_found: "knowledge_not_found",
   knowledge_batch_owner_required: "knowledge_batch_owner_required",

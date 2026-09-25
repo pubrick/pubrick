@@ -58,4 +58,19 @@ export class AutopilotController {
   planTopics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.autopilot.planTopics(orgId, brandId);
   }
+
+  @Post("trigger")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @HttpCode(202)
+  @UseGuards(AutopilotOwnerGuard)
+  trigger(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.trigger(orgId, brandId);
+  }
+
+  @Get("attempts")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  attempts(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.manualHistory(orgId, brandId);
+  }
 }

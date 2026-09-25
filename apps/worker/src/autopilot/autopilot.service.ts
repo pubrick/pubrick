@@ -5,6 +5,7 @@ import {
   LIVE_RUN_STATUSES,
   MAX_BRIEF_LENGTH,
   MAX_CONCURRENT_RUNS,
+  type ManualAutopilotJob,
   RUN_ADMISSION_LOCK_NAMESPACE,
   type RunInput,
 } from "@pubrick/shared";
@@ -31,6 +32,55 @@ export type AutopilotDecision =
 @Injectable()
 export class AutopilotService {
   private readonly logger = new Logger(AutopilotService.name);
+
+  async handleManual(boss: PgBoss, job: ManualAutopilotJob): Promise<void> {
+    const [claimed] = await db
+      .update(schema.autopilotManualAttempts)
+      .set({ status: "running", startedAt: sql`clock_timestamp()` })
+      .where(
+        and(
+          eq(schema.autopilotManualAttempts.orgId, job.orgId),
+          eq(schema.autopilotManualAttempts.brandId, job.brandId),
+          eq(schema.autopilotManualAttempts.id, job.attemptId),
+          eq(schema.autopilotManualAttempts.status, "queued"),
+        ),
+      )
+      .returning({ id: schema.autopilotManualAttempts.id });
+    if (!claimed) return;
+    try {
+      await this.trigger(boss, job.orgId, job.brandId, job.attemptId);
+    } catch (error) {
+      this.logger.error(`Manual Autopilot check failed for attempt ${job.attemptId}`, error);
+      await this.exhausted(job);
+    }
+  }
+
+  async exhausted(job: ManualAutopilotJob): Promise<void> {
+    await db
+      .update(schema.autopilotManualAttempts)
+      .set({ status: "failed", decision: "worker_failed", completedAt: sql`clock_timestamp()` })
+      .where(
+        and(
+          eq(schema.autopilotManualAttempts.orgId, job.orgId),
+          eq(schema.autopilotManualAttempts.brandId, job.brandId),
+          eq(schema.autopilotManualAttempts.id, job.attemptId),
+          inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
+        ),
+      );
+  }
+
+  /** Reconciles a worker crash or a queue job that vanished before its DLQ copy. */
+  async sweepManual(): Promise<void> {
+    await db
+      .update(schema.autopilotManualAttempts)
+      .set({ status: "failed", decision: "worker_failed", completedAt: sql`clock_timestamp()` })
+      .where(
+        and(
+          inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
+          sql`${schema.autopilotManualAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+        ),
+      );
+  }
 
   /** Global discovery only; each brand is rechecked under its org's admission lock. */
   async scan(boss: PgBoss): Promise<void> {
@@ -60,13 +110,58 @@ export class AutopilotService {
     }
   }
 
-  async trigger(boss: PgBoss, orgId: string, brandId: string): Promise<AutopilotDecision> {
+  async trigger(
+    boss: PgBoss,
+    orgId: string,
+    brandId: string,
+    attemptId?: string,
+  ): Promise<AutopilotDecision> {
     return db.transaction(async (tx) => {
       // The same org lock as manual and calendar generation. It serializes
       // quota, budget admission and concurrency checks across worker replicas.
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      if (attemptId) {
+        const [attempt] = await tx
+          .select({ status: schema.autopilotManualAttempts.status })
+          .from(schema.autopilotManualAttempts)
+          .where(
+            and(
+              eq(schema.autopilotManualAttempts.orgId, orgId),
+              eq(schema.autopilotManualAttempts.brandId, brandId),
+              eq(schema.autopilotManualAttempts.id, attemptId),
+            ),
+          )
+          .for("update");
+        if (attempt?.status !== "running") return "disabled";
+      }
+      const finish = async (
+        decision: AutopilotDecision,
+        runId?: string,
+      ): Promise<AutopilotDecision> => {
+        if (attemptId) {
+          const updated = await tx
+            .update(schema.autopilotManualAttempts)
+            .set({
+              status: "completed",
+              decision,
+              runId: runId ?? null,
+              completedAt: sql`clock_timestamp()`,
+            })
+            .where(
+              and(
+                eq(schema.autopilotManualAttempts.orgId, orgId),
+                eq(schema.autopilotManualAttempts.brandId, brandId),
+                eq(schema.autopilotManualAttempts.id, attemptId),
+                eq(schema.autopilotManualAttempts.status, "running"),
+              ),
+            )
+            .returning({ id: schema.autopilotManualAttempts.id });
+          if (!updated[0]) throw new Error("Manual Autopilot attempt lost its worker claim");
+        }
+        return decision;
+      };
       const configs = await tx
         .select({
           enabled: schema.autopilotConfigs.enabled,
@@ -88,7 +183,7 @@ export class AutopilotService {
         .for("update")
         .limit(1);
       const config = configs[0];
-      if (!config?.enabled) return "disabled";
+      if (!config?.enabled) return finish("disabled");
       const clock = await tx
         .select({
           day: sql<string>`(timezone(${config.timezone}, now())::date)::text`,
@@ -100,8 +195,8 @@ export class AutopilotService {
       const day = clock[0]?.day;
       const hour = clock[0]?.hour;
       if (!day || hour === undefined) throw new Error("Autopilot clock unavailable");
-      if (hour < config.startHour) return "before_start";
-      if (quietHour(hour, config.quietStartHour, config.quietEndHour)) return "quiet_hours";
+      if (hour < config.startHour) return finish("before_start");
+      if (quietHour(hour, config.quietStartHour, config.quietEndHour)) return finish("quiet_hours");
       const dispatched = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(schema.autopilotDispatches)
@@ -112,7 +207,7 @@ export class AutopilotService {
             eq(schema.autopilotDispatches.localDate, day),
           ),
         );
-      if ((dispatched[0]?.count ?? 0) >= config.dailyRunLimit) return "quota_full";
+      if ((dispatched[0]?.count ?? 0) >= config.dailyRunLimit) return finish("quota_full");
 
       // The ledger is the spend source of truth. This is an admission threshold,
       // not a promise about the final price of an in-flight model call.
@@ -131,8 +226,9 @@ export class AutopilotService {
             sql`(timezone(${config.timezone}, ${schema.usageLedger.createdAt} at time zone 'UTC')::date)::text = ${day}`,
           ),
         );
-      if ((spend[0]?.unpriced ?? 0) > 0) return "unpriced_spend";
-      if (Number(spend[0]?.usd ?? 0) >= Number(config.dailySpendLimitUsd)) return "budget_full";
+      if ((spend[0]?.unpriced ?? 0) > 0) return finish("unpriced_spend");
+      if (Number(spend[0]?.usd ?? 0) >= Number(config.dailySpendLimitUsd))
+        return finish("budget_full");
       const uncertain = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(schema.pipelineRuns)
@@ -144,7 +240,7 @@ export class AutopilotService {
             sql`(timezone(${config.timezone}, ${schema.pipelineRuns.createdAt} at time zone 'UTC')::date)::text = ${day}`,
           ),
         );
-      if ((uncertain[0]?.count ?? 0) > 0) return "unpriced_spend";
+      if ((uncertain[0]?.count ?? 0) > 0) return finish("unpriced_spend");
 
       const activeAuto = await tx
         .select({ count: sql<number>`count(*)::int` })
@@ -160,7 +256,7 @@ export class AutopilotService {
             inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           ),
         );
-      if ((activeAuto[0]?.count ?? 0) > 0) return "run_in_progress";
+      if ((activeAuto[0]?.count ?? 0) > 0) return finish("run_in_progress");
       const activeOrg = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(schema.pipelineRuns)
@@ -170,7 +266,7 @@ export class AutopilotService {
             inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           ),
         );
-      if ((activeOrg[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) return "org_busy";
+      if ((activeOrg[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) return finish("org_busy");
       const channels = config.channelIds.length
         ? await tx
             .select({ id: schema.channels.id })
@@ -184,7 +280,7 @@ export class AutopilotService {
             )
         : [];
       if (!config.channelIds.length || channels.length !== config.channelIds.length)
-        return "channels_missing";
+        return finish("channels_missing");
 
       const topics = await tx
         .select({
@@ -210,9 +306,9 @@ export class AutopilotService {
         .for("update", { of: schema.topics, skipLocked: true })
         .limit(1);
       const topic = topics[0];
-      if (!topic) return "no_approved_topic";
+      if (!topic) return finish("no_approved_topic");
       const brief = `${topic.title}\n\n${topic.description}`.trim();
-      if (brief.length > MAX_BRIEF_LENGTH) return "invalid_brief";
+      if (brief.length > MAX_BRIEF_LENGTH) return finish("invalid_brief");
       const input: RunInput = { kind: "brief", text: brief, channelIds: config.channelIds };
       const inserted = await tx
         .insert(schema.pipelineRuns)
@@ -232,7 +328,7 @@ export class AutopilotService {
         },
       );
       if (jobId === null) throw new Error("Autopilot generation job was not enqueued");
-      return "dispatched";
+      return finish("dispatched", runId);
     });
   }
 }

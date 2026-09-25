@@ -62,3 +62,31 @@ export type AutopilotDispatch = {
   createdAt: Date;
   runStatus: string;
 };
+
+/** Closed decisions from the same admission path used by scheduled Autopilot. */
+export const AUTOPILOT_DECISIONS = [
+  "disabled",
+  "before_start",
+  "quiet_hours",
+  "quota_full",
+  "budget_full",
+  "unpriced_spend",
+  "run_in_progress",
+  "org_busy",
+  "channels_missing",
+  "no_approved_topic",
+  "invalid_brief",
+  "dispatched",
+  "worker_failed",
+] as const;
+export const AUTOPILOT_MANUAL_STATUSES = ["queued", "running", "completed", "failed"] as const;
+export const autopilotManualAttemptSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(AUTOPILOT_MANUAL_STATUSES),
+  decision: z.enum(AUTOPILOT_DECISIONS).nullable(),
+  runId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
+  startedAt: z.iso.datetime().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+});
+export type AutopilotManualAttempt = z.infer<typeof autopilotManualAttemptSchema>;

@@ -93,7 +93,7 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  *
  * Twelve of them are the publishing path, converted by 0014. Proposals,
  * publication assertions, public feeds, monitored news, guidance revisions,
- * and calendar slots were born zoned in later migrations. They are deliberately
+ * calendar slots, and manual Autopilot attempts were born zoned in later migrations. They are deliberately
  * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
@@ -108,6 +108,9 @@ const ZONED_COLUMNS = [
   "autopilot_configs.last_manual_plan_at",
   "autopilot_configs.updated_at",
   "autopilot_dispatches.created_at",
+  "autopilot_manual_attempts.completed_at",
+  "autopilot_manual_attempts.created_at",
+  "autopilot_manual_attempts.started_at",
   "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
@@ -403,6 +406,11 @@ const NON_ENUM_CHECKS = [
   "claim_reviews_body_hash_check",
   "claim_reviews_error_code_check",
   "claim_reviews_unrecorded_calls_check",
+  // 0074's operator attempts are created after the historical seed. API and
+  // worker e2e cover active/terminal transitions and an off-list decision.
+  "autopilot_manual_attempts_status_check",
+  "autopilot_manual_attempts_decision_check",
+  "autopilot_manual_attempts_terminal_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

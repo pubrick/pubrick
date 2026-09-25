@@ -395,6 +395,7 @@ export const API_ERROR_CODES = [
   "topic_suggestions_cooldown",
   "topic_planning_disabled",
   "topic_planning_cooldown",
+  "autopilot_trigger_cooldown",
   "brand_not_found",
   "knowledge_not_found",
   "knowledge_batch_owner_required",

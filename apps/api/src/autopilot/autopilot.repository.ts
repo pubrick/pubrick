@@ -1,6 +1,12 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { type AutopilotConfig, autopilotDefaults, LIVE_RUN_STATUSES } from "@pubrick/shared";
+import {
+  type AutopilotConfig,
+  type AutopilotManualAttempt,
+  autopilotDefaults,
+  autopilotManualAttemptSchema,
+  LIVE_RUN_STATUSES,
+} from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
@@ -19,6 +25,30 @@ const CONFIG_COLUMNS = {
   planningDailyLimit: schema.autopilotConfigs.planningDailyLimit,
   dailySpendLimitUsd: schema.autopilotConfigs.dailySpendLimitUsd,
 };
+
+const ATTEMPT_COLUMNS = {
+  id: schema.autopilotManualAttempts.id,
+  status: schema.autopilotManualAttempts.status,
+  decision: schema.autopilotManualAttempts.decision,
+  runId: schema.autopilotManualAttempts.runId,
+  createdAt: schema.autopilotManualAttempts.createdAt,
+  startedAt: schema.autopilotManualAttempts.startedAt,
+  completedAt: schema.autopilotManualAttempts.completedAt,
+};
+
+function attemptDto(
+  row: Pick<typeof schema.autopilotManualAttempts.$inferSelect, keyof typeof ATTEMPT_COLUMNS>,
+): AutopilotManualAttempt {
+  return autopilotManualAttemptSchema.parse({
+    id: row.id,
+    status: row.status,
+    decision: row.decision,
+    runId: row.runId,
+    createdAt: row.createdAt.toISOString(),
+    startedAt: row.startedAt?.toISOString() ?? null,
+    completedAt: row.completedAt?.toISOString() ?? null,
+  });
+}
 
 @Injectable()
 export class AutopilotRepository {
@@ -351,5 +381,76 @@ export class AutopilotRepository {
         );
       return { status: "queued" as const };
     });
+  }
+
+  /** Brand-row lock serializes admission even when no config row exists yet. */
+  async trigger(orgId: string, brandId: string): Promise<AutopilotManualAttempt> {
+    return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      // The queue can lose a delivery on a worker crash. A stale row must not
+      // keep the brand locked out forever even if the maintenance sweep is late.
+      await tx
+        .update(schema.autopilotManualAttempts)
+        .set({ status: "failed", decision: "worker_failed", completedAt: sql`clock_timestamp()` })
+        .where(
+          and(
+            eq(schema.autopilotManualAttempts.orgId, orgId),
+            eq(schema.autopilotManualAttempts.brandId, brandId),
+            inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
+            sql`${schema.autopilotManualAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+          ),
+        );
+      const [latest] = await tx
+        .select({
+          ...ATTEMPT_COLUMNS,
+          cooldownActive: sql<boolean>`${schema.autopilotManualAttempts.createdAt} > clock_timestamp() - interval '60 seconds'`,
+        })
+        .from(schema.autopilotManualAttempts)
+        .where(
+          and(
+            eq(schema.autopilotManualAttempts.orgId, orgId),
+            eq(schema.autopilotManualAttempts.brandId, brandId),
+          ),
+        )
+        .orderBy(
+          desc(schema.autopilotManualAttempts.createdAt),
+          desc(schema.autopilotManualAttempts.id),
+        )
+        .limit(1);
+      if (latest?.status === "queued" || latest?.status === "running") return attemptDto(latest);
+      if (latest?.cooldownActive) {
+        throw conflict("autopilot_trigger_cooldown", "Wait one minute before trying again");
+      }
+      const [attempt] = await tx
+        .insert(schema.autopilotManualAttempts)
+        .values({ orgId, brandId })
+        .returning(ATTEMPT_COLUMNS);
+      if (!attempt) throw new Error("Manual Autopilot attempt insert returned no row");
+      await this.queue.enqueueManualAutopilot(tx, { orgId, brandId, attemptId: attempt.id });
+      return attemptDto(attempt);
+    });
+  }
+
+  async manualHistory(orgId: string, brandId: string): Promise<AutopilotManualAttempt[]> {
+    const rows = await db
+      .select(ATTEMPT_COLUMNS)
+      .from(schema.autopilotManualAttempts)
+      .where(
+        and(
+          eq(schema.autopilotManualAttempts.orgId, orgId),
+          eq(schema.autopilotManualAttempts.brandId, brandId),
+        ),
+      )
+      .orderBy(
+        desc(schema.autopilotManualAttempts.createdAt),
+        desc(schema.autopilotManualAttempts.id),
+      )
+      .limit(20);
+    return rows.map(attemptDto);
   }
 }

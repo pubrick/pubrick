@@ -11,6 +11,11 @@ vi.mock("./diagnostics", () => ({
     <div data-testid="diagnostics">{brandId}</div>
   ),
 }));
+vi.mock("./manual-trigger", () => ({
+  AutopilotManualTrigger: ({ brandId }: { brandId: string }) => (
+    <div data-testid="manual-trigger">{brandId}</div>
+  ),
+}));
 
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const CHANNEL_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";

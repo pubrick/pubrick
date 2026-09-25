@@ -1,3 +1,4 @@
+import { AUTOPILOT_DECISIONS, AUTOPILOT_MANUAL_STATUSES } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -14,6 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
+import { enumCheck } from "./enum-check.js";
 import { pipelineRuns } from "./generation.js";
 import { topics } from "./topics.js";
 
@@ -52,6 +54,41 @@ export const autopilotConfigs = pgTable(
     check(
       "autopilot_configs_auto_plan_channels_check",
       sql`NOT ${t.autoPlanTopics} OR jsonb_array_length(${t.channelIds}) > 0`,
+    ),
+  ],
+);
+
+/** One operator request and its closed admission decision; no provider data is stored here. */
+export const autopilotManualAttempts = pgTable(
+  "autopilot_manual_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    status: text("status", { enum: AUTOPILOT_MANUAL_STATUSES }).notNull().default("queued"),
+    decision: text("decision", { enum: AUTOPILOT_DECISIONS }),
+    runId: uuid("run_id").references(() => pipelineRuns.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("autopilot_manual_attempts_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
+    uniqueIndex("autopilot_manual_attempts_active_idx")
+      .on(t.brandId)
+      .where(sql`${t.status} IN ('queued', 'running')`),
+    check(
+      "autopilot_manual_attempts_status_check",
+      sql`${t.status} IN ('queued', 'running', 'completed', 'failed')`,
+    ),
+    enumCheck("autopilot_manual_attempts_decision_check", t.decision, AUTOPILOT_DECISIONS),
+    check(
+      "autopilot_manual_attempts_terminal_check",
+      sql`((${t.status} = 'queued' OR ${t.status} = 'running') AND ${t.completedAt} IS NULL AND ${t.decision} IS NULL) OR ((${t.status} = 'completed' OR ${t.status} = 'failed') AND ${t.completedAt} IS NOT NULL AND ${t.decision} IS NOT NULL)`,
     ),
   ],
 );

@@ -9,8 +9,12 @@ import {
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
   type GenerateJob,
+  MANUAL_AUTOPILOT_DLQ,
+  MANUAL_AUTOPILOT_QUEUE,
+  MANUAL_AUTOPILOT_QUEUE_OPTIONS,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualAutopilotJob,
   type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
@@ -413,6 +417,24 @@ export class QueueService {
       );
     }
     if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(MANUAL_AUTOPILOT_DLQ);
+      await boss.createQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+      await boss.updateQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+      await boss.work<ManualAutopilotJob>(
+        MANUAL_AUTOPILOT_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.autopilot?.handleManual(boss, job.data);
+        },
+      );
+      await boss.work<ManualAutopilotJob>(MANUAL_AUTOPILOT_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.autopilot?.exhausted(job.data);
+      });
+      await boss.createQueue("autopilot-manual-sweep");
+      await boss.schedule("autopilot-manual-sweep", SWEEP_CRON);
+      await boss.work("autopilot-manual-sweep", { batchSize: 1 }, async () => {
+        await this.autopilot?.sweepManual();
+      });
       await boss.createQueue("autopilot-scan");
       await boss.schedule("autopilot-scan", "*/5 * * * *");
       await boss.work("autopilot-scan", { batchSize: 1 }, async () => {
