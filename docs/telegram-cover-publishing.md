@@ -1,10 +1,12 @@
 # Telegram post delivery and recovery
 
-Pubrick can publish a reviewed Telegram post with one JPEG cover and up to 4,096
-characters of plain text. When the text fits Telegram's 1,024-character photo
-caption, it sends one photo. For longer text, it sends the photo with the first
-caption-sized part, then sends the remainder as one reply to that photo. The
-channel preview shows those two parts before approval. Nothing is truncated or
+Pubrick can publish a reviewed Telegram channel adaptation of up to 12,000
+UTF-16 code units of plain text, including its managed hashtags. The master
+draft and other channel adaptations retain their own limits. A covered post
+sends one JPEG photo with at most 1,024 units in its caption, then up to three
+text replies. A text-only post sends up to three messages. Each text message
+holds at most 4,096 units. Replies target the first message ID, and the channel
+preview shows every exact part before approval. Nothing is truncated or
 interpreted as HTML or Markdown.
 
 The first message is already live before Pubrick asks Telegram to send a reply.
@@ -18,11 +20,11 @@ follows the same path.
 The reply request refuses to send as a standalone message if Telegram can no
 longer find the first message. A dead-lettered attempt with a saved checkpoint
 also keeps the partial outcome instead of becoming a plain failed send.
-If a dead-lettered attempt has an in-flight send claim but no photo checkpoint,
+If a dead-lettered attempt has an in-flight send claim but no checkpoint,
 Pubrick records a generic unknown outcome: the send may already have reached
 Telegram, so retry still requires a channel check.
 Reject is refused while a send claim is in flight, including the interval
-between Telegram accepting the photo and the worker saving its checkpoint.
+between Telegram accepting the first message and the worker saving its checkpoint.
 After the attempt finishes, the operator resolves an unknown or partial
 outcome before approving another send.
 
@@ -40,15 +42,14 @@ If they remove the first message and every reply, they confirm removal, which
 allows a new publish attempt. A generic unknown-delivery assertion is refused
 for a partial Telegram post: it cannot truthfully say whether the full post was
 delivered. No recovery action automatically resends any part. A
-crash between Telegram's photo response and the database checkpoint can still
+crash between Telegram's first response and the database checkpoint can still
 leave only the generic unknown receipt; the safe response is to inspect the
 channel before resolving it.
 
-The compatible delivery layer can checkpoint up to three text messages or one
-photo and three text replies, with a maximum of 12,000 UTF-16 code units. The
-editor and API still limit Telegram adaptations to 4,096 until the separate
-authoring change is released; therefore ordinary text-only posts remain one
-message in this release. Historical photo checkpoints remain readable. The
-worker retains the old photo/reply checkpoint for posts within the old limit
-during rolling upgrades, while the new API understands both receipt shapes.
-Video remains a single upload with a 1,024-character caption.
+The editor, API and AI adapter enforce the same 12,000-unit limit for Telegram
+adaptations, including saved versions and managed hashtags. A resumed AI run
+keeps the 4,096-unit Telegram limit in its original claim receipt. Historical
+photo checkpoints remain readable. During a rolling upgrade, deploy the
+compatible API and worker before enabling the longer editor limit; the worker
+retains the old photo/reply checkpoint for posts within that old limit. Video
+remains a single MP4 upload with a 1,024-unit caption.
