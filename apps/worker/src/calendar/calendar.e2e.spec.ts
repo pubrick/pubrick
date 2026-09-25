@@ -358,6 +358,57 @@ describe.skipIf(!url)("planned calendar generation", () => {
     expect(refused).toEqual({ runId: null, errorCode: "topic_changed" });
   });
 
+  it("honors an older linked article slot when the topic predates saved formats", async () => {
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.pipelineRuns)
+      .set({ status: "succeeded" })
+      .where(eq(schema.pipelineRuns.orgId, orgId));
+    const [topic] = await db
+      .insert(schema.topics)
+      .values({
+        orgId,
+        brandId,
+        title: "Legacy guide",
+        description: "Reviewed facts",
+        status: "approved",
+      })
+      .returning({
+        id: schema.topics.id,
+        updatedAt: schema.topics.updatedAt,
+        revision: schema.topics.revision,
+      });
+    if (!topic) throw new Error("Topic insert failed");
+    const [slot] = await db
+      .insert(schema.calendarSlots)
+      .values({
+        orgId,
+        brandId,
+        scheduledAt: new Date(Date.now() - 60_000),
+        brief: "Legacy guide\n\nReviewed facts",
+        channelIds: [channelId],
+        topicId: topic.id,
+        topicTitle: "Legacy guide",
+        topicDescription: "Reviewed facts",
+        topicUpdatedAt: topic.updatedAt,
+        topicRevision: topic.revision,
+        contentType: "expert_article",
+      })
+      .returning({ id: schema.calendarSlots.id });
+    await service.trigger(boss, orgId, slot?.id as string);
+    const [result] = await db
+      .select({ runId: schema.calendarSlots.runId, errorCode: schema.calendarSlots.errorCode })
+      .from(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, slot?.id as string));
+    expect(result?.errorCode).toBeNull();
+    const [run] = await db
+      .select({ input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, result?.runId as string));
+    expect(run?.input).toMatchObject({ contentType: "expert_article" });
+    expect(run?.input).not.toHaveProperty("seoKeywords");
+  });
+
   it("defers an illustrated article when fewer than two hourly image calls remain", async () => {
     const { eq } = await import("drizzle-orm");
     await db

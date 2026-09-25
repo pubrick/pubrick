@@ -101,8 +101,6 @@ export class CalendarService {
             title: schema.topics.title,
             description: schema.topics.description,
             sourceUrl: schema.topics.sourceUrl,
-            contentType: schema.topics.contentType,
-            seoKeywords: schema.topics.seoKeywords,
             updatedAt: schema.topics.updatedAt,
             revision: schema.topics.revision,
           })
@@ -115,13 +113,14 @@ export class CalendarService {
             ),
           )
           .for("share");
+        // Historical linked slots could select an article format before topics
+        // stored a format. Revision and timestamp still reject later edits;
+        // the reviewed slot snapshot remains the generation input.
         if (
           topic?.status !== "approved" ||
           topic.title !== slot.topicTitle ||
           topic.description !== slot.topicDescription ||
           topic.sourceUrl !== slot.topicSourceUrl ||
-          topic.contentType !== slot.contentType ||
-          JSON.stringify(topic.seoKeywords) !== JSON.stringify(slot.seoKeywords) ||
           topic.updatedAt.getTime() !== slot.topicUpdatedAt?.getTime() ||
           topic.revision !== slot.topicRevision
         ) {

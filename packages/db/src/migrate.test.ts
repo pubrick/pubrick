@@ -2875,7 +2875,7 @@ describe.skipIf(!url)("runMigrations", () => {
         );
         topicId = topic.rows[0]?.id as string;
         const slot = await pool.query<{ id: string }>(
-          "INSERT INTO calendar_slots (org_id, brand_id, scheduled_at, brief, topic_id, topic_title, topic_description, topic_updated_at, topic_revision, channel_ids) VALUES ('topic_format_old', $1, now() + interval '1 day', 'Reviewed topic\\n\\nKnown details', $2, 'Reviewed topic', 'Known details', $3, $4, '[]'::jsonb) RETURNING id",
+          "INSERT INTO calendar_slots (org_id, brand_id, scheduled_at, brief, topic_id, topic_title, topic_description, topic_updated_at, topic_revision, channel_ids, content_type) VALUES ('topic_format_old', $1, now() + interval '1 day', 'Reviewed topic\\n\\nKnown details', $2, 'Reviewed topic', 'Known details', $3, $4, '[]'::jsonb, 'expert_article') RETURNING id",
           [brandId, topicId, topic.rows[0]?.updated_at, topic.rows[0]?.revision],
         );
         slotId = slot.rows[0]?.id as string;
@@ -2903,7 +2903,7 @@ describe.skipIf(!url)("runMigrations", () => {
         );
         expect(slot.rows[0]).toMatchObject({
           topic_id: topicId,
-          content_type: "social_post",
+          content_type: "expert_article",
           seo_keywords: [],
         });
         expect(slot.rows[0]?.brief).toContain("Reviewed topic");
