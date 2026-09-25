@@ -348,6 +348,12 @@ export class SourcesRepository {
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, query.brandId),
           ...(query.status === "all" ? [] : [eq(schema.newsItems.relevanceStatus, query.status)]),
+          ...(query.sourceId ? [eq(schema.newsItems.sourceId, query.sourceId)] : []),
+          ...(query.search
+            ? [
+                sql`(strpos(lower(${schema.newsItems.title}), lower(${query.search})) > 0 OR strpos(lower(coalesce(${schema.newsItems.summary}, '')), lower(${query.search})) > 0)`,
+              ]
+            : []),
         ),
       )
       .orderBy(

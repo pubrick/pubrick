@@ -179,6 +179,8 @@ export const newsItemListQuerySchema = z.object({
   brandId: z.string().uuid(),
   sort: z.enum(["recent", "relevance"]).default("recent"),
   status: z.enum(["all", "unscored", "scored", "failed"]).default("all"),
+  sourceId: z.string().uuid().optional(),
+  search: z.string().trim().min(1).max(200).optional(),
 });
 export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;
 

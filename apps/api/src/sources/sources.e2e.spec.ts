@@ -613,6 +613,93 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(201);
   });
 
+  it("searches literal title and summary text before the news limit within a source and brand", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Search" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other" }).expect(201);
+    const first = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "First", url: "https://example.com/first.xml" })
+      .expect(201);
+    const second = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Second", url: "https://example.com/second.xml" })
+      .expect(201);
+    const foreignSource = await owner
+      .post("/api/sources")
+      .send({
+        brandId: otherBrand.body.id,
+        name: "Foreign",
+        url: "https://example.com/foreign.xml",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    await db.insert(schema.newsItems).values(
+      Array.from({ length: 101 }, (_, index) => ({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: second.body.id,
+        title: `Recent ${index}`,
+        url: `https://example.com/recent-${index}`,
+        publishedAt: new Date("2026-09-24T00:00:00Z"),
+      })),
+    );
+    const [match] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: first.body.id,
+        title: "СВОДКА 100%_",
+        summary: "Важная история",
+        url: "https://example.com/match",
+        publishedAt: new Date("2026-09-01T00:00:00Z"),
+      })
+      .returning({ id: schema.newsItems.id });
+    await db.insert(schema.newsItems).values({
+      orgId,
+      brandId: otherBrand.body.id,
+      sourceId: foreignSource.body.id,
+      title: "СВОДКА 100%_",
+      url: "https://example.com/other-brand",
+    });
+    if (!match) throw new Error("Search fixture failed");
+    const endpoint = `/api/sources/items?brandId=${brand.body.id}&sourceId=${first.body.id}`;
+    const byTitle = await owner
+      .get(`${endpoint}&search=${encodeURIComponent("сводка 100%_")}`)
+      .expect(200);
+    expect(byTitle.body.map((item: { id: string }) => item.id)).toEqual([match.id]);
+    const bySummary = await owner
+      .get(`${endpoint}&search=${encodeURIComponent("ИСТОРИЯ")}`)
+      .expect(200);
+    expect(bySummary.body.map((item: { id: string }) => item.id)).toEqual([match.id]);
+    expect(
+      (await owner.get(`${endpoint}&search=${encodeURIComponent("100%X")}`).expect(200)).body,
+    ).toEqual([]);
+    expect(
+      (await owner.get(`${endpoint}&search=${encodeURIComponent("100X_")}`).expect(200)).body,
+    ).toEqual([]);
+    expect(
+      (
+        await owner
+          .get(
+            `/api/sources/items?brandId=${brand.body.id}&sourceId=${second.body.id}&search=${encodeURIComponent("сводка")}`,
+          )
+          .expect(200)
+      ).body,
+    ).toEqual([]);
+    expect(
+      (
+        await owner
+          .get(`/api/sources/items?brandId=${brand.body.id}&sourceId=${foreignSource.body.id}`)
+          .expect(200)
+      ).body,
+    ).toEqual([]);
+    await other.get(`${endpoint}&search=${encodeURIComponent("сводка")}`).expect(404);
+    await owner.get(`${endpoint}&search=${"x".repeat(201)}`).expect(400);
+  });
+
   it("reranks scored news in bounded pages from local feedback without model usage", async () => {
     const { agent: owner, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();
