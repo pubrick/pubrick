@@ -1373,6 +1373,40 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await publicationsFor(adaptationId)).toHaveLength(0);
   });
 
+  it("claimSend refuses an attempt rejected after markPublishing but before the send claim", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId, null);
+    await db
+      .update(schema.adaptations)
+      .set({ status: "pending", attemptCount: 2 })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    expect(await repo.claimSend(orgId, adaptationId)).toBeNull();
+    expect(await publicationsFor(adaptationId)).toHaveLength(0);
+  });
+
+  it("claimSend rechecks publishing after waiting for a concurrent reject", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId, null);
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
+      const claiming = repo.claimSend(orgId, adaptationId);
+      await waitForLockWaiters("%insert into publications%", 1, claiming);
+      await holder.query(
+        "UPDATE adaptations SET status = 'pending', attempt_count = 2 WHERE id = $1",
+        [adaptationId],
+      );
+      await holder.query("COMMIT");
+      expect(await claiming).toBeNull();
+    } finally {
+      await holder.query("ROLLBACK").catch(() => {});
+      holder.release();
+    }
+    expect(await publicationsFor(adaptationId)).toHaveLength(0);
+  });
+
   it("releaseSend hands the claim back so an honest retry can take it again", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);

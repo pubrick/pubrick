@@ -5042,7 +5042,7 @@ export class ContentRepository {
   }
 
   /**
-   * Rejects an item AND stops anything it already had in flight.
+   * Rejects an item and cancels deliveries that have not claimed a send.
    *
    * Flipping `content_items.status` alone was not a rejection at all: the
    * adaptations stayed `queued`/`scheduled`, their pg-boss jobs stayed live,
@@ -5052,16 +5052,13 @@ export class ContentRepository {
    * one transaction with the status write, so the queue can never disagree
    * with the database.
    *
-   * `publishing` counts as outstanding, and leaving it out stranded the row
-   * for good. A transient platform failure leaves the adaptation `publishing`
-   * for the whole retry chain (`recordTransient` deliberately does not move
-   * the status). A reject during that window used to match nothing: no job
-   * cancelled, no status reset — and then the next retry loaded the item, saw
-   * `rejected` and returned normally, which completes the job and ends the
-   * chain. That also removed the dead-letter delivery that would otherwise
-   * have terminated the row, so the adaptation sat in `publishing` forever
-   * with no job behind it, and re-approve (which skips `publishing`) silently
-   * did nothing.
+   * `publishing` counts as outstanding when it has no in-flight send claim.
+   * A transient platform failure leaves the adaptation `publishing` for the
+   * retry chain (`recordTransient` deliberately does not move the status).
+   * Reject cancels that chain. Once `claimSend` has written a receipt, request
+   * bytes may already be on the wire, so Reject refuses until the worker has
+   * recorded the result. Cancelling then could hide a confirmed photo behind
+   * `pending`, after which Approve would send a second copy.
    *
    * `attempt_count` advances for each cancelled job: a cancelled pg-boss row
    * keeps its id, so without the bump a later re-approve would derive the same
@@ -5070,8 +5067,8 @@ export class ContentRepository {
    *
    * A PUBLISHED item is the one case where none of that is available, and it
    * is refused with a 409 (`requireNotPublished`) rather than accepted. The
-   * promise above — "rejects an item AND stops anything it already had in
-   * flight" — is not something this method can keep once the post is live in
+   * promise above — cancel deliveries that have not claimed a send — is not
+   * something this method can keep once the post is live in
    * someone's channel; all a 200 bought was a row that said `rejected` about a
    * published post. Saying so out loud is the honest answer, and it is the one
    * the UI can render.
@@ -5105,6 +5102,34 @@ export class ContentRepository {
         ...OUTSTANDING_ADAPTATION_STATUSES,
         "manual_ready",
       ]);
+      // A send claim means request bytes may already be on the wire. Keep the
+      // adaptation in publishing until its receipt is resolved; otherwise a
+      // late photo/reply result would be hidden behind pending and re-approval
+      // could send a second cover. The adaptation locks above come first, as
+      // on the worker's terminal path.
+      const publishingIds = outstanding
+        .filter((adaptation) => adaptation.status === "publishing")
+        .map((adaptation) => adaptation.id);
+      if (publishingIds.length > 0) {
+        const [activeClaim] = await tx
+          .select({ id: schema.publications.id })
+          .from(schema.publications)
+          .where(
+            and(
+              eq(schema.publications.orgId, orgId),
+              inArray(schema.publications.adaptationId, publishingIds),
+              eq(schema.publications.status, "in_flight"),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (activeClaim) {
+          throw conflict(
+            "delivery_in_flight",
+            "A delivery has started; wait for its outcome before rejecting this post",
+          );
+        }
+      }
       const live = await this.requireNotPublished(tx, orgId, id, {
         of: "the fan-out",
         hasOutstanding: outstanding.length > 0,
