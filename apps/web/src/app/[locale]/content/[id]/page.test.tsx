@@ -2190,17 +2190,24 @@ describe("the per-channel counter (provenance-lens design §6)", () => {
     expect(counterFor(forX as HTMLElement)).not.toHaveAttribute("data-over-limit");
   });
 
-  it("falls back to MAX_BODY_LENGTH when the channel cannot be resolved", async () => {
+  it("keeps long channel text editable when the channel cannot be resolved", async () => {
     // `channels` is `[]` whenever GET /api/channels failed (load() swallows it),
     // and the counter must still show a number rather than NaN or nothing.
-    installBaseHandlers({ current: counterFixture({ a1: null, a2: null }) }, [], undefined, []);
+    installBaseHandlers(
+      { current: counterFixture({ a1: null, a2: "t".repeat(5000) }) },
+      [],
+      undefined,
+      [],
+    );
 
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     await screen.findByRole("heading", { name: en.Publish.overridesTitle });
 
-    for (const field of screen.getAllByPlaceholderText(en.Publish.overridePlaceholder)) {
-      expect(counterFor(field)).toHaveTextContent(`0 / ${MAX_BODY_LENGTH}`);
-    }
+    const [shortField, longField] = screen.getAllByPlaceholderText(en.Publish.overridePlaceholder);
+    expect(counterFor(shortField as HTMLElement)).toHaveTextContent("0 / 12000");
+    expect(counterFor(longField as HTMLElement)).toHaveTextContent("5000 / 12000");
+    expect(longField).toHaveAttribute("maxlength", "12000");
+    expect(longField).toHaveValue("t".repeat(5000));
   });
 });
 

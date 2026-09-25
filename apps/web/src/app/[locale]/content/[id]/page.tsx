@@ -1391,12 +1391,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   /**
    * The counter's denominator for one channel's override (provenance-lens design §6). An
    * unresolved channel — deleted, or `GET /api/channels` failed and `channels`
-   * is `[]` — keeps what the API can store, the same fallback
-   * `adaptationLimit` makes for an id it does not know.
+   * is `[]` — keeps the largest channel body the API can store, so a saved
+   * long Telegram override remains editable until channel details return.
    */
   function overrideLimit(channelId: string): number {
     const ch = channels.find((c) => c.id === channelId);
-    return ch ? adaptationLimit(ch.platform) : MAX_BODY_LENGTH;
+    return ch ? adaptationLimit(ch.platform) : adaptationLimit("");
   }
 
   function previewLimit(channelId: string): number {

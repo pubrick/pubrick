@@ -1,4 +1,8 @@
-import { MAX_BODY_LENGTH, PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
+import {
+  MAX_BODY_LENGTH,
+  PLATFORM_MAX_TEXT_LENGTH,
+  TELEGRAM_LONG_POST_LENGTH,
+} from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { adaptationLimit, channelLabel, credentialFieldLabel, platformName } from "./platform";
 
@@ -53,13 +57,14 @@ describe("adaptationLimit", () => {
     }
   });
 
-  it("falls back to MAX_BODY_LENGTH for a platform id it does not know", () => {
+  it("falls back to the channel DTO bound for a platform id it does not know", () => {
     // `channels.platform` is a text column, so an unknown id reaches the
     // browser at runtime whatever the type says. `@pubrick/ai` throws there,
     // because generating against NaN spends money on unusable text; a counter
     // cannot throw — the editor would go blank over a denominator — so it
-    // falls back to the only bound the API really enforces.
-    expect(adaptationLimit("myspace")).toBe(MAX_BODY_LENGTH);
-    expect(adaptationLimit("")).toBe(MAX_BODY_LENGTH);
+    // falls back to the largest channel text the API can store, preserving
+    // edits to an existing long Telegram adaptation while details are absent.
+    expect(adaptationLimit("myspace")).toBe(TELEGRAM_LONG_POST_LENGTH);
+    expect(adaptationLimit("")).toBe(TELEGRAM_LONG_POST_LENGTH);
   });
 });
