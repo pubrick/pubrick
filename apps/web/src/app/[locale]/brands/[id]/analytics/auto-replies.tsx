@@ -12,26 +12,35 @@ export function AutoReplies({ brandId }: { brandId: string }) {
   const t = useTranslations("Analytics");
   const te = useTranslations("Errors");
   const [config, setConfig] = useState<PublicationCommentCollectionDto | null>(null);
-  const [telegramConnected, setTelegramConnected] = useState<boolean | null>(null);
+  const [connectionState, setConnectionState] = useState<
+    "checking" | "connected" | "disconnected" | "unknown"
+  >("checking");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const load = useCallback(
-    (active: () => boolean = () => true) =>
-      Promise.all([
-        api<PublicationCommentCollectionDto>(`/api/analytics/brands/${brandId}/comment-collection`),
-        api<{ connected: boolean }>("/api/sources/telegram-connection"),
-      ])
-        .then(([next, connection]) => {
+    (active: () => boolean = () => true) => {
+      setConnectionState("checking");
+      void api<{ connected: boolean }>("/api/sources/telegram-connection")
+        .then((connection) => {
+          if (active()) setConnectionState(connection.connected ? "connected" : "disconnected");
+        })
+        .catch(() => {
+          if (active()) setConnectionState("unknown");
+        });
+      return api<PublicationCommentCollectionDto>(
+        `/api/analytics/brands/${brandId}/comment-collection`,
+      )
+        .then((next) => {
           if (!active()) return;
           setConfig(next);
-          setTelegramConnected(connection.connected);
           setError(null);
         })
         .catch((cause) => {
           if (active()) setError(errorMessage(cause, t("autoRepliesError"), te));
-        }),
+        });
+    },
     [brandId, t, te],
   );
 
@@ -75,10 +84,13 @@ export function AutoReplies({ brandId }: { brandId: string }) {
                 {t(config.enabled ? "autoRepliesOn" : "autoRepliesOff")}
               </p>
             )}
-            {config && telegramConnected === false && (
+            {config && connectionState === "disconnected" && (
               <p className="mt-2 text-sm text-fg-secondary">
                 {t(config.enabled ? "autoRepliesWaitingConnection" : "autoRepliesConnection")}
               </p>
+            )}
+            {config && connectionState === "unknown" && (
+              <p className="mt-2 text-sm text-fg-secondary">{t("autoRepliesConnectionUnknown")}</p>
             )}
           </div>
           {config && (

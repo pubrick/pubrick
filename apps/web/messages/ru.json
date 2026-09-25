@@ -1576,6 +1576,7 @@
     "autoRepliesOff": "Автоматический сбор выключен",
     "autoRepliesConnection": "Для начала сбора владелец или администратор должен подключить аккаунт Telegram в настройках.",
     "autoRepliesWaitingConnection": "Сбор ожидает, пока владелец или администратор подключит аккаунт Telegram в настройках.",
+    "autoRepliesConnectionUnknown": "Не удалось проверить подключение Telegram. Проверьте аккаунт в настройках; управление сбором остаётся доступным.",
     "autoRepliesEnable": "Включить сбор",
     "autoRepliesDisable": "Выключить сбор",
     "autoRepliesSaving": "Сохранение…",
