@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { MAX_BRIEF_LENGTH } from "@pubrick/shared";
+import { MANUAL_TOPIC_PLAN_QUEUE, MAX_BRIEF_LENGTH } from "@pubrick/shared";
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 
@@ -90,6 +90,15 @@ export class TopicPlannerService {
         and(
           inArray(schema.manualTopicPlanAttempts.status, ["queued", "running"]),
           sql`${schema.manualTopicPlanAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+          // A delayed queue or a handler waiting for the brand lock is still
+          // valid work. Reconcile only attempts whose original job is gone or
+          // terminal; the DLQ usually handles those first.
+          sql`not exists (
+            select 1 from pgboss.job as active_job
+            where active_job.name = ${MANUAL_TOPIC_PLAN_QUEUE}
+              and active_job.id = ${schema.manualTopicPlanAttempts.id}
+              and active_job.state in ('created', 'retry', 'active')
+          )`,
         ),
       );
   }

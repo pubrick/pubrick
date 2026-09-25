@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { schema } from "@pubrick/db";
+import {
+  MANUAL_TOPIC_PLAN_DLQ,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
+import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -323,5 +329,43 @@ describe.skipIf(!url)("approved topic calendar planning", () => {
     await planner.handleManual({ orgId, brandId, attemptId: undefined as unknown as string });
     expect(await slots(brandId)).toHaveLength(1);
     expect((await slots(brandId))[0]?.manualPlanAttemptId).toBeNull();
+  });
+
+  it("does not fail an old attempt while its queue job is still waiting", async () => {
+    const { brandId } = await brand();
+    const old = new Date(Date.now() - 11 * 60_000);
+    const [queued] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId, createdAt: old })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const [orphaned] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId, createdAt: old })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    if (!queued || !orphaned) throw new Error("Manual planning attempt insert returned no row");
+    const boss = new PgBoss({ connectionString: url as string, supervise: false, schedule: false });
+    boss.on("error", () => {});
+    await boss.start();
+    try {
+      await boss.createQueue(MANUAL_TOPIC_PLAN_DLQ);
+      await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.send(
+        MANUAL_TOPIC_PLAN_QUEUE,
+        { orgId, brandId, attemptId: queued.id },
+        { id: queued.id, group: { id: orgId } },
+      );
+      await planner.sweepManual();
+      const rows = await db
+        .select({
+          id: schema.manualTopicPlanAttempts.id,
+          status: schema.manualTopicPlanAttempts.status,
+        })
+        .from(schema.manualTopicPlanAttempts)
+        .where(eq(schema.manualTopicPlanAttempts.brandId, brandId));
+      expect(rows.find((row) => row.id === queued.id)?.status).toBe("queued");
+      expect(rows.find((row) => row.id === orphaned.id)?.status).toBe("failed");
+    } finally {
+      await boss.stop({ graceful: false, timeout: 5000 });
+    }
   });
 });
