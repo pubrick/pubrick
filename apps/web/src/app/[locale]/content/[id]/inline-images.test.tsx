@@ -46,7 +46,8 @@ beforeEach(() => {
   mockApi.mockImplementation((path: string) => {
     if (path === "/api/content/post-1/images") return Promise.resolve({ images: [], revision: 0 });
     if (path === "/api/media?brandId=brand-1") return Promise.resolve([image]);
-    if (path === "/api/ai-credentials") return Promise.resolve([]);
+    if (path === "/api/ai-credentials/availability")
+      return Promise.resolve({ configured: false, googleConfigured: false });
     throw new Error(`Unexpected request: ${path}`);
   });
 });
@@ -81,7 +82,8 @@ describe("article image slots", () => {
           images: [{ ...slot, mediaId: "image-2", needsReview: true }],
           revision: 2,
         });
-      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: false, googleConfigured: false });
       throw new Error(`Unexpected request: ${path}`);
     });
     render(<InlineImages {...props} />);
@@ -173,7 +175,8 @@ describe("article image slots", () => {
           revision: 1,
         });
       if (path === "/api/media?brandId=brand-1") return Promise.resolve([image]);
-      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: false, googleConfigured: false });
       throw new Error(`Unexpected request: ${method} ${path}`);
     });
     render(<InlineImages {...props} />);
@@ -226,7 +229,8 @@ describe("article image slots", () => {
     };
     const puts: Record<string, unknown>[] = [];
     mockApi.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: false, googleConfigured: false });
       if (path !== "/api/content/post-1/images") throw new Error(`Unexpected request: ${path}`);
       if (init?.method === "PUT") {
         puts.push(JSON.parse(init.body as string));
@@ -285,7 +289,8 @@ describe("article image slots", () => {
     mockApi.mockImplementation((path: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       calls.push({ path, method, body: init?.body as string | undefined });
-      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: true, googleConfigured: true });
       if (path === "/api/content/post-1/images" && method === "GET")
         return Promise.resolve({ images: [original], revision: 4 });
       if (path === "/api/content/post-1/images/slot-1/regenerate" && method === "POST")
@@ -353,7 +358,8 @@ describe("article image slots", () => {
       needsReview: false,
     };
     mockApi.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: true, googleConfigured: true });
       if (path === "/api/content/post-1/images/slot-1/regenerate" && init?.method === "POST")
         return Promise.reject(new ApiError(409, "changed", false, "content_images_changed"));
       if (path === "/api/content/post-1/images")
@@ -381,7 +387,8 @@ describe("article image slots", () => {
     };
     const onReloadArticle = vi.fn();
     mockApi.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: true, googleConfigured: true });
       if (path === "/api/content/post-1/images/slot-1/regenerate" && init?.method === "POST")
         return Promise.reject(new ApiError(409, "changed", false, "content_image_body_conflict"));
       if (path === "/api/content/post-1/images")
@@ -421,7 +428,8 @@ describe("article image slots", () => {
         return Promise.resolve({ images: [], revision: 0 });
       if (path === "/api/media?brandId=brand-1")
         return Promise.resolve(generatedYet ? [generated, image] : [image]);
-      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: true, googleConfigured: true });
       if (path === "/api/media/generate" && method === "POST") {
         generatedYet = true;
         return Promise.resolve(generated);
@@ -475,7 +483,8 @@ describe("article image slots", () => {
       if (path === "/api/content/post-1/images")
         return Promise.resolve({ images: [], revision: 0 });
       if (path === "/api/media?brandId=brand-1") return Promise.resolve([image]);
-      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: false, googleConfigured: false });
       throw new Error(`Unexpected request: ${path}`);
     });
     const view = render(<InlineImages {...props} />);
@@ -519,7 +528,8 @@ describe("article image slots", () => {
       if (path === "/api/content/post-1/images")
         return Promise.resolve({ images: [], revision: revision++ });
       if (path === "/api/media?brandId=brand-1") return Promise.resolve([image]);
-      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ configured: false, googleConfigured: false });
       throw new Error(`Unexpected request: ${path}`);
     });
     render(<InlineImages {...props} />);

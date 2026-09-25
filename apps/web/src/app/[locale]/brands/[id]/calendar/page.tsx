@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  type AiCredentialPublic,
   CONTENT_TYPES,
   COVER_SUPPORTED_PLATFORMS,
   type ContentType,
@@ -100,7 +99,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
-  const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
+  const [aiAvailability, setAiAvailability] = useState<{ googleConfigured: boolean } | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -144,9 +143,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     }
   }, []);
   useEffect(() => {
-    api<AiCredentialPublic[]>("/api/ai-credentials")
-      .then(setCredentials)
-      .catch(() => setCredentials([]));
+    api<{ googleConfigured: boolean }>("/api/ai-credentials/availability")
+      .then(setAiAvailability)
+      .catch(() => setAiAvailability({ googleConfigured: false }));
   }, []);
 
   const describe = useCallback(
@@ -228,7 +227,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       (_, index) => new Date(month.getFullYear(), month.getMonth(), index - offset + 1),
     );
   }, [month]);
-  const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
+  const hasGoogleKey = aiAvailability?.googleConfigured ?? false;
   const coverChannelsSupported = selectedChannels.every((id) =>
     (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
       channels?.find((channel) => channel.id === id)?.platform ?? "",
@@ -582,7 +581,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               <span>{tc("generateCover")}</span>
             </label>
             <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverHint")}</p>
-            {credentials !== null && !hasGoogleKey && (
+            {aiAvailability !== null && !hasGoogleKey && (
               <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverNeedsGoogle")}</p>
             )}
             {!coverChannelsSupported && (
@@ -604,7 +603,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               <span>{tc("generateInlineImages")}</span>
             </label>
             <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateInlineImagesHint")}</p>
-            {credentials !== null && !hasGoogleKey && (
+            {aiAvailability !== null && !hasGoogleKey && (
               <p className="mt-1 pl-8 text-sm text-fg-tertiary">
                 {tc("generateInlineImagesNeedsGoogle")}
               </p>

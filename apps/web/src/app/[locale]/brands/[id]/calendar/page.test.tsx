@@ -200,7 +200,8 @@ describe("brand calendar", () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       calls.push({ url, init });
-      if (url.includes("/api/ai-credentials")) return jsonResponse([{ provider: "google" }]);
+      if (url.includes("/api/ai-credentials/availability"))
+        return jsonResponse({ configured: true, googleConfigured: true });
       if (url.includes("/api/channels"))
         return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
       if (url.includes("/api/calendar/memorable-dates"))
@@ -240,7 +241,8 @@ describe("brand calendar", () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       calls.push({ url, init });
-      if (url.includes("/api/ai-credentials")) return jsonResponse([{ provider: "google" }]);
+      if (url.includes("/api/ai-credentials/availability"))
+        return jsonResponse({ configured: true, googleConfigured: true });
       if (url.includes("/api/channels"))
         return jsonResponse([{ id: channelId, name: "Main", platform: "mastodon" }]);
       if (url.includes("/api/calendar/memorable-dates"))

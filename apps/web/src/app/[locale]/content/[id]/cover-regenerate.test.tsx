@@ -22,7 +22,8 @@ describe("draft cover regeneration", () => {
       resolveAsset = resolve;
     });
     mockApi.mockImplementation(async (path) => {
-      if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;
+      if (path === "/api/ai-credentials/availability")
+        return { configured: true, googleConfigured: true } as never;
       if (path === "/api/media/old-cover") return assetRequest as never;
       throw new Error(`Unexpected ${path}`);
     });
@@ -54,7 +55,8 @@ describe("draft cover regeneration", () => {
 
   it("prefills a saved generated prompt, makes one deliberate call, and previews the attached cover", async () => {
     mockApi.mockImplementation(async (path) => {
-      if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;
+      if (path === "/api/ai-credentials/availability")
+        return { configured: true, googleConfigured: true } as never;
       if (path === "/api/media/old-cover")
         return { name: "AI image: A sunrise above a quiet harbor" } as never;
       if (path === "/api/media/posts/post-1/cover/regenerate")
@@ -110,7 +112,8 @@ describe("draft cover regeneration", () => {
 
   it("keeps a paid conflict visible with a direct path to manual library selection", async () => {
     mockApi.mockImplementation(async (path) => {
-      if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;
+      if (path === "/api/ai-credentials/availability")
+        return { configured: true, googleConfigured: true } as never;
       if (path === "/api/media/posts/post-1/cover/regenerate")
         return {
           attached: false,
@@ -145,7 +148,8 @@ describe("draft cover regeneration", () => {
 
   it("does not offer a paid call without a key and localizes a preflight refusal", async () => {
     mockApi.mockImplementation(async (path) => {
-      if (path === "/api/ai-credentials") return [] as never;
+      if (path === "/api/ai-credentials/availability")
+        return { configured: false, googleConfigured: false } as never;
       throw new Error(`Unexpected ${path}`);
     });
     const view = render(
@@ -173,7 +177,8 @@ describe("draft cover regeneration", () => {
     view.unmount();
     mockApi.mockReset();
     mockApi.mockImplementation(async (path) => {
-      if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;
+      if (path === "/api/ai-credentials/availability")
+        return { configured: true, googleConfigured: true } as never;
       if (path === "/api/media/posts/post-1/cover/regenerate")
         throw new ApiError(409, "limit", false, "media_generation_limit");
       throw new Error(`Unexpected ${path}`);
