@@ -44,4 +44,18 @@ describe("role template persistence schema", () => {
     expect(schema.pipelineRuns.templateSnapshot.notNull).toBe(false);
     expect(schema.pipelineRuns.templateSnapshot.default).toBeUndefined();
   });
+
+  it("indexes only pinned runs for tenant and brand outcome cohorts", () => {
+    const runs = getTableConfig(schema.pipelineRuns);
+    const cohort = runs.indexes.find(
+      (index) => index.config.name === "pipeline_runs_template_cohort_idx",
+    );
+    expect(cohort?.config.columns.map((column) => "name" in column && column.name)).toEqual([
+      "org_id",
+      "brand_id",
+      "created_at",
+      "id",
+    ]);
+    expect(cohort?.config.where).toBeDefined();
+  });
 });

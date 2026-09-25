@@ -63,6 +63,33 @@ async function prepareUsageBrandIndex(client: pg.PoolClient): Promise<void> {
 }
 
 /**
+ * A populated run journal must keep accepting claims while its observational
+ * template-cohort index is built. A fresh install gets the same index from 0098.
+ */
+async function prepareTemplateCohortIndex(client: pg.PoolClient): Promise<void> {
+  const column = await client.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM pg_attribute
+       WHERE attrelid = to_regclass('public.pipeline_runs')
+         AND attname = 'template_snapshot' AND NOT attisdropped
+     ) AS exists`,
+  );
+  if (!column.rows[0]?.exists) return;
+  const state = await client.query<{ valid: boolean }>(
+    `SELECT i.indisvalid AS valid FROM pg_index i
+     WHERE i.indexrelid = to_regclass('public.pipeline_runs_template_cohort_idx')`,
+  );
+  if (state.rows[0]?.valid) return;
+  if (state.rows.length) {
+    // PostgreSQL retains an invalid index after an interrupted concurrent build.
+    await client.query('DROP INDEX CONCURRENTLY IF EXISTS "pipeline_runs_template_cohort_idx"');
+  }
+  await client.query(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS "pipeline_runs_template_cohort_idx" ON "pipeline_runs" USING btree ("org_id", "brand_id", "created_at", "id") WHERE "template_snapshot" IS NOT NULL',
+  );
+}
+
+/**
  * A migration transaction must never rewrite every row of a populated table.
  * Each page commits independently. Selecting pages by the stable primary key
  * also lets a failed post-migration step resume without changing assigned UUIDs.
@@ -290,8 +317,10 @@ export async function runMigrations(connectionString: string): Promise<void> {
       }
       try {
         await prepareUsageHistoryIndex(client);
+        await prepareTemplateCohortIndex(client);
         await migrate(drizzle(client), { migrationsFolder: migrationsFolder() });
         await prepareUsageBrandIndex(client);
+        await prepareTemplateCohortIndex(client);
         await backfillPaidReplyHistory(client);
         await validateBodyRevision(client);
       } finally {

@@ -1178,6 +1178,74 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("builds the template cohort index online and repairs an interrupted build", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0098_template_cohort_index");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('template_cohort', 'Template cohort', 'template-cohort')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('template_cohort', 'Brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id;
+        const runs = await pool.query<{ id: string; template_snapshot: unknown }>(
+          `INSERT INTO pipeline_runs (org_id, brand_id, input, steps, template_snapshot)
+           VALUES ('template_cohort', $1, '{}'::jsonb, '{}'::jsonb, NULL),
+                  ('template_cohort', $1, '{}'::jsonb, '{}'::jsonb, '{"formatVersion":1}'::jsonb)
+           RETURNING id, template_snapshot`,
+          [brandId],
+        );
+        expect(
+          await refusal(
+            pool,
+            'CREATE UNIQUE INDEX CONCURRENTLY "pipeline_runs_template_cohort_idx" ON "pipeline_runs" ("org_id")',
+          ),
+        ).toBe(UNIQUE_VIOLATION);
+        expect(
+          (
+            await pool.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'pipeline_runs_template_cohort_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: false }]);
+
+        await runMigrations(fresh.url);
+        const index = await pool.query<{ valid: boolean; definition: string }>(
+          `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS definition
+           FROM pg_index i WHERE i.indexrelid = 'pipeline_runs_template_cohort_idx'::regclass`,
+        );
+        expect(index.rows).toHaveLength(1);
+        expect(index.rows[0]?.valid).toBe(true);
+        expect(index.rows[0]?.definition).toContain("(org_id, brand_id, created_at, id)");
+        expect(index.rows[0]?.definition).toContain("template_snapshot IS NOT NULL");
+        expect(
+          (
+            await pool.query(
+              "SELECT id, template_snapshot FROM pipeline_runs WHERE org_id = 'template_cohort' ORDER BY id",
+            )
+          ).rows,
+        ).toEqual([...runs.rows].sort((a, b) => a.id.localeCompare(b.id)));
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await pool.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'pipeline_runs_template_cohort_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: true }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
   it("backfills saved reply versions and consumes an old manual admission without opting in", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0092_bent_arclight");

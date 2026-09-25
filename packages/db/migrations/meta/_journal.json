@@ -680,6 +680,13 @@
       "when": 1790351486713,
       "tag": "0097_template_decision_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1790352433112,
+      "tag": "0098_template_cohort_index",
+      "breakpoints": true
     }
   ]
 }
