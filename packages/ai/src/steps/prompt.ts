@@ -30,7 +30,10 @@ export type Material = { label: string; text: string };
  * (The channel's identity sits here rather than in the material because it is
  * the same trust tier as the brand's voice: org configuration, not content.)
  */
-export function instructionsFor(ctx: StepContext, role: readonly string[]): string {
+export function instructionsFor(
+  ctx: Pick<StepContext, "brand" | "now">,
+  role: readonly string[],
+): string {
   const currentDate = (ctx.now?.() ?? new Date()).toISOString().slice(0, 10);
   const brand = [`Name: ${ctx.brand.name}`];
   // An unset voice omits its line. Interpolating a null would tell the model the

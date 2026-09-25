@@ -51,7 +51,9 @@ export {
   resolveModel,
 } from "./provider.js";
 export {
+  builtInRoleTemplateSource,
   previewRoleTemplate,
+  previewRoleTemplateInstruction,
   ROLE_TEMPLATE_LIMITS,
   RoleTemplateError,
   type RoleTemplateErrorCode,

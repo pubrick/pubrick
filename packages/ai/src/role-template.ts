@@ -7,6 +7,9 @@ import {
   PROMPT_ROLES,
   type PromptRole,
 } from "@pubrick/shared";
+import { contentTypePolicy } from "./steps/content-type-policy.js";
+import { instructionsFor } from "./steps/prompt.js";
+import { BUILT_IN_ROLE_SOURCES, customRoleLines } from "./steps/role-manifest.js";
 
 export const ROLE_TEMPLATE_LIMITS = {
   sourceCodePoints: 12_000,
@@ -249,4 +252,38 @@ export function previewRoleTemplate(role: PromptRole, source: string): RoleTempl
       : {}),
   };
   return renderRoleTemplate(role, source, values);
+}
+
+/** Editorial text shown in the editor; protected rules live in code. */
+export function builtInRoleTemplateSource(role: PromptRole): string {
+  assertRole(role);
+  return BUILT_IN_ROLE_SOURCES[role];
+}
+
+/**
+ * Measure a sample complete instruction without a model call or tenant data.
+ * The editable body is followed by code-owned role and content-type rules.
+ */
+export function previewRoleTemplateInstruction(
+  role: PromptRole,
+  source: string,
+): { instructionBytes: number } {
+  const rendered = previewRoleTemplate(role, source);
+  const instruction = instructionsFor(
+    {
+      brand: {
+        name: "Example Brand",
+        voice: "Clear and practical",
+        audience: "Readers",
+        contentLanguage: "en",
+      },
+      now: () => new Date("2026-01-15T00:00:00.000Z"),
+    },
+    [...customRoleLines(role, rendered.text), ...contentTypePolicy("social_post", role)],
+  );
+  const instructionBytes = Buffer.byteLength(instruction, "utf8");
+  if (instructionBytes > 96 * 1024) {
+    throw new RoleTemplateError("render_limit", "Complete role instruction exceeds 96 KiB");
+  }
+  return { instructionBytes };
 }
