@@ -734,7 +734,7 @@
     "partialTelegramWarning": "A foto de capa foi aceita em {channel}, mas a publicação completa não foi confirmada. Não envie este rascunho novamente ainda.",
     "partialTelegramViewPhoto": "Ver foto aceita",
     "partialTelegramPhotoId": "ID da mensagem da foto aceita: {id}",
-    "partialTelegramMissingText": "Texto que ainda precisa ser verificado ou publicado como resposta",
+    "partialTelegramMissingText": "Texto cuja publicação como resposta ainda precisa de confirmação ou envio",
     "partialTelegramCopyText": "Copiar texto da resposta",
     "partialTelegramVerifyReply": "A resposta pode já estar publicada. Verifique o canal antes de copiar ou publicar este texto.",
     "partialTelegramReplyNotSent": "A resposta não foi aceita. Verifique o canal e, se necessário, publique este texto exato como resposta à foto.",
