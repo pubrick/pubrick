@@ -314,6 +314,52 @@ describe("rich master integration", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toBeVisible();
   });
+
+  it("refuses to save the previous valid draft after an overlong editor update", async () => {
+    const served = { current: makeItem({ richBody: null, bodyRevision: 0 }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.richEditor.formatMode }));
+    const editor = await screen.findByRole("textbox", { name: en.Publish.richEditor.label });
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? "x".repeat(4097) : ""),
+        types: ["text/plain"],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByText(en.Publish.richEditor.invalid)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeDisabled();
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("saves pending formatting after switching to the plain preview", async () => {
+    const served = { current: makeItem({ richBody: null, bodyRevision: 0 }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method, init) => {
+      if (path !== "/api/content/c1" || method !== "PATCH") return undefined;
+      const payload = JSON.parse(String(init?.body)) as { richBody: RichBody };
+      served.current = { ...served.current, richBody: payload.richBody, bodyRevision: 1 };
+      return served.current;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.richEditor.formatMode }));
+    await screen.findByRole("textbox", { name: en.Publish.richEditor.label });
+    await user.click(screen.getByRole("button", { name: en.Publish.richEditor.plainMode }));
+    await user.click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    const sent = calls.find((call) => call.method === "PATCH");
+    expect(JSON.parse(sent?.body ?? "{}")).toMatchObject({
+      body: "Hello world",
+      expectedBodyRevision: 0,
+      richBody: {
+        content: [{ content: [{ text: "Hello world" }] }],
+      },
+    });
+  });
 });
 
 describe("rendering by adaptation status (Step 1)", () => {

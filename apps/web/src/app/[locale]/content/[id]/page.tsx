@@ -704,8 +704,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   async function saveBody() {
     setActionError(null);
+    // An invalid TipTap update leaves the last valid document in state. Never
+    // persist that older document as though it were the editor's visible text.
+    if (richSupported && richError !== null) return;
     try {
-      if (richMode && richSupported) {
+      // Switching to the plain preview does not discard an unsaved rich edit.
+      // A real plain-text edit clears richDraft in the textarea onChange below.
+      const pendingRichEdit =
+        richSupported &&
+        richDraft !== null &&
+        JSON.stringify(richDraft) !== JSON.stringify(item.richBody ?? null);
+      if (richSupported && richDraft && (richMode || pendingRichEdit)) {
         const parsed = contentUpdateSchema.safeParse({
           body: bodyDraft,
           richBody: richDraft,
@@ -1899,7 +1908,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               value={bodyDraft}
               onChange={(body) => {
                 setBodyDraft(body);
-                if (richDraft && body !== bodyDraft) setRichDraft(null);
+                if (body !== bodyDraft) {
+                  setRichDraft(null);
+                  setRichError(null);
+                }
               }}
               readOnly={richMode}
               disabled={isArchived}
@@ -1912,7 +1924,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             />
           </div>
           <div className="mt-3">
-            <Button variant="secondary" onClick={saveBody} disabled={isArchived}>
+            <Button
+              variant="secondary"
+              onClick={saveBody}
+              disabled={isArchived || (richSupported && richError !== null)}
+            >
               {t("saveBody")}
             </Button>
           </div>

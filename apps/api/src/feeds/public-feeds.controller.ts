@@ -1,4 +1,5 @@
 import { Controller, Get, Header, Param, ParseUUIDPipe, Res } from "@nestjs/common";
+import { projectRichBody, richBodySchema } from "@pubrick/shared";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import type { Response } from "express";
 import { Feed } from "feed";
@@ -34,8 +35,18 @@ function paragraphs(
   richBody?: unknown,
 ): string {
   const richBlocks = safeRichHtmlBlocks(richBody ?? null, text);
+  // Image slots count visible projected paragraphs, not raw rich JSON blocks.
+  const parsedRich = richBlocks ? richBodySchema.safeParse(richBody) : null;
   const blocks =
-    richBlocks ??
+    (richBlocks && parsedRich?.success
+      ? richBlocks.filter((_, index) => {
+          const block = parsedRich.data.content[index];
+          return (
+            block !== undefined &&
+            projectRichBody({ type: "doc", content: [block] }).trim().length > 0
+          );
+        })
+      : null) ??
     text
       .split(/\n\s*\n/)
       .filter((paragraph) => paragraph.trim().length > 0)
