@@ -97,6 +97,7 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
+  "accepted_claim_corrections.accepted_at",
   "adaptation_proposals.created_at",
   "adaptations.created_at",
   "adaptations.scheduled_at",
@@ -124,6 +125,7 @@ const ZONED_COLUMNS = [
   "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
+  "claim_correction_proposals.created_at",
   "claim_reviews.completed_at",
   "claim_reviews.created_at",
   "claim_reviews.lease_expires_at",
@@ -495,6 +497,22 @@ const NON_ENUM_CHECKS = [
   "claim_reviews_body_hash_check",
   "claim_reviews_error_code_check",
   "claim_reviews_unrecorded_calls_check",
+  // 0099–0100: staged corrections and accepted receipts arrived after the
+  // historical seed. Their focused DB test exercises exact quote, citation,
+  // tenant, immutability and cascade guards against populated rows.
+  "claim_correction_proposals_claim_index_check",
+  "claim_correction_proposals_source_body_check",
+  "claim_correction_proposals_source_hash_check",
+  "claim_correction_proposals_claim_check",
+  "claim_correction_proposals_replacement_check",
+  "claim_correction_proposals_reason_check",
+  "claim_correction_proposals_evidence_check",
+  "accepted_claim_corrections_claim_index_check",
+  "accepted_claim_corrections_source_hash_check",
+  "accepted_claim_corrections_claim_check",
+  "accepted_claim_corrections_replacement_check",
+  "accepted_claim_corrections_reason_check",
+  "accepted_claim_corrections_evidence_check",
   // 0074's operator attempts are created after the historical seed. API and
   // worker e2e cover active/terminal transitions and an off-list decision.
   "autopilot_manual_attempts_status_check",
