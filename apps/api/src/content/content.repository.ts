@@ -31,6 +31,7 @@ import {
   MAX_BODY_LENGTH,
   MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
+  MIN_RESCHEDULE_LEAD_MS,
   nextItemStatus,
   normalizeForComparison,
   normalizeHashtags,
@@ -49,7 +50,7 @@ import {
   toLedgerCostUsd,
   withHashtags,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
@@ -640,12 +641,9 @@ const ADAPTATION_COLUMNS = {
    * codebase — the literal column/table names here are the actual db names
    * from packages/db/src/schema/content-items.ts, not TS property names.
    *
-   * Scoped to `published` and deliberately NOT widened to the `unknown`
-   * receipts `deliveryOutcome` below reads: an unknown delivery has no link and
-   * cannot have one — the worker writes `external_url = null` on every one of
-   * them, because the answer that would have carried the id never arrived. That
-   * absence IS the outcome, and the screens say where the post may have gone by
-   * naming the CHANNEL, which they know without asking this subquery.
+   * Scoped to `published` and deliberately NOT widened to `unknown` receipts.
+   * A generic unknown has no confirmed link; a partial Telegram receipt may
+   * have a confirmed photo link, which `partialTelegram` exposes separately.
    *
    * The `order by`/`limit 1` are shape, not choice, and a mutation of either is
    * an equivalent one: `publications_one_published_per_adaptation` is a unique
@@ -665,7 +663,7 @@ const ADAPTATION_COLUMNS = {
   )`,
   /**
    * WHAT HAPPENED TO THIS CHANNEL'S POST — `DeliveryOutcome`, the field the web
-   * labels a delivery from. Its seven values are documented on the union in
+   * labels a delivery from. Its values are documented on the union in
    * `@pubrick/shared`; this is where the seventh is computed.
    *
    * The adaptation column has six: `failed` is its only
@@ -674,7 +672,9 @@ const ADAPTATION_COLUMNS = {
    * `failed` too. The distinction lives on the `publications` receipt the
    * worker writes per attempt, whose status is `unknown` for exactly that
    * ending (`PublishService.recordUnknownOutcome`, and `sweepAbandoned` for an
-   * attempt that died holding its in-flight claim). Rounding it back to
+   * attempt that died holding its in-flight claim). A confirmed Telegram cover
+   * adds frozen partial data to that receipt and reads as `partial`. Rounding
+   * either case back to
    * `failed` invites the re-approval that posts a SECOND copy, which is the
    * whole reason the distinction exists.
    *
@@ -703,15 +703,42 @@ const ADAPTATION_COLUMNS = {
    */
   deliveryOutcome: sql<DeliveryOutcome>`(
     case
-      when adaptations.status = 'failed' and (
-        select p.status from publications p
+      when adaptations.status = 'failed' then coalesce((
+        select case
+          when p.status = 'unknown' and p.partial_followup_text is not null then 'partial'
+          when p.status = 'unknown' then 'unknown'
+          else null
+        end
+        from publications p
         where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
         order by p.created_at desc
         limit 1
-      ) = 'unknown'
-      then 'unknown'
+      ), adaptations.status)
       else adaptations.status
     end
+  )`,
+  /** The last unresolved Telegram cover receipt, never reconstructed from log prose. */
+  partialTelegram: sql<{
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null>`(
+    select case
+      when adaptations.status = 'failed' and p.status = 'unknown'
+        and p.partial_followup_text is not null
+      then json_build_object(
+        'photoId', p.partial_photo_id,
+        'photoUrl', p.partial_photo_url,
+        'followupText', p.partial_followup_text,
+        'followupOutcome', p.partial_followup_outcome
+      )
+      else null
+    end
+    from publications p
+    where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+    order by p.created_at desc
+    limit 1
   )`,
   /**
    * WHO SAID THIS POST WAS DELIVERED, when no platform did — and WHEN they
@@ -776,6 +803,14 @@ const ADAPTATION_COLUMNS = {
     limit 1
   )`,
 };
+
+// A queue card needs the delivery verdict, but never the frozen missing reply.
+// Keep its projection narrow: the list is polled and can contain 200 channels.
+const { partialTelegram: _detailOnly, ...ADAPTATION_LIST_COLUMNS } = ADAPTATION_COLUMNS;
+type AdaptationListRow = Omit<
+  Awaited<ReturnType<ContentRepository["adaptationsFor"]>>[number],
+  "partialTelegram"
+>;
 
 /**
  * The columns `get` needs to answer "which sentences are still the AI's" —
@@ -1073,12 +1108,10 @@ export class ContentRepository {
    * put a thousand statements in front of every other request in the process.
    * Wall time was never the complaint (110 ms warm, measured); the pool was.
    *
-   * `ADAPTATION_COLUMNS` VERBATIM, which is the point rather than a
-   * convenience: `deliveryOutcome` and `externalUrl` are `sql` templates with
-   * exactly one definition each, read by this list, by `get` and by
-   * `updateAdaptation`'s RETURNING, and a verdict the three could answer
-   * differently is the defect that field exists to prevent (see its own
-   * docstring, and CLAUDE.md's "one provenance question, two references").
+   * The same verdict columns as the item detail, minus `partialTelegram`:
+   * its frozen missing reply belongs on the authenticated detail screen, not
+   * on every queue card. `deliveryOutcome` and `externalUrl` keep their one SQL
+   * definition in `ADAPTATION_COLUMNS`.
    * Their correlated subqueries still run once per adaptation ROW; what this
    * removes is the round TRIP per item.
    *
@@ -1089,13 +1122,11 @@ export class ContentRepository {
   private async adaptationsForMany(
     orgId: string,
     contentItemIds: string[],
-  ): Promise<Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>> {
-    const byItem = new Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>(
-      contentItemIds.map((id) => [id, []]),
-    );
+  ): Promise<Map<string, AdaptationListRow[]>> {
+    const byItem = new Map<string, AdaptationListRow[]>(contentItemIds.map((id) => [id, []]));
     if (contentItemIds.length === 0) return byItem;
     const rows = await db
-      .select(ADAPTATION_COLUMNS)
+      .select(ADAPTATION_LIST_COLUMNS)
       .from(schema.adaptations)
       .where(
         and(
@@ -1837,6 +1868,26 @@ export class ContentRepository {
     if (!item) throw notFound("content_not_found", "Content item not found");
     const pinned = pinnedItemRefusal(item.status);
     if (pinned) throw pinned;
+    // Keep the reviewed text stable while a confirmed Telegram photo is live
+    // and its reply still needs a human verdict. This also covers a channel
+    // that inherits the item body rather than storing its own override.
+    const partial = await tx
+      .select({ id: schema.adaptations.id })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, id),
+          eq(ADAPTATION_COLUMNS.deliveryOutcome, "partial"),
+        ),
+      )
+      .limit(1);
+    if (partial.length > 0) {
+      throw conflict(
+        "partial_telegram_unresolved",
+        "Resolve the partial Telegram post before editing its reviewed text",
+      );
+    }
     return { body: item.body, status: item.status };
   }
 
@@ -4022,7 +4073,11 @@ export class ContentRepository {
       .select({ id: schema.adaptations.id, deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome })
       .from(schema.adaptations)
       .where(and(eq(schema.adaptations.orgId, orgId), inArray(schema.adaptations.id, ids)));
-    return new Set(rows.filter((row) => row.deliveryOutcome === "unknown").map((row) => row.id));
+    return new Set(
+      rows
+        .filter((row) => row.deliveryOutcome === "unknown" || row.deliveryOutcome === "partial")
+        .map((row) => row.id),
+    );
   }
 
   /**
@@ -4320,7 +4375,12 @@ export class ContentRepository {
    * (`requireHumanInvolvement`) — the promise, enforced here rather than in the
    * UI, because this is the only door to `enqueuePublish`.
    */
-  async approve(orgId: string, id: string, scheduledAt: Date | null) {
+  async approve(
+    orgId: string,
+    id: string,
+    requestedScheduledAt: Date | null,
+    delayMinutes: 30 | null = null,
+  ) {
     // A SCHEDULE IN THE PAST, refused here rather than by `contentApproveSchema`.
     //
     // It used to be a zod `.refine` on the DTO, and being there is what made the
@@ -4339,7 +4399,7 @@ export class ContentRepository {
     // refusal should cost neither. pg-boss treats a past `startAfter` as "run
     // now", so without this a typo'd or stale date publishes IMMEDIATELY
     // instead of being scheduled, which is the damage the rule exists to stop.
-    if (scheduledAt !== null && scheduledAt.getTime() <= Date.now()) {
+    if (requestedScheduledAt !== null && requestedScheduledAt.getTime() <= Date.now()) {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
     await db.transaction(async (tx) => {
@@ -4351,6 +4411,21 @@ export class ContentRepository {
         "scheduled",
         "manual_ready",
       ]);
+      // A relative shortcut uses the database clock after any lock wait. The
+      // browser may be minutes ahead or behind; the queue must still mean a
+      // full 30 minutes from this decision.
+      let scheduledAt = requestedScheduledAt;
+      if (delayMinutes !== null) {
+        const [clock] = await tx
+          .select({
+            nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
+          })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+          .limit(1);
+        if (!clock) throw notFound("content_not_found", "Content item not found");
+        scheduledAt = new Date(clock.nowMs + delayMinutes * 60_000);
+      }
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
       const journalDecision = await this.shouldJournalDecision(
         tx,
@@ -4453,28 +4528,9 @@ export class ContentRepository {
             "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
           );
         }
-        const overrideBodies = await tx
-          .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
-          .from(schema.adaptations)
-          .where(
-            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
-          );
-        const telegramChannelIds = new Set(
-          platforms
-            .filter((channel) => channel.platform === "telegram")
-            .map((channel) => channel.id),
-        );
-        if (
-          overrideBodies.some(
-            (row) =>
-              telegramChannelIds.has(row.channelId) && (row.body ?? coveredItem.body).length > 1024,
-          )
-        ) {
-          throw conflict(
-            "content_media_caption_too_long",
-            "Telegram photo captions must be 1024 characters or fewer",
-          );
-        }
+        // Telegram delivers reviewed photo text over 1024 characters as a
+        // caption plus one reply. The shared 4096-character adaptation limit
+        // bounds that second call; video remains a single-caption delivery.
       }
       if (coveredItem?.videoId) {
         if (
@@ -4642,6 +4698,245 @@ export class ContentRepository {
     return this.get(orgId, id);
   }
 
+  /** Move exactly one automatic channel's outstanding job without re-approving its siblings. */
+  async rescheduleAdaptation(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    expectedScheduledAt: Date,
+    scheduledAt: Date,
+  ) {
+    await db.transaction(async (tx) => {
+      // The publish worker claims this same row before any external call. A
+      // second request must wait for the first reschedule, then compare the
+      // time in a NEW statement under this lock (READ COMMITTED snapshot).
+      const [locked] = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!locked) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      const [current] = await tx
+        .select({
+          channelId: schema.adaptations.channelId,
+          status: schema.adaptations.status,
+          scheduledAt: schema.adaptations.scheduledAt,
+          attemptCount: schema.adaptations.attemptCount,
+          platform: schema.channels.platform,
+          nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
+        })
+        .from(schema.adaptations)
+        .innerJoin(
+          schema.channels,
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.id, schema.adaptations.channelId),
+          ),
+        )
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .limit(1);
+      if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // Archive/reject take adaptation locks before changing the parent, so
+      // this read stays valid until commit. Do not lock the item first: that
+      // would invert the worker's adaptation -> item lock order.
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1);
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "approved" && item.status !== "partially_published") {
+        throw conflict(
+          "schedule_parent_not_ready",
+          "This post is no longer approved for scheduling",
+        );
+      }
+      if (
+        current.status !== "scheduled" ||
+        !current.scheduledAt ||
+        isManualPlatform(current.platform)
+      ) {
+        throw conflict(
+          "schedule_not_scheduled",
+          "This channel has no scheduled automatic delivery to move",
+        );
+      }
+      if (current.scheduledAt.getTime() !== expectedScheduledAt.getTime()) {
+        throw conflict(
+          "schedule_changed",
+          "This channel's scheduled time changed; reload before moving it",
+        );
+      }
+      // A previous known failure is evidence that nothing was delivered, and
+      // approving its retry already created this scheduled job. A published
+      // receipt or an active claim is different: either can be live outside
+      // Pubrick, so moving the job would hide a second send behind a new slot.
+      const [unsafeReceipt] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.adaptationId, adaptationId),
+            inArray(schema.publications.status, ["in_flight", "published"]),
+          ),
+        )
+        .limit(1);
+      // An unknown result becomes safe only when a later human assertion says
+      // it was not delivered. A subsequent worker failure alone cannot settle
+      // that earlier send, even though it would be the last finished receipt.
+      const [lastUncertainOrResolution] = await tx
+        .select({ status: schema.publications.status })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.adaptationId, adaptationId),
+            or(
+              eq(schema.publications.status, "unknown"),
+              and(
+                eq(schema.publications.status, "failed"),
+                isNotNull(schema.publications.assertedAt),
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(schema.publications.createdAt), desc(schema.publications.id))
+        .limit(1);
+      if (unsafeReceipt || lastUncertainOrResolution?.status === "unknown") {
+        throw conflict(
+          "schedule_has_history",
+          "This channel has an unresolved or delivered attempt; inspect it before scheduling again",
+        );
+      }
+
+      // Both comparisons use the DB clock AFTER any lock wait. pg-boss runs a
+      // past startAfter immediately; a short guard also avoids changing a job
+      // already due in the next dispatch window.
+      const now = current.nowMs;
+      if (scheduledAt.getTime() <= now) {
+        throw badRequest("schedule_in_past", "scheduledAt must be in the future");
+      }
+      if (
+        Math.min(current.scheduledAt.getTime(), scheduledAt.getTime()) <=
+        now + MIN_RESCHEDULE_LEAD_MS
+      ) {
+        throw conflict(
+          "schedule_too_close",
+          "Choose a time at least one minute away before this delivery is due",
+        );
+      }
+      if (scheduledAt.getTime() === current.scheduledAt.getTime()) return;
+
+      // Cancellation and replacement share this transaction with the row.
+      // The cancelled pg-boss id remains, so a fresh attempt count is required.
+      await this.queue.cancelPublish(tx, adaptationId, orgId);
+      const attemptCount = current.attemptCount + 1;
+      await tx
+        .update(schema.adaptations)
+        .set({ scheduledAt, attemptCount })
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, contentItemId),
+            eq(schema.adaptations.id, adaptationId),
+          ),
+        );
+      await this.queue.enqueuePublish(
+        tx,
+        { id: adaptationId, orgId, channelId: current.channelId, attemptCount },
+        scheduledAt,
+      );
+    });
+    return this.get(orgId, contentItemId);
+  }
+
+  /** Return an unsent approval to the review queue without recording a rejection. */
+  async retractApproval(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
+      await this.requireItem(tx, orgId, id);
+      // A worker claims an adaptation before making the external request. Lock
+      // every row first, in the same order as approval and publishing, so a
+      // claim cannot pass the checks below while its cancellation commits.
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "approved") {
+        throw conflict(
+          "approval_retraction_not_approved",
+          "Only an approved post can return to drafts",
+        );
+      }
+      if (
+        !item.isSafeToDelete ||
+        adaptations.length === 0 ||
+        adaptations.some(
+          (adaptation) => !["pending", "scheduled", "queued"].includes(adaptation.status),
+        )
+      ) {
+        throw conflict(
+          "approval_retraction_delivery_started",
+          "A delivery has started or finished; inspect the channel results before changing this post",
+        );
+      }
+      const [receipt] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            inArray(
+              schema.publications.adaptationId,
+              adaptations.map((adaptation) => adaptation.id),
+            ),
+          ),
+        )
+        .limit(1);
+      if (receipt) {
+        throw conflict(
+          "approval_retraction_delivery_started",
+          "A delivery has started or finished; inspect the channel results before changing this post",
+        );
+      }
+      for (const adaptation of adaptations) {
+        const hadJob = adaptation.status === "scheduled" || adaptation.status === "queued";
+        if (hadJob) await this.queue.cancelPublish(tx, adaptation.id, orgId);
+        await tx
+          .update(schema.adaptations)
+          .set({
+            status: "pending",
+            scheduledAt: null,
+            attemptCount: adaptation.attemptCount + (hadJob ? 1 : 0),
+            lastError: null,
+            failureReason: null,
+          })
+          .where(
+            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
+          );
+      }
+      await this.setItemStatus(tx, orgId, id, "draft");
+    });
+    return this.get(orgId, id);
+  }
+
   /**
    * A PERSON SETTLES A DELIVERY NOBODY ELSE CAN — "Mark as delivered" and
    * "Mark as not delivered", per adaptation.
@@ -4703,6 +4998,7 @@ export class ContentRepository {
     adaptationId: string,
     delivered: boolean,
     userId: string,
+    partialResolution?: "completed" | "removed",
   ) {
     await db.transaction(async (tx) => {
       // `adaptations` first — the product's one lock order. One row, by primary
@@ -4730,6 +5026,7 @@ export class ContentRepository {
             status: schema.adaptations.status,
             attemptCount: schema.adaptations.attemptCount,
             deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
+            partialTelegram: ADAPTATION_COLUMNS.partialTelegram,
           })
           .from(schema.adaptations)
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
@@ -4759,10 +5056,23 @@ export class ContentRepository {
           PINNED_ADAPTATION_MESSAGE[current.status],
         );
       }
-      if (current.deliveryOutcome !== "unknown") {
+      if (current.deliveryOutcome !== "unknown" && current.deliveryOutcome !== "partial") {
         throw conflict(
           "delivery_outcome_already_known",
           "This delivery's outcome is already known, so there is nothing to say about it",
+        );
+      }
+      if (current.partialTelegram) {
+        if (partialResolution !== (delivered ? "completed" : "removed")) {
+          throw conflict(
+            "delivery_outcome_unknown",
+            "Confirm the full Telegram reply was posted, or that the partial photo was removed",
+          );
+        }
+      } else if (partialResolution !== undefined) {
+        throw conflict(
+          "delivery_outcome_already_known",
+          "This delivery has no partial Telegram post",
         );
       }
 
@@ -4791,13 +5101,11 @@ export class ContentRepository {
         adaptationId,
         channelId: current.channelId,
         status: delivered ? "published" : "failed",
-        // No id and no link, on purpose and on both verdicts: nobody has one.
-        // The answer that would have carried them never arrived, and a caller
-        // is deliberately given no way to supply one — a caller that could
-        // would be authoring the product's evidence that a platform accepted a
-        // post.
-        externalId: null,
-        externalUrl: null,
+        // A partial Telegram receipt already has the platform-confirmed photo
+        // id and URL. The person attests completion of its tail, not its photo.
+        // Generic unknown outcomes still have no id or link.
+        externalId: delivered ? (current.partialTelegram?.photoId ?? null) : null,
+        externalUrl: delivered ? (current.partialTelegram?.photoUrl ?? null) : null,
         error: null,
         attempt: current.attemptCount,
         // WHO, AND WHEN — and the two are written together because only the
@@ -4921,7 +5229,7 @@ export class ContentRepository {
   }
 
   /**
-   * Rejects an item AND stops anything it already had in flight.
+   * Rejects an item and cancels deliveries that have not claimed a send.
    *
    * Flipping `content_items.status` alone was not a rejection at all: the
    * adaptations stayed `queued`/`scheduled`, their pg-boss jobs stayed live,
@@ -4931,16 +5239,13 @@ export class ContentRepository {
    * one transaction with the status write, so the queue can never disagree
    * with the database.
    *
-   * `publishing` counts as outstanding, and leaving it out stranded the row
-   * for good. A transient platform failure leaves the adaptation `publishing`
-   * for the whole retry chain (`recordTransient` deliberately does not move
-   * the status). A reject during that window used to match nothing: no job
-   * cancelled, no status reset — and then the next retry loaded the item, saw
-   * `rejected` and returned normally, which completes the job and ends the
-   * chain. That also removed the dead-letter delivery that would otherwise
-   * have terminated the row, so the adaptation sat in `publishing` forever
-   * with no job behind it, and re-approve (which skips `publishing`) silently
-   * did nothing.
+   * `publishing` counts as outstanding when it has no in-flight send claim.
+   * A transient platform failure leaves the adaptation `publishing` for the
+   * retry chain (`recordTransient` deliberately does not move the status).
+   * Reject cancels that chain. Once `claimSend` has written a receipt, request
+   * bytes may already be on the wire, so Reject refuses until the worker has
+   * recorded the result. Cancelling then could hide a confirmed photo behind
+   * `pending`, after which Approve would send a second copy.
    *
    * `attempt_count` advances for each cancelled job: a cancelled pg-boss row
    * keeps its id, so without the bump a later re-approve would derive the same
@@ -4949,8 +5254,8 @@ export class ContentRepository {
    *
    * A PUBLISHED item is the one case where none of that is available, and it
    * is refused with a 409 (`requireNotPublished`) rather than accepted. The
-   * promise above — "rejects an item AND stops anything it already had in
-   * flight" — is not something this method can keep once the post is live in
+   * promise above — cancel deliveries that have not claimed a send — is not
+   * something this method can keep once the post is live in
    * someone's channel; all a 200 bought was a row that said `rejected` about a
    * published post. Saying so out loud is the honest answer, and it is the one
    * the UI can render.
@@ -4984,6 +5289,34 @@ export class ContentRepository {
         ...OUTSTANDING_ADAPTATION_STATUSES,
         "manual_ready",
       ]);
+      // A send claim means request bytes may already be on the wire. Keep the
+      // adaptation in publishing until its receipt is resolved; otherwise a
+      // late photo/reply result would be hidden behind pending and re-approval
+      // could send a second cover. The adaptation locks above come first, as
+      // on the worker's terminal path.
+      const publishingIds = outstanding
+        .filter((adaptation) => adaptation.status === "publishing")
+        .map((adaptation) => adaptation.id);
+      if (publishingIds.length > 0) {
+        const [activeClaim] = await tx
+          .select({ id: schema.publications.id })
+          .from(schema.publications)
+          .where(
+            and(
+              eq(schema.publications.orgId, orgId),
+              inArray(schema.publications.adaptationId, publishingIds),
+              eq(schema.publications.status, "in_flight"),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (activeClaim) {
+          throw conflict(
+            "delivery_in_flight",
+            "A delivery has started; wait for its outcome before rejecting this post",
+          );
+        }
+      }
       const live = await this.requireNotPublished(tx, orgId, id, {
         of: "the fan-out",
         hasOutstanding: outstanding.length > 0,

@@ -154,7 +154,7 @@ export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 export type RunDetail = RunDetailDto;
 
 /**
- * The five text roles, followed by optional image steps. `adapter` is one row for
+ * The five default text roles, optional SEO polish, then optional image steps. `adapter` is one row for
  * the whole fan-out even though its checkpoints are keyed `adapter:<channelId>`
  * — the human is watching one pipeline, not N of them, and the per-channel
  * progress rides along as a count.
@@ -162,6 +162,7 @@ export type RunDetail = RunDetailDto;
 export const RUN_STEP_KEYS = [
   "researcher",
   "writer",
+  "seo_polish",
   "editor",
   "factcheck",
   "adapter",
@@ -204,7 +205,8 @@ export function runStepStates(run: RunDetail): RunStepProgress[] {
   return RUN_STEP_KEYS.filter(
     (key) =>
       (key !== "cover" || run.input.generateCover === true) &&
-      (key !== "inline_image" || run.input.generateInlineImages === true),
+      (key !== "inline_image" || run.input.generateInlineImages === true) &&
+      (key !== "seo_polish" || Boolean(run.input.seoKeywords?.length)),
   ).map((key) => {
     if (key === "adapter") {
       const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);
@@ -266,6 +268,17 @@ export function runStepStates(run: RunDetail): RunStepProgress[] {
 
     const checkpoint = run.steps[key];
     const isCurrent = run.currentStep === key;
+    if (key === "seo_polish" && checkpoint?.status === "succeeded") {
+      const output = checkpoint.output;
+      if (
+        typeof output === "object" &&
+        output !== null &&
+        "result" in output &&
+        output.result === "unavailable"
+      ) {
+        return { key, state: "unavailable", done: 0, total: 0 };
+      }
+    }
     if (key === "cover" && checkpoint?.status === "succeeded") {
       const output = checkpoint.output;
       if (
@@ -352,6 +365,45 @@ export type RunClaim = {
 
 const NOTE_SOURCE_ID =
   /^note:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+const NEWS_SOURCE_ID =
+  /^news:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+
+export type RunRelatedNews = { id: string; title: string; summary: string; url: string | null };
+
+/** The exact public feed excerpts frozen before any model used them. */
+export function runRelatedNews(run: RunDetail): RunRelatedNews[] | null {
+  const output = succeededOutput(run, "knowledge");
+  if (!isRecord(output) || !Array.isArray(output.relatedNews)) return null;
+  if (output.relatedNews.length > 2) return null;
+  const stories: RunRelatedNews[] = [];
+  for (const item of output.relatedNews) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      !NEWS_SOURCE_ID.test(`news:${item.id}`) ||
+      typeof item.title !== "string" ||
+      item.title === "" ||
+      typeof item.summary !== "string"
+    )
+      return null;
+    let url: string | null = null;
+    if (typeof item.url === "string" && item.url.length <= 2048) {
+      try {
+        const parsed = new URL(item.url);
+        if (
+          (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+          !parsed.username &&
+          !parsed.password
+        )
+          url = parsed.href;
+      } catch {
+        // A malformed stored URL is never linked.
+      }
+    }
+    stories.push({ id: item.id, title: item.title, summary: item.summary, url });
+  }
+  return stories;
+}
 
 function excerptCorpus(run: RunDetail): Map<string, string> {
   const corpus = new Map<string, string>();
@@ -365,6 +417,9 @@ function excerptCorpus(run: RunDetail): Map<string, string> {
     }
   }
   if (run.input.kind === "source") corpus.set("material", run.input.material.slice(0, 6000));
+  for (const story of runRelatedNews(run) ?? []) {
+    corpus.set(`news:${story.id}`, `${story.title}\n${story.summary}`);
+  }
   return corpus;
 }
 

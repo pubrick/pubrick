@@ -22,6 +22,7 @@ import {
   runEditorChanges,
   runFailureMessage,
   runKnowledgeNotes,
+  runRelatedNews,
   runStepStates,
 } from "@/lib/runs";
 
@@ -194,6 +195,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
    */
   const draftDeleted = run?.status === "succeeded" && run.contentItemId === null;
   const knowledgeNotes = run ? runKnowledgeNotes(run) : null;
+  const relatedNews = run ? runRelatedNews(run) : null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
   // One primary action, and only one: the finished draft while there is one to
@@ -236,10 +238,29 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             lines={claimLines(runClaims(run))}
             empty={t("claimsEmpty")}
             mark={t("claimNeedsCheck")}
-            source={(id) =>
-              id === "material" ? (
-                t("foundInMaterial")
-              ) : (
+            source={(id) => {
+              if (id === "material") return t("foundInMaterial");
+              if (id.startsWith("news:")) {
+                const story = relatedNews?.find((item) => item.id === id.slice(5));
+                return story ? (
+                  <>
+                    {t("foundInRelatedNews")}{" "}
+                    {story.url ? (
+                      <a
+                        href={story.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-accent hover:underline"
+                      >
+                        {story.title}
+                      </a>
+                    ) : (
+                      story.title
+                    )}
+                  </>
+                ) : null;
+              }
+              return (
                 <>
                   {t("foundInBrandNote")}{" "}
                   <Link
@@ -249,12 +270,16 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                     {t("currentNote")}
                   </Link>
                 </>
-              )
-            }
+              );
+            }}
           />
         );
       case "editor":
         return <StepLines lines={changeLines(runEditorChanges(run))} empty={t("changesEmpty")} />;
+      case "seo_polish":
+        return step.state === "unavailable" ? (
+          <p className="mt-2 text-sm text-fg-secondary">{t("seoUnavailable")}</p>
+        ) : null;
       case "cover": {
         const checkpoint = run.steps.cover;
         if (checkpoint?.status !== "succeeded") return null;
@@ -337,6 +362,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                   {t(`contentType.${run.input.contentType ?? "social_post"}`)}
                 </p>
               </RunField>
+              {run.input.seoKeywords && run.input.seoKeywords.length > 0 && (
+                <RunField label={t("seoKeywordsLabel")}>
+                  <p className="whitespace-pre-wrap text-sm text-fg">
+                    {run.input.seoKeywords.join("\n")}
+                  </p>
+                </RunField>
+              )}
               {run.input.kind === "source" && run.input.text === null ? (
                 /*
                   Not an empty "Brief" block. A label with nothing under it reads
@@ -414,6 +446,31 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                 </ul>
               )}
               <p className="mt-3 text-sm text-fg-tertiary">{t("knowledgeNotesHint")}</p>
+            </Card>
+          )}
+
+          {relatedNews !== null && relatedNews.length > 0 && (
+            <Card className="mb-6">
+              <h2 className="mb-2 text-base font-semibold text-fg">{t("relatedNewsTitle")}</h2>
+              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+                {relatedNews.map((story) => (
+                  <li key={story.id}>
+                    {story.url ? (
+                      <a
+                        href={story.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-accent hover:underline"
+                      >
+                        {story.title}
+                      </a>
+                    ) : (
+                      <span className="text-fg">{story.title}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-sm text-fg-tertiary">{t("relatedNewsHint")}</p>
             </Card>
           )}
 

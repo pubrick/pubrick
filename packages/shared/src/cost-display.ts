@@ -16,13 +16,12 @@
  *             The only rows that add to the sum. `price_table` ones make it an
  *             estimate.
  *   UNPRICED  not priced, AND either the provider counted tokens
- *             (input + output > 0) OR the row's outcome is `unknown`. Money was
- *             spent, or may have been, and nothing can name the amount — so the
- *             total is a floor.
- *   IGNORED   not priced, no tokens, and the outcome is not `unknown`. A round
- *             trip the provider REFUSED before generating anything — a 429, a
- *             401. Its cost is KNOWN, and it is zero: it neither adds to the sum
- *             nor degrades the label.
+ *             (input + output > 0) OR the row's outcome is not `refused`.
+ *             Completed image calls can return bytes without token metadata;
+ *             an unknown outcome may also have been billed. The total is a floor.
+ *   IGNORED   not priced, no tokens, and the provider explicitly `refused` the
+ *             call before generating anything — a 429, a 401. Its cost is
+ *             known to be zero: it neither adds to the sum nor degrades the label.
  *
  * That last bucket is the refinement the generation-engine spec's §4 gained once metering moved to every
  * physical round trip: failed attempts write rows too, and the ledger is
@@ -37,8 +36,8 @@
  * IGNORED they neither added to the sum nor raised the "≥", so the figure
  * shrank AND kept the symbol that means "estimate". Measured: one priced call
  * plus three timed-out ones rendered "≈ $0.007875" against a true $0.0315.
- * `usage_ledger.outcome` is what tells the two apart; NULL (a row written
- * before that column) reads as `completed`, which is the meaning it already had.
+ * `usage_ledger.outcome` is what tells the two apart. NULL predates the column;
+ * without an explicit refusal it cannot prove a zero charge.
  *
  * The display rules are then exactly three:
  *
@@ -130,7 +129,7 @@ export type CostRow = {
   inputTokens: number;
   outputTokens: number;
   /**
-   * NULL for a row written before the column existed, and read as `completed`.
+   * NULL for a row written before the column existed; it cannot prove refusal.
    * Required rather than optional so a new producer of these rows has to decide
    * — the whole defect this closed was a writer that had no way to say
    * "unknown" and a reader that therefore never heard it.
@@ -150,9 +149,9 @@ export function costTotals(rows: readonly CostRow[]): LedgerCostTotals {
       if (row.costSource === "price_table") estimatedCalls += 1;
       continue;
     }
-    // Either half is enough. Tokens mean the provider metered work; `unknown`
-    // means we cannot say it did not.
-    if (row.inputTokens + row.outputTokens > 0 || row.outcome === "unknown") unpricedCalls += 1;
+    // Only an explicit token-free refusal proves that no work was billed.
+    // Successful image calls may carry bytes without token metadata.
+    if (row.inputTokens + row.outputTokens > 0 || row.outcome !== "refused") unpricedCalls += 1;
   }
   return { usd, unpricedCalls, estimatedCalls };
 }

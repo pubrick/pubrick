@@ -97,6 +97,8 @@ export class TopicPlannerService {
           title: schema.topics.title,
           description: schema.topics.description,
           sourceUrl: schema.topics.sourceUrl,
+          contentType: schema.topics.contentType,
+          seoKeywords: schema.topics.seoKeywords,
           plannedDate: schema.topics.plannedDate,
           priority: schema.topics.priority,
           updatedAt: schema.topics.updatedAt,
@@ -182,6 +184,8 @@ export class TopicPlannerService {
           topicSourceUrl: topic.sourceUrl,
           topicUpdatedAt: topic.updatedAt,
           topicRevision: topic.revision,
+          contentType: topic.contentType,
+          seoKeywords: topic.seoKeywords,
           channelIds: selected,
         });
         plannedTopics.add(topic.id);

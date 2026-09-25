@@ -82,6 +82,9 @@ export const API_ERROR_CODES = [
   "telegram_login_invalid",
   "telegram_login_busy",
   "telegram_login_unavailable",
+  "recheck_busy",
+  "recheck_empty",
+  "recheck_preview_stale",
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
@@ -112,9 +115,11 @@ export const API_ERROR_CODES = [
   "content_image_body_conflict",
   "content_image_not_found",
   "content_images_changed",
+  "content_image_crop_invalid",
   "content_images_need_review",
   "media_invalid",
   "media_not_found",
+  "media_unavailable",
   "media_in_use",
   "media_video_pinned",
   "media_cover_pinned",
@@ -154,6 +159,8 @@ export const API_ERROR_CODES = [
   // ── content: the decision cannot be made ──────────────────────────────────
   /** Approve or reject on a post that is already live somewhere. */
   "content_already_published",
+  "approval_retraction_not_approved",
+  "approval_retraction_delivery_started",
   /**
    * REJECT ON A POST THAT IS PART LIVE AND PART OVER — a different refusal from
    * the one above, and a separate code because one sentence cannot be true of
@@ -204,6 +211,10 @@ export const API_ERROR_CODES = [
    * (`POST /api/content/:id/adaptations/:adaptationId/delivery`).
    */
   "delivery_outcome_unknown",
+  /** The reviewed draft stays frozen until its live Telegram photo is resolved. */
+  "partial_telegram_unresolved",
+  /** A send claim is still in flight; rejecting it could hide a live post. */
+  "delivery_in_flight",
   /**
    * The resolver, on a delivery whose outcome is NOT in doubt.
    *
@@ -220,6 +231,11 @@ export const API_ERROR_CODES = [
   "manual_publication_not_ready",
   /** A schedule time that is not in the future. */
   "schedule_in_past",
+  "schedule_too_close",
+  "schedule_changed",
+  "schedule_not_scheduled",
+  "schedule_parent_not_ready",
+  "schedule_has_history",
   /**
    * A NEW TIME FOR A POST THAT IS ALREADY ON ITS WAY — the two refusals that
    * replaced a 200 which changed nothing.
@@ -392,6 +408,8 @@ export const API_ERROR_CODES = [
   "topic_not_found",
   "news_item_not_found",
   "topic_not_approved",
+  "topic_blocked",
+  "topic_changed",
   "topic_suggestions_cooldown",
   "topic_planning_disabled",
   "topic_planning_cooldown",

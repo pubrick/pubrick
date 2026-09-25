@@ -10,6 +10,7 @@ const images: ContentImageDto[] = [
     afterParagraph: 0,
     alt: 'A "sample" <photo> & details',
     caption: "O'Brien <said> hello",
+    alignment: "right",
     needsReview: false,
   },
 ];
@@ -30,15 +31,15 @@ describe("VC.ru portable article package", () => {
     );
     expect(html).not.toContain("<script>");
     expect(html).toMatch(
-      /<\/p>\n<figure><img src="images\/01.jpg" alt="A &quot;sample&quot; &lt;photo&gt; &amp; details">/,
+      /<\/p>\n<figure style="max-width:32rem;margin:1.5rem 0 1.5rem auto"><img src="images\/01.jpg" alt="A &quot;sample&quot; &lt;photo&gt; &amp; details"/,
     );
     expect(html).toContain("<figcaption>O&#39;Brien &lt;said&gt; hello</figcaption>");
-    expect(html.indexOf("<figure>")).toBeLessThan(html.indexOf("Second paragraph."));
+    expect(html.indexOf("<figure ")).toBeLessThan(html.indexOf("Second paragraph."));
   });
 
   it("does not pretend master paragraph positions apply to an adapted body", () => {
     const html = vcArticleHtml({ ...article, body: "New opening.\n\nAdapted second paragraph." });
-    expect(html.indexOf("<figure>")).toBeGreaterThan(html.indexOf("Adapted second paragraph."));
+    expect(html.indexOf("<figure ")).toBeGreaterThan(html.indexOf("Adapted second paragraph."));
     expect(html).toContain("The VC.ru adaptation differs from the main article.");
   });
 
@@ -47,7 +48,7 @@ describe("VC.ru portable article package", () => {
     const html = vcArticleHtml({ ...article, body, masterBody: body });
     expect(html).toContain("<p>  First line.  <br>\tSecond line. </p>");
     expect(html).toContain("<p>  Next paragraph.\t</p>");
-    expect(html.indexOf("<figure>")).toBeLessThan(html.indexOf("Next paragraph."));
+    expect(html.indexOf("<figure ")).toBeLessThan(html.indexOf("Next paragraph."));
   });
 
   it("downloads authenticated JPEGs and writes a complete ZIP with placement guidance", async () => {
@@ -63,10 +64,11 @@ describe("VC.ru portable article package", () => {
     const files = unzipSync(zip);
     expect(Object.keys(files).sort()).toEqual(["README.txt", "article.html", "images/01.jpg"]);
     expect(files["images/01.jpg"]).toEqual(jpg);
-    expect(strFromU8(files["article.html"] ?? new Uint8Array())).toContain("<figure>");
+    expect(strFromU8(files["article.html"] ?? new Uint8Array())).toContain("<figure ");
     expect(strFromU8(files["README.txt"] ?? new Uint8Array())).toContain(
       "after paragraph 1 in the main article",
     );
+    expect(strFromU8(files["README.txt"] ?? new Uint8Array())).toContain("alignment: right");
   });
 
   it("includes the saved cover and fetches it once when also used inline", async () => {

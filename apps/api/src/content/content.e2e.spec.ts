@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { INestApplication } from "@nestjs/common";
+import { ConflictException, type INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
   adaptationLimit,
@@ -10,7 +10,7 @@ import {
 } from "@pubrick/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReadaptCaller, type ReadaptOutcome } from "./readapt.caller";
 import { RefineCaller, type RefineOutcome } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
@@ -1487,6 +1487,115 @@ describe.skipIf(!url)("content e2e", () => {
     expect(new Date(approved.body.adaptations[0].scheduledAt).toISOString()).toBe(when);
   });
 
+  it("returns an unsent scheduled approval to the draft and invalidates its old job", async () => {
+    const agent = await orgAgent();
+    const outsider = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Review this once more", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const when = new Date(Date.now() + 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: when }).expect(200);
+
+    await outsider.post(`/api/content/${itemId}/retract-approval`).expect(404);
+    const retracted = await agent.post(`/api/content/${itemId}/retract-approval`).expect(200);
+    expect(retracted.body).toMatchObject({
+      status: "draft",
+      adaptations: [{ status: "pending", scheduledAt: null, attemptCount: 1 }],
+    });
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const oldJobs = await db.execute(sql`
+        SELECT state FROM pgboss.job
+        WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+      `);
+      expect(oldJobs.rows.map((row) => row.state)).toEqual(["cancelled"]);
+      await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: when }).expect(200);
+      const jobs = await db.execute(sql`
+        SELECT state FROM pgboss.job
+        WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+      `);
+      expect(jobs.rows.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses to undo approval after any delivery attempt, preserving the send", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Delivery was attempted", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })
+      .expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      await db.execute(sql`
+        INSERT INTO publications (org_id, adaptation_id, channel_id, status)
+        SELECT org_id, id, channel_id, 'failed' FROM adaptations WHERE id = ${adaptationId}
+      `);
+      const refused = await agent.post(`/api/content/${itemId}/retract-approval`).expect(409);
+      expect(refused.body.code).toBe("approval_retraction_delivery_started");
+      const item = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(item.body.status).toBe("approved");
+      expect(item.body.adaptations[0].status).toBe("scheduled");
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("waits for a worker claim before deciding whether approval can be undone", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Claim race", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const worker = await pool.connect();
+    try {
+      await worker.query("BEGIN");
+      // The claim is invisible outside this transaction, but already owns the
+      // adaptation row. Undo must wait rather than reading the old queued state.
+      await worker.query("UPDATE adaptations SET status = 'publishing' WHERE id = $1", [
+        adaptationId,
+      ]);
+      const retract = Promise.resolve(agent.post(`/api/content/${itemId}/retract-approval`).send());
+      try {
+        await waitForAdaptationLockWaiters(db, 1);
+      } finally {
+        await worker.query("COMMIT");
+      }
+      const refused = await retract;
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("approval_retraction_delivery_started");
+      const after = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(after.body.status).toBe("approved");
+      expect(after.body.adaptations[0].status).toBe("publishing");
+    } finally {
+      worker.release();
+      await pool.end();
+    }
+  });
+
   it("enqueues exactly one publish job per adaptation, even when approve is called twice", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -2547,6 +2656,41 @@ describe.skipIf(!url)("content e2e", () => {
     expect(fetched.body.adaptations[0].status).toBe("pending");
   });
 
+  it("schedules the explicit 30-minute shortcut from the database clock", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Review before sending", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/approve`;
+    await agent
+      .post(path)
+      .send({ scheduledAt: new Date(Date.now() + 86_400_000).toISOString(), delayMinutes: 30 })
+      .expect(400);
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const databaseNow = async () => {
+        const clock = await db.execute(
+          sql`SELECT extract(epoch FROM clock_timestamp()) * 1000 AS now_ms`,
+        );
+        return Number(clock.rows[0]?.now_ms);
+      };
+      const before = await databaseNow();
+      const approved = await agent.post(path).send({ delayMinutes: 30 }).expect(200);
+      const after = await databaseNow();
+      const scheduledAt = new Date(approved.body.adaptations[0].scheduledAt).getTime();
+      expect(approved.body.status).toBe("approved");
+      expect(approved.body.adaptations[0].status).toBe("scheduled");
+      expect(scheduledAt).toBeGreaterThanOrEqual(Math.floor(before) + 30 * 60_000);
+      expect(scheduledAt).toBeLessThanOrEqual(Math.ceil(after) + 30 * 60_000);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("rescheduling: approving an already-scheduled item cancels the old job and enqueues a new one at the new time", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -2595,6 +2739,408 @@ describe.skipIf(!url)("content e2e", () => {
     expect(rows[0]?.state).toBe("cancelled");
     expect(rows[1]?.state).toBe("created");
     expect(new Date(rows[1]?.start_after as string).toISOString()).toBe(second);
+  });
+
+  it("moves only the selected channel's scheduled job and keeps its sibling and item decision", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const secondChannel = await agent
+      .post("/api/channels")
+      .send({
+        brandId,
+        platform: "telegram",
+        name: "Second",
+        credentials: { botToken: "123:abc", chatId: "-1001234567891" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({
+        brandId,
+        body: "Two schedules",
+        channelIds: [channelId, secondChannel.body.id],
+      })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    const approved = await agent
+      .post(`/api/content/${itemId}/approve`)
+      .send({ scheduledAt: first })
+      .expect(200);
+    const target = approved.body.adaptations.find(
+      (a: { channelId: string }) => a.channelId === channelId,
+    );
+    const sibling = approved.body.adaptations.find(
+      (a: { channelId: string }) => a.channelId === secondChannel.body.id,
+    );
+    const moved = await agent
+      .post(`/api/content/${itemId}/adaptations/${target.id}/reschedule`)
+      .send({ expectedScheduledAt: first, scheduledAt: second })
+      .expect(200);
+    expect(moved.body.status).toBe("approved");
+    expect(moved.body.adaptations.find((a: { id: string }) => a.id === target.id)).toMatchObject({
+      status: "scheduled",
+      scheduledAt: second,
+      attemptCount: 1,
+    });
+    expect(moved.body.adaptations.find((a: { id: string }) => a.id === sibling.id)).toMatchObject({
+      status: "scheduled",
+      scheduledAt: first,
+      attemptCount: 0,
+    });
+
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const jobs = await db.execute(sql`
+        SELECT data->>'adaptationId' AS adaptation_id, state, start_after
+        FROM pgboss.job WHERE name = 'publish'
+          AND data->>'adaptationId' IN (${target.id}, ${sibling.id})
+        ORDER BY created_on, id
+      `);
+      const targetJobs = jobs.rows.filter((row) => row.adaptation_id === target.id);
+      const siblingJobs = jobs.rows.filter((row) => row.adaptation_id === sibling.id);
+      expect(targetJobs.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+      expect(siblingJobs.map((row) => row.state)).toEqual(["created"]);
+      expect(
+        targetJobs.some(
+          (row) =>
+            row.state === "created" && new Date(row.start_after as string).toISOString() === second,
+        ),
+      ).toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("moves a scheduled retry after a known failure or a human confirmed no delivery", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      for (const prior of ["failed", "resolved_unknown"] as const) {
+        const created = await agent
+          .post("/api/content")
+          .send({ brandId, body: `Retry after ${prior}`, channelIds: [channelId] })
+          .expect(201);
+        const itemId = created.body.id as string;
+        const adaptationId = created.body.adaptations[0].id as string;
+        const orgId = await orgOf(itemId);
+        await db
+          .update(schema.adaptations)
+          .set({ status: "failed", attemptCount: 1 })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await db
+          .update(schema.contentItems)
+          .set({ status: "failed" })
+          .where(eq(schema.contentItems.id, itemId));
+        await db.insert(schema.publications).values({
+          orgId,
+          adaptationId,
+          channelId,
+          status: prior === "failed" ? "failed" : "unknown",
+          attempt: 1,
+          createdAt: new Date(Date.now() - 2_000),
+        });
+        if (prior === "resolved_unknown") {
+          await agent
+            .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+            .send({ delivered: false })
+            .expect(200);
+        }
+
+        const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+        const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+        await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+        const moved = await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/reschedule`)
+          .send({ expectedScheduledAt: first, scheduledAt: second })
+          .expect(200);
+        expect(moved.body.adaptations[0]).toMatchObject({
+          status: "scheduled",
+          scheduledAt: second,
+          attemptCount: 2,
+        });
+        const jobs = await db.execute(sql`
+          SELECT state, start_after FROM pgboss.job
+          WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+          ORDER BY created_on, id
+        `);
+        expect(jobs.rows.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+        expect(
+          jobs.rows.some(
+            (row) =>
+              row.state === "created" &&
+              new Date(row.start_after as string).toISOString() === second,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses cross-tenant, wrong-item, stale, past, near-due, and already-claimed channel moves", async () => {
+    const agent = await orgAgent();
+    const outsider = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const firstItem = await agent
+      .post("/api/content")
+      .send({ brandId, body: "First", channelIds: [channelId] })
+      .expect(201);
+    const otherItem = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Other", channelIds: [channelId] })
+      .expect(201);
+    const itemId = firstItem.body.id as string;
+    const adaptationId = firstItem.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const path = `/api/content/${itemId}/adaptations/${adaptationId}/reschedule`;
+    const body = { expectedScheduledAt: first, scheduledAt: second };
+    await outsider.post(path).send(body).expect(404);
+    const restrictedMember = await orgAgent();
+    const memberSession = await restrictedMember.get("/api/auth/get-session").expect(200);
+    const { createDb: createScopedDb, schema: scopedSchema } = await import("@pubrick/db");
+    const scoped = createScopedDb(url as string);
+    try {
+      const ownerOrgId = await orgOf(itemId);
+      await scoped.db.insert(scopedSchema.member).values({
+        id: randomUUID(),
+        organizationId: ownerOrgId,
+        userId: memberSession.body.user.id,
+        role: "member",
+      });
+      await restrictedMember
+        .post("/api/auth/organization/set-active")
+        .send({ organizationId: ownerOrgId })
+        .expect(200);
+      await restrictedMember.post(path).send(body).expect(404);
+    } finally {
+      await scoped.pool.end();
+    }
+    await agent
+      .post(`/api/content/${otherItem.body.id}/adaptations/${adaptationId}/reschedule`)
+      .send(body)
+      .expect(404);
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, expectedScheduledAt: second })
+          .expect(409)
+      ).body.code,
+    ).toBe("schedule_changed");
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, scheduledAt: new Date(Date.now() - 1000).toISOString() })
+          .expect(400)
+      ).body.code,
+    ).toBe("schedule_in_past");
+    expect(
+      (
+        await agent
+          .post(path)
+          .send({ ...body, scheduledAt: new Date(Date.now() + 10_000).toISOString() })
+          .expect(409)
+      ).body.code,
+    ).toBe("schedule_too_close");
+
+    const moved = await agent.post(path).send(body).expect(200);
+    expect(moved.body.adaptations[0].scheduledAt).toBe(second);
+    expect((await agent.post(path).send(body).expect(409)).body.code).toBe("schedule_changed");
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const orgId = await orgOf(itemId);
+      for (const status of ["in_flight", "unknown", "published"] as const) {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({ orgId, adaptationId, channelId, status, attempt: 1 })
+          .returning({ id: schema.publications.id });
+        expect(
+          (
+            await agent
+              .post(path)
+              .send({ expectedScheduledAt: second, scheduledAt: first })
+              .expect(409)
+          ).body.code,
+        ).toBe("schedule_has_history");
+        if (receipt)
+          await db.delete(schema.publications).where(eq(schema.publications.id, receipt.id));
+      }
+      const unresolved = await db
+        .insert(schema.publications)
+        .values([
+          {
+            orgId,
+            adaptationId,
+            channelId,
+            status: "unknown",
+            attempt: 1,
+            createdAt: new Date(Date.now() - 2_000),
+          },
+          {
+            orgId,
+            adaptationId,
+            channelId,
+            status: "failed",
+            attempt: 2,
+            createdAt: new Date(Date.now() - 1_000),
+          },
+        ])
+        .returning({ id: schema.publications.id });
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: second, scheduledAt: first })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_has_history");
+      for (const receipt of unresolved) {
+        await db.delete(schema.publications).where(eq(schema.publications.id, receipt.id));
+      }
+      await db
+        .update(schema.adaptations)
+        .set({ status: "publishing" })
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: second, scheduledAt: first })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_not_scheduled");
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("rolls back the cancelled job and timestamp when replacement enqueue fails", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Atomic move", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const { QueueService } = await import("../queue/queue.service");
+    const failure = vi
+      .spyOn(app.get(QueueService), "enqueuePublish")
+      .mockRejectedValueOnce(new ConflictException("A publish job is already queued"));
+    try {
+      await agent
+        .post(`/api/content/${itemId}/adaptations/${adaptationId}/reschedule`)
+        .send({ expectedScheduledAt: first, scheduledAt: second })
+        .expect(409);
+    } finally {
+      failure.mockRestore();
+    }
+    const current = await agent.get(`/api/content/${itemId}`).expect(200);
+    expect(current.body.adaptations[0]).toMatchObject({
+      status: "scheduled",
+      scheduledAt: first,
+      attemptCount: 0,
+    });
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const jobs = await db.execute(
+        sql`SELECT state FROM pgboss.job WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}`,
+      );
+      expect(jobs.rows.map((row) => row.state)).toEqual(["created"]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses a slot already near dispatch and a claim that wins the adaptation lock", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Claim race", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+    const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+    const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+    const path = `/api/content/${itemId}/adaptations/${adaptationId}/reschedule`;
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      const near = new Date(Date.now() + 30_000).toISOString();
+      await db
+        .update(schema.adaptations)
+        .set({ scheduledAt: new Date(near) })
+        .where(eq(schema.adaptations.id, adaptationId));
+      expect(
+        (
+          await agent
+            .post(path)
+            .send({ expectedScheduledAt: near, scheduledAt: second })
+            .expect(409)
+        ).body.code,
+      ).toBe("schedule_too_close");
+      await db
+        .update(schema.adaptations)
+        .set({ scheduledAt: new Date(first) })
+        .where(eq(schema.adaptations.id, adaptationId));
+
+      let moveSettled = false;
+      let move: Promise<request.Response> | undefined;
+      await db.transaction(async (tx) => {
+        await tx
+          .select({ id: schema.adaptations.id })
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.id, adaptationId))
+          .for("update");
+        move = agent.post(path).send({ expectedScheduledAt: first, scheduledAt: second });
+        void move.then(
+          () => {
+            moveSettled = true;
+          },
+          () => {
+            moveSettled = true;
+          },
+        );
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const waiting = await db.execute(sql`
+            SELECT count(*)::int AS count FROM pg_stat_activity
+            WHERE application_name = ${APP_NAME} AND wait_event_type = 'Lock'
+              AND query ILIKE '%adaptations%'
+          `);
+          if (Number(waiting.rows[0]?.count) > 0) break;
+          if (moveSettled || Date.now() > deadline)
+            throw new Error("Reschedule did not wait for the claim lock");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        // The worker's claim wins this lock, changing the row before the API
+        // wakes up. The API must read the NEW status and refuse the move.
+        await tx
+          .update(schema.adaptations)
+          .set({ status: "publishing" })
+          .where(eq(schema.adaptations.id, adaptationId));
+      });
+      const response = await move;
+      expect(response?.status).toBe(409);
+      expect(response?.body.code).toBe("schedule_not_scheduled");
+    } finally {
+      await pool.end();
+    }
   });
 
   /**
@@ -7447,6 +7993,20 @@ describe.skipIf(!url)("content e2e", () => {
       await pool.end();
     }
 
+    async function seedPartialTelegram(adaptationId: string) {
+      await seedDelivery(adaptationId, "unknown");
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      await db.execute(
+        `UPDATE publications SET partial_photo_id = '4711',
+           partial_photo_url = 'https://t.me/mychannel/4711',
+           partial_followup_text = 'Frozen missing reply',
+           partial_followup_outcome = 'rejected'
+         WHERE adaptation_id = '${adaptationId}' AND status = 'unknown'`,
+      );
+      await pool.end();
+    }
+
     /** The receipts of one adaptation, oldest first — what was actually filed. */
     async function receipts(adaptationId: string) {
       const { createDb } = await import("@pubrick/db");
@@ -7522,6 +8082,161 @@ describe.skipIf(!url)("content e2e", () => {
         channelId,
       };
     }
+
+    it.each([
+      [true, "completed", "published"],
+      [false, "removed", "failed"],
+    ] as const)(
+      "requires explicit %s recovery for a Telegram partial delivery",
+      async (delivered, partialResolution, expectedStatus) => {
+        const agent = await orgAgent();
+        const { itemId, adaptationId } = await oneChannel(agent);
+        await seedPartialTelegram(adaptationId);
+
+        const detail = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(detail.body.adaptations[0].partialTelegram).toEqual({
+          photoId: "4711",
+          photoUrl: "https://t.me/mychannel/4711",
+          followupText: "Frozen missing reply",
+          followupOutcome: "rejected",
+        });
+        expect(detail.body.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(contentDetailDtoSchema.safeParse(detail.body).success).toBe(true);
+        const list = await agent.get("/api/content").expect(200);
+        const card = list.body.find((row: { id: string }) => row.id === itemId);
+        expect(contentListItemDtoSchema.safeParse(card).success).toBe(true);
+        expect(card?.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(card?.adaptations[0]).not.toHaveProperty("partialTelegram");
+        expect(JSON.stringify(card)).not.toContain("Frozen missing reply");
+        const frozenItem = await agent
+          .patch(`/api/content/${itemId}`)
+          .send({ body: "Changed after the photo went live" })
+          .expect(409);
+        expect(frozenItem.body.code).toBe("partial_telegram_unresolved");
+        const frozenChannel = await agent
+          .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+          .send({ body: "Changed after the photo went live" })
+          .expect(409);
+        expect(frozenChannel.body.code).toBe("partial_telegram_unresolved");
+        for (const kind of ["cover", "video"] as const) {
+          const frozenMedia = await agent
+            .patch(`/api/media/posts/${itemId}/${kind}`)
+            .send({ mediaId: null })
+            .expect(409);
+          expect(frozenMedia.body.code).toBe("partial_telegram_unresolved");
+        }
+        const premature = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(premature.body.code).toBe("delivery_outcome_unknown");
+        expect(await publishJobCount(adaptationId)).toBe(0);
+
+        await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered })
+          .expect(409);
+        await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered, partialResolution: delivered ? "removed" : "completed" })
+          .expect(409);
+
+        const settled = await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered, partialResolution })
+          .expect(200);
+        expect(settled.body.adaptations[0].status).toBe(expectedStatus);
+        expect(settled.body.adaptations[0].partialTelegram).toBeNull();
+        expect(settled.body.adaptations[0].externalUrl).toBe(
+          delivered ? "https://t.me/mychannel/4711" : null,
+        );
+        expect((await receipts(adaptationId)).map((receipt) => receipt.status)).toEqual([
+          "unknown",
+          expectedStatus,
+        ]);
+        if (delivered) {
+          await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+          expect(await publishJobCount(adaptationId)).toBe(0);
+        } else {
+          await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+          expect(await publishJobCount(adaptationId)).toBe(1);
+        }
+      },
+    );
+
+    it("serializes reject with a photo checkpoint and never requeues the unresolved cover", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await oneChannel(agent);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const initialJobs = await publishJobCount(adaptationId);
+      expect(initialJobs).toBe(1);
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const orgId = await orgOf(itemId);
+        await db.execute(
+          `UPDATE adaptations SET status = 'publishing', attempt_count = 1 WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, attempt)
+           VALUES ('${orgId}', '${adaptationId}', '${channelId}', 'in_flight', 1)`,
+        );
+        const beforeCheckpoint = await agent
+          .post(`/api/content/${itemId}/reject`)
+          .send({})
+          .expect(409);
+        expect(beforeCheckpoint.body.code).toBe("delivery_in_flight");
+
+        // Hold the adaptation lock while Reject queues behind it. The photo
+        // checkpoint lands before that lock is released, so Reject must read
+        // the claim after the wait and leave the adaptation publishing.
+        const holder = await pool.connect();
+        await holder.query("BEGIN");
+        let rejecting: Promise<request.Response> | undefined;
+        try {
+          await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
+          rejecting = Promise.resolve(agent.post(`/api/content/${itemId}/reject`).send({}));
+          await waitForAdaptationLockWaiters(db, 1);
+          await holder.query(
+            `UPDATE publications SET partial_photo_id = '4711',
+               partial_photo_url = 'https://t.me/mychannel/4711',
+               partial_followup_text = 'Frozen missing reply',
+               partial_followup_outcome = 'pending'
+             WHERE adaptation_id = $1 AND status = 'in_flight'`,
+            [adaptationId],
+          );
+        } finally {
+          await holder.query("COMMIT");
+          holder.release();
+        }
+        const refused = await rejecting;
+        expect(refused.status).toBe(409);
+        expect(refused.body.code).toBe("delivery_in_flight");
+
+        const during = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(during.body.adaptations[0].status).toBe("publishing");
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+
+        // Model the worker's terminal reply refusal on the same real rows.
+        await db.execute(
+          `UPDATE adaptations SET status = 'failed', failure_reason = 'outcome_unknown'
+            WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `UPDATE publications SET status = 'unknown', partial_followup_outcome = 'rejected'
+            WHERE adaptation_id = '${adaptationId}' AND status = 'in_flight'`,
+        );
+        const partial = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(partial.body.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(partial.body.adaptations[0].partialTelegram.followupText).toBe(
+          "Frozen missing reply",
+        );
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+      } finally {
+        await pool.end();
+      }
+    });
 
     /**
      * THE SKIP IS PER ROW, and this is the test that says so.

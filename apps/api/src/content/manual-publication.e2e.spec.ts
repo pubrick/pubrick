@@ -62,6 +62,57 @@ describe.skipIf(!url)("manual VC.ru publication e2e", () => {
     return { itemId: item.body.id as string, adaptationId: item.body.adaptations[0].id as string };
   }
 
+  it("does not undo manual approval before an off-platform result is recorded", async () => {
+    const { agent } = await orgAgent();
+    const { itemId } = await draft(agent);
+    await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+
+    const refused = await agent.post(`/api/content/${itemId}/retract-approval`).expect(409);
+    expect(refused.body.code).toBe("approval_retraction_delivery_started");
+    const after = await agent.get(`/api/content/${itemId}`).expect(200);
+    expect(after.body.status).toBe("approved");
+    expect(after.body.adaptations[0].status).toBe("manual_ready");
+  });
+
+  it("leaves automatic delivery queued when another channel may be live manually", async () => {
+    const { agent } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Mixed delivery" }).expect(201);
+    const vc = await agent
+      .post("/api/channels")
+      .send({ brandId: brand.body.id, platform: "vc_ru", name: "VC.ru" })
+      .expect(201);
+    const telegram = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Telegram",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const item = await agent
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        body: "Both destinations",
+        channelIds: [vc.body.id, telegram.body.id],
+      })
+      .expect(201);
+    const itemId = item.body.id as string;
+    const approved = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    expect(
+      approved.body.adaptations.map((adaptation: { status: string }) => adaptation.status).sort(),
+    ).toEqual(["manual_ready", "queued"]);
+
+    const refused = await agent.post(`/api/content/${itemId}/retract-approval`).expect(409);
+    expect(refused.body.code).toBe("approval_retraction_delivery_started");
+    const after = await agent.get(`/api/content/${itemId}`).expect(200);
+    expect(after.body.status).toBe("approved");
+    expect(
+      after.body.adaptations.map((adaptation: { status: string }) => adaptation.status).sort(),
+    ).toEqual(["manual_ready", "queued"]);
+  });
+
   it("requires approval, never enqueues a VC send, and records only a human-confirmed URL", async () => {
     const { agent, orgId } = await orgAgent();
     const { itemId, adaptationId } = await draft(agent);

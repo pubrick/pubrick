@@ -76,6 +76,80 @@ beforeEach(() => {
 });
 
 describe("the step checklist", () => {
+  it("shows frozen public story context and labels any matching quote as unverified", async () => {
+    const newsId = "66666666-6666-4666-8666-666666666666";
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        steps: {
+          knowledge: {
+            status: "succeeded",
+            output: {
+              entries: [],
+              relatedNews: [
+                {
+                  id: newsId,
+                  title: "Market hall",
+                  summary: "Opened on Tuesday.",
+                  url: "https://example.com/story",
+                },
+              ],
+            },
+          },
+          factcheck: {
+            status: "succeeded",
+            output: {
+              claims: [
+                {
+                  text: "The hall opened Tuesday.",
+                  needsCheck: true,
+                  sourceId: `news:${newsId}`,
+                  sourceQuote: "Opened on Tuesday.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    expect(await screen.findByText(en.Runs.relatedNewsTitle)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Market hall" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "Market hall" })[0]).toHaveAttribute(
+      "href",
+      "https://example.com/story",
+    );
+    expect(screen.getByText(/Found in feed excerpt/)).toBeInTheDocument();
+    expect(screen.getByText(en.Runs.relatedNewsHint)).toBeInTheDocument();
+  });
+  it("shows reviewed SEO input and says when the optional pass used the writer draft", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        input: {
+          kind: "brief",
+          text: "Explain the evidence",
+          channelIds: [CHANNEL_A],
+          contentType: "expert_article",
+          seoKeywords: ["practical guide"],
+        },
+        steps: {
+          seo_polish: {
+            status: "succeeded",
+            output: { body: "Writer draft", result: "unavailable" },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    expect(await screen.findByText("practical guide")).toBeInTheDocument();
+    const rows = screen.getAllByRole("listitem");
+    const seo = rows.find((row) => row.textContent?.startsWith(en.Runs.step.seo_polish));
+    expect(seo).toHaveTextContent(en.Runs.stepState.unavailable);
+    expect(seo).toHaveTextContent(en.Runs.seoUnavailable);
+  });
   it("shows an optional cover failure without hiding the completed text draft", async () => {
     installHandlers({
       current: makeRun({

@@ -114,10 +114,14 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  RELEVANCE_BATCH_DLQ,
+  RELEVANCE_BATCH_QUEUE,
+  RELEVANCE_BATCH_QUEUE_OPTIONS,
   RELEVANCE_DLQ,
   RELEVANCE_QUEUE,
   RELEVANCE_QUEUE_OPTIONS,
   RELEVANCE_SCAN_QUEUE,
+  type RelevanceBatchJob,
   type RelevanceJob,
   RSS_POLL_MIN_GAP_SECONDS,
   RSS_POLL_OPTIONS,
@@ -166,4 +170,5 @@ export {
   type RefineAcceptArgs,
   type RefineAcceptPlan,
 } from "./refine-merge.js";
+export { TELEGRAM_PHOTO_CAPTION_LENGTH, telegramPhotoParts } from "./telegram-photo-parts.js";
 export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

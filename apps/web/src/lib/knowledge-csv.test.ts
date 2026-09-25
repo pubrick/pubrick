@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import { KnowledgeCsvError, parseKnowledgeCsv, serializeKnowledgeCsv } from "./knowledge-csv";
 
 describe("knowledge CSV import", () => {
+  it("round-trips a custom category and rejects a malformed category atomically", () => {
+    const entry = {
+      title: "Partner",
+      content: "Facts",
+      category: "Retail Partners",
+      tags: [],
+      isActive: true,
+    };
+    expect(parseKnowledgeCsv(serializeKnowledgeCsv([entry])[0] ?? "")).toEqual([entry]);
+    expect(() =>
+      parseKnowledgeCsv(
+        "title,content,category\nGood,Facts,product_info\nBad,Facts,bad\\u0000name\n".replace(
+          "\\u0000",
+          "\u0000",
+        ),
+      ),
+    ).toThrowError(KnowledgeCsvError);
+  });
   it("reads quoted commas, doubled quotes, CRLF and tags", () => {
     expect(
       parseKnowledgeCsv(

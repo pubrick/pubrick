@@ -72,6 +72,7 @@ export class CalendarService {
           generateCover: schema.calendarSlots.generateCover,
           generateInlineImages: schema.calendarSlots.generateInlineImages,
           contentType: schema.calendarSlots.contentType,
+          seoKeywords: schema.calendarSlots.seoKeywords,
         })
         .from(schema.calendarSlots)
         .where(
@@ -112,6 +113,9 @@ export class CalendarService {
             ),
           )
           .for("share");
+        // Historical linked slots could select an article format before topics
+        // stored a format. Revision and timestamp still reject later edits;
+        // the reviewed slot snapshot remains the generation input.
         if (
           topic?.status !== "approved" ||
           topic.title !== slot.topicTitle ||
@@ -174,6 +178,7 @@ export class CalendarService {
       }
       if (
         contentTypeRequiresMaterial(slot.contentType) ||
+        (slot.seoKeywords.length > 0 && slot.contentType !== "expert_article") ||
         (slot.generateInlineImages && !supportsInlineImages(slot.contentType))
       ) {
         await tx
@@ -228,6 +233,7 @@ export class CalendarService {
               ...(slot.generateCover && { generateCover: true }),
               ...(slot.generateInlineImages && { generateInlineImages: true }),
               ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
+              ...(slot.seoKeywords.length && { seoKeywords: slot.seoKeywords }),
             }
           : {
               kind: "brief",
@@ -236,6 +242,7 @@ export class CalendarService {
               ...(slot.generateCover && { generateCover: true }),
               ...(slot.generateInlineImages && { generateInlineImages: true }),
               ...(slot.contentType !== "social_post" && { contentType: slot.contentType }),
+              ...(slot.seoKeywords.length && { seoKeywords: slot.seoKeywords }),
             };
       if (!runInputSchema.safeParse(input).success) {
         await tx

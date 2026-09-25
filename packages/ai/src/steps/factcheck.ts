@@ -37,6 +37,7 @@ export type FactcheckSource = { id: string; text: string };
 export type FactcheckInput = { body: string; sources?: FactcheckSource[] };
 
 const NOTE_ID = /^note:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const NEWS_ID = /^news:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const QUOTE_LIMIT = 320;
 const NOTE_LIMIT = 3000;
 const MATERIAL_LIMIT = 6000;
@@ -45,6 +46,7 @@ const MATERIAL_LIMIT = 6000;
 export function factcheckSources(
   knowledge: readonly { id?: string; content: string }[] | undefined,
   material: string | null | undefined,
+  relatedNews: readonly { id: string; title: string; summary: string }[] | undefined = [],
 ): FactcheckSource[] {
   const sources: FactcheckSource[] = [];
   for (const entry of (knowledge ?? []).slice(0, 5)) {
@@ -54,6 +56,10 @@ export function factcheckSources(
     }
   }
   if (material) sources.push({ id: "material", text: material.slice(0, MATERIAL_LIMIT) });
+  for (const item of relatedNews.slice(0, 2)) {
+    const id = `news:${item.id}`;
+    if (NEWS_ID.test(id)) sources.push({ id, text: `${item.title}\n${item.summary}` });
+  }
   return sources;
 }
 

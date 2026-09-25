@@ -13,9 +13,11 @@ import {
 import {
   type NewsFeedback,
   newsFeedbackSchema,
+  type TopicBlock,
   type TopicCreate,
   type TopicRun,
   type TopicUpdate,
+  topicBlockSchema,
   topicCreateSchema,
   topicRunSchema,
   topicUpdateSchema,
@@ -86,6 +88,25 @@ export class TopicsController {
     @Body(new ZodValidationPipe(topicUpdateSchema)) body: TopicUpdate,
   ) {
     return this.topics.update(orgId, brandId, id, body);
+  }
+
+  @Post(":id/block")
+  block(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(topicBlockSchema)) body: TopicBlock,
+  ) {
+    return this.topics.block(orgId, brandId, id, body);
+  }
+
+  @Post(":id/unblock")
+  unblock(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+  ) {
+    return this.topics.unblock(orgId, brandId, id);
   }
 
   @Delete(":id")

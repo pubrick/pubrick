@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutoComments } from "./auto-comments";
+import { RecheckPanel } from "./recheck-panel";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
@@ -48,6 +49,12 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const loadVersion = useRef(0);
+  const inFlight = useRef<{ key: string; version: number } | null>(null);
+  const renderedBrandId = useRef(id);
   const [rerankCursor, setRerankCursor] = useState<NewsRerankCursor | null>(null);
   const [rerankBusy, setRerankBusy] = useState(false);
   const feedbackVersion = useRef(0);
@@ -82,40 +89,94 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     [locale, router, t, te],
   );
 
-  const load = useCallback(() => {
-    const query = newsItemListQuerySchema.parse({ brandId: id, sort, status });
-    const itemQuery = new URLSearchParams(query).toString();
-    Promise.all([
-      api<Brand>(`/api/brands/${id}`),
-      api<NewsSourceDto[]>(`/api/sources?brandId=${id}`),
-      api<NewsItemDto[]>(`/api/sources/items?${itemQuery}`),
-      api<Channel[]>(`/api/channels?brandId=${id}`),
-      api<{ connected: boolean }>("/api/sources/telegram-connection"),
-    ])
-      .then(([nextBrand, nextSources, nextItems, nextChannels, connection]) => {
-        setBrand(nextBrand);
-        setSources(nextSources);
-        setItems(nextItems);
-        setChannels(nextChannels);
-        setTelegramConnected(connection.connected);
-        setError(null);
-      })
-      .catch((err) => {
-        setSources(null);
-        setItems(null);
-        setError(describeError(err));
+  useEffect(() => {
+    if (searchInput.trim() === search) return;
+    setItems(null);
+    const timer = window.setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput, search]);
+
+  useEffect(() => {
+    if (renderedBrandId.current === id) return;
+    renderedBrandId.current = id;
+    loadVersion.current++;
+    setBrand(null);
+    setSources(null);
+    setItems(null);
+    setSourceFilter("");
+    setSearchInput("");
+    setSearch("");
+    setSort("recent");
+    setStatus("all");
+  }, [id]);
+
+  const load = useCallback(
+    (force = true) => {
+      if (searchInput.trim() !== search) return;
+      const query = newsItemListQuerySchema.parse({
+        brandId: id,
+        sort,
+        status,
+        ...(sourceFilter ? { sourceId: sourceFilter } : {}),
+        ...(search ? { search } : {}),
       });
-  }, [id, sort, status, describeError]);
+      const itemQuery = new URLSearchParams(
+        Object.entries(query).map(([key, value]) => [key, String(value)]),
+      ).toString();
+      const key = `${id}?${itemQuery}`;
+      if (!force && inFlight.current?.key === key) return;
+      const version = ++loadVersion.current;
+      inFlight.current = { key, version };
+      Promise.all([
+        api<Brand>(`/api/brands/${id}`),
+        api<NewsSourceDto[]>(`/api/sources?brandId=${id}`),
+        api<NewsItemDto[]>(`/api/sources/items?${itemQuery}`),
+        api<Channel[]>(`/api/channels?brandId=${id}`),
+        api<{ connected: boolean }>("/api/sources/telegram-connection"),
+      ])
+        .then(([nextBrand, nextSources, nextItems, nextChannels, connection]) => {
+          if (version !== loadVersion.current) return;
+          setBrand(nextBrand);
+          setSources(nextSources);
+          if (sourceFilter && !nextSources.some((source) => source.id === sourceFilter)) {
+            setSourceFilter("");
+            setItems(null);
+          } else {
+            setItems(nextItems);
+          }
+          setChannels(nextChannels);
+          setTelegramConnected(connection.connected);
+          setError(null);
+        })
+        .catch((err) => {
+          if (version !== loadVersion.current) return;
+          setSources(null);
+          setItems(null);
+          setError(describeError(err));
+        })
+        .finally(() => {
+          if (inFlight.current?.version === version) inFlight.current = null;
+        });
+    },
+    [id, sort, status, sourceFilter, searchInput, search, describeError],
+  );
 
   useEffect(() => {
     load();
-    const timer = window.setInterval(load, 15_000);
+    const timer = window.setInterval(() => load(false), 15_000);
     return () => {
+      loadVersion.current++;
       window.clearInterval(timer);
-      const input = document.getElementById("private-telegram-invite") as HTMLInputElement | null;
-      if (input) input.value = "";
     };
   }, [load]);
+
+  useEffect(
+    () => () => {
+      const input = document.getElementById("private-telegram-invite") as HTMLInputElement | null;
+      if (input) input.value = "";
+    },
+    [],
+  );
 
   async function addSource(event: React.FormEvent) {
     event.preventDefault();
@@ -555,10 +616,35 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("news")}</h2>
       <div className="mb-3 flex flex-wrap gap-3">
+        <Input
+          label={t("searchLabel")}
+          placeholder={t("searchPlaceholder")}
+          value={searchInput}
+          maxLength={200}
+          onChange={(event) => setSearchInput(event.target.value)}
+        />
+        <Select
+          label={t("sourceFilterLabel")}
+          value={sourceFilter}
+          onChange={(event) => {
+            setItems(null);
+            setSourceFilter(event.target.value);
+          }}
+        >
+          <option value="">{t("sourceFilterAll")}</option>
+          {sources?.map((source) => (
+            <option key={source.id} value={source.id}>
+              {source.name}
+            </option>
+          ))}
+        </Select>
         <Select
           label={t("sortLabel")}
           value={sort}
-          onChange={(event) => setSort(event.target.value as typeof sort)}
+          onChange={(event) => {
+            setItems(null);
+            setSort(event.target.value as typeof sort);
+          }}
         >
           <option value="recent">{t("sortRecent")}</option>
           <option value="relevance">{t("sortRelevance")}</option>
@@ -566,7 +652,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         <Select
           label={t("statusLabel")}
           value={status}
-          onChange={(event) => setStatus(event.target.value as typeof status)}
+          onChange={(event) => {
+            setItems(null);
+            setStatus(event.target.value as typeof status);
+          }}
         >
           <option value="all">{t("statusAll")}</option>
           <option value="unscored">{t("statusUnscored")}</option>
@@ -578,6 +667,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         </Button>
       </div>
       <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
+      <RecheckPanel brandId={id} onFinished={load} />
       <Card padded={false}>
         {items === null ? (
           <div className="p-4">
@@ -585,12 +675,21 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </div>
         ) : items.length === 0 ? (
           <EmptyState
-            title={t(status === "all" ? "emptyNews" : "emptyFiltered")}
+            title={t(
+              status === "all" && !sourceFilter && !searchInput ? "emptyNews" : "emptyFiltered",
+            )}
             action={
-              status === "all" ? (
+              status === "all" && !sourceFilter && !searchInput ? (
                 <span className="text-sm text-fg-secondary">{t("emptyNewsHint")}</span>
               ) : (
-                <Button variant="secondary" onClick={() => setStatus("all")}>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setStatus("all");
+                    setSourceFilter("");
+                    setSearchInput("");
+                  }}
+                >
                   {t("showAll")}
                 </Button>
               )

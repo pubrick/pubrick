@@ -39,6 +39,8 @@ export type VerifyResult =
 export interface PublisherOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /** Persist the accepted Telegram photo and frozen reply before attempting the reply. */
+  onTelegramPhotoAccepted?: (primary: PublishResult, followup: string) => Promise<void>;
 }
 
 export interface Publisher<C = Record<string, string>> {
@@ -111,6 +113,18 @@ export class UnknownOutcomePublishError extends Error {
     message: string,
     /** HTTP status, when a response was received but never understood. */
     readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+/** A photo is live, but its required text reply has not been confirmed. */
+export class PartialTelegramPublishError extends UnknownOutcomePublishError {
+  constructor(
+    message: string,
+    readonly primary: PublishResult,
+    readonly followup: string,
+    readonly followupOutcome: "not_sent" | "rejected" | "unknown",
   ) {
     super(message);
   }

@@ -5,6 +5,7 @@ import {
   privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
+import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
@@ -14,6 +15,7 @@ import en from "../../../../../../messages/en.json";
 import SourcesPage from "./page";
 
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
+const OTHER_BRAND_ID = "255e6b41-cf47-4e69-8a5a-af06827d82e8";
 const CHANNEL_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
 const SOURCE_ID = "d8787c8f-4308-4bc9-8896-6d9e272a0be8";
 const ITEM_ID = "40a21268-4c10-4ad9-b05d-519c11231322";
@@ -295,7 +297,7 @@ describe("watched sources page", () => {
       ],
     );
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
-    expect(await screen.findByText("Joined channel")).toBeInTheDocument();
+    expect((await screen.findAllByText("Joined channel")).length).toBeGreaterThan(0);
     expect(document.body.textContent).toContain(en.Sources.telegramPrivate);
     expect(document.body.textContent).toContain("https://t.me/c/123456");
     expect(screen.queryByRole("button", { name: en.Sources.comments })).not.toBeInTheDocument();
@@ -422,6 +424,231 @@ describe("watched sources page", () => {
       }),
     );
     expect(document.body.textContent).toContain(en.Sources.irrelevant);
+  });
+
+  it("debounces title search, filters by source, and clears all news filters", async () => {
+    const calls = install([], [{ id: SOURCE_ID, name: "Journal", kind: "rss", isActive: true }]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.type(screen.getByLabelText(en.Sources.searchLabel), "Сводка 100%_");
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.includes(`/api/sources/items?`) &&
+            new URL(call.url, "http://localhost").searchParams.get("search") === "Сводка 100%_",
+        ),
+      ).toBe(true),
+    );
+    const matching = calls.find(
+      (call) => new URL(call.url, "http://localhost").searchParams.get("search") === "Сводка 100%_",
+    );
+    expect(
+      Object.fromEntries(new URL(matching?.url ?? "", "http://localhost").searchParams),
+    ).toEqual({
+      brandId: BRAND_ID,
+      sort: "recent",
+      status: "all",
+      sourceId: SOURCE_ID,
+      search: "Сводка 100%_",
+    });
+    expect(screen.getByText(en.Sources.emptyFiltered)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Sources.showAll }));
+    expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
+    expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
+    await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
+  });
+
+  it("clears a selected source after that source is removed", async () => {
+    const source = { id: SOURCE_ID, name: "Journal", kind: "rss", isActive: true };
+    const calls = install([], [source]);
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let removed = false;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (init?.method === "DELETE" && url.includes(`/api/sources/${SOURCE_ID}`)) {
+        removed = true;
+        return Promise.resolve(response(200, {}));
+      }
+      if (url.includes("/api/sources?") && removed) return Promise.resolve(response(200, []));
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes(`sourceId=${SOURCE_ID}`))).toBe(true),
+    );
+    const itemRequestsBeforeRemoval = calls.filter((call) =>
+      call.url.includes("/api/sources/items?"),
+    ).length;
+    await user.click(screen.getByRole("button", { name: en.Sources.remove }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: en.Sources.removeTitle })).getByRole("button", {
+        name: en.Sources.remove,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue(""),
+    );
+    await waitFor(() =>
+      expect(
+        calls
+          .filter((call) => call.url.includes("/api/sources/items?"))
+          .slice(itemRequestsBeforeRemoval)
+          .some(
+            (call) =>
+              call.url.includes(`/api/sources/items?`) &&
+              !new URL(call.url, "http://localhost").searchParams.has("sourceId"),
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("resets news filters when the same page instance opens another brand", async () => {
+    const calls = install([], [{ id: SOURCE_ID, name: "Journal", kind: "rss", isActive: true }]);
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes(`/api/brands/${OTHER_BRAND_ID}`)) {
+        return Promise.resolve(response(200, { id: OTHER_BRAND_ID, name: "Other" }));
+      }
+      if (url.includes(`/api/sources?brandId=${OTHER_BRAND_ID}`)) {
+        return Promise.resolve(response(200, []));
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.type(screen.getByLabelText(en.Sources.searchLabel), "first");
+    await waitFor(() => expect(calls.some((call) => call.url.includes("search=first"))).toBe(true));
+    await act(async () => {
+      view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
+      expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
+    });
+    await waitFor(() =>
+      expect(
+        calls.some((call) => {
+          if (!call.url.includes("/api/sources/items?")) return false;
+          const query = new URL(call.url, "http://localhost").searchParams;
+          return (
+            query.get("brandId") === OTHER_BRAND_ID &&
+            !query.has("sourceId") &&
+            !query.has("search")
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("lets a slow same-query response finish while polling", async () => {
+    install();
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    const intervals: Array<() => void> = [];
+    const realSetInterval = globalThis.setInterval.bind(globalThis);
+    const intervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler, delay) => {
+      if (typeof handler === "function") intervals.push(handler as () => void);
+      return realSetInterval(handler, delay);
+    });
+    let resolveItems: ((response: Response) => void) | undefined;
+    let itemRequests = 0;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).includes("/api/sources/items?")) {
+        itemRequests++;
+        if (itemRequests === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveItems = resolve;
+          });
+        }
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    try {
+      await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+      expect(itemRequests).toBe(1);
+      await act(async () => intervals[0]?.());
+      expect(itemRequests).toBe(1);
+      await act(async () =>
+        resolveItems?.(
+          response(200, [
+            {
+              id: ITEM_ID,
+              title: "Slow result",
+              url: "https://example.com/slow",
+              publishedAt: null,
+              createdAt: "2026-09-23T12:00:00.000Z",
+              relevanceStatus: "unscored",
+              relevanceScore: null,
+              relevanceReason: null,
+              relevanceUrgency: null,
+              relevanceErrorCode: null,
+              relevanceScoredAt: null,
+            },
+          ]),
+        ),
+      );
+      expect(await screen.findByText("Slow result")).toBeInTheDocument();
+      await act(async () => intervals[0]?.());
+      expect(itemRequests).toBe(2);
+    } finally {
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it("ignores an older search response after a newer query finishes", async () => {
+    install();
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let resolveFirst: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const query = new URL(String(input), "http://localhost").searchParams.get("search");
+      if (String(input).includes("/api/sources/items?") && query === "first") {
+        return new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      if (String(input).includes("/api/sources/items?") && query === "second") {
+        return Promise.resolve(
+          response(200, [
+            {
+              id: ITEM_ID,
+              title: "Second result",
+              url: "https://example.com/second",
+              publishedAt: null,
+              createdAt: "2026-09-23T12:00:00.000Z",
+              relevanceStatus: "unscored",
+              relevanceScore: null,
+              relevanceReason: null,
+              relevanceUrgency: null,
+              relevanceErrorCode: null,
+              relevanceScoredAt: null,
+            },
+          ]),
+        );
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    const input = screen.getByLabelText(en.Sources.searchLabel);
+    await user.type(input, "first");
+    await waitFor(() => expect(resolveFirst).toBeDefined());
+    await user.clear(input);
+    await user.type(input, "second");
+    expect(await screen.findByText("Second result")).toBeInTheDocument();
+    await act(async () => {
+      resolveFirst?.(response(200, [{ id: "old", title: "First result" }]));
+    });
+    expect(screen.queryByText("First result")).not.toBeInTheDocument();
+    expect(screen.getByText("Second result")).toBeInTheDocument();
   });
 
   it("shows a Telegram story's discussion status and queues a bounded collection", async () => {

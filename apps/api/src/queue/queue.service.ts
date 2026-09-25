@@ -23,9 +23,13 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RELEVANCE_BATCH_DLQ,
+  RELEVANCE_BATCH_QUEUE,
+  RELEVANCE_BATCH_QUEUE_OPTIONS,
   RELEVANCE_DLQ,
   RELEVANCE_QUEUE,
   RELEVANCE_QUEUE_OPTIONS,
+  type RelevanceBatchJob,
   type RelevanceJob,
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
@@ -116,6 +120,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.updateQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
     await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(RELEVANCE_DLQ);
+    await boss.createQueue(RELEVANCE_BATCH_DLQ);
+    await boss.createQueue(RELEVANCE_BATCH_QUEUE, { ...RELEVANCE_BATCH_QUEUE_OPTIONS });
+    await boss.updateQueue(RELEVANCE_BATCH_QUEUE, { ...RELEVANCE_BATCH_QUEUE_OPTIONS });
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
@@ -178,6 +185,20 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
+  }
+
+  async enqueueRelevanceBatch(
+    tx: Tx,
+    payload: RelevanceBatchJob,
+    itemJobId: string,
+  ): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(RELEVANCE_BATCH_QUEUE, payload, {
+      id: itemJobId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("A recheck job is already queued");
   }
 
   async enqueueTelegramComments(tx: Tx, payload: TelegramCommentsJob): Promise<boolean> {

@@ -1,0 +1,3 @@
+ALTER TABLE "topics" ADD COLUMN "blocked_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "topics" ADD COLUMN "block_reason" text;--> statement-breakpoint
+ALTER TABLE "topics" ADD CONSTRAINT "topics_block_state_check" CHECK (("topics"."blocked_at" is null and "topics"."block_reason" is null) or ("topics"."blocked_at" is not null and "topics"."status" = 'archived' and "topics"."block_reason" is not null and length("topics"."block_reason") between 1 and 500)) NOT VALID;

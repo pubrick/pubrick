@@ -102,6 +102,10 @@ change the one port entry already in this file rather than adding a second
 one.
 
 Database migrations run automatically when the api container starts.
+On an existing installation, the recent AI spend history index is prepared
+concurrently before transactional migrations. A large usage ledger can make
+startup take longer, but metering writes can continue while PostgreSQL builds
+the index. An interrupted build is retried at the next startup.
 
 ## Rotating `APP_ENCRYPTION_KEY`
 
@@ -333,6 +337,29 @@ docker compose up -d --build
 Migrations apply on boot; back up the `pgdata` and `media` volumes before major
 upgrades. Keep them together: post cover references live in Postgres and image
 bytes live in `media` (see [Media library](media-library.md)).
+
+The topic format upgrade (migration 0081) adds three `NOT VALID` checks for
+topic formats and editorial SEO keywords. They reject invalid new writes as
+soon as the upgrade commits. Existing rows receive safe defaults, so the
+startup migration does not scan every topic or calendar slot under its schema
+lock. To mark the checks validated later, run these statements individually in
+a database session during a quieter period, outside Pubrick's startup
+migration transaction:
+
+```sql
+ALTER TABLE calendar_slots VALIDATE CONSTRAINT calendar_slots_seo_keywords_check;
+ALTER TABLE topics VALIDATE CONSTRAINT topics_content_type_check;
+ALTER TABLE topics VALIDATE CONSTRAINT topics_seo_keywords_check;
+```
+
+Topic blocking (migration 0083) also adds `topics_block_state_check` as
+`NOT VALID`. New writes are checked immediately, while existing rows avoid a
+full table scan under the startup migration lock. Validate it separately
+during a quieter period:
+
+```sql
+ALTER TABLE topics VALIDATE CONSTRAINT topics_block_state_check;
+```
 
 ### Variables added since August 2026
 

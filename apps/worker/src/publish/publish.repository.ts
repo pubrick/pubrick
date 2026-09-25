@@ -187,7 +187,29 @@ type ClaimOutcome = {
   externalUrl: string | null;
   error: string | null;
   attempt: number;
+  partial?: PartialTelegramDelivery;
 };
+
+export type PartialTelegramDelivery = {
+  photoId: string | null;
+  photoUrl: string | null;
+  followupText: string;
+  followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+};
+
+const PARTIAL_TELEGRAM_EXHAUSTED_ERROR =
+  "Telegram accepted the cover, but its reply was not confirmed. Check the channel before sending again.";
+const CLAIM_EXHAUSTED_UNKNOWN_ERROR =
+  "A send was in flight when retries ended. The platform may have published the post; check the channel before sending again.";
+
+function partialColumns(partial: PartialTelegramDelivery) {
+  return {
+    partialPhotoId: partial.photoId,
+    partialPhotoUrl: partial.photoUrl,
+    partialFollowupText: partial.followupText,
+    partialFollowupOutcome: partial.followupOutcome,
+  };
+}
 
 /**
  * THE CLAIM THIS ATTEMPT WROTE, named by its own primary key.
@@ -254,6 +276,15 @@ async function resolveClaim(
       externalUrl: outcome.externalUrl,
       error: outcome.error,
       attempt: outcome.attempt,
+      ...(outcome.partial ? partialColumns(outcome.partial) : {}),
+      ...(outcome.status === "published"
+        ? {
+            partialPhotoId: null,
+            partialPhotoUrl: null,
+            partialFollowupText: null,
+            partialFollowupOutcome: null,
+          }
+        : {}),
     })
     .where(
       and(
@@ -276,6 +307,7 @@ async function resolveClaim(
     externalUrl: outcome.externalUrl,
     error: outcome.error,
     attempt: outcome.attempt,
+    ...(outcome.partial ? partialColumns(outcome.partial) : {}),
   });
 }
 
@@ -752,16 +784,19 @@ export class PublishRepository {
    * attempt.
    *
    * Writes an `in_flight` `publications` row before the platform is called,
-   * guarded by `publications_one_in_flight_per_adaptation`. Returns false when
-   * that index refuses the insert, which means one thing only: a previous
-   * attempt wrote a claim and never came back to resolve it. Its outcome is
-   * therefore unknown — it may have posted — and the caller must not send.
+   * guarded by `publications_one_in_flight_per_adaptation`. A null result has
+   * two safe endings: the attempt fence no longer matches (do not send), or
+   * that index found a previous unresolved claim (the prior send may be live,
+   * so do not send). The caller's fenced terminal write distinguishes them.
    *
    * The row's `attempt` is read from `adaptations.attempt_count` in the same
    * statement rather than passed in, so it cannot drift from the count
    * `markPublishing` just bumped. The INSERT ... SELECT also makes "the
    * adaptation exists" a condition of the claim: zero rows selected inserts
-   * nothing, and the caller is told so.
+   * nothing, and the caller is told so. The SELECT locks and rechecks the
+   * publishing row after a concurrent Reject, and requires the exact attempt
+   * count returned by this handler's `markPublishing`. A delayed handler can
+   * therefore neither send after Reject nor claim a newer re-approval's send.
    *
    * Deliberately NOT inside `markPublishing`'s update: a unique violation
    * inside a transaction aborts the whole transaction, and the two claims have
@@ -769,21 +804,65 @@ export class PublishRepository {
    * "an attempt is unaccounted for"). The index, not a shared transaction, is
    * what makes two workers racing here safe.
    */
-  async claimSend(orgId: string, adaptationId: string): Promise<SendClaim | null> {
+  async claimSend(
+    orgId: string,
+    adaptationId: string,
+    expectedAttemptCount: number,
+  ): Promise<SendClaim | null> {
     try {
-      const result = await db.execute(sql`
-        insert into publications (org_id, adaptation_id, channel_id, status, attempt)
-        select org_id, id, channel_id, 'in_flight', attempt_count
-          from adaptations
-         where org_id = ${orgId} and id = ${adaptationId}
-        returning id, attempt
-      `);
-      const row = result.rows[0] as { id: string; attempt: number } | undefined;
-      return row ? { id: row.id, attempt: Number(row.attempt) } : null;
+      return await db.transaction(async (tx) => {
+        // The publication INSERT takes an FK KEY SHARE on organization. Take
+        // that lock first, before the adaptation's FOR UPDATE, so a concurrent
+        // organization delete cannot deadlock against its child cascade.
+        const org = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (org.length === 0) return null;
+        const result = await tx.execute(sql`
+          insert into publications (org_id, adaptation_id, channel_id, status, attempt)
+          select a.org_id, a.id, a.channel_id, 'in_flight', a.attempt_count
+            from adaptations a
+           where a.org_id = ${orgId} and a.id = ${adaptationId}
+             and a.status = 'publishing' and a.attempt_count = ${expectedAttemptCount}
+             for update of a
+          returning id, attempt
+        `);
+        const row = result.rows[0] as { id: string; attempt: number } | undefined;
+        return row ? { id: row.id, attempt: Number(row.attempt) } : null;
+      });
     } catch (error) {
       if (isInFlightClaimConflict(error)) return null;
       throw error;
     }
+  }
+
+  /** Checkpoint the accepted cover before any reply request can leave this process. */
+  async markTelegramPhotoAccepted(
+    orgId: string,
+    adaptationId: string,
+    claim: SendClaim,
+    partial: PartialTelegramDelivery,
+  ): Promise<boolean> {
+    const rows = await db
+      .update(schema.publications)
+      .set(partialColumns(partial))
+      .where(
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.id, claim.id),
+          eq(schema.publications.status, "in_flight"),
+          sql`exists (
+            select 1 from adaptations a
+            where a.org_id = ${orgId} and a.id = ${adaptationId}
+              and a.status = 'publishing' and a.attempt_count = ${claim.attempt}
+          )`,
+        ),
+      )
+      .returning({ id: schema.publications.id });
+    return rows.length === 1;
   }
 
   /**
@@ -927,6 +1006,10 @@ export class PublishRepository {
         externalUrl: result.externalUrl,
         error: null,
         attempt: claim.attempt,
+        partialPhotoId: null,
+        partialPhotoUrl: null,
+        partialFollowupText: null,
+        partialFollowupOutcome: null,
       })
       .where(
         and(
@@ -1010,6 +1093,7 @@ export class PublishRepository {
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
       const rows = await tx
@@ -1032,7 +1116,16 @@ export class PublishRepository {
         if (claim) {
           await tx
             .update(schema.publications)
-            .set({ status: outcome, error, attempt: claim.attempt })
+            .set({
+              // A late failure cannot turn a checkpointed photo into a
+              // known-not-sent receipt, even when the adaptation fence lost.
+              status: sql<
+                "failed" | "unknown"
+              >`case when ${schema.publications.partialFollowupText} is not null then 'unknown' else ${partial ? "unknown" : outcome} end`,
+              error: sql<string>`case when ${schema.publications.partialFollowupText} is not null then ${PARTIAL_TELEGRAM_EXHAUSTED_ERROR} else ${error} end`,
+              attempt: claim.attempt,
+              ...(partial ? partialColumns(partial) : {}),
+            })
             .where(
               and(
                 eq(schema.publications.orgId, orgId),
@@ -1044,17 +1137,52 @@ export class PublishRepository {
         return false;
       }
 
+      // A dead letter cannot know whether an in-flight claim reached the
+      // platform. Read that durable claim under its row lock after fencing
+      // the adaptation. A photo checkpoint adds structured partial evidence;
+      // without it the outcome is still unknown, not a retryable failure.
+      const [activeClaim] = await tx
+        .select({ followupText: schema.publications.partialFollowupText })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            claim
+              ? eq(schema.publications.id, claim.id)
+              : eq(schema.publications.adaptationId, adaptationId),
+            eq(schema.publications.status, "in_flight"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      const hasPartial = partial !== undefined || activeClaim?.followupText != null;
+      const exhaustedClaim = failureReason === "retries_exhausted" && activeClaim !== undefined;
+      const finalOutcome = hasPartial || exhaustedClaim ? "unknown" : outcome;
+      const finalError =
+        outcome === "failed" && hasPartial
+          ? PARTIAL_TELEGRAM_EXHAUSTED_ERROR
+          : outcome === "failed" && exhaustedClaim
+            ? CLAIM_EXHAUSTED_UNKNOWN_ERROR
+            : error;
+      if (finalOutcome === "unknown" && outcome === "failed") {
+        await tx
+          .update(schema.adaptations)
+          .set({ lastError: finalError, failureReason: "outcome_unknown" })
+          .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+      }
+
       await resolveClaim(
         tx,
         orgId,
         adaptationId,
         {
           channelId: updated.channelId,
-          status: outcome,
+          status: finalOutcome,
           externalId: null,
           externalUrl: null,
-          error,
+          error: finalError,
           attempt: updated.attemptCount,
+          partial,
         },
         claim,
       );
@@ -1063,7 +1191,7 @@ export class PublishRepository {
       await enqueueNotification(
         tx,
         orgId,
-        outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+        finalOutcome === "unknown" ? "delivery_unknown" : "delivery_failed",
         adaptationId,
         updated.contentItemId,
         updated.attemptCount,

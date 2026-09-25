@@ -8,6 +8,7 @@ import type {
   RunInput,
 } from "@pubrick/shared";
 import {
+  adaptationRescheduleSchema,
   adaptationUpdateSchema,
   allSentencesAi,
   contentApproveSchema,
@@ -52,6 +53,12 @@ type Adaptation = {
   cta: string | null;
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
+  partialTelegram?: {
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -180,21 +187,10 @@ const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel"
 /**
  * A `datetime-local` value that is still in the future when the test runs.
  *
- * Any date a test sends to approve MUST be in the future, because
- * `contentApproveSchema` refines `scheduledAt` against `Date.now()` — and the
- * pin below parses the request body back through that very schema. So a
- * hardcoded date rots: these tests held `2026-09-01T10:30` and went red the day
- * the wall clock passed it, with one `ZodError: scheduledAt must be in the
- * future` from the round-trip assertion — a suite that turns red on a calendar
- * boundary while the screen it covers is fine.
- *
- * The schema is no longer the ONLY thing that refuses a past instant (see
- * "the schedule field's lower bound" below), but it still MUST be, because
- * neither the field's `min` nor the button's `disabled` can be trusted to
- * catch every case — see `approve()`'s own doc comment on why it re-checks
- * `Date.now()` at click time rather than relying on either. This helper stays
- * a day ahead specifically so ordinary tests of the request/response cycle
- * never brush up against that boundary at all.
+ * The click handler and API refuse an absolute time once it is past. A fixed
+ * date would eventually cross that boundary and turn an ordinary approval
+ * test into an unrelated clock test. Keep these fixtures a day ahead; the
+ * separate lower-bound tests exercise the boundary deliberately.
  */
 function scheduleValue(daysAhead = 1): string {
   const when = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
@@ -484,6 +480,63 @@ describe("rendering by adaptation status (Step 1)", () => {
     });
   });
 
+  it("reschedules one channel with an expected-time fence and leaves the sibling alone", async () => {
+    const first = new Date(`${scheduleValue()}:00`).toISOString();
+    const secondInput = scheduleValue(2);
+    const target = makeAdaptation({ status: "scheduled", scheduledAt: first });
+    const sibling = makeAdaptation({
+      id: "a2",
+      channelId: "ch2",
+      status: "scheduled",
+      scheduledAt: first,
+    });
+    const served = { current: makeItem({ status: "approved", adaptations: [target, sibling] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content/c1/adaptations/a1/reschedule") {
+          served.current = {
+            ...served.current,
+            adaptations: [{ ...target, scheduledAt: new Date(secondInput).toISOString() }, sibling],
+          };
+          return served.current;
+        }
+        return undefined;
+      },
+      [channel, { id: "ch2", platform: "telegram", name: "Second" }],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = resultsList();
+    await userEvent.setup().click(
+      within(results).getAllByRole("button", {
+        name: en.Publish.rescheduleChannel,
+      })[0] as HTMLElement,
+    );
+    const field = screen.getByLabelText(/^New time for/);
+    fireEvent.change(field, { target: { value: secondInput } });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.rescheduleSave }));
+    await waitFor(() =>
+      expect(
+        within(resultsList()).getByText(
+          `${en.Publish.scheduledFor} ${new Date(secondInput).toLocaleString("en")}`,
+        ),
+      ).toBeInTheDocument(),
+    );
+    const call = calls.find((row) => row.path === "/api/content/c1/adaptations/a1/reschedule");
+    expect(call?.method).toBe("POST");
+    expect(JSON.parse(call?.body ?? "")).toEqual({
+      expectedScheduledAt: first,
+      scheduledAt: new Date(secondInput).toISOString(),
+    });
+    expect(adaptationRescheduleSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(
+      JSON.parse(call?.body ?? ""),
+    );
+    expect(served.current.adaptations[1]).toBe(sibling);
+  });
+
   /**
    * THE OUTAGE, WHILE IT IS STILL HAPPENING. A slot that has come and gone with
    * nothing delivered leaves the row `scheduled` until the worker's bound runs
@@ -660,6 +713,81 @@ describe("approve now (Step 2)", () => {
 });
 
 describe("approve with a schedule (Step 3)", () => {
+  it("approves for 30 minutes after the click without reading a previously chosen time", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation({ status: "pending" })] }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/approve") {
+        served.current = { ...served.current, status: "approved" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+    fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+      target: { value: scheduleValue(2) },
+    });
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Publish.approveAfterThirtyMinutes }));
+    await screen.findByText(en.Content.status.approved);
+
+    const approveCall = calls.find((call) => call.path === "/api/content/c1/approve");
+    const payload = contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""));
+    expect(approveCall?.method).toBe("POST");
+    expect(payload).toEqual({ delayMinutes: 30 });
+  });
+
+  it("does not offer the shortcut for an already scheduled post", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "scheduled", scheduledAt: scheduleValue() })],
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.approved);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("waits for channel details before offering the shortcut", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation({ status: "pending" })] }),
+    };
+    installBaseHandlers(served, [], undefined, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["unknown", "partial"] as const)(
+    "hides the shortcut while a %s delivery remains unresolved",
+    async (deliveryOutcome) => {
+      const served = {
+        current: makeItem({
+          status: "failed",
+          adaptations: [makeAdaptation({ status: "failed", deliveryOutcome })],
+        }),
+      };
+      installBaseHandlers(served, []);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByText(en.Content.status.failed);
+      expect(
+        screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("sends the chosen datetime-local value as an ISO scheduledAt", async () => {
     const served = { current: makeItem({ status: "draft" }) };
     const calls: Call[] = [];
@@ -694,12 +822,9 @@ describe("approve with a schedule (Step 3)", () => {
   });
 
   /**
-   * The `!scheduledAt` half of the button's `disabled` is load-bearing and
-   * irreversible if lost: `approve(true)` with an empty date falls through to
-   * the `{}` body, which is the "publish immediately" request. Weakening the
-   * guard to `disabled={isPublished}` would turn "Approve with schedule" into
-   * "publish now" for anyone who clicks it before filling the field, and the
-   * post is live in the channel by the time anyone notices.
+   * The schedule action stays unavailable until a date is chosen. The click
+   * handler also refuses an empty date, so a stale UI can never send the
+   * immediate-publication body from the scheduled path.
    */
   it("keeps the schedule button disabled until a date is chosen, and issues no request if clicked", async () => {
     const served = { current: makeItem({ status: "draft" }) };
@@ -828,6 +953,56 @@ describe("reject (Step 4)", () => {
     const rejectCall = calls.find((c) => c.path === "/api/content/c1/reject");
     expect(rejectCall?.method).toBe("POST");
     expect(rejectCall?.body).toBe(JSON.stringify({}));
+  });
+});
+
+describe("undo approval", () => {
+  it("returns an unsent scheduled post to editing without recording rejection", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "scheduled", scheduledAt: scheduleValue() })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/retract-approval") {
+        served.current = makeItem({ status: "draft", adaptations: [makeAdaptation()] });
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.retractApproval }));
+    await screen.findByText(en.Content.status.draft);
+    expect(calls).toContainEqual({
+      path: "/api/content/c1/retract-approval",
+      method: "POST",
+      body: undefined,
+    });
+    expect(calls.some((call) => call.path === "/api/content/c1/reject")).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.retractApproval }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer undo for a manually prepared post that may already be live", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "approved",
+          adaptations: [makeAdaptation({ status: "manual_ready" })],
+        }),
+      },
+      [],
+      undefined,
+      [{ ...channel, platform: "vc_ru" }],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.retractApproval }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -1280,7 +1455,7 @@ describe("per-channel override (Step 6)", () => {
     expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
   });
 
-  it("shows the Telegram cover and warns only beyond the 1024-character caption limit", async () => {
+  it("previews a Telegram cover's caption and reply under the reviewed 4096-character limit", async () => {
     const served = {
       current: makeItem({
         coverMediaId: "cover-1",
@@ -1297,12 +1472,17 @@ describe("per-channel override (Step 6)", () => {
       within(preview).getByRole("img", { name: en.Publish.reviewPreviewCoverAlt }),
     ).toHaveAttribute("src", "/api/media/cover-1/file");
     const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
-    expect(counterFor(field)).toHaveTextContent("1024 / 1024");
+    expect(counterFor(field)).toHaveTextContent("1024 / 4096");
     expect(within(preview).queryByRole("alert")).toBeNull();
 
     fireEvent.change(field, { target: { value: "a".repeat(1025) } });
-    expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
-    expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+    expect(within(preview).getByText(en.Publish.reviewPreviewPhotoCaption)).toBeVisible();
+    expect(within(preview).getByText(en.Publish.reviewPreviewPhotoReply)).toBeVisible();
+    expect(within(preview).queryByRole("alert")).toBeNull();
+    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+
+    fireEvent.change(field, { target: { value: "a".repeat(4097) } });
+    expect(within(preview).getByRole("alert")).toHaveTextContent("4096");
   });
 
   it("previews a VK video without applying Telegram's caption limit", async () => {
@@ -2189,6 +2369,70 @@ describe("settling a delivery nobody can speak for", () => {
       adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
     });
   }
+
+  it.each([
+    ["partialTelegramConfirmComplete", true, "completed"],
+    ["partialTelegramConfirmRemoved", false, "removed"],
+  ] as const)(
+    "shows the accepted cover and frozen reply before %s",
+    async (label, delivered, partialResolution) => {
+      const calls: Call[] = [];
+      const served = {
+        current: makeItem({
+          status: "failed",
+          adaptations: [
+            makeAdaptation({
+              status: "failed",
+              deliveryOutcome: "partial",
+              partialTelegram: {
+                photoId: "4711",
+                photoUrl: "https://t.me/mychannel/4711",
+                followupText: "Frozen missing reply",
+                followupOutcome: "unknown",
+              },
+            }),
+          ],
+        }),
+      };
+      installBaseHandlers(served, calls, (path, method) => {
+        if (path === "/api/content/c1/adaptations/a1/delivery" && method === "POST") {
+          served.current = makeItem({
+            status: delivered ? "published" : "failed",
+            adaptations: [makeAdaptation({ status: delivered ? "published" : "failed" })],
+          });
+          return served.current;
+        }
+        return undefined;
+      });
+
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      const results = resultsList();
+      expect(
+        within(results).getByRole("link", { name: en.Publish.partialTelegramViewPhoto }),
+      ).toHaveAttribute("href", "https://t.me/mychannel/4711");
+      expect(within(results).getByText("Frozen missing reply")).toBeInTheDocument();
+      expect(within(results).getByText(en.Publish.partialTelegramVerifyReply)).toBeInTheDocument();
+      const copy = vi.fn().mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: copy },
+      });
+      await user.click(
+        within(results).getByRole("button", { name: en.Publish.partialTelegramCopyText }),
+      );
+      expect(copy).toHaveBeenCalledWith("Frozen missing reply");
+      expect(within(results).queryByRole("button", { name: en.Publish.markDelivered })).toBeNull();
+      expect(
+        within(results).queryByRole("button", { name: en.Publish.markNotDelivered }),
+      ).toBeNull();
+      await user.click(within(results).getByRole("button", { name: en.Publish[label] }));
+      const call = calls.find((entry) => entry.path === "/api/content/c1/adaptations/a1/delivery");
+      const body = { delivered, partialResolution };
+      expect(call?.body).toBe(JSON.stringify(body));
+      expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(body);
+    },
+  );
 
   it("offers both verdicts, and says what pressing one asserts", async () => {
     installBaseHandlers({ current: unknownRow() }, []);
@@ -3840,6 +4084,9 @@ describe("VC.ru manual publication", () => {
     expect(results.getByText(en.Content.adaptationStatus.manual_ready)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Publish.manualReadyAction })).toBeDisabled();
     expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
     expect(results.getByRole("link", { name: en.Publish.openVc })).toHaveAttribute(
       "href",
       "https://vc.ru/",

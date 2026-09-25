@@ -751,7 +751,9 @@ export default function ContentQueuePage() {
    * copy. A one-click retry in a list is exactly how that second copy happens.
    */
   function renderItem(item: ContentItem) {
-    const failed = item.status === "failed";
+    const failed =
+      item.status === "failed" &&
+      item.adaptations.every((adaptation) => adaptation.deliveryOutcome === "failed");
     return (
       <li key={item.id} className="border-b border-border-soft py-3 last:border-b-0">
         <span className="flex flex-wrap items-center gap-2">
@@ -792,6 +794,11 @@ export default function ContentQueuePage() {
               {a.deliveryOutcome === "unknown" && (
                 <span className="w-full text-[var(--status-review-fg)]">
                   {t("unknownOutcome", { channel: channelLabel(a.channelId) })}
+                </span>
+              )}
+              {a.deliveryOutcome === "partial" && (
+                <span className="w-full text-[var(--status-review-fg)]">
+                  {t("partialOutcome", { channel: channelLabel(a.channelId) })}
                 </span>
               )}
               {/*

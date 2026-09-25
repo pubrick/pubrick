@@ -1,8 +1,12 @@
 "use client";
 
 import {
+  type ContentType,
+  seoKeywordsSchema,
+  TOPIC_CONTENT_TYPES,
   type TopicDto,
   type TopicSuggestionRequestDto,
+  topicBlockSchema,
   topicCreateSchema,
   topicUpdateSchema,
 } from "@pubrick/shared";
@@ -19,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Menu } from "@/components/ui/menu";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,6 +39,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const { id } = use(params);
   const t = useTranslations("Topics");
   const te = useTranslations("Errors");
+  const tc = useTranslations("ContentNew");
   const locale = useLocale();
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
@@ -46,14 +52,23 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const [description, setDescription] = useState("");
   const [plannedDate, setPlannedDate] = useState("");
   const [priority, setPriority] = useState(5);
+  const [contentType, setContentType] = useState<ContentType>("social_post");
+  const [seoKeywordsText, setSeoKeywordsText] = useState("");
   const [editing, setEditing] = useState<TopicDto | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPlannedDate, setEditPlannedDate] = useState("");
   const [editPriority, setEditPriority] = useState(5);
+  const [editContentType, setEditContentType] = useState<ContentType>("social_post");
+  const [editSeoKeywordsText, setEditSeoKeywordsText] = useState("");
   const [toDelete, setToDelete] = useState<TopicDto | null>(null);
+  const [toBlock, setToBlock] = useState<TopicDto | null>(null);
+  const [blockReason, setBlockReason] = useState("");
   const [toRun, setToRun] = useState<TopicDto | null>(null);
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
+  const [runFormat, setRunFormat] = useState<ContentType>("social_post");
+  const [runSeoKeywordsText, setRunSeoKeywordsText] = useState("");
+  const [runSeoOpen, setRunSeoOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -78,7 +93,13 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
     ])
       .then(([nextBrand, nextTopics, nextChannels, nextRequest]) => {
         setBrand(nextBrand);
-        setTopics(nextTopics);
+        setTopics(
+          nextTopics.map((topic) => ({
+            ...topic,
+            contentType: topic.contentType ?? "social_post",
+            seoKeywords: topic.seoKeywords ?? [],
+          })),
+        );
         setChannels(nextChannels);
         setSuggestionRequest(nextRequest.request);
         setError(null);
@@ -115,15 +136,25 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
 
   async function add(event: React.FormEvent) {
     event.preventDefault();
+    const seoKeywords = seoKeywordsText
+      .split(/\r?\n/)
+      .map((term) => term.trim())
+      .filter(Boolean);
     const parsed = topicCreateSchema.safeParse({
       brandId: id,
       title,
       description,
       ...(plannedDate ? { plannedDate } : {}),
       priority,
+      contentType,
+      seoKeywords,
     });
     if (!parsed.success) {
-      setError(t("invalid"));
+      setError(
+        seoKeywords.length && !seoKeywordsSchema.safeParse(seoKeywords).success
+          ? t("seoKeywordsInvalid")
+          : t("invalid"),
+      );
       return;
     }
     setBusy(true);
@@ -134,6 +165,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
       setDescription("");
       setPlannedDate("");
       setPriority(5);
+      setContentType("social_post");
+      setSeoKeywordsText("");
       load();
     } catch (err) {
       setError(describeError(err));
@@ -148,16 +181,23 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
     setEditDescription(topic.description);
     setEditPlannedDate(topic.plannedDate ?? "");
     setEditPriority(topic.priority);
+    setEditContentType(topic.contentType ?? "social_post");
+    setEditSeoKeywordsText((topic.seoKeywords ?? []).join("\n"));
     setDialogError(null);
   }
 
   const closeEdit = useCallback(() => setEditing(null), []);
   const closeDelete = useCallback(() => setToDelete(null), []);
+  const closeBlock = useCallback(() => setToBlock(null), []);
   const closeRun = useCallback(() => setToRun(null), []);
 
   async function saveEdit(event: React.FormEvent) {
     event.preventDefault();
     if (!editing) return;
+    const seoKeywords = editSeoKeywordsText
+      .split(/\r?\n/)
+      .map((term) => term.trim())
+      .filter(Boolean);
     const parsed = topicUpdateSchema.safeParse({
       ...(editTitle !== editing.title ? { title: editTitle } : {}),
       ...(editDescription !== editing.description ? { description: editDescription } : {}),
@@ -165,9 +205,17 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
         ? { plannedDate: editPlannedDate || null }
         : {}),
       ...(editPriority !== editing.priority ? { priority: editPriority } : {}),
+      ...(editContentType !== editing.contentType ? { contentType: editContentType } : {}),
+      ...(JSON.stringify(seoKeywords) !== JSON.stringify(editing.seoKeywords ?? [])
+        ? { seoKeywords }
+        : {}),
     });
     if (!parsed.success) {
-      setDialogError(t("invalid"));
+      setDialogError(
+        seoKeywords.length && !seoKeywordsSchema.safeParse(seoKeywords).success
+          ? t("seoKeywordsInvalid")
+          : t("invalid"),
+      );
       return;
     }
     setBusy(true);
@@ -209,20 +257,76 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
     }
   }
 
+  async function block() {
+    if (!toBlock) return;
+    const parsed = topicBlockSchema.safeParse({ reason: blockReason });
+    if (!parsed.success) {
+      setDialogError(t("blockReasonInvalid"));
+      return;
+    }
+    setBusy(true);
+    setDialogError(null);
+    try {
+      await api(`/api/topics/${toBlock.id}/block?brandId=${id}`, {
+        method: "POST",
+        body: JSON.stringify(parsed.data),
+      });
+      setToBlock(null);
+      setBlockReason("");
+      load();
+    } catch (err) {
+      setDialogError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unblock(topic: TopicDto) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/topics/${topic.id}/unblock?brandId=${id}`, { method: "POST" });
+      load();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openRun(topic: TopicDto) {
     setToRun(topic);
     setSelectedChannels(new Set());
+    setRunFormat(topic.contentType ?? "social_post");
+    setRunSeoKeywordsText((topic.seoKeywords ?? []).join("\n"));
+    setRunSeoOpen((topic.seoKeywords?.length ?? 0) > 0);
     setDialogError(null);
   }
 
   async function generate() {
     if (!toRun || selectedChannels.size === 0) return;
+    const seoKeywords = runSeoKeywordsText
+      .split(/\r?\n/)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    if (runSeoKeywordsText.trim() && !seoKeywordsSchema.safeParse(seoKeywords).success) {
+      setDialogError(t("seoKeywordsInvalid"));
+      setRunSeoOpen(true);
+      return;
+    }
     setBusy(true);
     setDialogError(null);
     try {
       const run = await api<Run>(`/api/topics/${toRun.id}/run?brandId=${id}`, {
         method: "POST",
-        body: JSON.stringify({ channelIds: [...selectedChannels] }),
+        body: JSON.stringify({
+          channelIds: [...selectedChannels],
+          ...(runFormat !== (toRun.contentType ?? "social_post") && { contentType: runFormat }),
+          ...(runFormat === "expert_article" &&
+            JSON.stringify(seoKeywords) !== JSON.stringify(toRun.seoKeywords ?? []) && {
+              seoKeywords,
+            }),
+        }),
       });
       router.push(`/${locale}/content/runs/${run.id}`);
     } catch (err) {
@@ -268,8 +372,42 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             maxLength={2000}
             showCount
           />
-          <Advanced dirty={Boolean(plannedDate) || priority !== 5}>
+          <Advanced
+            dirty={
+              Boolean(plannedDate) ||
+              priority !== 5 ||
+              contentType !== "social_post" ||
+              Boolean(seoKeywordsText.trim())
+            }
+          >
             <div className="flex flex-col gap-3">
+              <Select
+                label={t("runFormat")}
+                value={contentType}
+                onChange={(event) => {
+                  const selected = event.target.value as ContentType;
+                  setContentType(selected);
+                  if (selected !== "expert_article") setSeoKeywordsText("");
+                }}
+              >
+                {TOPIC_CONTENT_TYPES.map((format) => (
+                  <option key={format} value={format}>
+                    {tc(`contentType.${format}`)}
+                  </option>
+                ))}
+              </Select>
+              {contentType === "expert_article" && (
+                <>
+                  <Textarea
+                    label={t("seoKeywordsLabel")}
+                    value={seoKeywordsText}
+                    onChange={(event) => setSeoKeywordsText(event.target.value)}
+                    rows={3}
+                    placeholder={t("seoKeywordsPlaceholder")}
+                  />
+                  <p className="text-sm text-fg-tertiary">{t("seoKeywordsHint")}</p>
+                </>
+              )}
               <Input
                 label={t("plannedDate")}
                 type="date"
@@ -354,9 +492,23 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
               meta={
                 <span>
                   <StatusBadge status={topic.status === "approved" ? "published" : "draft"}>
-                    {t(`status_${topic.status}`)}
+                    {topic.blockedAt ? t("status_blocked") : t(`status_${topic.status}`)}
                   </StatusBadge>
+                  {topic.blockedAt && (
+                    <>
+                      {" · "}
+                      {t("blockedAt", { date: new Date(topic.blockedAt).toLocaleString(locale) })}
+                      {" · "}
+                      {t("blockedReason", { reason: topic.blockReason ?? "" })}
+                    </>
+                  )}
                   {topic.origin === "ai" && <> · {t("aiSuggestion")}</>}
+                  {topic.contentType && topic.contentType !== "social_post" && (
+                    <> · {tc(`contentType.${topic.contentType}`)}</>
+                  )}
+                  {(topic.seoKeywords?.length ?? 0) > 0 && (
+                    <> · {t("savedKeywords", { count: topic.seoKeywords.length })}</>
+                  )}
                   {topic.plannedDate && (
                     <>
                       {" · "}
@@ -391,7 +543,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
               }
               trailing={
                 <>
-                  {topic.status !== "approved" && (
+                  {!topic.blockedAt && topic.status !== "approved" && (
                     <Button
                       size="sm"
                       variant="secondary"
@@ -400,7 +552,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                       {t("approve")}
                     </Button>
                   )}
-                  {topic.status === "approved" && (
+                  {!topic.blockedAt && topic.status === "approved" && (
                     <>
                       <Link
                         className={buttonClasses("secondary", "sm")}
@@ -415,25 +567,37 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                   )}
                   <Menu
                     trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
-                    items={[
-                      { label: t("edit"), onSelect: () => openEdit(topic) },
-                      ...(topic.status === "archived"
-                        ? []
+                    items={
+                      topic.blockedAt
+                        ? [{ label: t("unblock"), onSelect: () => void unblock(topic) }]
                         : [
+                            { label: t("edit"), onSelect: () => openEdit(topic) },
                             {
-                              label: t("archive"),
-                              onSelect: () => void setStatus(topic, "archived"),
+                              label: t("block"),
+                              onSelect: () => {
+                                setToBlock(topic);
+                                setBlockReason("");
+                                setDialogError(null);
+                              },
                             },
-                          ]),
-                      {
-                        label: t("remove"),
-                        danger: true,
-                        onSelect: () => {
-                          setToDelete(topic);
-                          setDialogError(null);
-                        },
-                      },
-                    ]}
+                            ...(topic.status === "archived"
+                              ? []
+                              : [
+                                  {
+                                    label: t("archive"),
+                                    onSelect: () => void setStatus(topic, "archived"),
+                                  },
+                                ]),
+                            {
+                              label: t("remove"),
+                              danger: true,
+                              onSelect: () => {
+                                setToDelete(topic);
+                                setDialogError(null);
+                              },
+                            },
+                          ]
+                    }
                   />
                 </>
               }
@@ -476,8 +640,42 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             maxLength={2000}
             showCount
           />
-          <Advanced dirty={Boolean(editPlannedDate) || editPriority !== 5}>
+          <Advanced
+            dirty={
+              Boolean(editPlannedDate) ||
+              editPriority !== 5 ||
+              editContentType !== "social_post" ||
+              Boolean(editSeoKeywordsText.trim())
+            }
+          >
             <div className="flex flex-col gap-3">
+              <Select
+                label={t("runFormat")}
+                value={editContentType}
+                onChange={(event) => {
+                  const selected = event.target.value as ContentType;
+                  setEditContentType(selected);
+                  if (selected !== "expert_article") setEditSeoKeywordsText("");
+                }}
+              >
+                {TOPIC_CONTENT_TYPES.map((format) => (
+                  <option key={format} value={format}>
+                    {tc(`contentType.${format}`)}
+                  </option>
+                ))}
+              </Select>
+              {editContentType === "expert_article" && (
+                <>
+                  <Textarea
+                    label={t("seoKeywordsLabel")}
+                    value={editSeoKeywordsText}
+                    onChange={(event) => setEditSeoKeywordsText(event.target.value)}
+                    rows={3}
+                    placeholder={t("seoKeywordsPlaceholder")}
+                  />
+                  <p className="text-sm text-fg-tertiary">{t("seoKeywordsHint")}</p>
+                </>
+              )}
               <Input
                 label={t("plannedDate")}
                 type="date"
@@ -496,6 +694,35 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
             </div>
           </Advanced>
         </form>
+      </Modal>
+      <Modal
+        open={toBlock !== null}
+        onClose={closeBlock}
+        title={t("blockTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeBlock}>
+              {t("cancel")}
+            </Button>
+            <Button variant="danger" onClick={block} disabled={busy}>
+              {t("block")}
+            </Button>
+          </>
+        }
+      >
+        {dialogError && (
+          <p role="alert" className="mb-3 text-sm text-danger">
+            {dialogError}
+          </p>
+        )}
+        <p className="mb-3 text-sm text-fg-secondary">{t("blockBody")}</p>
+        <Textarea
+          label={t("blockReasonLabel")}
+          value={blockReason}
+          onChange={(event) => setBlockReason(event.target.value)}
+          maxLength={500}
+          required
+        />
       </Modal>
       <Modal
         open={toDelete !== null}
@@ -540,6 +767,40 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
           </p>
         )}
         <p className="mb-3 text-sm text-fg-secondary">{t("runHint")}</p>
+        <Select
+          id="topic-run-format"
+          label={t("runFormat")}
+          value={runFormat}
+          onChange={(event) => {
+            const selected = event.target.value as ContentType;
+            setRunFormat(selected);
+            if (selected !== "expert_article") setRunSeoKeywordsText("");
+          }}
+          className="mb-3"
+        >
+          {TOPIC_CONTENT_TYPES.map((format) => (
+            <option key={format} value={format}>
+              {tc(`contentType.${format}`)}
+            </option>
+          ))}
+        </Select>
+        {runFormat === "expert_article" && (
+          <Advanced
+            label={t("seoOptions")}
+            dirty={Boolean(runSeoKeywordsText.trim())}
+            open={runSeoOpen}
+            onOpenChange={setRunSeoOpen}
+          >
+            <Textarea
+              label={t("seoKeywordsLabel")}
+              value={runSeoKeywordsText}
+              onChange={(event) => setRunSeoKeywordsText(event.target.value)}
+              rows={3}
+              placeholder={t("seoKeywordsPlaceholder")}
+            />
+            <p className="mt-2 text-sm text-fg-tertiary">{t("seoKeywordsHint")}</p>
+          </Advanced>
+        )}
         {channels.length === 0 ? (
           <p className="text-sm text-fg-secondary">{t("noChannels")}</p>
         ) : (

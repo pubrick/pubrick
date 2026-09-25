@@ -181,6 +181,10 @@ export function isOutstandingAdaptation(status: AdaptationStatus): boolean {
 export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknown"] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
+/** State of the required Telegram reply after its cover was accepted. */
+export const TELEGRAM_FOLLOWUP_OUTCOMES = ["pending", "not_sent", "rejected", "unknown"] as const;
+export type TelegramFollowupOutcome = (typeof TELEGRAM_FOLLOWUP_OUTCOMES)[number];
+
 /**
  * WHY A DELIVERY ENDED — `adaptations.failure_reason`, the CLASS of a failure
  * as opposed to the sentence about it.
@@ -592,33 +596,49 @@ export type AdaptationProposal = {
   previousBody: string | null;
 };
 
-export const contentApproveSchema = z.object({
-  /**
-   * ISO timestamp; when omitted the post is queued immediately.
-   *
-   * IT MUST ALSO BE IN THE FUTURE — pg-boss treats a past `startAfter` as "run
-   * now", so a typo'd or stale date would silently publish immediately instead
-   * of being scheduled — but that rule is NOT here any more. It is
-   * `ContentRepository.approve`'s, and it moved for two reasons that point the
-   * same way.
-   *
-   * It is not a shape rule. This schema says what a well-formed request looks
-   * like, and a shape does not stop being well-formed while you look at it; a
-   * clock-reading `.refine` returns a different verdict for the same bytes a
-   * moment later, which is a domain rule wearing a schema's clothes.
-   *
-   * And where it stood it could not be named. The pipe refuses a whole body
-   * with one code (`invalid_request`), so the user was shown the developer's
-   * string — "scheduledAt: scheduledAt must be in the future", the pipe's
-   * `path: message` join wrapped around a message naming the field again. As a
-   * domain refusal it has its own code, `schedule_in_past`, and says "pick a
-   * time in the future" in four languages.
-   *
-   * `.datetime()` stays: THAT is a shape.
-   */
-  scheduledAt: z.string().datetime().optional(),
-});
+export const contentApproveSchema = z
+  .object({
+    /**
+     * ISO timestamp; when omitted the post is queued immediately.
+     *
+     * IT MUST ALSO BE IN THE FUTURE — pg-boss treats a past `startAfter` as "run
+     * now", so a typo'd or stale date would silently publish immediately instead
+     * of being scheduled — but that rule is NOT here any more. It is
+     * `ContentRepository.approve`'s, and it moved for two reasons that point the
+     * same way.
+     *
+     * It is not a shape rule. This schema says what a well-formed request looks
+     * like, and a shape does not stop being well-formed while you look at it; a
+     * clock-reading `.refine` returns a different verdict for the same bytes a
+     * moment later, which is a domain rule wearing a schema's clothes.
+     *
+     * And where it stood it could not be named. The pipe refuses a whole body
+     * with one code (`invalid_request`), so the user was shown the developer's
+     * string — "scheduledAt: scheduledAt must be in the future", the pipe's
+     * `path: message` join wrapped around a message naming the field again. As a
+     * domain refusal it has its own code, `schedule_in_past`, and says "pick a
+     * time in the future" in four languages.
+     *
+     * `.datetime()` stays: THAT is a shape.
+     */
+    scheduledAt: z.string().datetime().optional(),
+    /** Fixed, explicit shortcut; the database clock determines its actual time. */
+    delayMinutes: z.literal(30).optional(),
+  })
+  .refine((body) => !(body.scheduledAt && body.delayMinutes), {
+    message: "Choose either scheduledAt or delayMinutes",
+  });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
+
+/** Leave one dispatch window between an edit and an automatic channel send. */
+export const MIN_RESCHEDULE_LEAD_MS = 60_000;
+
+/** Move one already-scheduled automatic delivery, with a stale-editor fence. */
+export const adaptationRescheduleSchema = z.object({
+  scheduledAt: z.string().datetime(),
+  expectedScheduledAt: z.string().datetime(),
+});
+export type AdaptationReschedule = z.infer<typeof adaptationRescheduleSchema>;
 
 /**
  * WHAT A PERSON SAW WHEN THEY OPENED THE CHANNEL — the body of
@@ -639,6 +659,7 @@ export type ContentApprove = z.infer<typeof contentApproveSchema>;
  */
 export const deliveryAssertionSchema = z.object({
   delivered: z.boolean(),
+  partialResolution: z.enum(["completed", "removed"]).optional(),
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
 
@@ -663,7 +684,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * on every adaptation it returns, and the only field a screen needs in order to
  * label a delivery.
  *
- * Six of the seven values are the adaptation row's own `status`, forwarded:
+ * Six values are the adaptation row's own `status`, forwarded:
  *
  * - `pending` — created, not approved yet. Nothing has been sent.
  * - `scheduled` — approved for a future time; the queue holds the job until it.
@@ -674,7 +695,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * - `failed` — the attempt ended and NOTHING reached the platform. Safe to
  *   approve again: re-approving sends the post for the first time.
  *
- * The seventh has no column of its own and is the reason this field exists:
+ * Two outcomes have no adaptation column of their own:
  *
  * - `unknown` — the request may have left this process and never came back.
  *   The post may be live in the channel and nothing here can tell. It carries
@@ -682,19 +703,23 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  *   emphatically NOT `failed`: re-approving an unknown delivery can put a
  *   SECOND copy in someone's channel, so a human has to open the channel and
  *   look first.
+ * - `partial` — Telegram accepted the cover photo, but its required text reply
+ *   was not confirmed. The receipt holds the photo id/link and exact remaining
+ *   text. Re-approving before recovery would duplicate the photo.
  *
- * The adaptation column cannot hold that seventh value: `failed` is its only
+ * The adaptation column cannot hold those two values: `failed` is its only
  * terminal-and-not-published state, and the distinction lives one table over,
  * on the `publications` receipt the worker writes per attempt (`unknown`
  * there). The api joins the two — a `failed` adaptation whose most recent
- * finished receipt says `unknown` is reported here as `unknown` — so that a
+ * finished receipt says `unknown` is reported as `partial` when it has a
+ * confirmed cover checkpoint, and otherwise as `unknown` — so that a
  * browser never has to, and so the queue and the item screen cannot disagree.
  * The status is part of the pair on purpose: a re-approved adaptation is
  * `queued` again, and an older attempt's `unknown` receipt must not keep
  * describing the delivery that is currently in flight.
  *
  * DERIVED FROM `ADAPTATION_STATUSES` rather than spelled out beside it. "Six
- * of the seven values are the adaptation row's own status" IS the definition,
+ * of the eight values are the adaptation row's own status" IS the definition,
  * so a seventh adaptation status has to appear here — and the moment it does,
  * every `Record<DeliveryOutcome, …>` in the web is missing a key and stops
  * compiling, which is exactly where the decision about its color belongs.
@@ -702,7 +727,7 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * badge lookup would answer `undefined` for the new status and paint a badge
  * with `undefined` classes.
  */
-export const DELIVERY_OUTCOMES = [...ADAPTATION_STATUSES, "unknown"] as const;
+export const DELIVERY_OUTCOMES = [...ADAPTATION_STATUSES, "unknown", "partial"] as const;
 export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
 
 /** Is this string one of the outcomes? Guards a value read back off the wire. */
@@ -736,16 +761,18 @@ export const adaptationDtoSchema = z.strictObject({
   attemptCount: z.number().int().nonnegative(),
   lastError: z.string().nullable(),
   /**
-   * THE FOUR FIELDS THE DELIVERY RECEIPT CONTRIBUTES, all nullable, all of
+   * THE RECEIPT FIELDS THE DELIVERY CONTRIBUTES, all nullable, all of
    * them `ADAPTATION_COLUMNS` members like the rest of this schema.
    *
    * `failureReason` is the closed code the screens say a failure from, and
    * `lateBySeconds` the number its missed-slot sentence names; `assertedByName`
    * and `assertedAt` are whose word a delivery is when no platform answered for
-   * it. They are declared here for the reason the docstring above gives: a
+   * it. `partialTelegram` preserves the accepted cover and exact missing text
+   * on item detail; queue cards omit it and parse the default null.
+   * They are declared here for the reason the docstring above gives: a
    * field on this schema is a field the api MUST return, and one that stops
    * being selected fails a parse rather than arriving in a browser as
-   * `undefined` — which for these four is precisely how the screens go back to
+   * `undefined` — which for these fields is precisely how the screens go back to
    * printing a worker's English log line, or claiming a platform confirmation
    * nobody ever got.
    */
@@ -753,10 +780,22 @@ export const adaptationDtoSchema = z.strictObject({
   lateBySeconds: z.number().nullable(),
   externalUrl: z.string().nullable(),
   deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
+  partialTelegram: z
+    .object({
+      photoId: z.string().nullable(),
+      photoUrl: z.string().nullable(),
+      followupText: z.string(),
+      followupOutcome: z.enum(TELEGRAM_FOLLOWUP_OUTCOMES),
+    })
+    .nullable(),
   assertedByName: z.string().nullable(),
   assertedAt: z.string().nullable(),
 });
 export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
+
+/** Queue cards omit the frozen Telegram reply; it belongs on item detail. */
+export const adaptationListDtoSchema = adaptationDtoSchema.omit({ partialTelegram: true });
+export type AdaptationListDto = z.infer<typeof adaptationListDtoSchema>;
 
 /**
  * ONE CARD OF THE QUEUE — `GET /api/content`, one element.
@@ -792,7 +831,7 @@ export const contentListItemDtoSchema = z.strictObject({
   status: z.enum(CONTENT_STATUSES),
   origin: z.enum(CONTENT_ORIGINS),
   bodyIsAiVerbatim: z.boolean(),
-  adaptations: z.array(adaptationDtoSchema),
+  adaptations: z.array(adaptationListDtoSchema),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -848,6 +887,7 @@ export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
  */
 export const contentDetailDtoSchema = contentListItemDtoSchema
   .extend({
+    adaptations: z.array(adaptationDtoSchema),
     body: z.string(),
     linkPolicyWebsite: z.string().url().nullable(),
     archivedFromStatus: z.enum(CONTENT_STATUSES).nullable(),

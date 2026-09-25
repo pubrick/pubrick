@@ -1,0 +1,6 @@
+ALTER TABLE "calendar_slots" ADD COLUMN "seo_keywords" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "topics" ADD COLUMN "content_type" text DEFAULT 'social_post' NOT NULL;--> statement-breakpoint
+ALTER TABLE "topics" ADD COLUMN "seo_keywords" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "calendar_slots" ADD CONSTRAINT "calendar_slots_seo_keywords_check" CHECK (jsonb_typeof("calendar_slots"."seo_keywords") = 'array' and jsonb_array_length("calendar_slots"."seo_keywords") <= 8 and ("calendar_slots"."content_type" = 'expert_article' or "calendar_slots"."seo_keywords" = '[]'::jsonb)) NOT VALID;--> statement-breakpoint
+ALTER TABLE "topics" ADD CONSTRAINT "topics_content_type_check" CHECK ("topics"."content_type" in ('social_post', 'news_digest', 'product_update', 'expert_article', 'comparison', 'educational')) NOT VALID;--> statement-breakpoint
+ALTER TABLE "topics" ADD CONSTRAINT "topics_seo_keywords_check" CHECK (jsonb_typeof("topics"."seo_keywords") = 'array' and jsonb_array_length("topics"."seo_keywords") <= 8 and ("topics"."content_type" = 'expert_article' or "topics"."seo_keywords" = '[]'::jsonb)) NOT VALID;

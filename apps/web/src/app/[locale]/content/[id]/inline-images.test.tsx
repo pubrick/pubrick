@@ -1,4 +1,4 @@
-import { contentImageRegenerateSchema } from "@pubrick/shared";
+import { contentImageCropSchema, contentImageRegenerateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
@@ -10,6 +10,24 @@ vi.mock("@/lib/api", async (original) => {
   const actual = await original<typeof import("@/lib/api")>();
   return { ...actual, api: mockApi };
 });
+vi.mock("./image-crop-dialog", () => ({
+  ImageCropDialog: ({
+    onCancel,
+    onSave,
+  }: {
+    onCancel: () => void;
+    onSave: (area: { x: number; y: number; width: number; height: number }) => void;
+  }) => (
+    <div role="dialog" aria-label="Crop article image">
+      <button type="button" onClick={onCancel}>
+        Cancel
+      </button>
+      <button type="button" onClick={() => onSave({ x: 4, y: 0, width: 4, height: 6 })}>
+        Save crop
+      </button>
+    </div>
+  ),
+}));
 
 const image = {
   id: "image-1",
@@ -44,6 +62,62 @@ const props = {
 };
 
 describe("article image slots", () => {
+  it("does not upload on cancel and submits an explicit crop with current revision", async () => {
+    const sourceId = "8c9c09d1-4f93-4716-956a-00ba0d4b047a";
+    const slotId = "47d8c830-7c27-4386-8642-98a72543cfe1";
+    const slot = {
+      id: slotId,
+      mediaId: sourceId,
+      afterParagraph: 0,
+      alt: "Striped image",
+      caption: "Colors",
+      needsReview: false,
+    };
+    mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/content/post-1/images" && !init?.method)
+        return Promise.resolve({ images: [slot], revision: 1 });
+      if (path === `/api/content/post-1/images/${slotId}/crop` && init?.method === "POST")
+        return Promise.resolve({
+          images: [{ ...slot, mediaId: "image-2", needsReview: true }],
+          revision: 2,
+        });
+      if (path === "/api/ai-credentials") return Promise.resolve([]);
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<InlineImages {...props} />);
+    const crop = await screen.findByRole("button", { name: "Crop image" });
+    await userEvent.setup().click(crop);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mockApi).not.toHaveBeenCalledWith(
+      `/api/content/post-1/images/${slotId}/crop`,
+      expect.anything(),
+    );
+    await userEvent.setup().click(crop);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Save crop" }));
+    await waitFor(() => expect(screen.getByText("Image review required")).toBeVisible());
+    const submitted = mockApi.mock.calls.find(
+      ([path, init]) =>
+        path === `/api/content/post-1/images/${slotId}/crop` && init?.method === "POST",
+    );
+    expect(submitted?.[1]?.body).toBe(
+      JSON.stringify({
+        expectedRevision: 1,
+        sourceMediaId: sourceId,
+        x: 4,
+        y: 0,
+        width: 4,
+        height: 6,
+      }),
+    );
+    expect(contentImageCropSchema.parse(JSON.parse(submitted?.[1]?.body as string))).toEqual({
+      expectedRevision: 1,
+      sourceMediaId: sourceId,
+      x: 4,
+      y: 0,
+      width: 4,
+      height: 6,
+    });
+  });
   it("counts nonempty paragraphs and previews saved text literally with the image in place", async () => {
     expect(articleParagraphs("First\r\n\r\n \r\nSecond")).toEqual(["First", "Second"]);
     mockApi.mockImplementation((path: string) => {
@@ -115,6 +189,12 @@ describe("article image slots", () => {
     await userEvent
       .setup()
       .type(screen.getByRole("textbox", { name: "Caption (optional)" }), "The result");
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByRole("combobox", { name: "Image alignment" }), "right");
+    expect(
+      screen.getByRole("region", { name: "Article preview" }).querySelector("figure"),
+    ).toHaveClass("ml-auto");
     await userEvent.setup().click(screen.getByRole("button", { name: "Save images" }));
     await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
     const put = calls.find((call) => call.method === "PUT");
@@ -126,6 +206,7 @@ describe("article image slots", () => {
           afterParagraph: 1,
           alt: "A helpful diagram",
           caption: "The result",
+          alignment: "right",
         },
       ],
     });
@@ -154,8 +235,8 @@ describe("article image slots", () => {
       return Promise.resolve({ images: [slot], revision: 1 });
     });
     render(<InlineImages {...props} />);
-    expect(await screen.findByText("Generated image — review required")).toBeVisible();
-    expect(screen.getByText(/Review every generated image/)).toBeVisible();
+    expect(await screen.findByText("Image review required")).toBeVisible();
+    expect(screen.getByText(/Review every changed image/)).toBeVisible();
     const review = screen.getByRole("checkbox", {
       name: "I reviewed this image, its placement, and description",
     });
@@ -175,10 +256,12 @@ describe("article image slots", () => {
     expect(puts[0]).toEqual({
       expectedRevision: 1,
       reviewGeneratedImages: true,
-      images: [{ mediaId: image.id, afterParagraph: 0, alt: "Green landscape" }],
+      images: [
+        { mediaId: image.id, afterParagraph: 0, alt: "Green landscape", alignment: "center" },
+      ],
     });
     await waitFor(() =>
-      expect(screen.queryByText("Generated image — review required")).not.toBeInTheDocument(),
+      expect(screen.queryByText("Image review required")).not.toBeInTheDocument(),
     );
   });
 
@@ -232,7 +315,7 @@ describe("article image slots", () => {
         JSON.parse(calls.find((call) => call.path.endsWith("/regenerate"))?.body ?? ""),
       ),
     ).toEqual({ expectedRevision: 4, expectedBody: props.savedBody });
-    expect(await screen.findByText("Generated image — review required")).toBeVisible();
+    expect(await screen.findByText("Image review required")).toBeVisible();
     expect(screen.getAllByRole("img", { name: "New illustration to review" })[0]).toHaveAttribute(
       "src",
       "/api/media/image-2/file",
@@ -249,7 +332,14 @@ describe("article image slots", () => {
     expect(JSON.parse(calls.find((call) => call.method === "PUT")?.body ?? "")).toEqual({
       expectedRevision: 5,
       reviewGeneratedImages: true,
-      images: [{ mediaId: "image-2", afterParagraph: 0, alt: "New illustration to review" }],
+      images: [
+        {
+          mediaId: "image-2",
+          afterParagraph: 0,
+          alt: "New illustration to review",
+          alignment: "center",
+        },
+      ],
     });
   });
 

@@ -10,7 +10,7 @@ import {
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
-import { schema, withImageCallLock } from "@pubrick/db";
+import { newsRankScore, schema, withImageCallLock } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
@@ -36,6 +36,7 @@ import {
   eq,
   inArray,
   isNotNull,
+  ne,
   type SQL,
   type SQLWrapper,
   sql,
@@ -746,6 +747,92 @@ export class GenerateRepository {
       )
       .limit(1);
     return rows.length > 0;
+  }
+
+  /** Only public, scored stories can become draft context. */
+  async hasRelatedNews(orgId: string, brandId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: schema.newsItems.id })
+      .from(schema.newsItems)
+      .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
+      .where(this.relatedNewsScope(orgId, brandId))
+      .limit(1);
+    return !!row;
+  }
+
+  async hasIndexedRelatedNews(orgId: string, brandId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: schema.newsItems.id })
+      .from(schema.newsItems)
+      .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
+      .where(
+        and(
+          this.relatedNewsScope(orgId, brandId),
+          isNotNull(schema.newsItems.embedding),
+          eq(schema.newsItems.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.newsItems.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
+        ),
+      )
+      .limit(1);
+    return !!row;
+  }
+
+  private relatedNewsScope(orgId: string, brandId: string) {
+    return and(
+      eq(schema.newsItems.orgId, orgId),
+      eq(schema.newsItems.brandId, brandId),
+      eq(schema.newsSources.orgId, orgId),
+      eq(schema.newsSources.brandId, brandId),
+      ne(schema.newsSources.kind, "telegram_private"),
+      eq(schema.newsItems.relevanceStatus, "scored"),
+      sql`${newsRankScore} >= 0.5`,
+      sql`${schema.newsItems.editorSignal} IS DISTINCT FROM 'irrelevant'`,
+      sql`coalesce(${schema.newsItems.publishedAt}, ${schema.newsItems.createdAt}) >= now() - interval '30 days'`,
+      sql`coalesce(${schema.newsItems.publishedAt}, ${schema.newsItems.createdAt}) <= now()`,
+    );
+  }
+
+  async similarRelatedNews(orgId: string, brandId: string, embedding: number[]) {
+    return db
+      .select({
+        id: schema.newsItems.id,
+        title: schema.newsItems.title,
+        summary: schema.newsItems.summary,
+        url: schema.newsItems.url,
+      })
+      .from(schema.newsItems)
+      .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
+      .where(
+        and(
+          this.relatedNewsScope(orgId, brandId),
+          isNotNull(schema.newsItems.embedding),
+          eq(schema.newsItems.embeddingModel, KNOWLEDGE_EMBEDDING_MODEL),
+          eq(schema.newsItems.embeddingDimensions, KNOWLEDGE_EMBEDDING_DIMENSIONS),
+        ),
+      )
+      .orderBy(
+        asc(cosineDistance(schema.newsItems.embedding, embedding)),
+        desc(schema.newsItems.createdAt),
+      )
+      .limit(2);
+  }
+
+  async lexicalRelatedNews(orgId: string, brandId: string, topic: string) {
+    if (!topic.trim()) return [];
+    const document = sql`to_tsvector('simple', ${schema.newsItems.title} || ' ' || ${schema.newsItems.summary})`;
+    const query = sql`websearch_to_tsquery('simple', regexp_replace(${topic}, '[[:space:]]+', ' OR ', 'g'))`;
+    return db
+      .select({
+        id: schema.newsItems.id,
+        title: schema.newsItems.title,
+        summary: schema.newsItems.summary,
+        url: schema.newsItems.url,
+      })
+      .from(schema.newsItems)
+      .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
+      .where(and(this.relatedNewsScope(orgId, brandId), sql`${document} @@ ${query}`))
+      .orderBy(desc(sql`ts_rank_cd(${document}, ${query})`), desc(schema.newsItems.createdAt))
+      .limit(2);
   }
 
   async googleKnowledgeKey(orgId: string): Promise<string | undefined> {

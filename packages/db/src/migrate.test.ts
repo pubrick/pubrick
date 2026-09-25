@@ -155,6 +155,10 @@ const ZONED_COLUMNS = [
   "news_items.created_at",
   "news_items.published_at",
   "news_items.relevance_scored_at",
+  "news_relevance_batch_items.completed_at",
+  "news_relevance_batches.completed_at",
+  "news_relevance_batches.created_at",
+  "news_relevance_batches.started_at",
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
@@ -191,6 +195,7 @@ const ZONED_COLUMNS = [
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
   "topic_suggestion_requests.updated_at",
+  "topics.blocked_at",
   "topics.created_at",
   "topics.updated_at",
   "webhook_deliveries.created_at",
@@ -291,10 +296,13 @@ const NON_ENUM_CHECKS = [
   "content_image_slots_paragraph_check",
   "content_image_slots_alt_check",
   "content_image_slots_caption_check",
+  // 0085 pins both saved image alignment and its immutable public snapshot.
+  "content_image_slots_alignment_check",
   "feed_entry_images_paragraph_check",
   "feed_entry_images_position_check",
   "feed_entry_images_alt_check",
   "feed_entry_images_caption_check",
+  "feed_entry_images_alignment_check",
   // 0059: archive is a reversible state; its previous status must be present
   // exactly while archived. The dedicated test below proves both directions.
   "content_items_archived_from_status_check",
@@ -366,18 +374,22 @@ const NON_ENUM_CHECKS = [
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
   "calendar_slots_content_type_check",
+  "calendar_slots_seo_keywords_check",
   "calendar_slots_topic_snapshot_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
   "memorable_dates_month_day_check",
-  // The knowledge category pin arrives after the pre-0009 seed, so it has no row for
-  // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
-  // the category constraint against a bogus update at head.
+  // Knowledge categories allow custom names but retain length, trim and control
+  // character checks. The knowledge e2e inserts a real note and proves the
+  // constraint rejects invalid data at head.
   "knowledge_entries_category_check",
   // These late enum pins: neither topics nor news items exists in the pre-0009
   // seed. The topic API e2e writes real rows and proves both reject off-list
   // values with SQLSTATE 23514.
   "topics_status_check",
+  "topics_content_type_check",
+  "topics_seo_keywords_check",
+  "topics_block_state_check",
   // 0033's late enum pins are exercised by the topic API and suggestion worker
   // e2e suites; this pre-0009 seed has no topic or request rows to update.
   "topics_origin_check",
@@ -395,6 +407,14 @@ const NON_ENUM_CHECKS = [
   "news_items_relevance_feedback_delta_check",
   "news_items_relevance_consistency_check",
   "news_items_relevance_attempts_check",
+  // 0080's paid recheck journal is created after the historical seed.
+  "news_relevance_batches_days_check",
+  "news_relevance_batches_counts_check",
+  "news_relevance_batches_unrecorded_check",
+  "news_relevance_batches_status_check",
+  "news_relevance_batches_error_code_check",
+  "news_relevance_batch_items_status_check",
+  "news_relevance_batch_items_error_code_check",
   // The metric table is created after the pre-0009 seed. Analytics e2e proves
   // measured zero and missing values; these checks pin the stored shape.
   "publication_metrics_status_check",
@@ -431,6 +451,10 @@ const NON_ENUM_CHECKS = [
   "prompt_decision_revisions_version_positive_check",
   // 0076 adds explicit opt-in for publication reply sampling.
   "publication_comment_collection_configs_revision_check",
+  // 0084: the accepted Telegram cover and pending reply must remain a coherent receipt.
+  // The nullable enum pin is exercised against real rows by the worker repository spec.
+  "publications_partial_followup_outcome_check",
+  "publications_partial_telegram_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -2748,6 +2772,43 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("rejects a paid relevance batch with another organization's brand", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('recheck_fk_a', 'A', 'recheck-fk-a'), ('recheck_fk_b', 'B', 'recheck-fk-b')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('recheck_fk_a', 'A brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id as string;
+        const inserted = await pool.query<{ id: string }>(
+          "INSERT INTO news_relevance_batches (org_id, brand_id, days, selected_count) VALUES ('recheck_fk_a', $1, 7, 1) RETURNING id",
+          [brandId],
+        );
+        expect(inserted.rows).toHaveLength(1);
+        await expect(
+          pool.query(
+            "INSERT INTO news_relevance_batches (org_id, brand_id, days, selected_count) VALUES ('recheck_fk_b', $1, 7, 1)",
+            [brandId],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query("UPDATE news_relevance_batches SET org_id = 'recheck_fk_b' WHERE id = $1", [
+            inserted.rows[0]?.id,
+          ]),
+        ).rejects.toMatchObject({ code: "23503" });
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
   it("keeps historical image revisions null while defaulting new posts to zero", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0064_amusing_unus");
@@ -2788,6 +2849,302 @@ describe.skipIf(!url)("runMigrations", () => {
           [brandId],
         );
         expect(inserted.rows[0]?.images_revision).toBe(0);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("preserves existing topic and slot content while defaulting their new format metadata", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0081_topic_format_seo");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      let slotId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const oldColumns = await pool.query(
+          "SELECT table_name, column_name FROM information_schema.columns WHERE table_name IN ('topics', 'calendar_slots') AND column_name = 'seo_keywords'",
+        );
+        expect(oldColumns.rows).toHaveLength(0);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_format_old', 'Topic old', 'topic-format-old')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_format_old', 'Legacy brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id as string;
+        const topic = await pool.query<{ id: string; updated_at: Date; revision: number }>(
+          "INSERT INTO topics (org_id, brand_id, title, description, status) VALUES ('topic_format_old', $1, 'Reviewed topic', 'Known details', 'approved') RETURNING id, updated_at, revision",
+          [brandId],
+        );
+        topicId = topic.rows[0]?.id as string;
+        const slot = await pool.query<{ id: string }>(
+          "INSERT INTO calendar_slots (org_id, brand_id, scheduled_at, brief, topic_id, topic_title, topic_description, topic_updated_at, topic_revision, channel_ids, content_type) VALUES ('topic_format_old', $1, now() + interval '1 day', 'Reviewed topic\\n\\nKnown details', $2, 'Reviewed topic', 'Known details', $3, $4, '[]'::jsonb, 'expert_article') RETURNING id",
+          [brandId, topicId, topic.rows[0]?.updated_at, topic.rows[0]?.revision],
+        );
+        slotId = slot.rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const topic = await after.query(
+          "SELECT title, description, status, content_type, seo_keywords FROM topics WHERE id = $1",
+          [topicId],
+        );
+        expect(topic.rows[0]).toMatchObject({
+          title: "Reviewed topic",
+          description: "Known details",
+          status: "approved",
+          content_type: "social_post",
+          seo_keywords: [],
+        });
+        const slot = await after.query(
+          "SELECT brief, topic_id, content_type, seo_keywords FROM calendar_slots WHERE id = $1",
+          [slotId],
+        );
+        expect(slot.rows[0]).toMatchObject({
+          topic_id: topicId,
+          content_type: "expert_article",
+          seo_keywords: [],
+        });
+        expect(slot.rows[0]?.brief).toContain("Reviewed topic");
+        const constraints = await after.query<{ conname: string; convalidated: boolean }>(
+          "SELECT conname, convalidated FROM pg_constraint WHERE conname IN ('calendar_slots_seo_keywords_check', 'topics_content_type_check', 'topics_seo_keywords_check') ORDER BY conname",
+        );
+        expect(constraints.rows).toEqual([
+          { conname: "calendar_slots_seo_keywords_check", convalidated: false },
+          { conname: "topics_content_type_check", convalidated: false },
+          { conname: "topics_seo_keywords_check", convalidated: false },
+        ]);
+        expect(
+          await refusal(after, "UPDATE topics SET content_type = 'not_a_format' WHERE id = $1", [
+            topicId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE topics SET seo_keywords = '[\"term\"]'::jsonb WHERE id = $1",
+            [topicId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE calendar_slots SET content_type = 'social_post', seo_keywords = '[\"term\"]'::jsonb WHERE id = $1",
+            [slotId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("builds the recent usage index while upgrading an existing ledger", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0082_exotic_warstar");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const missing = await pool.query(
+          "SELECT 1 FROM pg_indexes WHERE indexname = 'usage_ledger_org_recent_idx'",
+        );
+        expect(missing.rowCount).toBe(0);
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const built = await after.query<{ indisvalid: boolean; indexdef: string }>(
+          `SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) AS indexdef
+           FROM pg_index i WHERE i.indexrelid = to_regclass('public.usage_ledger_org_recent_idx')`,
+        );
+        expect(built.rows[0]?.indisvalid).toBe(true);
+        expect(built.rows[0]?.indexdef).toContain("created_at DESC");
+        expect(built.rows[0]?.indexdef).toContain("id DESC");
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds the topic block check without scanning existing topics at startup", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0083_purple_patriot");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_block_old', 'Topic block old', 'topic-block-old')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_block_old', 'Legacy brand') RETURNING id",
+        );
+        const topic = await pool.query<{ id: string }>(
+          "INSERT INTO topics (org_id, brand_id, title, status) VALUES ('topic_block_old', $1, 'Legacy approved', 'approved') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        topicId = topic.rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const topic = await after.query(
+          "SELECT status, blocked_at, block_reason FROM topics WHERE id = $1",
+          [topicId],
+        );
+        expect(topic.rows[0]).toEqual({ status: "approved", blocked_at: null, block_reason: null });
+        const constraint = await after.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname = 'topics_block_state_check'",
+        );
+        expect(constraint.rows).toEqual([{ convalidated: false }]);
+        expect(
+          await refusal(after, "UPDATE topics SET blocked_at = now() WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("preserves existing image slots and feed snapshots with centered alignment", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0085_fixed_blob");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let itemId!: string;
+      let entryId!: string;
+      let brandId!: string;
+      let mediaId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        const missing = await pool.query(
+          "SELECT table_name FROM information_schema.columns WHERE table_name IN ('content_image_slots', 'feed_entry_images') AND column_name = 'alignment'",
+        );
+        expect(missing.rows).toHaveLength(0);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('alignment_old', 'Alignment old', 'alignment-old')",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('alignment_old', 'Legacy brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        itemId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, title, body) VALUES ('alignment_old', $1, 'Legacy article', 'First paragraph\n\nSecond paragraph') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        mediaId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO media_assets (org_id, brand_id, name, width, height, byte_size) VALUES ('alignment_old', $1, 'Legacy image', 10, 10, 200) RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        const feedId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brand_feeds (org_id, brand_id, public_token) VALUES ('alignment_old', $1, 'alignment-old-token') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        entryId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO feed_entries (org_id, brand_id, feed_id, content_item_id, title, body) VALUES ('alignment_old', $1, $2, $3, 'Legacy article', 'First paragraph\n\nSecond paragraph') RETURNING id",
+            [brandId, feedId, itemId],
+          )
+        ).rows[0]?.id as string;
+        await pool.query(
+          "INSERT INTO content_image_slots (org_id, brand_id, content_item_id, media_id, after_paragraph, alt) VALUES ('alignment_old', $1, $2, $3, 0, 'Legacy image')",
+          [brandId, itemId, mediaId],
+        );
+        await pool.query(
+          "INSERT INTO feed_entry_images (org_id, brand_id, feed_entry_id, media_id, after_paragraph, alt, position) VALUES ('alignment_old', $1, $2, $3, 0, 'Legacy image', 0)",
+          [brandId, entryId, mediaId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const slots = await after.query<{ after_paragraph: number; alignment: string }>(
+          "SELECT after_paragraph, alignment FROM content_image_slots WHERE content_item_id = $1 ORDER BY after_paragraph",
+          [itemId],
+        );
+        const snapshots = await after.query<{ after_paragraph: number; alignment: string }>(
+          "SELECT after_paragraph, alignment FROM feed_entry_images WHERE feed_entry_id = $1 ORDER BY after_paragraph",
+          [entryId],
+        );
+        expect(slots.rows).toEqual([{ after_paragraph: 0, alignment: "center" }]);
+        expect(snapshots.rows).toEqual([{ after_paragraph: 0, alignment: "center" }]);
+        await after.query(
+          "INSERT INTO content_image_slots (org_id, brand_id, content_item_id, media_id, after_paragraph, alt) VALUES ('alignment_old', $1, $2, $3, 1, 'New image')",
+          [brandId, itemId, mediaId],
+        );
+        await after.query(
+          "INSERT INTO feed_entry_images (org_id, brand_id, feed_entry_id, media_id, after_paragraph, alt, position) VALUES ('alignment_old', $1, $2, $3, 1, 'New image', 1)",
+          [brandId, entryId, mediaId],
+        );
+        expect(
+          (
+            await after.query<{ alignment: string }>(
+              "SELECT alignment FROM content_image_slots WHERE content_item_id = $1 ORDER BY after_paragraph",
+              [itemId],
+            )
+          ).rows.map((row) => row.alignment),
+        ).toEqual(["center", "center"]);
+        expect(
+          (
+            await after.query<{ alignment: string }>(
+              "SELECT alignment FROM feed_entry_images WHERE feed_entry_id = $1 ORDER BY after_paragraph",
+              [entryId],
+            )
+          ).rows.map((row) => row.alignment),
+        ).toEqual(["center", "center"]);
+        expect(
+          await refusal(
+            after,
+            "UPDATE content_image_slots SET alignment = 'diagonal' WHERE content_item_id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE feed_entry_images SET alignment = 'diagonal' WHERE feed_entry_id = $1",
+            [entryId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const checks = await after.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname IN ('content_image_slots_alignment_check', 'feed_entry_images_alignment_check') ORDER BY conname",
+        );
+        expect(checks.rows).toEqual([{ convalidated: false }, { convalidated: false }]);
       } finally {
         await after.end();
       }

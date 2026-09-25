@@ -18,7 +18,20 @@ minutes per brand (unless its key is missing or unreadable), runs through a
 bounded per-organization queue, and records every physical model call in the
 usage ledger using the organization's AI key. Repeated titles are skipped.
 The request status shows queued, running, completed, or failed; zero new ideas
-means the results were duplicates, not that the model failed.
+means the results were repeats or reviewer-blocked near matches, not that the
+model failed.
+
+For a **manual** request, Pubrick also compares proposed titles with every
+reviewer-blocked topic from the same brand in the last 90 days, including
+manually created topics. It uses Google's `gemini-embedding-001` with 768
+dimensions and a cosine threshold of 0.88. This needs a Google BYOK key even
+when the text suggestion uses OpenRouter. At most 20 recent blocked titles
+and three physical embedding calls are admitted per request; the calls are
+recorded separately in the usage ledger. A request with blocked titles does not
+buy another provider call on queue redelivery. More than 20 recent blocks, an
+embedding failure, an unavailable ledger, or a changed blocked set fails the
+request without adding ideas. The one-call automatic suggestion path does not
+buy embeddings and still applies only the exact-title check below.
 
 An owner or admin can separately enable **Suggest topics daily** in the brand's
 Autopilot settings. After 09:00 in the brand's time zone, it queues at most one
@@ -36,6 +49,22 @@ review of the draft before publication. An approved topic can be reused for
 multiple runs.
 Editing an approved topic returns it to **Idea**, so its new text needs a fresh
 approval.
+
+Use **Block** in a topic's More menu to archive it with a required reason and
+time. A blocked topic cannot be edited, approved, deleted, or used for a new
+run. An unstarted calendar slot linked to the old topic revision fails as
+`topic_changed` before it can call the AI provider. Existing drafts and runs
+are unchanged. **Unblock** returns the topic to **Idea** and requires a fresh
+approval; it clears the block reason and time.
+
+AI suggestion completion checks every existing title in that brand, including
+blocked topics, using Unicode NFKC normalization, English lowercase, and
+collapsed whitespace. This skips **exact normalized title repeats**. Similar
+or paraphrased titles may still be suggested, especially on the automatic
+path. The block action and suggestion completion share a brand transaction lock
+so a completed suggestion cannot slip between the block and this check.
+Manual suggestion completion rechecks the blocked set under that lock after
+its embedding calls. Blocking itself makes no paid AI call.
 
 All topic and article actions are scoped to organization and brand. Deleting a
 source removes its collected articles, but leaves saved topics and existing

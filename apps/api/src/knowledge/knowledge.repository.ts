@@ -178,12 +178,16 @@ export class KnowledgeRepository {
       .returning({ id: schema.knowledgeEntries.id });
     return rows.length === 1;
   }
-  list(orgId: string, brandId: string) {
+  list(orgId: string, brandId: string, category?: string) {
     return db
       .select(PUBLIC_COLUMNS)
       .from(schema.knowledgeEntries)
       .where(
-        and(eq(schema.knowledgeEntries.orgId, orgId), eq(schema.knowledgeEntries.brandId, brandId)),
+        and(
+          eq(schema.knowledgeEntries.orgId, orgId),
+          eq(schema.knowledgeEntries.brandId, brandId),
+          category === undefined ? undefined : eq(schema.knowledgeEntries.category, category),
+        ),
       )
       .orderBy(desc(schema.knowledgeEntries.createdAt), desc(schema.knowledgeEntries.id));
   }

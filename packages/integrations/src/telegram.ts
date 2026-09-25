@@ -1,6 +1,7 @@
-import { PLATFORM_MAX_TEXT_LENGTH } from "@pubrick/shared";
+import { PLATFORM_MAX_TEXT_LENGTH, telegramPhotoParts } from "@pubrick/shared";
 import { z } from "zod";
 import {
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
@@ -425,24 +426,74 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
     }
 
     if (input.image) {
-      if (
-        input.text.length > 1024 ||
-        input.image.bytes.length === 0 ||
-        input.image.mimeType !== "image/jpeg"
-      ) {
-        throw new PermanentPublishError(
-          "Telegram photo captions must be 1..1024 characters and the image must be JPEG",
-        );
+      if (input.image.bytes.length === 0 || input.image.mimeType !== "image/jpeg") {
+        throw new PermanentPublishError("Telegram photos require a nonempty JPEG");
       }
+      const parts = telegramPhotoParts(input.text);
       const payload = new FormData();
       payload.append("chat_id", credentials.chatId);
-      payload.append("caption", input.text);
+      payload.append("caption", parts.caption);
       payload.append(
         "photo",
         new Blob([new Uint8Array(input.image.bytes)], { type: "image/jpeg" }),
         "cover.jpg",
       );
-      return messageLink(await call<unknown>("sendPhoto", credentials, payload, options));
+      const primary = messageLink(await call<unknown>("sendPhoto", credentials, payload, options));
+      if (parts.followup === null) return primary;
+
+      try {
+        await options?.onTelegramPhotoAccepted?.(primary, parts.followup);
+      } catch {
+        throw new PartialTelegramPublishError(
+          "Telegram accepted the photo, but its delivery checkpoint failed; the text reply was not sent.",
+          primary,
+          parts.followup,
+          "not_sent",
+        );
+      }
+
+      // The photo is already live. A missing message ID means the reply cannot
+      // be linked safely; stopping here is a partial delivery, never a retry.
+      const primaryId = Number(primary.externalId);
+      if (!primary.externalId || !Number.isSafeInteger(primaryId) || primaryId <= 0) {
+        throw new PartialTelegramPublishError(
+          "Telegram accepted the photo, but returned no usable message ID; the text reply was not sent. Check the channel before sending again.",
+          primary,
+          parts.followup,
+          "not_sent",
+        );
+      }
+      try {
+        await call<unknown>(
+          "sendMessage",
+          credentials,
+          {
+            chat_id: credentials.chatId,
+            text: parts.followup,
+            link_preview_options: { is_disabled: true },
+            // Fail closed if the photo disappeared: a standalone tail is not
+            // the reviewed cover post and must not count as a full delivery.
+            reply_parameters: { message_id: primaryId, allow_sending_without_reply: false },
+          },
+          options,
+        );
+      } catch (error) {
+        // Even a known rejection of the *reply* cannot make the whole delivery
+        // a known failure: the photo is already in the channel. Keep the worker
+        // on its terminal unknown/partial path so a queue retry cannot post a
+        // second photo. call() has already redacted the bot token.
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new PartialTelegramPublishError(
+          `Telegram accepted the photo${primary.externalUrl ? ` at ${primary.externalUrl}` : ""}, ` +
+            `but its text reply was not confirmed (${detail}). Check the channel before sending again.`,
+          primary,
+          parts.followup,
+          error instanceof PermanentPublishError || error instanceof TransientPublishError
+            ? "rejected"
+            : "unknown",
+        );
+      }
+      return primary;
     }
     const payload: Record<string, unknown> = {
       chat_id: credentials.chatId,

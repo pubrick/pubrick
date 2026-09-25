@@ -18,8 +18,10 @@ import {
   redactSecrets,
   resolveModel,
   runFailureOf,
+  SEO_POLISH,
   type Step,
   type StepAttribution,
+  seoPolishSchema,
   type UsageRecord,
   WRITER,
   withRunFailure,
@@ -46,6 +48,7 @@ import {
   type TerminalPayload,
 } from "./generate.repository";
 import { applyLinkPolicy } from "./link-policy";
+import { freezeRelatedNews } from "./related-news";
 
 export type { GenerateJob } from "@pubrick/shared";
 
@@ -114,6 +117,15 @@ const TERMINAL_WRITE_MAX_ATTEMPTS = 3;
 const EVERY_CHANNEL_DELETED: RunFailure = "every_channel_deleted";
 const EVERY_CHANNEL_DELETED_DETAIL =
   "every channel this run was started for has since been deleted";
+/** Fail-soft only for errors the model-call boundary can attribute to the optional call. */
+const SEO_FALLBACK_FAILURES: ReadonlySet<RunFailure> = new Set([
+  "invalid_key",
+  "model_not_found",
+  "no_structured_output",
+  "provider_refused",
+  "rate_limited",
+  "timed_out",
+]);
 
 /**
  * The org's decrypted key, carried from where it is loaded to where a failure is
@@ -177,6 +189,18 @@ const knowledgeContextSchema = z.object({
       }),
     )
     .max(5),
+  // Old checkpoints have only entries. A resume may read one after deployment.
+  relatedNews: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        title: z.string(),
+        summary: z.string(),
+        url: z.url().nullable(),
+      }),
+    )
+    .max(2)
+    .default([]),
 });
 
 const coverOutputSchema = z.object({
@@ -185,6 +209,10 @@ const coverOutputSchema = z.object({
 });
 
 const inlineImageOutputSchema = coverOutputSchema;
+const seoCheckpointSchema = z.object({
+  body: seoPolishSchema.shape.body,
+  result: z.enum(["polished", "unavailable"]),
+});
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -326,7 +354,7 @@ export class GenerateService {
     }
   }
 
-  /** The five roles, in order, resuming past whatever already has a checkpoint. */
+  /** The default five roles, with optional SEO polish before editing. */
   private async execute(
     run: ClaimedRun,
     fence: string,
@@ -442,9 +470,13 @@ export class GenerateService {
       },
     };
 
-    // Skip the step entirely for brands with no notes: existing runs keep the
-    // same checkpoints and make no additional model call.
-    if (state.checkpoints.knowledge || (await this.repo.hasKnowledge(run.orgId, run.brandId))) {
+    // Reuse the one metered query embedding for both brand notes and news.
+    // Brands with neither retain the original no-call path.
+    if (
+      state.checkpoints.knowledge ||
+      (await this.repo.hasKnowledge(run.orgId, run.brandId)) ||
+      (await this.repo.hasRelatedNews(run.orgId, run.brandId))
+    ) {
       const topic = (input.text ?? (input.kind === "source" ? input.material : "")).slice(0, 2000);
       const knowledge = await this.runStep(
         state,
@@ -453,7 +485,10 @@ export class GenerateService {
           schema: knowledgeContextSchema,
           run: async (ctx) => {
             let entries: Awaited<ReturnType<GenerateRepository["lexicalKnowledge"]>>;
-            const indexed = await this.repo.hasIndexedKnowledge(run.orgId, run.brandId);
+            let related: Awaited<ReturnType<GenerateRepository["lexicalRelatedNews"]>>;
+            const indexed =
+              (await this.repo.hasIndexedKnowledge(run.orgId, run.brandId)) ||
+              (await this.repo.hasIndexedRelatedNews(run.orgId, run.brandId));
             const key = indexed ? await this.repo.googleKnowledgeKey(run.orgId) : undefined;
             if (key && topic.trim()) {
               const started = Date.now();
@@ -513,17 +548,35 @@ export class GenerateService {
                   0,
                   5,
                 );
+                const similarNews = await this.repo.similarRelatedNews(
+                  run.orgId,
+                  run.brandId,
+                  result.embedding,
+                );
+                const lexicalNews = await this.repo.lexicalRelatedNews(
+                  run.orgId,
+                  run.brandId,
+                  topic,
+                );
+                const seenNews = new Set(similarNews.map((entry) => entry.id));
+                related = [
+                  ...similarNews,
+                  ...lexicalNews.filter((entry) => !seenNews.has(entry.id)),
+                ].slice(0, 2);
               } else {
                 entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+                related = await this.repo.lexicalRelatedNews(run.orgId, run.brandId, topic);
               }
             } else {
               entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+              related = await this.repo.lexicalRelatedNews(run.orgId, run.brandId, topic);
             }
             return {
               entries: entries.map((entry) => ({
                 ...entry,
                 content: entry.content.slice(0, 3000),
               })),
+              relatedNews: freezeRelatedNews(related),
             };
           },
         },
@@ -531,6 +584,7 @@ export class GenerateService {
       );
       if (knowledge === STOPPED) return STOPPED;
       state.ctx.knowledge = knowledge.entries;
+      state.ctx.relatedNews = knowledge.relatedNews;
     }
 
     const research = await this.runStep(state, RESEARCHER, undefined);
@@ -539,7 +593,42 @@ export class GenerateService {
     const draft = await this.runStep(state, WRITER, { research });
     if (draft === STOPPED) return STOPPED;
 
-    const edited = await this.runStep(state, EDITOR, { research, body: draft.body });
+    let editorialBody = draft.body;
+    if (input.contentType === "expert_article" && input.seoKeywords?.length) {
+      const seoStep: Step<
+        { body: string; keywords: string[] },
+        z.infer<typeof seoCheckpointSchema>,
+        RunStepContext
+      > = {
+        name: SEO_POLISH.name,
+        schema: seoCheckpointSchema,
+        run: async (ctx, request) => {
+          try {
+            const polished = await SEO_POLISH.run(ctx, request);
+            return { body: polished.body, result: "polished" };
+          } catch (error) {
+            // An optional rewrite must not lose the writer draft. Only errors
+            // classified by the model-call boundary are safe to fall back from:
+            // an unknown coding or storage error still follows the normal run
+            // failure path rather than being hidden as a provider outage.
+            const failure = runFailureOf(error);
+            if (!failure || !SEO_FALLBACK_FAILURES.has(failure)) throw error;
+            this.logger.warn(
+              `SEO polish unavailable for run ${state.runId} (${failure}); retaining writer draft`,
+            );
+            return { body: request.body, result: "unavailable" };
+          }
+        },
+      };
+      const seo = await this.runStep(state, seoStep, {
+        body: draft.body,
+        keywords: input.seoKeywords,
+      });
+      if (seo === STOPPED) return STOPPED;
+      editorialBody = seo.body;
+    }
+
+    const edited = await this.runStep(state, EDITOR, { research, body: editorialBody });
     if (edited === STOPPED) return STOPPED;
 
     // The claims list rides with the draft in the run's own checkpoint map; this
@@ -547,7 +636,7 @@ export class GenerateService {
     // could be mistaken for a check having happened.
     const checked = await this.runStep(state, FACTCHECK, {
       body: edited.body,
-      sources: factcheckSources(state.ctx.knowledge, state.ctx.material),
+      sources: factcheckSources(state.ctx.knowledge, state.ctx.material, state.ctx.relatedNews),
     });
     if (checked === STOPPED) return STOPPED;
 
@@ -598,11 +687,6 @@ export class GenerateService {
               context.channels.some(
                 (channel) =>
                   !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
-              ) ||
-              adaptations.some(
-                (adaptation) =>
-                  context.channels.find((channel) => channel.id === adaptation.channelId)
-                    ?.platform === "telegram" && adaptation.body.length > 1024,
               )
             ) {
               this.logger.warn(`Run ${run.id}: cover skipped because a channel cannot accept it`);

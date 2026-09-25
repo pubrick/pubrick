@@ -102,6 +102,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     generateCover?: boolean;
     generateInlineImages?: boolean;
     contentType?: import("@pubrick/shared").ContentType;
+    seoKeywords?: string[];
   };
 
   async function seed(options: SeedOptions = {}): Promise<Seeded> {
@@ -171,6 +172,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           ...(options.generateCover && { generateCover: true }),
           ...(options.generateInlineImages && { generateInlineImages: true }),
           ...(options.contentType && { contentType: options.contentType }),
+          ...(options.seoKeywords && { seoKeywords: options.seoKeywords }),
         },
       })
       .returning({ id: schema.pipelineRuns.id });
@@ -204,6 +206,93 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   async function ledgerOf(orgId: string) {
     return db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId));
   }
+
+  describe("optional expert-article SEO polish", () => {
+    it("uses the extra metered step only for a reviewed expert-article input", async () => {
+      const ordinary = await seed({ contentType: "expert_article" });
+      const without = scriptedModel();
+      await serviceFor(without).handle({
+        id: "seo-default-off",
+        data: { runId: ordinary.runId, orgId: ordinary.orgId },
+      });
+      expect(without.callsFor("seo_polish")).toBe(0);
+
+      const chosen = await seed({
+        contentType: "expert_article",
+        seoKeywords: ["local cafe planning"],
+      });
+      const script = scriptedModel({
+        seo_polish: () => ({ body: "## Local cafe planning\n\nA polished first draft." }),
+      });
+      await serviceFor(script).handle({
+        id: "seo-opted-in",
+        data: { runId: chosen.runId, orgId: chosen.orgId },
+      });
+      expect(script.callsFor("seo_polish")).toBe(1);
+      expect(script.calls.find((call) => call.role === "seo_polish")?.user).toContain(
+        "local cafe planning",
+      );
+      expect(script.calls.find((call) => call.role === "editor")?.user).toContain(
+        "A polished first draft.",
+      );
+      expect((await runRow(chosen.runId))?.steps.seo_polish?.output).toMatchObject({
+        result: "polished",
+      });
+      expect(
+        (await ledgerOf(chosen.orgId)).filter((entry) => entry.step === "seo_polish"),
+      ).toHaveLength(1);
+    }, 30_000);
+
+    it("checkpoints a visible fallback and does not repay SEO on takeover", async () => {
+      const seeded = await seed({
+        contentType: "expert_article",
+        seoKeywords: ["practical guide"],
+      });
+      const repo = new Repository();
+      const write = repo.writeCheckpoint.bind(repo);
+      let tookOver = false;
+      vi.spyOn(repo, "writeCheckpoint").mockImplementation(async (...args) => {
+        const result = await write(...(args as Parameters<typeof write>));
+        if (args[3] === "seo_polish" && !tookOver) {
+          tookOver = true;
+          await new Repository().claim(
+            seeded.orgId,
+            seeded.runId,
+            "seo-fallback#other",
+            "seo-fallback",
+          );
+        }
+        return result;
+      });
+      const first = scriptedModel({ seo_polish: () => "invalid structured response" });
+      await serviceFor(first, repo).handle({
+        id: "seo-fallback",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const afterFirst = await runRow(seeded.runId);
+      expect(afterFirst?.steps.seo_polish?.output).toMatchObject({
+        body: "A first draft.",
+        result: "unavailable",
+      });
+      expect(first.callsFor("seo_polish")).toBe(2); // structured-output repair
+      const billed = (await ledgerOf(seeded.orgId)).filter((entry) => entry.step === "seo_polish");
+      expect(billed).toHaveLength(2);
+
+      const resumed = scriptedModel();
+      await serviceFor(resumed).handle({
+        id: "seo-fallback",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(resumed.callsFor("seo_polish")).toBe(0);
+      expect(resumed.calls.find((call) => call.role === "editor")?.user).toContain(
+        "A first draft.",
+      );
+      expect((await runRow(seeded.runId))?.status).toBe("succeeded");
+      expect(
+        (await ledgerOf(seeded.orgId)).filter((entry) => entry.step === "seo_polish"),
+      ).toHaveLength(2);
+    }, 30_000);
+  });
 
   describe("opt-in draft covers", () => {
     it("does not call the image provider unless the run requested a cover", async () => {
@@ -267,6 +356,36 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         result: "generated",
       });
       expect(imageCaller.call).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps an opt-in Telegram cover when the reviewed adaptation needs a photo reply", async () => {
+      const seeded = await seed({ generateCover: true, channels: 1 });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 10,
+        })),
+      };
+      const model = scriptedModel({ adapter: () => ({ body: "x".repeat(1025) }) });
+      await serviceFor(model, new Repository(), imageCaller).handle({
+        id: "cover-long-telegram",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const [item] = await itemsOf(seeded.orgId);
+      expect(item?.coverMediaId).toBeTruthy();
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+      const adaptations = await db
+        .select({ body: schema.adaptations.body })
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.contentItemId, item?.id as string));
+      expect(adaptations[0]?.body).toHaveLength(1025);
     });
 
     it("keeps the text draft when the image outcome and cost are unknown", async () => {
@@ -928,6 +1047,271 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       });
       return { victim, intruder };
     }
+
+    it("uses effective editorial rank for news eligibility in lexical and vector retrieval", async () => {
+      const down = await seed({ channels: 1 });
+      const up = await seed({ channels: 1 });
+      const [downSource, upSource] = await db
+        .insert(schema.newsSources)
+        .values([
+          {
+            orgId: down.orgId,
+            brandId: down.brandId,
+            name: "Downranked",
+            kind: "rss",
+            url: "https://example.com/down-feed",
+          },
+          {
+            orgId: up.orgId,
+            brandId: up.brandId,
+            name: "Upranked",
+            kind: "rss",
+            url: "https://example.com/up-feed",
+          },
+        ])
+        .returning({ id: schema.newsSources.id });
+      const [, upStory] = await db
+        .insert(schema.newsItems)
+        .values([
+          {
+            orgId: down.orgId,
+            brandId: down.brandId,
+            sourceId: downSource?.id as string,
+            title: "Autumn menu downranked",
+            summary: "Autumn menu changed.",
+            url: "https://example.com/down-story",
+            relevanceStatus: "scored",
+            relevanceScore: 0.6,
+            relevanceFeedbackDelta: -0.2,
+            relevanceReason: "Initially useful",
+            relevanceUrgency: "timely",
+            relevanceScoredAt: new Date(),
+            embedding: Array(768).fill(0.1),
+            embeddingModel: "gemini-embedding-001",
+            embeddingDimensions: 768,
+          },
+          {
+            orgId: up.orgId,
+            brandId: up.brandId,
+            sourceId: upSource?.id as string,
+            title: "Autumn menu upranked",
+            summary: "Autumn menu changed.",
+            url: "https://example.com/up-story",
+            relevanceStatus: "scored",
+            relevanceScore: 0.4,
+            relevanceFeedbackDelta: 0.2,
+            relevanceReason: "Initially low",
+            relevanceUrgency: "timely",
+            relevanceScoredAt: new Date(),
+            embedding: Array(768).fill(0.1),
+            embeddingModel: "gemini-embedding-001",
+            embeddingDimensions: 768,
+          },
+        ])
+        .returning({ id: schema.newsItems.id });
+      const repo = new Repository();
+      const query = Array(768).fill(0.1);
+      expect(await repo.hasRelatedNews(down.orgId, down.brandId)).toBe(false);
+      expect(await repo.hasIndexedRelatedNews(down.orgId, down.brandId)).toBe(false);
+      expect(await repo.lexicalRelatedNews(down.orgId, down.brandId, "Autumn menu")).toEqual([]);
+      expect(await repo.similarRelatedNews(down.orgId, down.brandId, query)).toEqual([]);
+      expect(await repo.hasRelatedNews(up.orgId, up.brandId)).toBe(true);
+      expect(await repo.hasIndexedRelatedNews(up.orgId, up.brandId)).toBe(true);
+      expect(
+        (await repo.lexicalRelatedNews(up.orgId, up.brandId, "Autumn menu")).map(
+          (story) => story.id,
+        ),
+      ).toEqual([upStory?.id]);
+      expect(
+        (await repo.similarRelatedNews(up.orgId, up.brandId, query)).map((story) => story.id),
+      ).toEqual([upStory?.id]);
+    });
+
+    it("uses only recent scored public stories of this brand, without fetching their URLs", async () => {
+      const { victim, intruder } = await twoOrgs();
+      const [otherBrand] = await db
+        .insert(schema.brands)
+        .values({ orgId: victim.orgId, name: "Other news brand" })
+        .returning({ id: schema.brands.id });
+      const [publicSource, privateSource, otherBrandSource, otherOrgSource] = await db
+        .insert(schema.newsSources)
+        .values([
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            name: "Public",
+            kind: "rss",
+            url: "https://example.com/feed",
+          },
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            name: "Private",
+            kind: "telegram_private",
+            url: "https://example.com/private",
+            privatePeerEncrypted: "fixture",
+          },
+          {
+            orgId: victim.orgId,
+            brandId: otherBrand?.id as string,
+            name: "Other brand",
+            kind: "rss",
+            url: "https://example.com/other-brand",
+          },
+          {
+            orgId: intruder.orgId,
+            brandId: intruder.brandId,
+            name: "Other org",
+            kind: "rss",
+            url: "https://example.com/other-org",
+          },
+        ])
+        .returning({ id: schema.newsSources.id });
+      const row = (sourceId: string, orgId: string, brandId: string, marker: string) => ({
+        orgId,
+        brandId,
+        sourceId,
+        title: `Autumn menu ${marker}`,
+        summary: `${marker} opened on Tuesday.`,
+        url: `https://example.com/${marker}`,
+        relevanceStatus: "scored" as const,
+        relevanceScore: 0.8,
+        relevanceReason: "Relevant to this brand",
+        relevanceUrgency: "timely" as const,
+        relevanceScoredAt: new Date(),
+      });
+      const [eligible] = await db
+        .insert(schema.newsItems)
+        .values([
+          row(publicSource?.id as string, victim.orgId, victim.brandId, "OWN_NEWS_MARKER"),
+          row(privateSource?.id as string, victim.orgId, victim.brandId, "PRIVATE_NEWS_MARKER"),
+          row(
+            otherBrandSource?.id as string,
+            victim.orgId,
+            otherBrand?.id as string,
+            "OTHER_BRAND_NEWS_MARKER",
+          ),
+          row(
+            otherOrgSource?.id as string,
+            intruder.orgId,
+            intruder.brandId,
+            "OTHER_ORG_NEWS_MARKER",
+          ),
+          {
+            ...row(
+              publicSource?.id as string,
+              victim.orgId,
+              victim.brandId,
+              "IRRELEVANT_NEWS_MARKER",
+            ),
+            editorSignal: "irrelevant" as const,
+          },
+          {
+            ...row(publicSource?.id as string, victim.orgId, victim.brandId, "STALE_NEWS_MARKER"),
+            publishedAt: new Date(Date.now() - 40 * 86_400_000),
+          },
+          {
+            ...row(
+              publicSource?.id as string,
+              victim.orgId,
+              victim.brandId,
+              "UNSCORED_NEWS_MARKER",
+            ),
+            relevanceStatus: "unscored" as const,
+            relevanceScore: null,
+            relevanceReason: null,
+            relevanceUrgency: null,
+            relevanceScoredAt: null,
+          },
+        ])
+        .returning({ id: schema.newsItems.id });
+      const repo = new Repository();
+      expect(await repo.hasRelatedNews(victim.orgId, victim.brandId)).toBe(true);
+      expect(await repo.hasIndexedRelatedNews(victim.orgId, victim.brandId)).toBe(false);
+      expect(
+        (await repo.lexicalRelatedNews(victim.orgId, victim.brandId, BRIEF)).map((item) => item.id),
+      ).toEqual([eligible?.id]);
+
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "related-news-job",
+        data: { runId: victim.runId, orgId: victim.orgId },
+      });
+      for (const role of ["researcher", "writer"] as const) {
+        const call = script.calls.find((candidate) => candidate.role === role);
+        expect(call?.user).toContain("OWN_NEWS_MARKER");
+        expect(call?.user).not.toContain("PRIVATE_NEWS_MARKER");
+        expect(call?.user).not.toContain("OTHER_BRAND_NEWS_MARKER");
+        expect(call?.user).not.toContain("OTHER_ORG_NEWS_MARKER");
+        expect(call?.user).not.toContain("IRRELEVANT_NEWS_MARKER");
+        expect(call?.user).not.toContain("STALE_NEWS_MARKER");
+        expect(call?.user).not.toContain("UNSCORED_NEWS_MARKER");
+        expect(call?.user).not.toContain("https://example.com/OWN_NEWS_MARKER");
+      }
+      const run = await runRow(victim.runId);
+      expect(run?.steps.knowledge?.output).toMatchObject({
+        entries: [],
+        relatedNews: [{ id: eligible?.id, title: "Autumn menu OWN_NEWS_MARKER" }],
+      });
+      expect(
+        (await ledgerOf(victim.orgId)).filter((entry) => entry.step === "knowledge"),
+      ).toHaveLength(0);
+      await db
+        .update(schema.newsItems)
+        .set({
+          embedding: Array(768).fill(0.1),
+          embeddingModel: "gemini-embedding-001",
+          embeddingDimensions: 768,
+        })
+        .where(eq(schema.newsItems.id, eligible?.id as string));
+      expect(await repo.hasIndexedRelatedNews(victim.orgId, victim.brandId)).toBe(true);
+      expect(
+        (await repo.similarRelatedNews(victim.orgId, victim.brandId, Array(768).fill(0.1))).map(
+          (item) => item.id,
+        ),
+      ).toEqual([eligible?.id]);
+    }, 25_000);
+
+    it("reuses frozen news after its source has gone, without another retrieval call", async () => {
+      const seeded = await seed({ channels: 1 });
+      const newsId = randomUUID();
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          steps: {
+            knowledge: {
+              status: "succeeded",
+              output: {
+                entries: [],
+                relatedNews: [
+                  {
+                    id: newsId,
+                    title: "FROZEN_NEWS_MARKER",
+                    summary: "An old source excerpt.",
+                    url: "https://example.com/deleted",
+                  },
+                ],
+              },
+            },
+          },
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "frozen-news-job",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.calls.find((call) => call.role === "researcher")?.user).toContain(
+        "FROZEN_NEWS_MARKER",
+      );
+      expect(script.calls.find((call) => call.role === "writer")?.user).toContain(
+        "FROZEN_NEWS_MARKER",
+      );
+      expect(
+        (await ledgerOf(seeded.orgId)).filter((entry) => entry.step === "knowledge"),
+      ).toHaveLength(0);
+      expect((await runRow(seeded.runId))?.status).toBe("succeeded");
+    }, 25_000);
 
     it("adds only active notes of the run's brand to material, without a provider embedding call", async () => {
       const { victim, intruder } = await twoOrgs();

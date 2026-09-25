@@ -183,10 +183,10 @@ export class AiCredentialsRepository {
    * single statement of the rule, and two code paths answering one question is
    * how a total starts depending on which screen asked. `PRICED` is
    * `cost_usd IS NOT NULL AND cost_source <> 'unknown'`; anything else that
-   * counted tokens OR whose outcome is `unknown` is unpriced; anything else (a
-   * 429 the provider refused before generating) is ignored, because its cost is
-   * known to be zero and the ledger is lifetime — one blip must not stamp "≥"
-   * on an org's total forever.
+   * counted tokens OR was not explicitly `refused` is unpriced. A completed
+   * image can return bytes without token metadata, and a legacy NULL outcome
+   * cannot prove refusal. Only a token-free explicit refusal (such as a 429)
+   * is ignored, because its cost is known to be zero and the ledger is lifetime.
    *
    * A bucket rule pinned in one of the two readers and not the other is exactly
    * the seam the outcome clause came from, so the e2e drives THIS path over the
@@ -224,18 +224,13 @@ export class AiCredentialsRepository {
   async spend(orgId: string): Promise<CostSummary> {
     const priced = sql`${schema.usageLedger.costUsd} is not null and ${schema.usageLedger.costSource} <> 'unknown'`;
     const countedTokens = sql`${schema.usageLedger.inputTokens} + ${schema.usageLedger.outputTokens} > 0`;
-    // `is not distinct from`, not `=`: the column is NULL on every row written
-    // before it existed, and `NULL = 'unknown'` is NULL rather than false. That
-    // happens to give the same answer where this expression sits today — inside
-    // an OR, under an AND, where NULL and false are indistinguishable to
-    // `count(*) filter` — and stops doing so the moment it is negated or moved
-    // out. This form is two-valued wherever it stands: a NULL outcome reads as
-    // `completed`, which is the meaning those rows already had.
-    const outcomeUnknown = sql`${schema.usageLedger.outcome} is not distinct from 'unknown'`;
+    // `is distinct from` stays two-valued for legacy NULL outcomes. Their lack
+    // of an explicit refusal cannot establish that the provider charged zero.
+    const notRefused = sql`${schema.usageLedger.outcome} is distinct from 'refused'`;
     const rows = await db
       .select({
         usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}) filter (where ${priced}), 0)`,
-        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${countedTokens} or ${outcomeUnknown}))`,
+        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${countedTokens} or ${notRefused}))`,
         estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${schema.usageLedger.costSource} = 'price_table')`,
       })
       .from(schema.usageLedger)

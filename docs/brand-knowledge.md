@@ -5,6 +5,13 @@ note has a title, content, category, tags, and an active switch. The API scopes
 every read and write by both the active organization and the brand. Removing a
 brand also removes its notes.
 
+The six familiar categories keep localized labels. Choose **Custom** to name
+another category; names are trimmed, limited to 100 characters, and cannot
+contain control characters. Custom names are displayed literally. The compact
+category selector filters the current brand's notes, including paused notes,
+without crowding the page with chips. Changing only a category keeps an
+existing vector because the indexed title and body have not changed.
+
 ## Using notes
 
 The generation worker selects up to five active notes for a run. If the brand
@@ -75,7 +82,7 @@ stops the whole import, and the API inserts the entire batch in one transaction.
 The API also accepts an optional boolean `isActive` on each bulk-import entry.
 Titles, content, categories, and tags must pass the same limits as an individual
 note (500 title characters, 20,000 content characters, 20 tags of 50 characters
-each).
+each). Custom categories round-trip in `category` without translation.
 
 For a portable export from another system, first extract its notes to a local
 UTF-8 CSV without embeddings, provider keys, or internal IDs. Map each note's
@@ -130,9 +137,20 @@ vectors; inspect the ledger before retrying. The SDK makes no internal retry
 for an embedding call. Generating a query vector is checkpointed as a `knowledge`
 step, so a resumed run does not pay for it again after a successful checkpoint.
 
-Retrieval currently covers the brand's knowledge notes. It does not search
-historical posts, published content, or monitored news. The API returns the
-whole note list for a brand; server-side filtering and pagination are not yet
+Retrieval covers brand knowledge notes and up to two related public watched
+stories. The story query requires the same organization and brand, an effective
+relevance rank of at least 0.5 (AI score plus editor feedback), no explicit
+irrelevant editor signal, and a date
+within the last 30 days. Private Telegram sources are excluded. Compatible
+768-dimensional news vectors share the one metered query embedding already
+used by knowledge retrieval; text search works when indexing or the Google key
+is unavailable. The selected title and summary are frozen in the run checkpoint
+and limited to 2 KiB of UTF-8 across both stories, so a retry uses the same
+context without another retrieval call. Story URLs appear only as safe HTTP
+links in the run receipt, never in model material. Feed excerpts are context,
+not independent verification; claims remain for a human to check. Historical
+posts and published content are not searched. The API still returns the whole
+note list for a brand; server-side filtering and pagination are not yet
 available.
 
 ## API

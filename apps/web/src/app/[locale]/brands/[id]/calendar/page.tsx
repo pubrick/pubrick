@@ -32,6 +32,7 @@ type Slot = {
   scheduledAt: string;
   brief: string;
   contentType?: ContentType;
+  seoKeywords: string[];
   topicId: string | null;
   topicTitle: string | null;
   channelIds: string[];
@@ -48,6 +49,8 @@ type BulkPreviewRow = BulkRow & {
   title: string;
   description: string;
   sourceUrl: string | null;
+  contentType: TopicDto["contentType"];
+  seoKeywords: string[];
 };
 const FORM_ID = "calendar-add-slot";
 const EDIT_FORM_ID = "calendar-edit-slot";
@@ -79,6 +82,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const { id: brandId } = use(params);
   const t = useTranslations("Calendar");
   const tc = useTranslations("ContentNew");
+  const tt = useTranslations("Topics");
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
@@ -144,9 +148,15 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         api<TopicDto[]>(`/api/topics?brandId=${brandId}`).catch(() => []),
       ]);
       if (sequence !== loadSequence.current) return;
-      setSlots(slotRows);
+      setSlots(slotRows.map((slot) => ({ ...slot, seoKeywords: slot.seoKeywords ?? [] })));
       setChannels(channelRows);
-      const approved = topicRows.filter((topic) => topic.status === "approved");
+      const approved = topicRows
+        .filter((topic) => topic.status === "approved")
+        .map((topic) => ({
+          ...topic,
+          contentType: topic.contentType ?? ("social_post" as const),
+          seoKeywords: topic.seoKeywords ?? [],
+        }));
       setTopics(approved);
       setBulkRows((current) =>
         current.filter((row) => approved.some((topic) => topic.id === row.topicId)),
@@ -203,7 +213,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           scheduledAt: new Date(dateInput).toISOString(),
           ...(selectedTopicId ? { topicId: selectedTopicId } : { brief }),
           channelIds: selectedChannels,
-          ...(contentType !== "social_post" && { contentType }),
+          ...(!selectedTopicId && contentType !== "social_post" && { contentType }),
           ...(generateCover && { generateCover: true }),
           ...(generateInlineImages && { generateInlineImages: true }),
           notes: notes.trim() || null,
@@ -264,7 +274,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               ? { topicId: null, brief }
               : { brief }),
           channelIds: selectedChannels,
-          contentType,
+          ...(!selectedTopicId && { contentType }),
           generateCover,
           generateInlineImages,
           notes: notes.trim() || null,
@@ -339,6 +349,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
             title: topic.title,
             description: topic.description,
             sourceUrl: topic.sourceUrl,
+            contentType: topic.contentType,
+            seoKeywords: topic.seoKeywords,
           }
         : null;
     });
@@ -405,6 +417,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     new Date(`${selectedDay}T12:00`),
   );
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const selectedTopic = topics.find((topic) => topic.id === selectedTopicId);
+  const effectiveContentType = selectedTopic?.contentType ?? contentType;
 
   const fields = (isEdit: boolean) => (
     <div className="flex flex-col gap-3">
@@ -419,7 +433,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       <Select
         label={t("topic")}
         value={selectedTopicId}
-        onChange={(e) => setSelectedTopicId(e.target.value)}
+        onChange={(e) => {
+          setSelectedTopicId(e.target.value);
+          const nextTopic = topics.find((topic) => topic.id === e.target.value);
+          if (nextTopic) {
+            setContentType(nextTopic.contentType);
+            if (!supportsInlineImages(nextTopic.contentType)) setGenerateInlineImages(false);
+          }
+        }}
       >
         <option value="">{t("customBrief")}</option>
         {isEdit && editing?.topicId && !topics.some((topic) => topic.id === editing.topicId) && (
@@ -432,7 +453,19 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         ))}
       </Select>
       {selectedTopicId ? (
-        <p className="text-sm text-fg-secondary">{t("topicHint")}</p>
+        <div className="text-sm text-fg-secondary">
+          <p>{t("topicHint")}</p>
+          <p>{tc(`contentType.${effectiveContentType}`)}</p>
+          {selectedTopic && selectedTopic.seoKeywords.length > 0 && (
+            <>
+              <p>
+                {tt("savedKeywords", { count: selectedTopic.seoKeywords.length })}:{" "}
+                {selectedTopic.seoKeywords.join(", ")}
+              </p>
+              <p>{tt("seoKeywordsHint")}</p>
+            </>
+          )}
+        </div>
       ) : (
         <Textarea
           id={isEdit ? "calendar-edit-brief" : "calendar-brief"}
@@ -478,11 +511,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         maxLength={2000}
         showCount
       />
-      <Advanced dirty={contentType !== "social_post" || generateCover || generateInlineImages}>
+      <Advanced
+        dirty={effectiveContentType !== "social_post" || generateCover || generateInlineImages}
+      >
         <div className="flex flex-col gap-3">
           <Select
             label={tc("contentTypeLabel")}
-            value={contentType}
+            value={effectiveContentType}
+            disabled={Boolean(selectedTopicId)}
             onChange={(event) => {
               const selected = event.target.value as ContentType;
               setContentType(selected);
@@ -521,7 +557,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                 checked={generateInlineImages}
                 onChange={(event) => setGenerateInlineImages(event.target.checked)}
                 disabled={
-                  !generateInlineImages && (!hasGoogleKey || !supportsInlineImages(contentType))
+                  !generateInlineImages &&
+                  (!hasGoogleKey || !supportsInlineImages(effectiveContentType))
                 }
                 className="mt-0.5 h-5 w-5 rounded border-border text-accent"
               />
@@ -533,7 +570,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                 {tc("generateInlineImagesNeedsGoogle")}
               </p>
             )}
-            {!supportsInlineImages(contentType) && (
+            {!supportsInlineImages(effectiveContentType) && (
               <p className="mt-1 pl-8 text-sm text-fg-tertiary">
                 {tc("generateInlineImagesUnsupported")}
               </p>
@@ -685,6 +722,12 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                     {slot.contentType && slot.contentType !== "social_post" && (
                       <p className="mt-2 text-sm text-fg-secondary">
                         {tc(`contentType.${slot.contentType}`)}
+                      </p>
+                    )}
+                    {slot.seoKeywords.length > 0 && (
+                      <p className="mt-2 text-sm text-fg-secondary">
+                        {tt("savedKeywords", { count: slot.seoKeywords.length })}:{" "}
+                        {slot.seoKeywords.join(", ")}
                       </p>
                     )}
                     {slot.generateInlineImages && (
@@ -874,6 +917,13 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               {row.description && <p className="mt-1 text-fg-secondary">{row.description}</p>}
               {row.sourceUrl && (
                 <p className="mt-1 break-all text-xs text-fg-tertiary">{row.sourceUrl}</p>
+              )}
+              <p className="mt-1 text-fg-secondary">{tc(`contentType.${row.contentType}`)}</p>
+              {row.seoKeywords.length > 0 && (
+                <p className="mt-1 text-fg-secondary">
+                  {tt("savedKeywords", { count: row.seoKeywords.length })}:{" "}
+                  {row.seoKeywords.join(", ")}. {tt("seoKeywordsHint")}
+                </p>
               )}
               <p className="mt-1 text-fg-secondary">
                 {new Intl.DateTimeFormat(locale, {

@@ -529,6 +529,36 @@ describe("Generate (Task 10)", () => {
     expect(control).toBeDisabled();
   });
 
+  it("submits reviewed expert-article keywords from Advanced and clears them on format switch", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => (path === "/api/runs" && method === "POST" ? { id: "seo-run" } : undefined),
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Explain supported evidence");
+    const format = screen.getByLabelText(en.ContentNew.contentTypeLabel);
+    await user.selectOptions(format, "expert_article");
+    await user.click(screen.getByText(en.ContentNew.seoOptions));
+    await user.type(screen.getByLabelText(en.ContentNew.seoKeywordsLabel), "practical guide");
+    await user.selectOptions(format, "social_post");
+    await user.selectOptions(format, "expert_article");
+    expect(screen.getByLabelText(en.ContentNew.seoKeywordsLabel)).toHaveValue("");
+    await user.type(screen.getByLabelText(en.ContentNew.seoKeywordsLabel), "practical guide");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/seo-run"));
+    expect(
+      parsedBody(calls.find((call) => call.path === "/api/runs" && call.method === "POST")),
+    ).toMatchObject({
+      contentType: "expert_article",
+      seoKeywords: ["practical guide"],
+    });
+  });
+
   it("requires a Google key for generated article images", async () => {
     const calls: Call[] = [];
     installHandlers(calls, undefined, [

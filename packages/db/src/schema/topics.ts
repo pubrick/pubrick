@@ -1,10 +1,16 @@
-import { TOPIC_ORIGINS, TOPIC_STATUSES, TOPIC_SUGGESTION_REQUEST_STATUSES } from "@pubrick/shared";
+import {
+  TOPIC_CONTENT_TYPES,
+  TOPIC_ORIGINS,
+  TOPIC_STATUSES,
+  TOPIC_SUGGESTION_REQUEST_STATUSES,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   check,
   date,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -29,8 +35,14 @@ export const topics = pgTable(
     newsItemId: uuid("news_item_id").references(() => newsItems.id, { onDelete: "set null" }),
     title: text("title").notNull(),
     description: text("description").notNull().default(""),
+    contentType: text("content_type", { enum: TOPIC_CONTENT_TYPES })
+      .notNull()
+      .default("social_post"),
+    seoKeywords: jsonb("seo_keywords").$type<string[]>().notNull().default([]),
     sourceUrl: text("source_url"),
     status: text("status", { enum: TOPIC_STATUSES }).notNull().default("idea"),
+    blockedAt: timestamp("blocked_at", { withTimezone: true }),
+    blockReason: text("block_reason"),
     plannedDate: date("planned_date"),
     priority: integer("priority").notNull().default(5),
     origin: text("origin", { enum: TOPIC_ORIGINS }).notNull().default("manual"),
@@ -44,6 +56,15 @@ export const topics = pgTable(
     uniqueIndex("topics_org_brand_news_item_idx").on(t.orgId, t.brandId, t.newsItemId),
     uniqueIndex("topics_org_brand_suggestion_key_idx").on(t.orgId, t.brandId, t.suggestionKey),
     enumCheck("topics_status_check", t.status, TOPIC_STATUSES),
+    check(
+      "topics_block_state_check",
+      sql`(${t.blockedAt} is null and ${t.blockReason} is null) or (${t.blockedAt} is not null and ${t.status} = 'archived' and ${t.blockReason} is not null and length(${t.blockReason}) between 1 and 500)`,
+    ),
+    enumCheck("topics_content_type_check", t.contentType, TOPIC_CONTENT_TYPES),
+    check(
+      "topics_seo_keywords_check",
+      sql`jsonb_typeof(${t.seoKeywords}) = 'array' and jsonb_array_length(${t.seoKeywords}) <= 8 and (${t.contentType} = 'expert_article' or ${t.seoKeywords} = '[]'::jsonb)`,
+    ),
     enumCheck("topics_origin_check", t.origin, TOPIC_ORIGINS),
     check("topics_priority_check", sql`${t.priority} BETWEEN 1 AND 10`),
   ],

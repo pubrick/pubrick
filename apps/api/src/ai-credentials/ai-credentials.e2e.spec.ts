@@ -1077,9 +1077,8 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           status: "ok",
         },
         {
-          // A 429. No tokens counted, so its cost is known to be zero — and the
-          // ledger is lifetime, so letting one blip stamp "≥" on the total would
-          // stamp it forever.
+          // A 429 explicitly refused before any tokens were counted. Its cost
+          // is known to be zero, so it cannot stamp "≥" on a lifetime total.
           orgId,
           step: "writer",
           provider: "google",
@@ -1089,6 +1088,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           inputTokens: 0,
           outputTokens: 0,
           status: "errored",
+          outcome: "refused",
         },
       ]);
 
@@ -1205,13 +1205,9 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       });
     });
 
-    it("reads a row written before the outcome column as one that came back", async () => {
-      // NULL means "nobody recorded this", not "unknown outcome". `NULL =
-      // 'unknown'` is NULL rather than false, which happens to fall out right
-      // where the predicate sits today — inside an OR under an AND — and would
-      // stop doing so the moment it were negated or moved. `is not distinct
-      // from` is two-valued wherever it stands; this test pins the answer, not
-      // the spelling.
+    it("treats an unpriced legacy row without refusal evidence as uncertain", async () => {
+      // NULL predates the outcome column. It does not prove the provider
+      // refused the call, even when no token count was recorded.
       const { agent, orgId } = await orgAgent();
       await direct.db.insert(schema.usageLedger).values([
         {
@@ -1241,8 +1237,9 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       ]);
 
       expect((await agent.get("/api/ai-credentials/spend").expect(200)).body).toEqual({
-        kind: "exact",
+        kind: "atLeast",
         usd: 1.23,
+        unpricedCalls: 1,
       });
     });
 
@@ -1292,6 +1289,20 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           outputTokens: 0,
           outcome: "refused",
         },
+        {
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 12,
+          outputTokens: 0,
+          outcome: "refused",
+        },
+        {
+          costUsd: null,
+          costSource: "unknown",
+          inputTokens: 0,
+          outputTokens: 0,
+          outcome: "completed",
+        },
         { costUsd: null, costSource: "unknown", inputTokens: 0, outputTokens: 0, outcome: null },
       ];
       await direct.db.insert(schema.usageLedger).values(
@@ -1313,9 +1324,9 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       expect(fromSql).toEqual(summarizeCost(costTotals(rows)));
       // Named too, so a day when both readers are wrong in the same way still
-      // fails: two unpriced calls — the one that burned tokens and the one we
-      // lost — and the refusal and the legacy NULL counted by neither.
-      expect(fromSql).toEqual({ kind: "atLeast", usd: 0.502, unpricedCalls: 2 });
+      // fails: the token-bearing, lost, completed image, legacy, and metered
+      // refusal calls are uncertain; only the token-free refusal is known free.
+      expect(fromSql).toEqual({ kind: "atLeast", usd: 0.502, unpricedCalls: 5 });
     });
 
     it("refuses an outcome outside the value set, in the database", async () => {

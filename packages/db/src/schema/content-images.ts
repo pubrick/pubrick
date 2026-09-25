@@ -1,3 +1,4 @@
+import { CONTENT_IMAGE_ALIGNMENTS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -12,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { contentItems } from "./content-items.js";
+import { enumCheck } from "./enum-check.js";
 import { feedEntries } from "./feeds.js";
 import { mediaAssets } from "./media.js";
 
@@ -30,6 +32,7 @@ export const contentImageSlots = pgTable(
     afterParagraph: integer("after_paragraph").notNull(),
     alt: text("alt").notNull(),
     caption: text("caption"),
+    alignment: text("alignment", { enum: CONTENT_IMAGE_ALIGNMENTS }).notNull().default("center"),
     needsReview: boolean("needs_review").notNull().default(false),
   },
   (t) => [
@@ -51,6 +54,7 @@ export const contentImageSlots = pgTable(
       "content_image_slots_caption_check",
       sql`${t.caption} IS NULL OR length(${t.caption}) <= 500`,
     ),
+    enumCheck("content_image_slots_alignment_check", t.alignment, CONTENT_IMAGE_ALIGNMENTS),
   ],
 );
 
@@ -68,6 +72,7 @@ export const feedEntryImages = pgTable(
     afterParagraph: integer("after_paragraph").notNull(),
     alt: text("alt").notNull(),
     caption: text("caption"),
+    alignment: text("alignment", { enum: CONTENT_IMAGE_ALIGNMENTS }).notNull().default("center"),
     position: integer("position").notNull(),
   },
   (t) => [
@@ -91,5 +96,6 @@ export const feedEntryImages = pgTable(
       "feed_entry_images_caption_check",
       sql`${t.caption} IS NULL OR length(${t.caption}) <= 500`,
     ),
+    enumCheck("feed_entry_images_alignment_check", t.alignment, CONTENT_IMAGE_ALIGNMENTS),
   ],
 );

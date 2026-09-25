@@ -14,10 +14,13 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type AdaptationReschedule,
   type AdaptationUpdate,
+  adaptationRescheduleSchema,
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
+  type ContentImageCrop,
   type ContentImageRegenerate,
   type ContentImagesReplace,
   type ContentUpdate,
@@ -25,6 +28,7 @@ import {
   type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
+  contentImageCropSchema,
   contentImageRegenerateSchema,
   contentImagesReplaceSchema,
   contentUpdateSchema,
@@ -138,6 +142,17 @@ export class ContentController {
     @Body(new ZodValidationPipe(contentImageRegenerateSchema)) body: ContentImageRegenerate,
   ) {
     return this.contentImages.regenerate(orgId, id, slotId, body);
+  }
+
+  @Post(":id/images/:slotId/crop")
+  @HttpCode(200)
+  cropImage(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("slotId", ParseUUIDPipe) slotId: string,
+    @Body(new ZodValidationPipe(contentImageCropSchema)) body: ContentImageCrop,
+  ) {
+    return this.contentImages.crop(orgId, id, slotId, body);
   }
 
   @Get(":id/versions")
@@ -392,7 +407,14 @@ export class ContentController {
     @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
     @Body(new ZodValidationPipe(deliveryAssertionSchema)) body: DeliveryAssertion,
   ) {
-    return this.content.assertDelivery(orgId, id, adaptationId, body.delivered, userId);
+    return this.content.assertDelivery(
+      orgId,
+      id,
+      adaptationId,
+      body.delivered,
+      userId,
+      body.partialResolution,
+    );
   }
 
   @Post(":id/adaptations/:adaptationId/manual-publication")
@@ -414,7 +436,36 @@ export class ContentController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(contentApproveSchema)) body: ContentApprove,
   ) {
-    return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
+    return this.content.approve(
+      orgId,
+      id,
+      body.scheduledAt ? new Date(body.scheduledAt) : null,
+      body.delayMinutes ?? null,
+    );
+  }
+
+  @Post(":id/adaptations/:adaptationId/reschedule")
+  @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
+  @HttpCode(200)
+  rescheduleAdaptation(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(adaptationRescheduleSchema)) body: AdaptationReschedule,
+  ) {
+    return this.content.rescheduleAdaptation(
+      orgId,
+      id,
+      adaptationId,
+      new Date(body.expectedScheduledAt),
+      new Date(body.scheduledAt),
+    );
+  }
+
+  @Post(":id/retract-approval")
+  @HttpCode(200)
+  retractApproval(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.retractApproval(orgId, id);
   }
 
   @Post(":id/archive")

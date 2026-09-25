@@ -186,4 +186,149 @@ describe.skipIf(!url)("SuggestionsRepository (Postgres)", () => {
       .where(eq(schema.topicSuggestionRequests.id, request.id));
     expect(stored).toEqual({ status: "succeeded", suggestionCount: 1 });
   });
+
+  it("waits for a reviewer block and rejects its normalized exact title at completion", async () => {
+    const orgId = `blocked-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await db
+      .insert(schema.organization)
+      .values({ id: orgId, name: "Blocked Org", slug: orgId, createdAt: new Date() });
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Brand" })
+      .returning({ id: schema.brands.id });
+    if (!brand) throw new Error("Brand seed failed");
+    const [topic] = await db
+      .insert(schema.topics)
+      .values({ orgId, brandId: brand.id, title: "Full Width Title" })
+      .returning({ id: schema.topics.id });
+    const [request] = await db
+      .insert(schema.topicSuggestionRequests)
+      .values({ orgId, brandId: brand.id })
+      .returning({ id: schema.topicSuggestionRequests.id });
+    if (!topic || !request) throw new Error("Seed failed");
+    let completion: Promise<number> | undefined;
+    await db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(eq(schema.brands.id, brand.id))
+        .for("no key update");
+      completion = repo.complete(
+        orgId,
+        brand.id,
+        request.id,
+        [{ title: "  FULL   WIDTH TITLE ", description: "Rejected repeat", newsItemId: null }],
+        [],
+      );
+      await tx
+        .update(schema.topics)
+        .set({
+          blockedAt: new Date(),
+          blockReason: "Reviewer veto",
+          status: "archived",
+          revision: sql`${schema.topics.revision} + 1`,
+        })
+        .where(eq(schema.topics.id, topic.id));
+    });
+    expect(await completion).toBe(0);
+    const rows = await db
+      .select({ title: schema.topics.title })
+      .from(schema.topics)
+      .where(and(eq(schema.topics.orgId, orgId), eq(schema.topics.brandId, brand.id)));
+    expect(rows).toEqual([{ title: "Full Width Title" }]);
+  });
+
+  it("includes manually created reviewer blocks and refuses a changed snapshot under the brand lock", async () => {
+    const orgId = `semantic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await db
+      .insert(schema.organization)
+      .values({ id: orgId, name: "Semantic Org", slug: orgId, createdAt: new Date() });
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Brand" })
+      .returning({ id: schema.brands.id });
+    if (!brand) throw new Error("Brand seed failed");
+    const [blocked] = await db
+      .insert(schema.topics)
+      .values({
+        orgId,
+        brandId: brand.id,
+        title: "Coffee workflow",
+        origin: "manual",
+        status: "archived",
+        blockedAt: new Date(),
+        blockReason: "Wrong angle",
+      })
+      .returning({ id: schema.topics.id });
+    const [request] = await db
+      .insert(schema.topicSuggestionRequests)
+      .values({ orgId, brandId: brand.id, status: "running", attempts: 1 })
+      .returning({ id: schema.topicSuggestionRequests.id });
+    if (!blocked || !request) throw new Error("Seed failed");
+    const snapshot = await repo.recentBlocked(orgId, brand.id);
+    expect(snapshot?.titles).toEqual(["Coffee workflow"]);
+    let completion: Promise<number> | undefined;
+    await db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(eq(schema.brands.id, brand.id))
+        .for("no key update");
+      completion = repo.complete(
+        orgId,
+        brand.id,
+        request.id,
+        [{ title: "Better coffee workflow", description: "A nearby idea", newsItemId: null }],
+        [],
+        1,
+        snapshot ?? undefined,
+      );
+      await tx
+        .update(schema.topics)
+        .set({
+          title: "Coffee workflow for staff",
+          revision: sql`${schema.topics.revision} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.topics.id, blocked.id));
+    });
+    expect(await completion).toBe(0);
+    const [stored] = await db
+      .select({
+        status: schema.topicSuggestionRequests.status,
+        errorCode: schema.topicSuggestionRequests.errorCode,
+      })
+      .from(schema.topicSuggestionRequests)
+      .where(eq(schema.topicSuggestionRequests.id, request.id));
+    expect(stored).toEqual({ status: "failed", errorCode: "model_failed" });
+    const ideas = await db
+      .select({ title: schema.topics.title })
+      .from(schema.topics)
+      .where(and(eq(schema.topics.orgId, orgId), eq(schema.topics.brandId, brand.id)));
+    expect(ideas).toEqual([{ title: "Coffee workflow for staff" }]);
+  });
+
+  it("refuses a partial sample when the recent blocked set exceeds the manual cap", async () => {
+    const orgId = `semantic-cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await db
+      .insert(schema.organization)
+      .values({ id: orgId, name: "Cap Org", slug: orgId, createdAt: new Date() });
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Brand" })
+      .returning({ id: schema.brands.id });
+    if (!brand) throw new Error("Brand seed failed");
+    await db.insert(schema.topics).values(
+      Array.from({ length: 21 }, (_, index) => ({
+        orgId,
+        brandId: brand.id,
+        title: `Blocked angle ${index}`,
+        origin: "manual" as const,
+        status: "archived" as const,
+        blockedAt: new Date(),
+        blockReason: "Reviewer veto",
+      })),
+    );
+    expect(await repo.recentBlocked(orgId, brand.id)).toBeNull();
+  });
 });

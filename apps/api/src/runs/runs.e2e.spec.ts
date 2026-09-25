@@ -1039,10 +1039,15 @@ describe.skipIf(!url)("runs e2e", () => {
           sourceUrl: "https://example.com/article",
           channelIds: [channelId],
           contentType: "expert_article",
+          seoKeywords: ["practical article guide"],
         })
         .expect(201);
       const first = runDetailDtoSchema.parse(created.body);
-      expect(first.input).toMatchObject({ kind: "source", contentType: "expert_article" });
+      expect(first.input).toMatchObject({
+        kind: "source",
+        contentType: "expert_article",
+        seoKeywords: ["practical article guide"],
+      });
       await setRunStatus(first.id, "failed", "internal");
 
       const retried = runDetailDtoSchema.parse(

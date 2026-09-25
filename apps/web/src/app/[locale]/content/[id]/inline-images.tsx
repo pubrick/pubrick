@@ -1,14 +1,16 @@
 "use client";
 
-import type { MediaAssetDto } from "@pubrick/shared";
+import type { ContentImageAlignment, MediaAssetDto } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Area } from "react-easy-crop";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { ImageCropDialog } from "./image-crop-dialog";
 
 type ImageSlot = {
   id?: string;
@@ -17,6 +19,7 @@ type ImageSlot = {
   afterParagraph: number;
   alt: string;
   caption: string | null;
+  alignment: ContentImageAlignment;
   needsReview?: boolean;
 };
 
@@ -75,6 +78,7 @@ export function InlineImages({
   const [hasGoogleKey, setHasGoogleKey] = useState(false);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
   const [regeneratingSlotId, setRegeneratingSlotId] = useState<string | null>(null);
+  const [cropTarget, setCropTarget] = useState<{ slotId: string; mediaId: string } | null>(null);
   const [prompt, setPrompt] = useState("");
   const [sourceMediaId, setSourceMediaId] = useState<string | null>(null);
   const [newMediaId, setNewMediaId] = useState<string | null>(null);
@@ -89,7 +93,7 @@ export function InlineImages({
     try {
       const state = await api<ImageState>(`/api/content/${itemId}/images`, { cache: "no-store" });
       if (version !== requestVersion.current) return;
-      setSlots(state.images);
+      setSlots(state.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(state.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -181,6 +185,7 @@ export function InlineImages({
           afterParagraph: position,
           alt: "",
           caption: null,
+          alignment: "center",
         },
       ]);
       setDirty(true);
@@ -244,7 +249,7 @@ export function InlineImages({
         method: "POST",
         body: JSON.stringify({ expectedRevision: revision, expectedBody: savedBody }),
       });
-      setSlots(saved.images);
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(saved.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -261,6 +266,41 @@ export function InlineImages({
     } finally {
       setBusy(false);
       setRegeneratingSlotId(null);
+    }
+  }
+
+  async function cropImage(area: Area) {
+    if (!cropTarget || busy || dirty || stale || bodyStale || bodyHasUnsavedChanges) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api<ImageState>(
+        `/api/content/${itemId}/images/${cropTarget.slotId}/crop`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expectedRevision: revision,
+            sourceMediaId: cropTarget.mediaId,
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+          }),
+        },
+      );
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
+      setRevision(saved.revision);
+      setReviewedSlots(new Set());
+      setDirty(false);
+      setCropTarget(null);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "content_images_changed") {
+        setStale(true);
+        setCropTarget(null);
+      }
+      setError(errorMessage(cause, t("cropFailed"), te));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -301,15 +341,16 @@ export function InlineImages({
         body: JSON.stringify({
           expectedRevision: revision,
           ...(pendingReview && { reviewGeneratedImages: true }),
-          images: slots.map(({ mediaId, afterParagraph, alt, caption }) => ({
+          images: slots.map(({ mediaId, afterParagraph, alt, caption, alignment }) => ({
             mediaId,
             afterParagraph,
             alt: alt.trim(),
+            alignment,
             ...(caption?.trim() ? { caption: caption.trim() } : {}),
           })),
         }),
       });
-      setSlots(saved.images);
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(saved.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -476,6 +517,20 @@ export function InlineImages({
                           changeSlot(index, { caption: event.target.value || null })
                         }
                       />
+                      <Select
+                        label={t("alignment")}
+                        value={slot.alignment}
+                        disabled={busy || bodyStale}
+                        onChange={(event) =>
+                          changeSlot(index, {
+                            alignment: event.target.value as ContentImageAlignment,
+                          })
+                        }
+                      >
+                        <option value="left">{t("alignLeft")}</option>
+                        <option value="center">{t("alignCenter")}</option>
+                        <option value="right">{t("alignRight")}</option>
+                      </Select>
                       {slot.needsReview && slot.id && (
                         <label className="flex items-start gap-2 text-sm text-fg-secondary">
                           <input
@@ -513,6 +568,18 @@ export function InlineImages({
                             onClick={() => void regenerate(slot.id as string)}
                           >
                             {regeneratingSlotId === slot.id ? t("regenerating") : t("regenerate")}
+                          </Button>
+                        )}
+                        {slot.id && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={busy || dirty || stale || bodyStale || bodyHasUnsavedChanges}
+                            onClick={() =>
+                              setCropTarget({ slotId: slot.id as string, mediaId: slot.mediaId })
+                            }
+                          >
+                            {t("crop")}
                           </Button>
                         )}
                         <Button
@@ -588,7 +655,7 @@ export function InlineImages({
                       .map((slot) => (
                         <figure
                           key={slot.id ?? `${slot.mediaId}-${position}`}
-                          className="mt-3 max-w-2xl"
+                          className={`mt-3 w-full max-w-lg ${slot.alignment === "right" ? "ml-auto" : slot.alignment === "center" ? "mx-auto" : "mr-auto"}`}
                         >
                           {/* biome-ignore lint/performance/noImgElement: session-bound media cannot use Next image optimization */}
                           <img
@@ -722,6 +789,15 @@ export function InlineImages({
             </Button>
           )}
         </section>
+      )}
+      {cropTarget && (
+        <ImageCropDialog
+          key={cropTarget.slotId}
+          mediaId={cropTarget.mediaId}
+          busy={busy}
+          onCancel={() => setCropTarget(null)}
+          onSave={(area) => void cropImage(area)}
+        />
       )}
     </Card>
   );

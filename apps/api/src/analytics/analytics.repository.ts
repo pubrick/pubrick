@@ -4,6 +4,11 @@ import { schema } from "@pubrick/db";
 import { readVkPostMetrics } from "@pubrick/integrations";
 import {
   type AnalyticsDto,
+  type BrandFormatSpendDto,
+  type BrandOverviewDto,
+  type BrandSpendHistoryDto,
+  CONTENT_TYPES,
+  type ContentType,
   commentAnalysisResultSchema,
   isPublicTelegramPostUrl,
   type PublicationCommentsDto,
@@ -21,6 +26,7 @@ import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
 
 const MAX_POSTS = 100;
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+const count = (value: string | number | null | undefined) => Number(value ?? 0);
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 function metricState(
@@ -60,6 +66,327 @@ export class AnalyticsRepository {
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
       .limit(1);
     if (!found[0]) throw notFound("brand_not_found", "Brand not found");
+  }
+
+  /** Counts persisted rows, never inferred reach or provider-side activity. */
+  async overview(orgId: string, brandId: string, days: 7 | 30 | 90): Promise<BrandOverviewDto> {
+    await this.requireBrand(orgId, brandId);
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    const d = schema.contentItems;
+    const r = schema.pipelineRuns;
+    const v = schema.promptDecisions;
+    const p = schema.publications;
+    const a = schema.adaptations;
+    const c = schema.channels;
+    const l = schema.usageLedger;
+    const [drafts] = await db
+      .select({
+        total: sql<string>`count(*)`,
+        ai: sql<string>`count(*) filter (where ${d.origin} = 'ai')`,
+        human: sql<string>`count(*) filter (where ${d.origin} = 'human')`,
+        draft: sql<string>`count(*) filter (where ${d.status} = 'draft')`,
+        approved: sql<string>`count(*) filter (where ${d.status} = 'approved')`,
+        rejected: sql<string>`count(*) filter (where ${d.status} = 'rejected')`,
+        published: sql<string>`count(*) filter (where ${d.status} = 'published')`,
+        other: sql<string>`count(*) filter (where ${d.status} not in ('draft', 'approved', 'rejected', 'published'))`,
+      })
+      .from(d)
+      .where(
+        and(
+          eq(d.orgId, orgId),
+          eq(d.brandId, brandId),
+          gte(d.createdAt, from),
+          lt(d.createdAt, to),
+        ),
+      );
+    const [runs] = await db
+      .select({
+        total: sql<string>`count(*)`,
+        queued: sql<string>`count(*) filter (where ${r.status} = 'queued')`,
+        running: sql<string>`count(*) filter (where ${r.status} = 'running')`,
+        succeeded: sql<string>`count(*) filter (where ${r.status} = 'succeeded')`,
+        failed: sql<string>`count(*) filter (where ${r.status} = 'failed')`,
+        cancelled: sql<string>`count(*) filter (where ${r.status} = 'cancelled')`,
+      })
+      .from(r)
+      .where(
+        and(
+          eq(r.orgId, orgId),
+          eq(r.brandId, brandId),
+          gte(r.createdAt, from),
+          lt(r.createdAt, to),
+        ),
+      );
+    // A decision survives item deletion, but has no brand_id of its own. Only
+    // decisions still linked to this brand can be attributed honestly.
+    const [decisions] = await db
+      .select({
+        approved: sql<string>`count(*) filter (where ${v.verdict} = 'approved')`,
+        rejected: sql<string>`count(*) filter (where ${v.verdict} = 'rejected')`,
+      })
+      .from(v)
+      .innerJoin(d, and(eq(d.id, v.contentItemId), eq(d.orgId, orgId), eq(d.brandId, brandId)))
+      .where(and(eq(v.orgId, orgId), gte(v.createdAt, from), lt(v.createdAt, to)));
+    // The live ownership chain excludes orphan receipts whose original brand
+    // cannot be reconstructed after a channel or item was removed.
+    const publicationRows = await db
+      .select({
+        platform: c.platform,
+        count: sql<string>`count(*)`,
+        asserted: sql<string>`count(*) filter (where ${p.assertedAt} is not null)`,
+      })
+      .from(p)
+      .innerJoin(a, and(eq(a.id, p.adaptationId), eq(a.orgId, orgId)))
+      .innerJoin(d, and(eq(d.id, a.contentItemId), eq(d.orgId, orgId), eq(d.brandId, brandId)))
+      .innerJoin(
+        c,
+        and(
+          eq(c.id, p.channelId),
+          eq(c.id, a.channelId),
+          eq(c.orgId, orgId),
+          eq(c.brandId, brandId),
+        ),
+      )
+      .where(
+        and(
+          eq(p.orgId, orgId),
+          eq(p.status, "published"),
+          gte(p.createdAt, from),
+          lt(p.createdAt, to),
+        ),
+      )
+      .groupBy(c.platform)
+      .orderBy(c.platform);
+    // Each ledger row joins at most one run/item/channel. Run attribution wins
+    // when several links are present, so one call never belongs to two brands.
+    const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
+    // Image calls can complete with no token usage metadata. Only an explicit
+    // zero-token refusal proves a provider call was not billed; legacy null
+    // outcomes remain uncertain.
+    const potentiallyBillable = sql`${l.outcome} is distinct from 'refused' or ${l.inputTokens} + ${l.outputTokens} > 0`;
+    const attributedBrand = sql`coalesce(${r.brandId}, ${d.brandId}, ${c.brandId})`;
+    const [ledger] = await db
+      .select({
+        knownUsd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
+        pricedCalls: sql<string>`count(*) filter (where ${priced})`,
+        estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${l.costSource} = 'price_table')`,
+        unpricedCalls: sql<string>`count(*) filter (where not (${priced}) and (${potentiallyBillable}))`,
+      })
+      .from(l)
+      .leftJoin(r, and(eq(r.id, l.runId), eq(r.orgId, orgId)))
+      .leftJoin(d, and(eq(d.id, l.contentItemId), eq(d.orgId, orgId)))
+      .leftJoin(c, and(eq(c.id, l.channelId), eq(c.orgId, orgId)))
+      .where(
+        and(
+          eq(l.orgId, orgId),
+          sql`${attributedBrand} = ${brandId}`,
+          gte(l.createdAt, from),
+          lt(l.createdAt, to),
+        ),
+      );
+    const [runLoss] = await db
+      .select({
+        unrecordedCalls: sql<string>`coalesce(sum(${r.unrecordedCalls}), 0)`,
+        legacyRuns: sql<string>`count(*) filter (where ${r.unrecordedCalls} is null)`,
+      })
+      .from(r)
+      .where(
+        and(
+          eq(r.orgId, orgId),
+          eq(r.brandId, brandId),
+          gte(r.createdAt, from),
+          lt(r.createdAt, to),
+        ),
+      );
+    // Claim review usage losses are outside pipeline runs. The review's own
+    // creation time is the only durable window clock for a missing ledger row.
+    const q = schema.claimReviews;
+    const [reviewLoss] = await db
+      .select({ unrecordedCalls: sql<string>`coalesce(sum(${q.unrecordedCalls}), 0)` })
+      .from(q)
+      .innerJoin(d, and(eq(d.id, q.contentItemId), eq(d.orgId, orgId), eq(d.brandId, brandId)))
+      .where(and(eq(q.orgId, orgId), gte(q.createdAt, from), lt(q.createdAt, to)));
+    return {
+      days,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      drafts: {
+        total: count(drafts?.total),
+        ai: count(drafts?.ai),
+        human: count(drafts?.human),
+        draft: count(drafts?.draft),
+        approved: count(drafts?.approved),
+        rejected: count(drafts?.rejected),
+        published: count(drafts?.published),
+        other: count(drafts?.other),
+      },
+      runs: {
+        total: count(runs?.total),
+        queued: count(runs?.queued),
+        running: count(runs?.running),
+        succeeded: count(runs?.succeeded),
+        failed: count(runs?.failed),
+        cancelled: count(runs?.cancelled),
+      },
+      decisions: { approved: count(decisions?.approved), rejected: count(decisions?.rejected) },
+      publications: {
+        total: publicationRows.reduce((sum, row) => sum + count(row.count), 0),
+        asserted: publicationRows.reduce((sum, row) => sum + count(row.asserted), 0),
+        byPlatform: publicationRows.map((row) => ({
+          platform: row.platform,
+          count: count(row.count),
+        })),
+      },
+      spend: {
+        knownUsd: Number(ledger?.knownUsd ?? 0),
+        pricedCalls: count(ledger?.pricedCalls),
+        estimatedCalls: count(ledger?.estimatedCalls),
+        unpricedCalls: count(ledger?.unpricedCalls),
+        unrecordedCalls: count(runLoss?.unrecordedCalls),
+        reviewUnrecordedCalls: count(reviewLoss?.unrecordedCalls),
+        legacyRuns: count(runLoss?.legacyRuns),
+      },
+    };
+  }
+
+  /** A bounded audit view; deletion can erase links but never reassign a call. */
+  async spendHistory(orgId: string, brandId: string): Promise<BrandSpendHistoryDto> {
+    await this.requireBrand(orgId, brandId);
+    const l = schema.usageLedger;
+    const r = schema.pipelineRuns;
+    const d = schema.contentItems;
+    const c = schema.channels;
+    // Keep the attribution precedence identical to overview(). In particular,
+    // a surviving run wins over a disagreeing item or channel link.
+    const attributedBrand = sql`coalesce(${r.brandId}, ${d.brandId}, ${c.brandId})`;
+    const rows = await db
+      .select({
+        id: l.id,
+        createdAt: l.createdAt,
+        step: l.step,
+        provider: l.provider,
+        modelId: l.modelId,
+        costUsd: l.costUsd,
+        costSource: l.costSource,
+        inputTokens: l.inputTokens,
+        outputTokens: l.outputTokens,
+        outcome: l.outcome,
+        runId: r.id,
+        runBrandId: r.brandId,
+        contentItemId: d.id,
+        contentBrandId: d.brandId,
+      })
+      .from(l)
+      .leftJoin(r, and(eq(r.id, l.runId), eq(r.orgId, orgId)))
+      .leftJoin(d, and(eq(d.id, l.contentItemId), eq(d.orgId, orgId)))
+      .leftJoin(c, and(eq(c.id, l.channelId), eq(c.orgId, orgId)))
+      .where(and(eq(l.orgId, orgId), sql`${attributedBrand} = ${brandId}`))
+      .orderBy(desc(l.createdAt), desc(l.id))
+      .limit(50);
+    return {
+      calls: rows.map((row) => {
+        const priced = row.costUsd !== null && row.costSource !== "unknown";
+        return {
+          id: row.id,
+          createdAt: row.createdAt.toISOString(),
+          step: row.step,
+          provider: row.provider,
+          modelId: row.modelId,
+          costUsd: priced ? Number(row.costUsd) : null,
+          costSource: row.costSource,
+          costState: priced
+            ? row.costSource === "price_table"
+              ? "estimated"
+              : "reported"
+            : row.outcome !== "refused" || row.inputTokens + row.outputTokens > 0
+              ? "unknown"
+              : "no_recorded_charge",
+          runId: row.runBrandId === brandId ? row.runId : null,
+          contentItemId: row.contentBrandId === brandId ? row.contentItemId : null,
+        };
+      }),
+    };
+  }
+
+  /** Run-created window: all recorded calls belonging to each selected run. */
+  async formatSpend(
+    orgId: string,
+    brandId: string,
+    days: 7 | 30 | 90,
+  ): Promise<BrandFormatSpendDto> {
+    await this.requireBrand(orgId, brandId);
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    const r = schema.pipelineRuns;
+    const l = schema.usageLedger;
+    // Older runs predate contentType and used social_post. The run is the
+    // authoritative brand/format link even if its produced draft was deleted.
+    const supportedFormats = sql.join(
+      CONTENT_TYPES.map((contentType) => sql`${contentType}`),
+      sql`, `,
+    );
+    const format = sql<ContentType | "unknown">`case
+      when ${r.input}->>'contentType' is null then 'social_post'
+      when ${r.input}->>'contentType' in (${supportedFormats}) then ${r.input}->>'contentType'
+      else 'unknown'
+    end`;
+    const scope = and(
+      eq(r.orgId, orgId),
+      eq(r.brandId, brandId),
+      gte(r.createdAt, from),
+      lt(r.createdAt, to),
+    );
+    const runs = await db
+      .select({
+        contentType: format,
+        runCount: sql<string>`count(*)`,
+        unrecordedCalls: sql<string>`coalesce(sum(${r.unrecordedCalls}), 0)`,
+        legacyRuns: sql<string>`count(*) filter (where ${r.unrecordedCalls} is null)`,
+      })
+      .from(r)
+      .where(scope)
+      // The expression contains bind parameters; group by its selected column
+      // so PostgreSQL sees the same values rather than a second bind set.
+      .groupBy(sql`1`);
+    const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
+    const potentiallyBillable = sql`${l.outcome} is distinct from 'refused' or ${l.inputTokens} + ${l.outputTokens} > 0`;
+    const calls = await db
+      .select({
+        contentType: format,
+        knownUsd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
+        pricedCalls: sql<string>`count(*) filter (where ${priced})`,
+        estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${l.costSource} = 'price_table')`,
+        unknownCostCalls: sql<string>`count(*) filter (where not (${priced}) and (${potentiallyBillable}))`,
+      })
+      .from(r)
+      .innerJoin(l, and(eq(l.runId, r.id), eq(l.orgId, orgId)))
+      .where(scope)
+      .groupBy(sql`1`);
+    const byFormat = new Map(calls.map((row) => [row.contentType, row]));
+    return {
+      days,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      formats: runs
+        .map((row) => {
+          const call = byFormat.get(row.contentType);
+          const runCount = count(row.runCount);
+          const knownUsd = Number(call?.knownUsd ?? 0);
+          return {
+            contentType: row.contentType,
+            runCount,
+            knownUsd,
+            meanKnownUsdPerRun: knownUsd / runCount,
+            pricedCalls: count(call?.pricedCalls),
+            estimatedCalls: count(call?.estimatedCalls),
+            unknownCostCalls: count(call?.unknownCostCalls),
+            unrecordedCalls: count(row.unrecordedCalls),
+            legacyRuns: count(row.legacyRuns),
+          };
+        })
+        .sort((a, b) => b.runCount - a.runCount || a.contentType.localeCompare(b.contentType)),
+    };
   }
 
   async publicationCommentCollection(orgId: string, brandId: string) {

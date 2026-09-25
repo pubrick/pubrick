@@ -6,11 +6,14 @@ import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   analyticsDtoSchema,
+  brandFormatSpendDtoSchema,
+  brandOverviewDtoSchema,
+  brandSpendHistoryDtoSchema,
   commentAnalysisDtoSchema,
   publicationCommentsDtoSchema,
   publicationMetricsDtoSchema,
 } from "@pubrick/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
@@ -97,6 +100,653 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("groups run spend by requested format without duplicating calls or leaking sibling links", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Format spend" }).expect(201);
+    const sibling = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Other format" })
+      .expect(201);
+    const now = Date.now();
+    const ago = (days: number) => new Date(now - days * 86_400_000);
+    const [draft, siblingDraft] = await db
+      .insert(schema.contentItems)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Delete after generation" },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Other brand" },
+      ])
+      .returning({ id: schema.contentItems.id });
+    const [siblingChannel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: sibling.body.id, platform: "vc_ru", name: "Other" })
+      .returning({ id: schema.channels.id });
+    if (!draft || !siblingDraft || !siblingChannel) throw new Error("Missing format fixtures");
+    const [current, legacy, expert, old, siblingRun] = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          contentItemId: draft.id,
+          input: { kind: "brief", text: "Social", channelIds: [], contentType: "social_post" },
+          status: "succeeded",
+          unrecordedCalls: 2,
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Earlier", channelIds: [] },
+          status: "failed",
+          unrecordedCalls: null,
+          createdAt: ago(12),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Expert", channelIds: [], contentType: "expert_article" },
+          status: "failed",
+          unrecordedCalls: 0,
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Out of window", channelIds: [] },
+          status: "succeeded",
+          unrecordedCalls: 0,
+          createdAt: ago(95),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          input: { kind: "brief", text: "Sibling", channelIds: [] },
+          status: "succeeded",
+          createdAt: ago(2),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    if (!current || !legacy || !expert || !old || !siblingRun)
+      throw new Error("Missing format runs");
+    const [malformed] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        input: { kind: "brief", text: "Malformed legacy JSON", channelIds: [] },
+        status: "failed",
+        unrecordedCalls: 0,
+        createdAt: ago(2),
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!malformed) throw new Error("Missing malformed run");
+    await db.execute(
+      sql`update pipeline_runs set input = jsonb_set(input, '{contentType}', '"other"') where id = ${malformed.id}`,
+    );
+    await db.insert(schema.usageLedger).values([
+      {
+        orgId: owner.orgId,
+        runId: current.id,
+        contentItemId: draft.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.120000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: current.id,
+        step: "editor",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.080000",
+        costSource: "price_table",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: current.id,
+        step: "image-without-usage",
+        provider: "google",
+        modelId: "image-test",
+        costSource: "unknown",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: legacy.id,
+        step: "timeout",
+        provider: "google",
+        modelId: "test",
+        inputTokens: 10,
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+      },
+      {
+        orgId: owner.orgId,
+        runId: legacy.id,
+        step: "refused-before-use",
+        provider: "google",
+        modelId: "test",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "refused",
+      },
+      {
+        orgId: owner.orgId,
+        runId: expert.id,
+        contentItemId: siblingDraft.id,
+        channelId: siblingChannel.id,
+        step: "research",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.300000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: expert.id,
+        step: "legacy-no-outcome",
+        provider: "google",
+        modelId: "test",
+        costSource: "unknown",
+        status: "errored",
+      },
+      {
+        orgId: owner.orgId,
+        runId: old.id,
+        step: "old",
+        provider: "google",
+        modelId: "test",
+        costUsd: "5.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: siblingRun.id,
+        step: "sibling",
+        provider: "google",
+        modelId: "test",
+        costUsd: "9.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: outsider.orgId,
+        runId: current.id,
+        step: "foreign-ledger",
+        provider: "google",
+        modelId: "test",
+        costUsd: "99.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+    ]);
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, draft.id));
+    const path = `/api/analytics/brands/${brand.body.id}/format-spend`;
+    await outsider.agent.get(`${path}?days=30`).expect(404);
+    await owner.agent.get(`${path}?days=31`).expect(400);
+    const month = brandFormatSpendDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=30`).expect(200)).body,
+    );
+    expect(month.formats).toEqual([
+      {
+        contentType: "social_post",
+        runCount: 2,
+        knownUsd: 0.2,
+        meanKnownUsdPerRun: 0.1,
+        pricedCalls: 2,
+        estimatedCalls: 1,
+        unknownCostCalls: 2,
+        unrecordedCalls: 2,
+        legacyRuns: 1,
+      },
+      {
+        contentType: "expert_article",
+        runCount: 1,
+        knownUsd: 0.3,
+        meanKnownUsdPerRun: 0.3,
+        pricedCalls: 1,
+        estimatedCalls: 0,
+        unknownCostCalls: 1,
+        unrecordedCalls: 0,
+        legacyRuns: 0,
+      },
+      {
+        contentType: "unknown",
+        runCount: 1,
+        knownUsd: 0,
+        meanKnownUsdPerRun: 0,
+        pricedCalls: 0,
+        estimatedCalls: 0,
+        unknownCostCalls: 0,
+        unrecordedCalls: 0,
+        legacyRuns: 0,
+      },
+    ]);
+    const week = brandFormatSpendDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=7`).expect(200)).body,
+    );
+    expect(week.formats.find((row) => row.contentType === "social_post")).toMatchObject({
+      runCount: 1,
+      knownUsd: 0.2,
+      meanKnownUsdPerRun: 0.2,
+      unknownCostCalls: 1,
+      legacyRuns: 0,
+    });
+    const history = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${brand.body.id}/spend-history`).expect(200))
+        .body,
+    );
+    expect(history.calls.find((call) => call.step === "image-without-usage")?.costState).toBe(
+      "unknown",
+    );
+    expect(history.calls.find((call) => call.step === "legacy-no-outcome")?.costState).toBe(
+      "unknown",
+    );
+    expect(history.calls.find((call) => call.step === "refused-before-use")?.costState).toBe(
+      "no_recorded_charge",
+    );
+    const overview = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${brand.body.id}/overview?days=30`).expect(200))
+        .body,
+    );
+    expect(overview.spend.unpricedCalls).toBe(3);
+  });
+
+  it("counts brand activity by event window without multiplying linked costs or leaking tenants", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Overview" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Sibling" }).expect(201);
+    const now = Date.now();
+    const daysAgo = (days: number) => new Date(now - days * 86_400_000);
+    const [item, oldItem, siblingItem] = await db
+      .insert(schema.contentItems)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          body: "Current",
+          origin: "ai",
+          status: "approved",
+          createdAt: daysAgo(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          body: "Old",
+          status: "draft",
+          createdAt: daysAgo(40),
+        },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling", createdAt: daysAgo(2) },
+      ])
+      .returning({ id: schema.contentItems.id });
+    if (!item || !oldItem || !siblingItem) throw new Error("Missing overview item");
+    const [run, legacyRun, siblingRun] = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          contentItemId: item.id,
+          input: { kind: "brief", text: "Current", channelIds: [] },
+          status: "succeeded",
+          unrecordedCalls: 2,
+          createdAt: daysAgo(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Legacy", channelIds: [] },
+          status: "failed",
+          unrecordedCalls: null,
+          createdAt: daysAgo(12),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          contentItemId: siblingItem.id,
+          input: { kind: "brief", text: "Sibling", channelIds: [] },
+          status: "succeeded",
+          createdAt: daysAgo(2),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    if (!run || !legacyRun || !siblingRun) throw new Error("Missing overview run");
+    await db.insert(schema.promptDecisions).values([
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        verdict: "rejected",
+        ordinal: 2,
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(40),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(1),
+      },
+    ]);
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, platform: "vc_ru", name: "VC" })
+      .returning({ id: schema.channels.id });
+    if (!channel) throw new Error("Missing overview channel");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("Missing overview adaptation");
+    await db.insert(schema.publications).values({
+      orgId: owner.orgId,
+      adaptationId: adaptation.id,
+      channelId: channel.id,
+      status: "published",
+      createdAt: daysAgo(1),
+    });
+    // A receipt may have been created in_flight long before it became
+    // published. Its creation time, not its later status change, owns the window.
+    const [oldAdaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!oldAdaptation) throw new Error("Missing older adaptation");
+    await db.insert(schema.publications).values({
+      orgId: owner.orgId,
+      adaptationId: oldAdaptation.id,
+      channelId: channel.id,
+      status: "published",
+      createdAt: daysAgo(40),
+    });
+    await db.insert(schema.usageLedger).values([
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        contentItemId: item.id,
+        channelId: channel.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.125000",
+        costSource: "price_table",
+        status: "ok",
+        outcome: "completed",
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "editor",
+        provider: "google",
+        modelId: "test",
+        inputTokens: 50,
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        runId: siblingRun.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "5.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: daysAgo(1),
+      },
+    ]);
+    await db.insert(schema.claimReviews).values([
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        bodyHash: "a".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(1),
+        createdAt: daysAgo(1),
+        unrecordedCalls: 3,
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        bodyHash: "b".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(1),
+        createdAt: daysAgo(1),
+        unrecordedCalls: 4,
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        bodyHash: "c".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(40),
+        createdAt: daysAgo(40),
+        unrecordedCalls: 5,
+      },
+    ]);
+    const path = `/api/analytics/brands/${brand.body.id}/overview`;
+    await outsider.agent.get(`${path}?days=30`).expect(404);
+    await owner.agent.get(`${path}?days=365`).expect(400);
+    const week = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=7`).expect(200)).body,
+    );
+    expect(week.drafts).toMatchObject({ total: 1, ai: 1, approved: 1 });
+    expect(week.runs).toMatchObject({ total: 1, succeeded: 1 });
+    expect(week.decisions).toEqual({ approved: 1, rejected: 1 });
+    expect(week.publications).toMatchObject({
+      total: 1,
+      byPlatform: [{ platform: "vc_ru", count: 1 }],
+    });
+    expect(week.spend).toEqual({
+      knownUsd: 0.125,
+      pricedCalls: 1,
+      estimatedCalls: 1,
+      unpricedCalls: 1,
+      unrecordedCalls: 2,
+      reviewUnrecordedCalls: 3,
+      legacyRuns: 0,
+    });
+    const month = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=30`).expect(200)).body,
+    );
+    expect(month.runs).toMatchObject({ total: 2, failed: 1 });
+    expect(month.spend.legacyRuns).toBe(1);
+    const quarter = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=90`).expect(200)).body,
+    );
+    expect(quarter.drafts.total).toBe(2);
+    expect(quarter.decisions.approved).toBe(2);
+    expect(quarter.publications.total).toBe(2);
+    expect(quarter.spend.reviewUnrecordedCalls).toBe(8);
+    expect(
+      (
+        await owner.agent
+          .get(`/api/analytics/brands/${sibling.body.id}/overview?days=30`)
+          .expect(200)
+      ).body.spend.knownUsd,
+    ).toBe(5);
+  });
+
+  it("lists at most 50 attributable calls in stable order without exposing other brands or deleted links", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Spend" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Other spend" }).expect(201);
+    const [item, siblingItem] = await db
+      .insert(schema.contentItems)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Owned" },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling" },
+      ])
+      .returning({ id: schema.contentItems.id });
+    if (!item || !siblingItem) throw new Error("Missing spend items");
+    const [run] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        input: { kind: "brief", text: "Owned", channelIds: [] },
+        status: "succeeded",
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, platform: "vc_ru", name: "Spend" })
+      .returning({ id: schema.channels.id });
+    if (!run || !channel) throw new Error("Missing spend links");
+    const at = new Date("2026-09-01T12:00:00.000Z");
+    const tiedIds = Array.from({ length: 51 }, () => randomUUID()).sort();
+    await db.insert(schema.usageLedger).values([
+      ...tiedIds.map((id) => ({
+        id,
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "writer",
+        provider: "google" as const,
+        modelId: "gemini-test",
+        costUsd: "0.000321",
+        costSource: "price_table" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+        createdAt: at,
+      })),
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        contentItemId: siblingItem.id,
+        step: "timeout",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "1.000000",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+        createdAt: new Date("2026-09-02T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        step: "refine",
+        provider: "google",
+        modelId: "gemini-test",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "refused",
+        createdAt: new Date("2026-09-03T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        channelId: channel.id,
+        step: "adapter",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "0.250000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: new Date("2026-09-04T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        step: "sibling-only",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "9.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: new Date("2026-09-05T12:00:00.000Z"),
+      },
+    ]);
+    const path = `/api/analytics/brands/${brand.body.id}/spend-history`;
+    await outsider.agent.get(path).expect(404);
+    const history = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(history.calls).toHaveLength(50);
+    expect(history.calls.map((call) => call.step)).not.toContain("sibling-only");
+    expect(history.calls[0]).toMatchObject({
+      step: "adapter",
+      costUsd: 0.25,
+      costState: "reported",
+      runId: null,
+      contentItemId: null,
+    });
+    expect(history.calls[1]).toMatchObject({
+      step: "refine",
+      costUsd: null,
+      costState: "no_recorded_charge",
+      contentItemId: item.id,
+    });
+    expect(history.calls[2]).toMatchObject({
+      step: "timeout",
+      costUsd: null,
+      costState: "unknown",
+      runId: run.id,
+      contentItemId: null,
+    });
+    expect(history.calls.slice(3).map((call) => call.id)).toEqual(tiedIds.slice(-47).reverse());
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, item.id));
+    await db.delete(schema.channels).where(eq(schema.channels.id, channel.id));
+    const afterDeletion = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(afterDeletion.calls.map((call) => call.step)).not.toContain("refine");
+    expect(afterDeletion.calls.map((call) => call.step)).not.toContain("adapter");
+    expect(afterDeletion.calls[0]).toMatchObject({ step: "timeout", runId: run.id });
+    await db.delete(schema.pipelineRuns).where(eq(schema.pipelineRuns.id, run.id));
+    expect((await owner.agent.get(path).expect(200)).body.calls).toEqual([]);
+    const siblingHistory = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${sibling.body.id}/spend-history`).expect(200))
+        .body,
+    );
+    expect(siblingHistory.calls.map((call) => call.step)).toEqual(["sibling-only", "timeout"]);
+  });
 
   it("keeps publication auto-collection off until an authorized brand opts in and increments the fence on every change", async () => {
     const owner = await orgAgent();

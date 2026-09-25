@@ -59,10 +59,14 @@ describe("RelevanceService", () => {
     });
     const repo = {
       claim: vi.fn().mockResolvedValue(article),
+      claimBatch: vi.fn().mockResolvedValue(article),
+      orphanedBatchJobs: vi.fn().mockResolvedValue([]),
+      finishBatch: vi.fn().mockResolvedValue(undefined),
       scored: vi.fn().mockResolvedValue(undefined),
       failed: vi.fn().mockResolvedValue(undefined),
       markAttemptLimit: vi.fn().mockResolvedValue(undefined),
       recordUsage: vi.fn().mockResolvedValue(undefined),
+      recordBatchUsageLoss: vi.fn().mockResolvedValue(undefined),
       recordEmbeddingUsage: vi.fn().mockResolvedValue(undefined),
       googleKey: vi.fn().mockResolvedValue("secret"),
       recentFeedback: vi.fn().mockResolvedValue({ relevant: [], irrelevant: [] }),
@@ -112,6 +116,79 @@ describe("RelevanceService", () => {
       embedding,
     });
     expect(repo.failed).not.toHaveBeenCalled();
+  });
+
+  it("rechecks a previously scored article through the same metered model path", async () => {
+    const { service, repo, calls } = harness(
+      '{"score":0.44,"reason":"Changed brand fit","urgency":"evergreen"}',
+    );
+    await service.handleBatch({ ...job, batchId: "batch-1" });
+    expect(repo.claimBatch).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1", job.itemId);
+    expect(repo.claim).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(repo.finishBatch).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      "batch-1",
+      job.itemId,
+      expect.objectContaining({ kind: "scored", score: 0.44 }),
+    );
+    expect(repo.scored).not.toHaveBeenCalled();
+  });
+
+  it("stops a paid batch without a key before spending on later articles", async () => {
+    const { service, repo, credentials, calls } = harness("{}");
+    credentials.credential.mockResolvedValue(undefined);
+    await service.handleBatch({ ...job, batchId: "batch-1" });
+    expect(calls).toHaveLength(0);
+    expect(repo.recordUsage).not.toHaveBeenCalled();
+    expect(repo.finishBatch).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1", job.itemId, {
+      kind: "failed",
+      code: "no_api_key",
+      halt: true,
+    });
+    expect(repo.failed).not.toHaveBeenCalled();
+  });
+
+  it("makes only one physical verdict call when structured output is malformed", async () => {
+    const { service, repo, calls } = harness("not structured JSON");
+    await service.handleBatch({ ...job, batchId: "batch-1" });
+    expect(calls).toHaveLength(1);
+    expect(repo.finishBatch).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1", job.itemId, {
+      kind: "failed",
+      code: "model_failed",
+      halt: false,
+    });
+  });
+
+  it("records a lost usage row before advancing batch progress", async () => {
+    const { service, repo } = harness('{"score":0.4,"reason":"Changed fit","urgency":"timely"}');
+    repo.recordUsage.mockRejectedValueOnce(new Error("ledger unavailable"));
+    await service.handleBatch({ ...job, batchId: "batch-1" });
+    expect(repo.recordBatchUsageLoss).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1");
+    expect(repo.recordBatchUsageLoss.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.finishBatch.mock.invocationCallOrder[0] as number,
+    );
+  });
+
+  it("does not advance progress when neither ledger nor usage-loss counter can be persisted", async () => {
+    const { service, repo } = harness('{"score":0.4,"reason":"Changed fit","urgency":"timely"}');
+    repo.recordUsage.mockRejectedValueOnce(new Error("ledger unavailable"));
+    repo.recordBatchUsageLoss.mockRejectedValueOnce(new Error("database unavailable"));
+    await expect(service.handleBatch({ ...job, batchId: "batch-1" })).rejects.toThrow();
+    expect(repo.finishBatch).not.toHaveBeenCalled();
+  });
+
+  it("closes orphaned queue work without a provider call", async () => {
+    const { service, repo, calls } = harness("{}");
+    repo.orphanedBatchJobs.mockResolvedValue([{ ...job, batchId: "batch-1" }]);
+    await service.reconcileBatches();
+    expect(calls).toHaveLength(0);
+    expect(repo.finishBatch).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1", job.itemId, {
+      kind: "failed",
+      code: "model_failed",
+    });
   });
 
   it("records no-key as a failure without interpreting it as zero", async () => {

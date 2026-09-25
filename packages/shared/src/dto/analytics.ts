@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTENT_TYPES } from "./runs.js";
 
 export const analyticsDaysSchema = z.coerce
   .number()
@@ -69,3 +70,92 @@ export const analyticsDtoSchema = z.object({
   posts: z.array(publicationResultDtoSchema),
 });
 export type AnalyticsDto = z.infer<typeof analyticsDtoSchema>;
+
+/** Observed events in a half-open UTC instant window; each group has its own event clock. */
+export const brandOverviewDtoSchema = z.object({
+  days: analyticsDaysSchema,
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+  drafts: z.object({
+    total: z.number().int().nonnegative(),
+    ai: z.number().int().nonnegative(),
+    human: z.number().int().nonnegative(),
+    draft: z.number().int().nonnegative(),
+    approved: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    published: z.number().int().nonnegative(),
+    other: z.number().int().nonnegative(),
+  }),
+  runs: z.object({
+    total: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    succeeded: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+  }),
+  decisions: z.object({
+    approved: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+  }),
+  publications: z.object({
+    total: z.number().int().nonnegative(),
+    asserted: z.number().int().nonnegative(),
+    byPlatform: z.array(z.object({ platform: z.string(), count: z.number().int().nonnegative() })),
+  }),
+  spend: z.object({
+    knownUsd: z.number().nonnegative(),
+    pricedCalls: z.number().int().nonnegative(),
+    estimatedCalls: z.number().int().nonnegative(),
+    unpricedCalls: z.number().int().nonnegative(),
+    unrecordedCalls: z.number().int().nonnegative(),
+    reviewUnrecordedCalls: z.number().int().nonnegative(),
+    legacyRuns: z.number().int().nonnegative(),
+  }),
+});
+export type BrandOverviewDto = z.infer<typeof brandOverviewDtoSchema>;
+
+/** Last 50 persisted calls attributable through a surviving brand link. */
+export const brandSpendHistoryDtoSchema = z.object({
+  calls: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        createdAt: z.iso.datetime(),
+        step: z.string(),
+        provider: z.string(),
+        modelId: z.string(),
+        costUsd: z.number().nonnegative().nullable(),
+        costSource: z.enum(["provider_reported", "price_table", "unknown"]),
+        costState: z.enum(["reported", "estimated", "unknown", "no_recorded_charge"]),
+        runId: z.uuid().nullable(),
+        contentItemId: z.uuid().nullable(),
+      }),
+    )
+    .max(50),
+});
+export type BrandSpendHistoryDto = z.infer<typeof brandSpendHistoryDtoSchema>;
+
+/** Generation runs started in the selected window; their recorded calls follow the run. */
+export const brandFormatSpendDtoSchema = z.object({
+  days: analyticsDaysSchema,
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+  formats: z.array(
+    z.object({
+      contentType: z.enum([...CONTENT_TYPES, "unknown"]),
+      runCount: z.number().int().nonnegative(),
+      knownUsd: z.number().nonnegative(),
+      meanKnownUsdPerRun: z.number().nonnegative(),
+      pricedCalls: z.number().int().nonnegative(),
+      estimatedCalls: z.number().int().nonnegative(),
+      /** Unpriced calls except explicit token-free refusals; includes images without token metadata. */
+      unknownCostCalls: z.number().int().nonnegative(),
+      /** Calls attempted by a run but not durably written to the usage ledger. */
+      unrecordedCalls: z.number().int().nonnegative(),
+      /** Runs created before the unrecorded-call counter existed. */
+      legacyRuns: z.number().int().nonnegative(),
+    }),
+  ),
+});
+export type BrandFormatSpendDto = z.infer<typeof brandFormatSpendDtoSchema>;

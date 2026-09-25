@@ -434,16 +434,15 @@ describe("which deliveries still have a publish job", () => {
 });
 
 /**
- * The api's `deliveryOutcome` is the adaptation column plus the one value the
- * column cannot hold. Derived rather than listed, so this asserts the SHAPE of
- * the derivation — that nothing but `unknown` was added, and that the column's
- * own order is preserved — rather than re-listing the members.
+ * The api's `deliveryOutcome` is the adaptation column plus two receipt-derived
+ * values the column cannot hold. Derived rather than listed, so this asserts
+ * the SHAPE of the derivation and preserves the column's own order.
  */
 describe("what the wire can say about a delivery", () => {
-  it("adds exactly one value to the adaptation column's own", () => {
+  it("adds only unresolved and partial outcomes to the adaptation column's own", () => {
     expect(
       DELIVERY_OUTCOMES.filter((o) => !(ADAPTATION_STATUSES as readonly string[]).includes(o)),
-    ).toEqual(["unknown"]);
+    ).toEqual(["unknown", "partial"]);
   });
 
   it("recognises every one of them, and nothing else", () => {

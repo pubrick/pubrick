@@ -28,6 +28,12 @@ before reading and locking the parent, so a job fetched before archive cannot
 claim a send after archive has committed. Worker status recomputation keeps an
 archived parent unchanged.
 
+Moving one channel's scheduled time locks only its adaptation, then reads its
+item and receipts before changing its queue job. It never locks the item first.
+The worker's claim waits on that adaptation lock and checks `scheduled_at` as
+well as status, so an old job fetched before a move cannot send at the new slot.
+The cancelled job, adaptation update, and replacement job share one transaction.
+
 Permanent deletion of an archived unsent post takes the same ordered adaptation
 locks before the content item lock. It refuses any delivery attempt or linked
 publication record, a retained generation run, or an item whose durable safety

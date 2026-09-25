@@ -18,6 +18,7 @@ import {
   type KnowledgeUpdate,
   knowledgeAutoIndexSchema,
   knowledgeBatchIndexSchema,
+  knowledgeCategorySchema,
   knowledgeCreateSchema,
   knowledgeImportSchema,
   knowledgeUpdateSchema,
@@ -40,8 +41,12 @@ export class KnowledgeController {
   ) {}
 
   @Get()
-  list(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
-    return this.entries.list(orgId, brandId);
+  list(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Query("category", new ZodValidationPipe(knowledgeCategorySchema.optional())) category?: string,
+  ) {
+    return this.entries.list(orgId, brandId, category);
   }
 
   @Post()

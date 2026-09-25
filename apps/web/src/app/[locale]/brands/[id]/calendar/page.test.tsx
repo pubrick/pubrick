@@ -161,7 +161,15 @@ describe("brand calendar", () => {
       if (url.includes("/api/channels"))
         return jsonResponse([{ id: channelId, name: "Main", platform: "telegram" }]);
       if (url.includes("/api/topics?"))
-        return jsonResponse([{ id: topicId, title: "Approved topic", status: "approved" }]);
+        return jsonResponse([
+          {
+            id: topicId,
+            title: "Approved topic",
+            status: "approved",
+            contentType: "expert_article",
+            seoKeywords: ["local guide"],
+          },
+        ]);
       if (url.includes("/api/calendar/memorable-dates"))
         return jsonResponse({ timezone: "UTC", dates: [] });
       if (url.includes("/api/calendar/slots") && init?.method === "POST")
@@ -174,6 +182,7 @@ describe("brand calendar", () => {
         expect(screen.getByRole("option", { name: "Approved topic" })).toBeInTheDocument(),
       );
       expect(screen.queryByLabelText(en.Calendar.brief)).not.toBeInTheDocument();
+      expect(screen.getByText(/local guide/)).toBeInTheDocument();
       await userEvent.setup().click(screen.getByRole("checkbox", { name: "Main" }));
       await userEvent
         .setup()
@@ -184,6 +193,7 @@ describe("brand calendar", () => {
       );
       expect(sent).toMatchObject({ brandId, topicId, channelIds: [channelId] });
       expect(sent).not.toHaveProperty("brief");
+      expect(sent).not.toHaveProperty("contentType");
       expect(calendarSlotCreateSchema.parse(sent)).toEqual(sent);
     } finally {
       window.history.replaceState({}, "", "/");

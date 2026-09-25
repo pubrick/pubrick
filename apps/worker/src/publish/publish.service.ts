@@ -7,6 +7,7 @@ import {
   getPublisher,
   MASTODON_REQUEST_TIMEOUT_MS,
   MAX_REQUEST_TIMEOUT_MS,
+  PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
   type Publisher,
@@ -27,6 +28,7 @@ import {
   type AttemptFence,
   ChannelNotFoundError,
   NoAutomaticCredentialsError,
+  type PartialTelegramDelivery,
   PublishRepository,
   type SendClaim,
 } from "./publish.repository";
@@ -105,7 +107,8 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
   Math.max(
-    TELEGRAM_REQUEST_TIMEOUT_MS,
+    // A covered Telegram post may send a photo and then one text reply.
+    TELEGRAM_REQUEST_TIMEOUT_MS * 2,
     VK_REQUEST_TIMEOUT_MS,
     MAX_REQUEST_TIMEOUT_MS,
     // Bluesky: session, mention resolution, optional cover upload, createRecord.
@@ -337,12 +340,11 @@ export class PublishService {
     const fence: AttemptFence = { status: "publishing", attemptCount: attempt };
 
     // The claim on the SEND, written before the platform is called. Losing it
-    // means a previous attempt wrote one and never came back to resolve it, and
-    // the ONLY thing that can leave a claim behind is an attempt that stopped
-    // running between the claim and its outcome — killed mid-send, unable to
-    // reach the database afterwards, failed by a graceful stop or by the
-    // heartbeat supervisor while its request was in flight. Every one of those
-    // may have posted. This is the guard that makes findings (b) and (c)
+    // means either a previous attempt left an unresolved claim or this handler
+    // lost its attempt fence to a newer approval. The fenced unknown write
+    // below is a no-op for that newer attempt. A claim left behind came from
+    // an attempt that stopped before recording its outcome, and may have
+    // posted. This is the guard that makes findings (b) and (c)
     // terminal instead of duplicating: the redelivery pg-boss was always going
     // to make now finds evidence where it used to find nothing.
     // The claim is kept as a VALUE, not as a fact: every later write of it
@@ -350,7 +352,7 @@ export class PublishService {
     // below from deleting a successor's claim, and what lets a delivery still be
     // recorded when the adaptation the claim pointed at has been deleted
     // underneath it (see `SendClaim`).
-    const claim = await this.repo.claimSend(job.orgId, job.adaptationId);
+    const claim = await this.repo.claimSend(job.orgId, job.adaptationId, attempt);
     if (!claim) {
       await this.recordUnknownOutcome(
         job.orgId,
@@ -588,6 +590,24 @@ export class PublishService {
         { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
         {
           baseUrl,
+          ...(adaptation.platform === "telegram" && image
+            ? {
+                onTelegramPhotoAccepted: async (primary: PublishResult, followup: string) => {
+                  const checkpointed = await this.repo.markTelegramPhotoAccepted(
+                    job.orgId,
+                    job.adaptationId,
+                    claim,
+                    {
+                      photoId: primary.externalId,
+                      photoUrl: primary.externalUrl,
+                      followupText: followup,
+                      followupOutcome: "pending",
+                    },
+                  );
+                  if (!checkpointed) throw new Error("The send claim is no longer active");
+                },
+              }
+            : {}),
         },
       );
     } catch (error) {
@@ -600,7 +620,23 @@ export class PublishService {
         // to look at the channel first. This is finding (a) — before, this
         // error did not exist and the case above it took the branch below,
         // where the rethrow is the second send.
-        await this.recordUnknownOutcome(job.orgId, job.adaptationId, message, fence, claim);
+        const partial: PartialTelegramDelivery | undefined =
+          error instanceof PartialTelegramPublishError
+            ? {
+                photoId: error.primary.externalId,
+                photoUrl: error.primary.externalUrl,
+                followupText: error.followup,
+                followupOutcome: error.followupOutcome,
+              }
+            : undefined;
+        await this.recordUnknownOutcome(
+          job.orgId,
+          job.adaptationId,
+          message,
+          fence,
+          claim,
+          partial,
+        );
         return;
       }
       if (error instanceof PermanentPublishError) {
@@ -848,6 +884,7 @@ export class PublishService {
     detail: string,
     fence: AttemptFence,
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<void> {
     const reason =
       "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
@@ -862,6 +899,7 @@ export class PublishService {
       fence,
       "unknown",
       claim,
+      partial,
     );
   }
 
@@ -993,18 +1031,30 @@ export class PublishService {
     fence: AttemptFence,
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
+    partial?: PartialTelegramDelivery,
   ): Promise<void> {
     try {
       if (
-        !(await this.repo.markFailed(
-          orgId,
-          adaptationId,
-          reason,
-          failureReason,
-          fence,
-          outcome,
-          claim,
-        ))
+        !(await (partial
+          ? this.repo.markFailed(
+              orgId,
+              adaptationId,
+              reason,
+              failureReason,
+              fence,
+              outcome,
+              claim,
+              partial,
+            )
+          : this.repo.markFailed(
+              orgId,
+              adaptationId,
+              reason,
+              failureReason,
+              fence,
+              outcome,
+              claim,
+            )))
       ) {
         // Not an error, and emphatically not something to retry or force: the
         // row moved out from under this attempt, which only the api does and

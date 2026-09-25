@@ -6,14 +6,17 @@ import type {
   DraftRevisionProposal,
 } from "@pubrick/shared";
 import {
+  isManualPlatform,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  MIN_RESCHEDULE_LEAD_MS,
   normalizeHashtags,
   type PublishFailureReason,
   REFINE_VERBS,
   type RefineProposal,
   type RefineVerb,
   stripHashtagSuffix,
+  telegramPhotoParts,
   withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -75,6 +78,12 @@ type Adaptation = {
    * send may actually have landed reads `unknown`.
    */
   deliveryOutcome: DeliveryOutcome;
+  partialTelegram?: {
+    photoId: string | null;
+    photoUrl: string | null;
+    followupText: string;
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
   attemptCount: number;
@@ -264,8 +273,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
+  const [channelSchedule, setChannelSchedule] = useState<{
+    adaptationId: string;
+    expectedScheduledAt: string;
+    value: string;
+  } | null>(null);
+  const [channelScheduleBusy, setChannelScheduleBusy] = useState(false);
+  const [channelScheduleError, setChannelScheduleError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [retractBusy, setRetractBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const closeDelete = useCallback(() => {
@@ -815,8 +832,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  async function approve(withSchedule: boolean) {
+  async function approve(withSchedule: boolean, delayMinutes?: 30) {
     setActionError(null);
+    const chosen =
+      withSchedule && delayMinutes === undefined && scheduledAt ? new Date(scheduledAt) : null;
     /*
      * Re-checked HERE, at click time, rather than trusted from the button's
      * `disabled` prop: this screen's poll (`usePoll`/`itemSettled`) stops
@@ -830,7 +849,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
      * clock crosses the picked instant reads identically whether this check
      * or `ContentRepository.approve`'s catches it.
      */
-    if (withSchedule && scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) {
+    if (
+      withSchedule &&
+      delayMinutes === undefined &&
+      (!chosen || !Number.isFinite(chosen.getTime()) || chosen.getTime() <= Date.now())
+    ) {
       setActionError(te("schedule_in_past"));
       return;
     }
@@ -838,12 +861,51 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await api(`/api/content/${id}/approve`, {
         method: "POST",
         body: JSON.stringify(
-          withSchedule && scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {},
+          delayMinutes === 30
+            ? { delayMinutes }
+            : chosen
+              ? { scheduledAt: chosen.toISOString() }
+              : {},
         ),
       });
       await reload();
     } catch (err) {
       handleError(err);
+    }
+  }
+
+  async function rescheduleChannel() {
+    if (!channelSchedule || channelScheduleBusy) return;
+    const chosen = new Date(channelSchedule.value);
+    if (
+      !channelSchedule.value ||
+      !Number.isFinite(chosen.getTime()) ||
+      chosen.getTime() <= Date.now()
+    ) {
+      setChannelScheduleError(te("schedule_in_past"));
+      return;
+    }
+    if (chosen.getTime() <= Date.now() + MIN_RESCHEDULE_LEAD_MS) {
+      setChannelScheduleError(te("schedule_too_close"));
+      return;
+    }
+    setChannelScheduleBusy(true);
+    setChannelScheduleError(null);
+    try {
+      await api(`/api/content/${id}/adaptations/${channelSchedule.adaptationId}/reschedule`, {
+        method: "POST",
+        body: JSON.stringify({
+          expectedScheduledAt: channelSchedule.expectedScheduledAt,
+          scheduledAt: chosen.toISOString(),
+        }),
+      });
+      await reload();
+      setChannelSchedule(null);
+    } catch (err) {
+      setChannelScheduleError(errorMessage(err, t("genericError"), te));
+      await reload();
+    } finally {
+      setChannelScheduleBusy(false);
     }
   }
 
@@ -870,6 +932,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        */
       handleError(err);
       await reload();
+    }
+  }
+
+  async function retractApproval() {
+    if (retractBusy) return;
+    setRetractBusy(true);
+    setActionError(null);
+    try {
+      await api(`/api/content/${id}/retract-approval`, { method: "POST" });
+      await reload();
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setRetractBusy(false);
     }
   }
 
@@ -916,7 +993,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * adaptation, the item's own status and the sentence this row will print, and
    * the api returns all three together.
    */
-  async function assertDelivery(adaptationId: string, delivered: boolean) {
+  async function assertDelivery(
+    adaptationId: string,
+    delivered: boolean,
+    partialResolution?: "completed" | "removed",
+  ) {
     setActionError(null);
     // BOTH VERDICTS CLOSE WHILE ONE IS IN FLIGHT, per row. They are
     // contradictory answers to one question, so a second press of EITHER is a
@@ -929,7 +1010,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}/delivery`, {
         method: "POST",
-        body: JSON.stringify({ delivered }),
+        body: JSON.stringify({ delivered, ...(partialResolution ? { partialResolution } : {}) }),
       });
       await reload();
     } catch (err) {
@@ -1204,9 +1285,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function previewLimit(channelId: string): number {
     const ch = channels.find((c) => c.id === channelId);
-    return ch?.platform === "telegram" && (item?.coverMediaId || item?.videoMediaId)
-      ? 1024
-      : overrideLimit(channelId);
+    return ch?.platform === "telegram" && item?.videoMediaId ? 1024 : overrideLimit(channelId);
   }
 
   function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
@@ -1226,6 +1305,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       previewText !== (adaptation.body ?? currentItem.body) ||
       (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const photoParts = telegramCover ? telegramPhotoParts(previewText) : null;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
       currentItem.videoMediaId !== null;
@@ -1268,10 +1348,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           />
         )}
         {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
-        <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        {photoParts ? (
+          <>
+            <p className="mb-1 text-xs font-medium text-fg-secondary">
+              {t("reviewPreviewPhotoCaption")}
+            </p>
+            <p className="whitespace-pre-wrap break-words text-sm text-fg">{photoParts.caption}</p>
+            {photoParts.followup !== null && (
+              <>
+                <p className="mb-1 mt-3 text-xs font-medium text-fg-secondary">
+                  {t("reviewPreviewPhotoReply")}
+                </p>
+                <p className="whitespace-pre-wrap break-words text-sm text-fg">
+                  {photoParts.followup}
+                </p>
+              </>
+            )}
+          </>
+        ) : (
+          <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        )}
         {previewText.length > limit && (
           <p role="alert" className="mt-3 text-sm text-danger">
-            {telegramCover || (channel?.platform === "telegram" && supportedVideo)
+            {channel?.platform === "telegram" && supportedVideo
               ? t("reviewPreviewCaptionTooLong", { limit })
               : t("reviewPreviewTooLong", { limit })}
           </p>
@@ -1341,6 +1440,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const hasOutstanding = item.adaptations.some(
     (a) => isOutstandingAdaptation(a.status) || a.status === "manual_ready",
   );
+  const canRetractApproval =
+    item.status === "approved" &&
+    item.isSafeToDelete &&
+    item.adaptations.length > 0 &&
+    item.adaptations.every((adaptation) =>
+      ["pending", "scheduled", "queued"].includes(adaptation.status),
+    );
   const manualAdaptations = item.adaptations.filter(
     (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
   );
@@ -1403,6 +1509,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    */
   const nowLocal = toDatetimeLocalValue(new Date());
   const scheduledAtIsPast = scheduledAt !== "" && new Date(scheduledAt).getTime() <= Date.now();
+  const canApproveAfterThirtyMinutes =
+    ["draft", "rejected", "failed"].includes(item.status) &&
+    item.adaptations.length > 0 &&
+    !channelsFailed &&
+    item.adaptations.every((adaptation) => {
+      const platform = channels.find((channel) => channel.id === adaptation.channelId)?.platform;
+      return (
+        platform !== undefined &&
+        !isManualPlatform(platform) &&
+        adaptation.deliveryOutcome !== "unknown" &&
+        adaptation.deliveryOutcome !== "partial"
+      );
+    });
 
   return (
     <AppShell
@@ -2049,8 +2168,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
-        action; the other two paths live here — "Approve with schedule" because
-        it is meaningless away from the date field it reads, and Reject because
+        action; the other paths live here — "Approve with schedule" because
+        it is meaningless away from the date field it reads, the 30-minute
+        shortcut beside it, and Reject because
         the constitution allows exactly one control in the primary slot and
         Approve is it. Reject keeps its danger styling, so nothing about its
         weight changed except where it sits.
@@ -2106,6 +2226,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             >
               {t("approveScheduled")}
             </Button>
+            {canApproveAfterThirtyMinutes && (
+              <Button variant="secondary" onClick={() => approve(true, 30)}>
+                {t("approveAfterThirtyMinutes")}
+              </Button>
+            )}
             {manualAdaptations.length > 0 && (
               <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
             )}
@@ -2116,6 +2241,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             >
               {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
             </Button>
+            {canRetractApproval && (
+              <Button variant="secondary" onClick={retractApproval} disabled={retractBusy}>
+                {t("retractApproval")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               onClick={() => changeArchiveState("archive")}
@@ -2293,18 +2423,66 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               a second copy.
 
               It NAMES the channel, and that is the whole of what this screen
-              can say about where the post went: an unknown delivery carries no
-              link, by construction — the answer that would have carried one
-              never arrived. The name is also next to it on the row, but this
-              paragraph is a `role="alert"`, announced on its own, and an alert
-              telling someone to go and check a channel it does not name is an
-              instruction they cannot follow.
+              can say about where the post went for a generic unknown: its
+              answer never returned with a link. A partial Telegram receipt has
+              its accepted photo link and frozen reply in the separate branch.
             */}
-            {a.deliveryOutcome === "unknown" && (
+            {(a.deliveryOutcome === "unknown" || a.deliveryOutcome === "partial") && (
               <>
-                <p role="alert" className="text-sm text-[var(--status-review-fg)]">
-                  {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
-                </p>
+                {a.partialTelegram ? (
+                  <div className="space-y-3">
+                    <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                      {t("partialTelegramWarning", { channel: channelLabel(a.channelId) })}
+                    </p>
+                    {a.partialTelegram.photoUrl && isLinkableUrl(a.partialTelegram.photoUrl) && (
+                      <a
+                        href={a.partialTelegram.photoUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-accent hover:underline"
+                      >
+                        {t("partialTelegramViewPhoto")}
+                      </a>
+                    )}
+                    {!a.partialTelegram.photoUrl && a.partialTelegram.photoId && (
+                      <p className="text-sm text-fg-tertiary">
+                        {t("partialTelegramPhotoId", { id: a.partialTelegram.photoId })}
+                      </p>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-fg">
+                        {t("partialTelegramMissingText")}
+                      </p>
+                      <pre className="whitespace-pre-wrap break-words rounded-md border border-border p-3 text-sm text-fg">
+                        {a.partialTelegram.followupText}
+                      </pre>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          copyManualField(
+                            `${a.id}:partialTelegram`,
+                            a.partialTelegram?.followupText ?? "",
+                          )
+                        }
+                      >
+                        {copiedManualField === `${a.id}:partialTelegram`
+                          ? t("copied")
+                          : t("partialTelegramCopyText")}
+                      </Button>
+                    </div>
+                    <p className="text-sm text-fg-tertiary">
+                      {a.partialTelegram.followupOutcome === "unknown" ||
+                      a.partialTelegram.followupOutcome === "pending"
+                        ? t("partialTelegramVerifyReply")
+                        : t("partialTelegramReplyNotSent")}
+                    </p>
+                  </div>
+                ) : (
+                  <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                    {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
+                  </p>
+                )}
                 {/*
                   THE WAY OUT OF "nobody knows", and the only one there is. The
                   paragraph above tells the reader to go and look; these record
@@ -2321,22 +2499,28 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   should say so before it is pressed, not after.
                 */}
                 <p className="text-sm text-fg-tertiary">
-                  {t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
+                  {a.partialTelegram
+                    ? t("partialTelegramRecoveryHint")
+                    : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="secondary"
-                    onClick={() => assertDelivery(a.id, true)}
+                    onClick={() =>
+                      assertDelivery(a.id, true, a.partialTelegram ? "completed" : undefined)
+                    }
                     disabled={isArchived || deliveryBusy === a.id}
                   >
-                    {t("markDelivered")}
+                    {a.partialTelegram ? t("partialTelegramConfirmComplete") : t("markDelivered")}
                   </Button>
                   <Button
                     variant="secondary"
-                    onClick={() => assertDelivery(a.id, false)}
+                    onClick={() =>
+                      assertDelivery(a.id, false, a.partialTelegram ? "removed" : undefined)
+                    }
                     disabled={isArchived || deliveryBusy === a.id}
                   >
-                    {t("markNotDelivered")}
+                    {a.partialTelegram ? t("partialTelegramConfirmRemoved") : t("markNotDelivered")}
                   </Button>
                 </div>
               </>
@@ -2406,6 +2590,65 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 <span className="text-sm text-fg-tertiary">
                   {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
                 </span>
+              ))}
+            {a.status === "scheduled" &&
+              a.scheduledAt &&
+              (item.status === "approved" || item.status === "partially_published") &&
+              !isManualPlatform(
+                channels.find((channel) => channel.id === a.channelId)?.platform ?? "",
+              ) &&
+              (channelSchedule?.adaptationId === a.id ? (
+                <div className="flex flex-col gap-2">
+                  <Input
+                    type="datetime-local"
+                    label={t("rescheduleChannelLabel", { channel: channelLabel(a.channelId) })}
+                    value={channelSchedule.value}
+                    min={toDatetimeLocalValue(new Date(Date.now() + MIN_RESCHEDULE_LEAD_MS))}
+                    onChange={(event) =>
+                      setChannelSchedule({ ...channelSchedule, value: event.target.value })
+                    }
+                    disabled={channelScheduleBusy}
+                  />
+                  {channelScheduleError && (
+                    <p role="alert" className="text-sm text-danger">
+                      {channelScheduleError}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => void rescheduleChannel()}
+                      disabled={channelScheduleBusy || !channelSchedule.value}
+                    >
+                      {t("rescheduleSave")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setChannelSchedule(null);
+                        setChannelScheduleError(null);
+                      }}
+                      disabled={channelScheduleBusy}
+                    >
+                      {t("rescheduleCancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setChannelSchedule({
+                      adaptationId: a.id,
+                      expectedScheduledAt: a.scheduledAt as string,
+                      value: toDatetimeLocalValue(new Date(a.scheduledAt as string)),
+                    });
+                    setChannelScheduleError(null);
+                  }}
+                  disabled={channelScheduleBusy}
+                >
+                  {t("rescheduleChannel")}
+                </Button>
               ))}
           </li>
         ))}
