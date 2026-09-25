@@ -113,3 +113,24 @@ export const brandOverviewDtoSchema = z.object({
   }),
 });
 export type BrandOverviewDto = z.infer<typeof brandOverviewDtoSchema>;
+
+/** Last 50 persisted calls attributable through a surviving brand link. */
+export const brandSpendHistoryDtoSchema = z.object({
+  calls: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        createdAt: z.iso.datetime(),
+        step: z.string(),
+        provider: z.string(),
+        modelId: z.string(),
+        costUsd: z.number().nonnegative().nullable(),
+        costSource: z.enum(["provider_reported", "price_table", "unknown"]),
+        costState: z.enum(["reported", "estimated", "unknown", "no_recorded_charge"]),
+        runId: z.uuid().nullable(),
+        contentItemId: z.uuid().nullable(),
+      }),
+    )
+    .max(50),
+});
+export type BrandSpendHistoryDto = z.infer<typeof brandSpendHistoryDtoSchema>;

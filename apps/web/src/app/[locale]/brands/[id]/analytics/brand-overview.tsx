@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { SpendHistory } from "./spend-history";
 
 export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30 | 90 }) {
   const t = useTranslations("Analytics");
@@ -160,6 +161,7 @@ export function BrandOverview({ brandId, days }: { brandId: string; days: 7 | 30
           </div>
           <p className="text-xs text-fg-tertiary">{t("overviewScope")}</p>
           <p className="text-xs text-fg-tertiary">{t("overviewLimits")}</p>
+          <SpendHistory brandId={brandId} />
         </>
       )}
     </section>

@@ -5,6 +5,7 @@ import { readVkPostMetrics } from "@pubrick/integrations";
 import {
   type AnalyticsDto,
   type BrandOverviewDto,
+  type BrandSpendHistoryDto,
   commentAnalysisResultSchema,
   isPublicTelegramPostUrl,
   type PublicationCommentsDto,
@@ -239,6 +240,65 @@ export class AnalyticsRepository {
         reviewUnrecordedCalls: count(reviewLoss?.unrecordedCalls),
         legacyRuns: count(runLoss?.legacyRuns),
       },
+    };
+  }
+
+  /** A bounded audit view; deletion can erase links but never reassign a call. */
+  async spendHistory(orgId: string, brandId: string): Promise<BrandSpendHistoryDto> {
+    await this.requireBrand(orgId, brandId);
+    const l = schema.usageLedger;
+    const r = schema.pipelineRuns;
+    const d = schema.contentItems;
+    const c = schema.channels;
+    // Keep the attribution precedence identical to overview(). In particular,
+    // a surviving run wins over a disagreeing item or channel link.
+    const attributedBrand = sql`coalesce(${r.brandId}, ${d.brandId}, ${c.brandId})`;
+    const rows = await db
+      .select({
+        id: l.id,
+        createdAt: l.createdAt,
+        step: l.step,
+        provider: l.provider,
+        modelId: l.modelId,
+        costUsd: l.costUsd,
+        costSource: l.costSource,
+        inputTokens: l.inputTokens,
+        outputTokens: l.outputTokens,
+        outcome: l.outcome,
+        runId: r.id,
+        runBrandId: r.brandId,
+        contentItemId: d.id,
+        contentBrandId: d.brandId,
+      })
+      .from(l)
+      .leftJoin(r, and(eq(r.id, l.runId), eq(r.orgId, orgId)))
+      .leftJoin(d, and(eq(d.id, l.contentItemId), eq(d.orgId, orgId)))
+      .leftJoin(c, and(eq(c.id, l.channelId), eq(c.orgId, orgId)))
+      .where(and(eq(l.orgId, orgId), sql`${attributedBrand} = ${brandId}`))
+      .orderBy(desc(l.createdAt), desc(l.id))
+      .limit(50);
+    return {
+      calls: rows.map((row) => {
+        const priced = row.costUsd !== null && row.costSource !== "unknown";
+        return {
+          id: row.id,
+          createdAt: row.createdAt.toISOString(),
+          step: row.step,
+          provider: row.provider,
+          modelId: row.modelId,
+          costUsd: priced ? Number(row.costUsd) : null,
+          costSource: row.costSource,
+          costState: priced
+            ? row.costSource === "price_table"
+              ? "estimated"
+              : "reported"
+            : row.inputTokens + row.outputTokens > 0 || row.outcome === "unknown"
+              ? "unknown"
+              : "no_recorded_charge",
+          runId: row.runBrandId === brandId ? row.runId : null,
+          contentItemId: row.contentBrandId === brandId ? row.contentItemId : null,
+        };
+      }),
     };
   }
 

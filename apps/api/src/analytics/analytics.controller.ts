@@ -32,6 +32,11 @@ export class AnalyticsController {
     return this.analytics.overview(orgId, brandId, days);
   }
 
+  @Get("brands/:brandId/spend-history")
+  spendHistory(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.analytics.spendHistory(orgId, brandId);
+  }
+
   @Get("brands/:brandId/comment-collection")
   commentCollection(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.analytics.publicationCommentCollection(orgId, brandId);

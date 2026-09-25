@@ -7,6 +7,7 @@ import { schema } from "@pubrick/db";
 import {
   analyticsDtoSchema,
   brandOverviewDtoSchema,
+  brandSpendHistoryDtoSchema,
   commentAnalysisDtoSchema,
   publicationCommentsDtoSchema,
   publicationMetricsDtoSchema,
@@ -340,6 +341,143 @@ describe.skipIf(!url)("publication analytics e2e", () => {
           .expect(200)
       ).body.spend.knownUsd,
     ).toBe(5);
+  });
+
+  it("lists at most 50 attributable calls in stable order without exposing other brands or deleted links", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Spend" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Other spend" }).expect(201);
+    const [item, siblingItem] = await db
+      .insert(schema.contentItems)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Owned" },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling" },
+      ])
+      .returning({ id: schema.contentItems.id });
+    if (!item || !siblingItem) throw new Error("Missing spend items");
+    const [run] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        input: { kind: "brief", text: "Owned", channelIds: [] },
+        status: "succeeded",
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, platform: "vc_ru", name: "Spend" })
+      .returning({ id: schema.channels.id });
+    if (!run || !channel) throw new Error("Missing spend links");
+    const at = new Date("2026-09-01T12:00:00.000Z");
+    const tiedIds = Array.from({ length: 51 }, () => randomUUID()).sort();
+    await db.insert(schema.usageLedger).values([
+      ...tiedIds.map((id) => ({
+        id,
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "writer",
+        provider: "google" as const,
+        modelId: "gemini-test",
+        costUsd: "0.000321",
+        costSource: "price_table" as const,
+        status: "ok" as const,
+        outcome: "completed" as const,
+        createdAt: at,
+      })),
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        contentItemId: siblingItem.id,
+        step: "timeout",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "1.000000",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+        createdAt: new Date("2026-09-02T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        step: "refine",
+        provider: "google",
+        modelId: "gemini-test",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "refused",
+        createdAt: new Date("2026-09-03T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        channelId: channel.id,
+        step: "adapter",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "0.250000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: new Date("2026-09-04T12:00:00.000Z"),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        step: "sibling-only",
+        provider: "google",
+        modelId: "gemini-test",
+        costUsd: "9.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: new Date("2026-09-05T12:00:00.000Z"),
+      },
+    ]);
+    const path = `/api/analytics/brands/${brand.body.id}/spend-history`;
+    await outsider.agent.get(path).expect(404);
+    const history = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(history.calls).toHaveLength(50);
+    expect(history.calls.map((call) => call.step)).not.toContain("sibling-only");
+    expect(history.calls[0]).toMatchObject({
+      step: "adapter",
+      costUsd: 0.25,
+      costState: "reported",
+      runId: null,
+      contentItemId: null,
+    });
+    expect(history.calls[1]).toMatchObject({
+      step: "refine",
+      costUsd: null,
+      costState: "no_recorded_charge",
+      contentItemId: item.id,
+    });
+    expect(history.calls[2]).toMatchObject({
+      step: "timeout",
+      costUsd: null,
+      costState: "unknown",
+      runId: run.id,
+      contentItemId: null,
+    });
+    expect(history.calls.slice(3).map((call) => call.id)).toEqual(tiedIds.slice(-47).reverse());
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, item.id));
+    await db.delete(schema.channels).where(eq(schema.channels.id, channel.id));
+    const afterDeletion = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(afterDeletion.calls.map((call) => call.step)).not.toContain("refine");
+    expect(afterDeletion.calls.map((call) => call.step)).not.toContain("adapter");
+    expect(afterDeletion.calls[0]).toMatchObject({ step: "timeout", runId: run.id });
+    await db.delete(schema.pipelineRuns).where(eq(schema.pipelineRuns.id, run.id));
+    expect((await owner.agent.get(path).expect(200)).body.calls).toEqual([]);
+    const siblingHistory = brandSpendHistoryDtoSchema.parse(
+      (await owner.agent.get(`/api/analytics/brands/${sibling.body.id}/spend-history`).expect(200))
+        .body,
+    );
+    expect(siblingHistory.calls.map((call) => call.step)).toEqual(["sibling-only", "timeout"]);
   });
 
   it("keeps publication auto-collection off until an authorized brand opts in and increments the fence on every change", async () => {
