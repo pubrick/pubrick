@@ -142,6 +142,9 @@ const ZONED_COLUMNS = [
   "knowledge_auto_index.updated_at",
   "knowledge_entries.created_at",
   "knowledge_entries.updated_at",
+  "manual_topic_plan_attempts.completed_at",
+  "manual_topic_plan_attempts.created_at",
+  "manual_topic_plan_attempts.started_at",
   "media_assets.created_at",
   "memorable_dates.created_at",
   "memorable_dates.updated_at",
@@ -450,6 +453,12 @@ const NON_ENUM_CHECKS = [
   "autopilot_manual_attempts_status_check",
   "autopilot_manual_attempts_decision_check",
   "autopilot_manual_attempts_terminal_check",
+  // 0090 creates operator planning attempts after the pre-0009 seed. The worker
+  // e2e covers live and orphaned attempts; schema-invariants pins enum values.
+  "manual_topic_plan_attempts_status_check",
+  "manual_topic_plan_attempts_error_code_check",
+  "manual_topic_plan_attempts_count_check",
+  "manual_topic_plan_attempts_terminal_check",
   // 0078's scheduled admission events have a closed status/decision pair.
   "autopilot_scan_events_status_check",
   "autopilot_scan_events_decision_check",

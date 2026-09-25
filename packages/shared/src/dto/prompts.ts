@@ -52,3 +52,26 @@ export const promptDecisionHistoryDtoSchema = z.object({
   nextCursor: z.string().uuid().nullable(),
 });
 export type PromptDecisionHistoryDto = z.infer<typeof promptDecisionHistoryDtoSchema>;
+
+/** One pinned run is one observation; review acts can outnumber runs. */
+export const promptOutcomeComparisonDtoSchema = z.object({
+  brandId: z.string().uuid(),
+  role: promptRoleSchema,
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+  rows: z.array(
+    z.object({
+      revisionId: z.string().uuid(),
+      version: z.number().int().positive(),
+      runCount: z.number().int().nonnegative(),
+      succeededRuns: z.number().int().nonnegative(),
+      publishedRuns: z.number().int().nonnegative(),
+      currentItemStatuses: z.record(z.string(), z.number().int().nonnegative()),
+      withoutCurrentItem: z.number().int().nonnegative(),
+      reviewActs: z.object({
+        approved: z.number().int().nonnegative(),
+        rejected: z.number().int().nonnegative(),
+      }),
+    }),
+  ),
+});
+export type PromptOutcomeComparisonDto = z.infer<typeof promptOutcomeComparisonDtoSchema>;

@@ -18,6 +18,7 @@ import {
   MANUAL_AUTOPILOT_QUEUE_OPTIONS,
   MANUAL_DIGEST_QUEUE,
   MANUAL_DIGEST_QUEUE_OPTIONS,
+  MANUAL_TOPIC_PLAN_DLQ,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   type ManualAutopilotJob,
@@ -131,6 +132,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
     await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.createQueue(MANUAL_TOPIC_PLAN_DLQ);
     await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
     await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
     await boss.createQueue(MANUAL_AUTOPILOT_DLQ);
@@ -231,6 +233,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueManualTopicPlan(tx: Tx, payload: ManualTopicPlanJob): Promise<void> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(MANUAL_TOPIC_PLAN_QUEUE, payload, {
+      id: payload.attemptId,
       group: { id: payload.orgId },
       db: fromDrizzle(tx, sql),
     });

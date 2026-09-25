@@ -16,6 +16,7 @@ import {
   MANUAL_AUTOPILOT_QUEUE_OPTIONS,
   MANUAL_DIGEST_QUEUE,
   MANUAL_DIGEST_QUEUE_OPTIONS,
+  MANUAL_TOPIC_PLAN_DLQ,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   type ManualAutopilotJob,
@@ -449,15 +450,28 @@ export class QueueService {
       await boss.work("topic-planning-scan", { batchSize: 1 }, async () => {
         await this.topicPlanner?.scan();
       });
+      await boss.createQueue(MANUAL_TOPIC_PLAN_DLQ);
       await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
       await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
       await boss.work<ManualTopicPlanJob>(
         MANUAL_TOPIC_PLAN_QUEUE,
         { batchSize: 1, groupConcurrency: 1 },
         async ([job]) => {
-          if (job) await this.topicPlanner?.planBrand(job.data.orgId, job.data.brandId);
+          if (job) await this.topicPlanner?.handleManual(job.data);
         },
       );
+      await boss.work<ManualTopicPlanJob>(
+        MANUAL_TOPIC_PLAN_DLQ,
+        { batchSize: 1 },
+        async ([job]) => {
+          if (job) await this.topicPlanner?.exhausted(job.data);
+        },
+      );
+      await boss.createQueue("topic-plan-manual-sweep");
+      await boss.schedule("topic-plan-manual-sweep", SWEEP_CRON);
+      await boss.work("topic-plan-manual-sweep", { batchSize: 1 }, async () => {
+        await this.topicPlanner?.sweepManual();
+      });
     }
     if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue(MANUAL_AUTOPILOT_DLQ);

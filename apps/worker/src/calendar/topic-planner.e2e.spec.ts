@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { schema } from "@pubrick/db";
+import {
+  MANUAL_TOPIC_PLAN_DLQ,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
+import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -213,5 +219,153 @@ describe.skipIf(!url)("approved topic calendar planning", () => {
     await topic(brandId, "2026-09-25");
     expect(await planner.planBrand(orgId, brandId, new Date("2026-09-24T08:00:00Z"))).toBe(0);
     expect(await slots(brandId)).toHaveLength(0);
+  });
+
+  it("completes an empty manual pass and preserves slot attribution across repeat delivery", async () => {
+    const { brandId } = await brand();
+    const [empty] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const emptyJob = { orgId, brandId, attemptId: empty?.id as string };
+    await planner.handleManual(emptyJob);
+    const [emptyResult] = await db
+      .select()
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, emptyJob.attemptId));
+    expect(emptyResult).toMatchObject({ status: "completed", createdCount: 0, errorCode: null });
+    expect(emptyResult?.startedAt).toBeInstanceOf(Date);
+    expect(emptyResult?.completedAt).toBeInstanceOf(Date);
+
+    const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    await topic(brandId, day);
+    const [created] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const job = { orgId, brandId, attemptId: created?.id as string };
+    await planner.handleManual(job);
+    await planner.handleManual(job);
+    const [result] = await db
+      .select()
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, job.attemptId));
+    expect(result).toMatchObject({ status: "completed", createdCount: 1, errorCode: null });
+    const planned = await slots(brandId);
+    expect(planned).toHaveLength(1);
+    expect(planned[0]?.manualPlanAttemptId).toBe(job.attemptId);
+    await db
+      .delete(schema.calendarSlots)
+      .where(eq(schema.calendarSlots.id, planned[0]?.id as string));
+    const [afterRemoval] = await db
+      .select({ createdCount: schema.manualTopicPlanAttempts.createdCount })
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, job.attemptId));
+    expect(afterRemoval?.createdCount).toBe(1);
+  });
+
+  it("retries a failed pass without a partial slot, then records a safe terminal failure", async () => {
+    const { brandId } = await brand();
+    const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    await topic(brandId, day);
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ timezone: "Not/A_Timezone" })
+      .where(eq(schema.autopilotConfigs.brandId, brandId));
+    const [created] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const job = { orgId, brandId, attemptId: created?.id as string };
+    await expect(planner.handleManual(job)).rejects.toThrow();
+    expect(await slots(brandId)).toHaveLength(0);
+    const [pending] = await db
+      .select()
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, job.attemptId));
+    expect(pending).toMatchObject({ status: "running", createdCount: 0, errorCode: null });
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ timezone: "UTC" })
+      .where(eq(schema.autopilotConfigs.brandId, brandId));
+    await planner.handleManual(job);
+    const [recovered] = await db
+      .select()
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, job.attemptId));
+    expect(recovered).toMatchObject({ status: "completed", createdCount: 1, errorCode: null });
+    expect(await slots(brandId)).toHaveLength(1);
+
+    const secondBrand = await brand();
+    await db
+      .update(schema.autopilotConfigs)
+      .set({ timezone: "Not/A_Timezone" })
+      .where(eq(schema.autopilotConfigs.brandId, secondBrand.brandId));
+    const [failed] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId: secondBrand.brandId })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const failedJob = { orgId, brandId: secondBrand.brandId, attemptId: failed?.id as string };
+    await expect(planner.handleManual(failedJob)).rejects.toThrow();
+    await planner.exhausted(failedJob);
+    const [terminal] = await db
+      .select()
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.id, failedJob.attemptId));
+    expect(terminal).toMatchObject({
+      status: "failed",
+      errorCode: "worker_failed",
+      createdCount: 0,
+    });
+    expect(terminal?.completedAt).toBeInstanceOf(Date);
+    await planner.handleManual(failedJob);
+    expect(await slots(secondBrand.brandId)).toHaveLength(0);
+  });
+
+  it("processes a topic-plan job queued before attempt IDs existed", async () => {
+    const { brandId } = await brand();
+    const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    await topic(brandId, day);
+    await planner.handleManual({ orgId, brandId, attemptId: undefined as unknown as string });
+    expect(await slots(brandId)).toHaveLength(1);
+    expect((await slots(brandId))[0]?.manualPlanAttemptId).toBeNull();
+  });
+
+  it("does not fail an old attempt while its queue job is still waiting", async () => {
+    const { brandId } = await brand();
+    const old = new Date(Date.now() - 11 * 60_000);
+    const [queued] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId, createdAt: old })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    const [orphaned] = await db
+      .insert(schema.manualTopicPlanAttempts)
+      .values({ orgId, brandId, createdAt: old })
+      .returning({ id: schema.manualTopicPlanAttempts.id });
+    if (!queued || !orphaned) throw new Error("Manual planning attempt insert returned no row");
+    const boss = new PgBoss({ connectionString: url as string, supervise: false, schedule: false });
+    boss.on("error", () => {});
+    await boss.start();
+    try {
+      await boss.createQueue(MANUAL_TOPIC_PLAN_DLQ);
+      await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.send(
+        MANUAL_TOPIC_PLAN_QUEUE,
+        { orgId, brandId, attemptId: queued.id },
+        { id: queued.id, group: { id: orgId } },
+      );
+      await planner.sweepManual();
+      const rows = await db
+        .select({
+          id: schema.manualTopicPlanAttempts.id,
+          status: schema.manualTopicPlanAttempts.status,
+        })
+        .from(schema.manualTopicPlanAttempts)
+        .where(eq(schema.manualTopicPlanAttempts.brandId, brandId));
+      expect(rows.find((row) => row.id === queued.id)?.status).toBe("queued");
+      expect(rows.find((row) => row.id === orphaned.id)?.status).toBe("failed");
+    } finally {
+      await boss.stop({ graceful: false, timeout: 5000 });
+    }
   });
 });

@@ -98,6 +98,43 @@ export const autopilotManualAttempts = pgTable(
   ],
 );
 
+/** One operator-requested calendar pass; slot provenance survives worker retries. */
+export const manualTopicPlanAttempts = pgTable(
+  "manual_topic_plan_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["queued", "running", "completed", "failed"] })
+      .notNull()
+      .default("queued"),
+    errorCode: text("error_code", { enum: ["worker_failed"] }),
+    createdCount: integer("created_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("manual_topic_plan_attempts_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
+    enumCheck("manual_topic_plan_attempts_status_check", t.status, [
+      "queued",
+      "running",
+      "completed",
+      "failed",
+    ]),
+    enumCheck("manual_topic_plan_attempts_error_code_check", t.errorCode, ["worker_failed"]),
+    check("manual_topic_plan_attempts_count_check", sql`${t.createdCount} >= 0`),
+    check(
+      "manual_topic_plan_attempts_terminal_check",
+      sql`((${t.status} = 'queued' OR ${t.status} = 'running') AND ${t.completedAt} IS NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'completed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NULL) OR (${t.status} = 'failed' AND ${t.completedAt} IS NOT NULL AND ${t.errorCode} IS NOT NULL)`,
+    ),
+  ],
+);
+
 /** Immutable attribution for every automatic generation. A topic is dispatched at most once. */
 export const autopilotDispatches = pgTable(
   "autopilot_dispatches",

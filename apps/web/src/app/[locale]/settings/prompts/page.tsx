@@ -4,6 +4,7 @@ import {
   CONTENT_STATUSES,
   PROMPT_ROLES,
   type PromptDecisionHistoryDto,
+  type PromptOutcomeComparisonDto,
   type PromptRevisionDto,
   type PromptRevisionUsageDto,
   type PromptRole,
@@ -16,12 +17,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ListRow } from "@/components/ui/list-row";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, errorMessage } from "@/lib/api";
 
 const FORM_ID = "prompt-guidance-form";
+type BrandOption = { id: string; name: string };
 
 export default function PromptsPage() {
   const t = useTranslations("Prompts");
@@ -41,8 +44,59 @@ export default function PromptsPage() {
   const [decisions, setDecisions] = useState<PromptDecisionHistoryDto | null>(null);
   const [decisionsError, setDecisionsError] = useState<string | null>(null);
   const [moreBusy, setMoreBusy] = useState(false);
+  const [brands, setBrands] = useState<BrandOption[] | null>(null);
+  const [outcomeBrandId, setOutcomeBrandId] = useState("");
+  const [outcomes, setOutcomes] = useState<PromptOutcomeComparisonDto | null>(null);
+  const [outcomesError, setOutcomesError] = useState<string | null>(null);
+  const visibleOutcomes =
+    outcomes?.brandId === outcomeBrandId && outcomes.role === role && outcomes.days === usageDays
+      ? outcomes
+      : null;
   const decisionRequestSequence = useRef(0);
   const requestSequence = useRef(0);
+  const outcomeRequestSequence = useRef(0);
+
+  useEffect(() => {
+    let current = true;
+    void api<BrandOption[]>("/api/brands")
+      .then((result) => {
+        if (!current) return;
+        setBrands(result);
+        setOutcomeBrandId((selected) =>
+          result.some((brand) => brand.id === selected) ? selected : (result[0]?.id ?? ""),
+        );
+      })
+      .catch((err) => {
+        if (current) setOutcomesError(errorMessage(err, t("outcomesError"), te));
+      });
+    return () => {
+      current = false;
+    };
+  }, [t, te]);
+
+  const loadOutcomes = useCallback(async () => {
+    const request = ++outcomeRequestSequence.current;
+    setOutcomes(null);
+    if (!outcomeBrandId) return;
+    setOutcomesError(null);
+    try {
+      const result = await api<PromptOutcomeComparisonDto>(
+        `/api/prompts/brands/${outcomeBrandId}/${role}/outcomes?days=${usageDays}`,
+      );
+      if (request === outcomeRequestSequence.current) setOutcomes(result);
+    } catch (err) {
+      if (request === outcomeRequestSequence.current) {
+        setOutcomesError(errorMessage(err, t("outcomesError"), te));
+      }
+    }
+  }, [outcomeBrandId, role, usageDays, t, te]);
+
+  useEffect(() => {
+    void loadOutcomes();
+    return () => {
+      outcomeRequestSequence.current += 1;
+    };
+  }, [loadOutcomes]);
 
   const load = useCallback(async () => {
     const request = ++requestSequence.current;
@@ -140,6 +194,7 @@ export default function PromptsPage() {
         body: JSON.stringify(parsed.data),
       });
       await load();
+      void loadOutcomes();
       setNotice(t("saved"));
     } catch (err) {
       setError(errorMessage(err, t("genericError"), te));
@@ -224,11 +279,11 @@ export default function PromptsPage() {
           )}
         </form>
       </Card>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-fg">{t("history")}</h2>
+      <div className="mb-3 flex justify-end">
         <Select
           label={t("usageWindow")}
           value={usageDays}
+          disabled={busy}
           onChange={(event) => setUsageDays(Number(event.target.value) as 7 | 30 | 90)}
         >
           {[7, 30, 90].map((days) => (
@@ -238,6 +293,113 @@ export default function PromptsPage() {
           ))}
         </Select>
       </div>
+      <Card className="mb-6 space-y-4">
+        <h2 className="text-lg font-semibold text-fg">{t("outcomesTitle")}</h2>
+        <p className="text-sm text-fg-secondary">{t("outcomesCaveat")}</p>
+        {brands && brands.length > 0 && (
+          <Select
+            label={t("outcomesBrand")}
+            value={outcomeBrandId}
+            disabled={busy}
+            onChange={(event) => setOutcomeBrandId(event.target.value)}
+          >
+            {brands.map((brand) => (
+              <option key={brand.id} value={brand.id}>
+                {brand.name}
+              </option>
+            ))}
+          </Select>
+        )}
+        {outcomesError && (
+          <p role="alert" className="text-sm text-danger">
+            {outcomesError}
+          </p>
+        )}
+        {brands === null && !outcomesError ? (
+          <Skeleton lines={2} />
+        ) : brands?.length === 0 ? (
+          <EmptyState
+            title={t("outcomesNoBrands")}
+            action={
+              <Link href={`/${locale}/brands`} className="text-sm text-accent underline">
+                {t("outcomesAddBrand")}
+              </Link>
+            }
+            className="py-6"
+          />
+        ) : visibleOutcomes === null ? (
+          !outcomesError && <Skeleton lines={3} />
+        ) : visibleOutcomes.rows.length === 0 ? (
+          <EmptyState
+            title={t("outcomesNoRevisions")}
+            action={
+              <a href="#prompt-guidance" className="text-sm text-accent underline">
+                {t("outcomesSaveVersion")}
+              </a>
+            }
+            className="py-6"
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-fg-secondary">
+                <tr>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesVersion")}
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesRuns")}
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesSucceeded")}
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesApproved")}
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesRejected")}
+                  </th>
+                  <th scope="col" className="pb-2 pr-4 font-medium">
+                    {t("outcomesPublished")}
+                  </th>
+                  <th scope="col" className="pb-2 font-medium">
+                    {t("outcomesCurrent")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {visibleOutcomes.rows.map((row) => {
+                  const draftStates = CONTENT_STATUSES.filter(
+                    (status) => (row.currentItemStatuses[status] ?? 0) > 0,
+                  ).map(
+                    (status) =>
+                      `${t(`itemStatuses.${status}`)}: ${row.currentItemStatuses[status]}`,
+                  );
+                  if (row.withoutCurrentItem > 0) {
+                    draftStates.push(`${t("withoutCurrentItem")}: ${row.withoutCurrentItem}`);
+                  }
+                  return (
+                    <tr key={row.revisionId}>
+                      <th scope="row" className="py-3 pr-4 font-medium">
+                        {t("version", { version: row.version })}
+                      </th>
+                      <td className="py-3 pr-4">{row.runCount}</td>
+                      <td className="py-3 pr-4">{row.succeededRuns}</td>
+                      <td className="py-3 pr-4">{row.reviewActs.approved}</td>
+                      <td className="py-3 pr-4">{row.reviewActs.rejected}</td>
+                      <td className="py-3 pr-4">{row.publishedRuns}</td>
+                      <td className="py-3 text-fg-secondary">
+                        {draftStates.join(" · ") || t("outcomesNoCurrent")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <h2 className="mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>
         {history === null ? (
           <div className="p-4">

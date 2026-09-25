@@ -56,11 +56,13 @@ export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
 } as const;
 /** Operator-requested, brand-scoped pass over approved dated topics. */
 export const MANUAL_TOPIC_PLAN_QUEUE = "topic-plan-manual";
-export type ManualTopicPlanJob = { orgId: string; brandId: string };
+export const MANUAL_TOPIC_PLAN_DLQ = "topic-plan-manual-dlq";
+export type ManualTopicPlanJob = { orgId: string; brandId: string; attemptId: string };
 export const MANUAL_TOPIC_PLAN_QUEUE_OPTIONS = {
   retryLimit: 2,
   retryDelay: 30,
   expireInSeconds: 120,
+  deadLetter: MANUAL_TOPIC_PLAN_DLQ,
 } as const;
 /** An operator-requested check uses the scheduled admission service unchanged. */
 export const MANUAL_AUTOPILOT_QUEUE = "autopilot-manual";

@@ -116,3 +116,18 @@ export const autopilotManualAttemptSchema = z.object({
   completedAt: z.iso.datetime().nullable(),
 });
 export type AutopilotManualAttempt = z.infer<typeof autopilotManualAttemptSchema>;
+
+/** Recent operator-requested calendar passes. Slot links are durable provenance. */
+export const manualTopicPlanAttemptSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(["queued", "running", "completed", "failed"]),
+  errorCode: z.enum(["worker_failed"]).nullable(),
+  createdAt: z.iso.datetime(),
+  startedAt: z.iso.datetime().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  slots: z.array(
+    z.object({ id: z.uuid(), scheduledAt: z.iso.datetime(), topicTitle: z.string().nullable() }),
+  ),
+  createdCount: z.number().int().nonnegative(),
+});
+export type ManualTopicPlanAttempt = z.infer<typeof manualTopicPlanAttemptSchema>;

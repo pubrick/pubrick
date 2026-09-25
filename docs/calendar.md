@@ -113,8 +113,16 @@ primary Add action still plans a generation slot.
   until generation starts.
 - `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
 - `POST /api/brands/:brandId/autopilot/plan-topics`: owner/admin request to run
-  the saved, opt-in dated-topic planner now. Returns 202 when queued or 409
+  the saved, opt-in dated-topic planner now. Returns 202 with a durable attempt
+  ID when queued or 409
   when the feature is off or was requested within 60 seconds.
+- `GET /api/brands/:brandId/autopilot/plan-topics/attempts`: owner/admin read of
+  the 20 most recent manual attempts. Queued, running, completed and failed
+  states include start/finish times; failures expose only `worker_failed`.
+  `createdCount` is finalized in the same transaction as new slots and stays
+  unchanged if an operator later deletes one. `slots` links only those still
+  on the calendar. Worker retries reuse the same attempt and cannot duplicate
+  or inflate the result. No AI call or publication occurs in this pass.
 
 Every route requires an active organization. The repository scopes all reads
 and writes by organization and brand and returns only explicit public columns.
