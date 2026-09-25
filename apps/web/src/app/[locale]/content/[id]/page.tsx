@@ -2430,9 +2430,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           staged={item.draftRevisionProposal}
           onAccepted={async (updatedBody) => {
             setBodyDraft(updatedBody);
-            setRichDraft(null);
-            setRichMode(false);
-            if (item.richBody) setRichResetNotice(true);
+            if (updatedBody !== item.body) {
+              setRichDraft(null);
+              setRichMode(false);
+              if (item.richBody) setRichResetNotice(true);
+            }
             await reload();
             const latest = await fetchItem();
             if (hasRichApiSupport(latest)) {

@@ -390,6 +390,51 @@ describe("editorial roles on content detail", () => {
 });
 
 describe("rich master integration", () => {
+  it("keeps rich formatting when an accepted AI revision changes only the title", async () => {
+    const savedBody = "Hello world";
+    const richBody: RichBody = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: savedBody }] }],
+    };
+    const revisionId = "01b3ccf6-1535-469d-9f87-dc15f589f893";
+    const served = {
+      current: makeItem({
+        origin: "ai",
+        richBody,
+        bodyRevision: 1,
+        draftRevisionProposal: {
+          id: revisionId,
+          sourceTitle: "Launch post",
+          sourceBody: savedBody,
+          instruction: "Improve the title",
+          proposedTitle: "Clearer launch post",
+          proposal: savedBody,
+          reason: "The headline is clearer.",
+        },
+      }),
+    };
+    installBaseHandlers(served, [], (path, method) => {
+      if (method === "POST" && path === `/api/content/c1/draft-revision/${revisionId}/accept`) {
+        served.current = {
+          ...served.current,
+          title: "Clearer launch post",
+          draftRevisionProposal: null,
+        };
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(
+      await screen.findByRole("button", { name: en.Publish.richEditor.plainMode }),
+    ).toBeEnabled();
+    await userEvent.setup().click(screen.getByRole("button", { name: en.DraftRevision.accept }));
+    expect(await screen.findByText("Clearer launch post")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.richEditor.plainMode })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: en.Publish.richEditor.label })).toBeVisible();
+    expect(screen.queryByText(en.Publish.richEditor.formatReset)).not.toBeInTheDocument();
+  });
+
   it("offers formatting only when the API advertises support and saves with the original revision", async () => {
     const served = { current: makeItem({ richBody: null, richBodyHtml: null, bodyRevision: 0 }) };
     const calls: Call[] = [];
