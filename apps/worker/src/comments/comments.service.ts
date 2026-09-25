@@ -18,7 +18,28 @@ export class CommentsService {
     return this.comments.scanAuto(boss);
   }
 
+  scanPublicationsAuto(boss: PgBoss): Promise<number> {
+    return this.comments.scanPublicationsAuto(boss);
+  }
+
   async handle(job: TelegramCommentsJob): Promise<void> {
+    if (job.kind === "publication_auto") {
+      const publication = await this.comments.eligiblePublicationAuto(job);
+      if (!publication) return;
+      const session = await this.comments.session(job.orgId);
+      if (!session || !(await this.comments.eligiblePublicationAuto(job))) return;
+      try {
+        const result = await this.telegram.comments(publication.url, session);
+        await this.comments.savePublicationAuto(job, publication.url, result);
+      } catch (error) {
+        if (!(error instanceof TelegramSourceError)) throw error;
+        this.logger.warn(
+          `Automatic reply check failed for publication ${job.publicationId}: ${error.code}`,
+        );
+        await this.comments.failPublicationAuto(job, publication.url, error.code);
+      }
+      return;
+    }
     if (job.kind === "news_auto") {
       const item = await this.comments.eligibleAuto(job);
       if (!item) return;

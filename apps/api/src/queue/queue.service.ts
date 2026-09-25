@@ -183,7 +183,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueTelegramComments(tx: Tx, payload: TelegramCommentsJob): Promise<boolean> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(TELEGRAM_COMMENTS_QUEUE, payload, {
-      ...(payload.kind === "publication"
+      ...(payload.kind === "publication" || payload.kind === "publication_auto"
         ? telegramPublicationCommentsJobOptions(payload.publicationId, payload.orgId)
         : telegramCommentsJobOptions(payload.itemId, payload.orgId)),
       db: fromDrizzle(tx, sql),

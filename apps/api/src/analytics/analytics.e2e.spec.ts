@@ -98,6 +98,30 @@ describe.skipIf(!url)("publication analytics e2e", () => {
     return { agent, orgId: org.body.id as string };
   }
 
+  it("keeps publication auto-collection off until an authorized brand opts in and increments the fence on every change", async () => {
+    const owner = await orgAgent();
+    const stranger = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Reply consent" }).expect(201);
+    const path = `/api/analytics/brands/${brand.body.id}/comment-collection`;
+    expect((await owner.agent.get(path).expect(200)).body).toEqual({
+      enabled: false,
+      updatedAt: null,
+    });
+    await stranger.agent.get(path).expect(404);
+    await stranger.agent.put(path).send({ enabled: true }).expect(404);
+    await owner.agent.put(path).send({ enabled: "yes" }).expect(400);
+    const enabled = await owner.agent.put(path).send({ enabled: true }).expect(200);
+    expect(enabled.body).toMatchObject({ enabled: true });
+    const disabled = await owner.agent.put(path).send({ enabled: false }).expect(200);
+    expect(disabled.body).toMatchObject({ enabled: false });
+    await owner.agent.put(path).send({ enabled: true }).expect(200);
+    const [row] = await db
+      .select({ revision: schema.publicationCommentCollectionConfigs.revision })
+      .from(schema.publicationCommentCollectionConfigs)
+      .where(eq(schema.publicationCommentCollectionConfigs.brandId, brand.body.id));
+    expect(row?.revision).toBe(3);
+  });
+
   it("collects only an owned public Telegram publication and recovers an abandoned request", async () => {
     const owner = await orgAgent();
     const other = await orgAgent();

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -22,6 +23,31 @@ export const PUBLICATION_COMMENT_STATUSES = [
   "unavailable",
   "error",
 ] as const;
+
+/** Explicit, default-off brand consent for free automatic public reply sampling. */
+export const publicationCommentCollectionConfigs = pgTable(
+  "publication_comment_collection_configs",
+  {
+    brandId: uuid("brand_id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(false),
+    /** Incremented on every update, including off/on cycles, to fence queued jobs. */
+    revision: integer("revision").notNull().default(0),
+    lastScannedAt: timestamp("last_scanned_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: "publication_comment_collection_configs_brand_org_fk",
+      columns: [t.orgId, t.brandId],
+      foreignColumns: [brands.orgId, brands.id],
+    }).onDelete("cascade"),
+    index("publication_comment_collection_configs_due_idx").on(t.enabled, t.lastScannedAt),
+    check("publication_comment_collection_configs_revision_check", sql`${t.revision} >= 0`),
+  ],
+);
 
 /** One latest collection attempt for a live Telegram publication. */
 export const publicationCommentSamples = pgTable(

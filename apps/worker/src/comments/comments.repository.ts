@@ -5,6 +5,7 @@ import {
   TELEGRAM_COMMENTS_QUEUE,
   type TelegramCommentsJob,
   telegramCommentsJobOptions,
+  telegramPublicationCommentsJobOptions,
 } from "@pubrick/shared";
 import type { ChannelComments } from "@pubrick/telegram";
 import { and, asc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
@@ -13,12 +14,131 @@ import { db } from "../db";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type AutoJob = Extract<TelegramCommentsJob, { kind: "news_auto" }>;
+type AutoPublicationJob = Extract<TelegramCommentsJob, { kind: "publication_auto" }>;
+type PublicationJob = Extract<TelegramCommentsJob, { kind: "publication" | "publication_auto" }>;
 const MAX_BRANDS_PER_SCAN = 10;
 const MAX_ITEMS_PER_BRAND = 50;
 const publicStoryUrl = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/[1-9]\d*$/;
 
 @Injectable()
 export class CommentsRepository {
+  /** Round-robin by last pass; a lost job remains eligible after singleton expiry. */
+  async scanPublicationsAuto(boss: PgBoss): Promise<number> {
+    return db.transaction(async (tx) => {
+      const lock = await tx.execute<{ acquired: boolean }>(
+        sql`select pg_try_advisory_xact_lock(hashtext('publication-comment-auto-scan')) as acquired`,
+      );
+      if (!lock.rows[0]?.acquired) return 0;
+      const configs = await tx
+        .select({
+          orgId: schema.publicationCommentCollectionConfigs.orgId,
+          brandId: schema.publicationCommentCollectionConfigs.brandId,
+          revision: schema.publicationCommentCollectionConfigs.revision,
+        })
+        .from(schema.publicationCommentCollectionConfigs)
+        .innerJoin(
+          schema.telegramSourceAccounts,
+          eq(schema.telegramSourceAccounts.orgId, schema.publicationCommentCollectionConfigs.orgId),
+        )
+        .where(
+          and(
+            eq(schema.publicationCommentCollectionConfigs.enabled, true),
+            or(
+              isNull(schema.publicationCommentCollectionConfigs.lastScannedAt),
+              lte(
+                schema.publicationCommentCollectionConfigs.lastScannedAt,
+                sql`now() - interval '1 hour'`,
+              ),
+            ),
+          ),
+        )
+        .orderBy(
+          sql`${schema.publicationCommentCollectionConfigs.lastScannedAt} ASC NULLS FIRST`,
+          asc(schema.publicationCommentCollectionConfigs.brandId),
+        )
+        .limit(MAX_BRANDS_PER_SCAN)
+        .for("update", { of: schema.publicationCommentCollectionConfigs, skipLocked: true });
+      let queued = 0;
+      for (const config of configs) {
+        const publications = await tx
+          .select({ id: schema.publications.id })
+          .from(schema.publications)
+          .innerJoin(
+            schema.adaptations,
+            and(
+              eq(schema.adaptations.id, schema.publications.adaptationId),
+              eq(schema.adaptations.orgId, config.orgId),
+              eq(schema.adaptations.channelId, schema.publications.channelId),
+            ),
+          )
+          .innerJoin(
+            schema.contentItems,
+            and(
+              eq(schema.contentItems.id, schema.adaptations.contentItemId),
+              eq(schema.contentItems.orgId, config.orgId),
+              eq(schema.contentItems.brandId, config.brandId),
+            ),
+          )
+          .innerJoin(
+            schema.channels,
+            and(
+              eq(schema.channels.id, schema.publications.channelId),
+              eq(schema.channels.orgId, config.orgId),
+              eq(schema.channels.brandId, config.brandId),
+              eq(schema.channels.platform, "telegram"),
+            ),
+          )
+          .leftJoin(
+            schema.publicationCommentSamples,
+            and(
+              eq(schema.publicationCommentSamples.publicationId, schema.publications.id),
+              eq(schema.publicationCommentSamples.orgId, config.orgId),
+              eq(schema.publicationCommentSamples.brandId, config.brandId),
+            ),
+          )
+          .where(
+            and(
+              eq(schema.publications.orgId, config.orgId),
+              eq(schema.publications.status, "published"),
+              lte(schema.publications.createdAt, sql`now() - interval '6 hours'`),
+              isNull(schema.publicationCommentSamples.publicationId),
+              sql`${schema.publications.externalUrl} ~ '^https://t\\.me/[A-Za-z0-9_]{5,32}/[1-9][0-9]*$'`,
+              sql`split_part(${schema.publications.externalUrl}, '/', 5) = ${schema.publications.externalId}`,
+              sql`CASE WHEN ${schema.publications.externalId} ~ '^[1-9][0-9]*$' THEN ${schema.publications.externalId}::numeric <= 9007199254740991 ELSE false END`,
+            ),
+          )
+          .orderBy(asc(schema.publications.createdAt), asc(schema.publications.id))
+          .limit(MAX_ITEMS_PER_BRAND);
+        for (const publication of publications) {
+          const sent = await boss.send(
+            TELEGRAM_COMMENTS_QUEUE,
+            {
+              kind: "publication_auto",
+              orgId: config.orgId,
+              brandId: config.brandId,
+              publicationId: publication.id,
+              revision: config.revision,
+            } satisfies AutoPublicationJob,
+            {
+              ...telegramPublicationCommentsJobOptions(publication.id, config.orgId),
+              db: fromDrizzle(tx, sql),
+            },
+          );
+          if (sent) queued++;
+        }
+        await tx
+          .update(schema.publicationCommentCollectionConfigs)
+          .set({ lastScannedAt: sql`now()` })
+          .where(
+            and(
+              eq(schema.publicationCommentCollectionConfigs.orgId, config.orgId),
+              eq(schema.publicationCommentCollectionConfigs.brandId, config.brandId),
+            ),
+          );
+      }
+      return queued;
+    });
+  }
   /** A fair page capped at 500 jobs per scan. All sends share the scan transaction. */
   async scanAuto(boss: PgBoss): Promise<number> {
     return db.transaction(async (tx) => {
@@ -306,9 +426,46 @@ export class CommentsRepository {
       : null;
   }
 
+  async eligiblePublicationAuto(job: AutoPublicationJob) {
+    const publication = await this.publication(job.orgId, job.brandId, job.publicationId);
+    if (!publication) return null;
+    const [eligible] = await db
+      .select({ id: schema.publications.id })
+      .from(schema.publications)
+      .innerJoin(
+        schema.publicationCommentCollectionConfigs,
+        and(
+          eq(schema.publicationCommentCollectionConfigs.orgId, job.orgId),
+          eq(schema.publicationCommentCollectionConfigs.brandId, job.brandId),
+          eq(schema.publicationCommentCollectionConfigs.enabled, true),
+          eq(schema.publicationCommentCollectionConfigs.revision, job.revision),
+        ),
+      )
+      .leftJoin(
+        schema.publicationCommentSamples,
+        and(
+          eq(schema.publicationCommentSamples.orgId, job.orgId),
+          eq(schema.publicationCommentSamples.brandId, job.brandId),
+          eq(schema.publicationCommentSamples.publicationId, job.publicationId),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.publications.orgId, job.orgId),
+          eq(schema.publications.id, job.publicationId),
+          eq(schema.publications.status, "published"),
+          eq(schema.publications.externalUrl, publication.url),
+          lte(schema.publications.createdAt, sql`now() - interval '6 hours'`),
+          isNull(schema.publicationCommentSamples.publicationId),
+        ),
+      )
+      .limit(1);
+    return eligible ? publication : null;
+  }
+
   private async lockLivePublication(
     tx: Tx,
-    job: Extract<TelegramCommentsJob, { kind: "publication" }>,
+    job: PublicationJob,
     current: NonNullable<Awaited<ReturnType<CommentsRepository["publication"]>>>,
   ): Promise<boolean> {
     if (!current.adaptationId || !current.channelId || !current.externalId) return false;
@@ -365,11 +522,94 @@ export class CommentsRepository {
           eq(schema.publications.channelId, current.channelId),
           eq(schema.publications.externalId, current.externalId),
           eq(schema.publications.externalUrl, current.url),
+          ...(job.kind === "publication_auto"
+            ? [lte(schema.publications.createdAt, sql`now() - interval '6 hours'`)]
+            : []),
         ),
       )
       .limit(1)
-      .for("share");
+      .for(job.kind === "publication_auto" ? "update" : "share");
     return !!receipt;
+  }
+
+  /** Final fence serializes opt-out and manual admission before recording a sample. */
+  private async finishPublicationAuto(
+    job: AutoPublicationJob,
+    url: string,
+    result: ChannelComments | null,
+    errorCode: string | null,
+  ): Promise<void> {
+    const current = await this.publication(job.orgId, job.brandId, job.publicationId);
+    if (!current || current.url !== url) return;
+    await db.transaction(async (tx) => {
+      const [config] = await tx
+        .select({ revision: schema.publicationCommentCollectionConfigs.revision })
+        .from(schema.publicationCommentCollectionConfigs)
+        .where(
+          and(
+            eq(schema.publicationCommentCollectionConfigs.orgId, job.orgId),
+            eq(schema.publicationCommentCollectionConfigs.brandId, job.brandId),
+            eq(schema.publicationCommentCollectionConfigs.enabled, true),
+            eq(schema.publicationCommentCollectionConfigs.revision, job.revision),
+          ),
+        )
+        .limit(1)
+        .for("share");
+      if (!config || !(await this.lockLivePublication(tx, job, current))) return;
+      const [existing] = await tx
+        .select({ id: schema.publicationCommentSamples.publicationId })
+        .from(schema.publicationCommentSamples)
+        .where(
+          and(
+            eq(schema.publicationCommentSamples.orgId, job.orgId),
+            eq(schema.publicationCommentSamples.brandId, job.brandId),
+            eq(schema.publicationCommentSamples.publicationId, job.publicationId),
+          ),
+        )
+        .limit(1);
+      if (existing) return;
+      const comments = result?.comments.slice(0, 50) ?? [];
+      const status = errorCode
+        ? "error"
+        : result?.status === "available"
+          ? comments.length
+            ? "available"
+            : "no_comments"
+          : "unavailable";
+      const [inserted] = await tx
+        .insert(schema.publicationCommentSamples)
+        .values({
+          orgId: job.orgId,
+          brandId: job.brandId,
+          publicationId: job.publicationId,
+          status,
+          requestedAt: sql`now()`,
+          checkedAt: sql`now()`,
+          errorCode,
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.publicationCommentSamples.publicationId });
+      if (!inserted) return;
+      if (status === "available")
+        await tx.insert(schema.publicationComments).values(
+          comments.map((comment) => ({
+            orgId: job.orgId,
+            brandId: job.brandId,
+            publicationId: job.publicationId,
+            telegramMessageId: comment.messageId,
+            body: comment.body,
+            publishedAt: comment.publishedAt,
+          })),
+        );
+    });
+  }
+
+  savePublicationAuto(job: AutoPublicationJob, url: string, result: ChannelComments) {
+    return this.finishPublicationAuto(job, url, result, null);
+  }
+
+  failPublicationAuto(job: AutoPublicationJob, url: string, code: string) {
+    return this.finishPublicationAuto(job, url, null, code);
   }
 
   async savePublication(
