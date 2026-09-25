@@ -449,6 +449,12 @@ expiring soon / broken); a degrading channel generates a Needs-attention
 item while the queue can still be saved: "Telegram bot token invalid — 3
 scheduled posts at risk."
 
+**Shipped scope:** a six-hour cached platform check shows checked OK, failed,
+or unknown. The queue links a failed check to the brand and counts scheduled
+posts depending on that channel. Expiry warnings require a platform-provided
+expiry instant; none of the current adapters supplies one. A failed check is
+not labelled "token invalid" unless the platform has actually established it.
+
 ### 6.3 CI-style delivery receipt on the post detail — `ADOPT-NOW`
 
 A run = an ordered list of steps, each with status, timestamp, expandable

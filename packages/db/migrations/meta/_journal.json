@@ -708,6 +708,13 @@
       "when": 1790356858456,
       "tag": "0101_telegram_partial_primary_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1790360646911,
+      "tag": "0102_channel-health",
+      "breakpoints": true
     }
   ]
 }

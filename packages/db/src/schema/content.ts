@@ -55,6 +55,9 @@ export const channels = pgTable(
     metricsAutoRefresh: boolean("metrics_auto_refresh").default(false).notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
     credentialsEncrypted: text("credentials_encrypted"),
+    /** Last real platform verification, invalidated when credentials change. */
+    healthOk: boolean("health_ok"),
+    healthCheckedAt: timestamp("health_checked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$onUpdate(() => new Date())
@@ -64,6 +67,11 @@ export const channels = pgTable(
   (t) => [
     index("channels_org_id_idx").on(t.orgId),
     index("channels_brand_id_idx").on(t.brandId),
+    index("channels_health_due_idx").on(t.healthCheckedAt, t.id),
+    check(
+      "channels_health_result_pair_check",
+      sql`${t.healthOk} is null or ${t.healthCheckedAt} is not null`,
+    ),
     /**
      * The platform decides which adapter sends the post and which length limit
      * the body is checked against (`adaptationLimit`), and both are lookups

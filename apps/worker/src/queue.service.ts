@@ -58,6 +58,7 @@ import type { PgBoss } from "pg-boss";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
+import { ChannelHealthService } from "./channels/channel-health.service";
 import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsService } from "./comments/comments.service";
 import { PaidReplyService } from "./comments/paid-reply.service";
@@ -170,6 +171,7 @@ export class QueueService {
     @Optional() private readonly topicPlanner?: TopicPlannerService,
     @Optional() private readonly claimReview?: ClaimReviewService,
     @Optional() private readonly paidReplies?: PaidReplyService,
+    @Optional() private readonly channelHealth?: ChannelHealthService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -187,6 +189,16 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    // Only the production queue set runs this bounded maintenance check.
+    // Test workers with private queue names must not contact real channels.
+    if (this.channelHealth && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("channel-health-scan");
+      await boss.schedule("channel-health-scan", "*/15 * * * *");
+      await boss.work("channel-health-scan", { batchSize: 1 }, async () => {
+        await this.channelHealth?.scan();
+      });
+    }
 
     // Manual requests always need a consumer and recovery sweep. The optional
     // rollout instant gates only automatic collection handoffs.

@@ -4,6 +4,7 @@ import { getPublisher, type VerifyResult } from "@pubrick/integrations";
 import {
   type ChannelCreate,
   type ChannelUpdate,
+  channelHealthState,
   decryptJson,
   encryptJson,
   isManualPlatform,
@@ -63,7 +64,29 @@ export class ChannelsRepository {
       brandId ? eq(schema.channels.brandId, brandId) : undefined,
       visibleBrandIds === null ? undefined : inArray(schema.channels.brandId, visibleBrandIds),
     );
-    return db.select(PUBLIC_COLUMNS).from(schema.channels).where(where);
+    return db
+      .select({
+        ...PUBLIC_COLUMNS,
+        healthOk: schema.channels.healthOk,
+        healthCheckedAt: schema.channels.healthCheckedAt,
+        scheduledCount: sql<number>`(
+          select count(*)::integer from adaptations a
+          where a.org_id = channels.org_id and a.channel_id = channels.id
+            and a.status = 'scheduled'
+        )`.mapWith(Number),
+      })
+      .from(schema.channels)
+      .where(where)
+      .then((rows) => {
+        const now = Date.now();
+        return rows.map(({ healthOk, healthCheckedAt, ...row }) => ({
+          ...row,
+          health: {
+            state: channelHealthState(healthOk, healthCheckedAt, now),
+            checkedAt: healthCheckedAt,
+          },
+        }));
+      });
   }
 
   /**
@@ -176,7 +199,11 @@ export class ChannelsRepository {
           : { metricsAutoRefresh: data.metricsAutoRefresh }),
         ...(data.credentials === undefined
           ? {}
-          : { credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY) }),
+          : {
+              credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY),
+              healthOk: null,
+              healthCheckedAt: null,
+            }),
       })
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .returning(PUBLIC_COLUMNS);
@@ -409,6 +436,32 @@ export class ChannelsRepository {
     }
   }
 
+  /** Advisory cache: a slow answer cannot overwrite rotated credentials, and a
+   * cache write failure cannot turn a valid manual Test response into a 500. */
+  private async saveHealth(
+    orgId: string,
+    id: string,
+    credentialsEncrypted: string | null,
+    ok: boolean | null,
+  ): Promise<void> {
+    if (credentialsEncrypted === null) return;
+    try {
+      await db
+        .update(schema.channels)
+        .set({ healthOk: ok, healthCheckedAt: new Date(), updatedAt: sql`updated_at` })
+        .where(
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.id, id),
+            eq(schema.channels.credentialsEncrypted, credentialsEncrypted),
+          ),
+        );
+    } catch {
+      // Database driver errors may contain SQL parameters, including ciphertext.
+      this.logger.warn(`Could not cache connection check for channel ${id}; orgId=${orgId}`);
+    }
+  }
+
   /**
    * Verifies stored credentials against the platform. Never returns them.
    *
@@ -424,7 +477,10 @@ export class ChannelsRepository {
    */
   async verify(orgId: string, id: string): Promise<VerifyResult> {
     const rows = await db
-      .select({ platform: schema.channels.platform })
+      .select({
+        platform: schema.channels.platform,
+        credentialsEncrypted: schema.channels.credentialsEncrypted,
+      })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
       .limit(1);
@@ -439,12 +495,17 @@ export class ChannelsRepository {
     }
 
     const publisher = getPublisher(channel.platform);
-    if (!publisher) return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
+    if (!publisher) {
+      await this.saveHealth(orgId, id, channel.credentialsEncrypted, false);
+      return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
+    }
 
     const credentials = await this.getDecryptedCredentials(orgId, id);
     const parsed = publisher.credentialsSchema.safeParse(credentials);
-    if (!parsed.success)
+    if (!parsed.success) {
+      await this.saveHealth(orgId, id, channel.credentialsEncrypted, false);
       return { ok: false, reason: "Stored credentials are missing required fields" };
+    }
 
     // Defense in depth: a failed connection test is a result, never a 5xx.
     // The adapter (e.g. `telegramPublisher.verify`) is expected to classify
@@ -452,6 +513,7 @@ export class ChannelsRepository {
     // live caller of `publisher.verify()` for any given platform, so an
     // adapter bug or an unanticipated response shape must not escape as a
     // raw exception and become an HTTP 500 here.
+    let result: VerifyResult;
     try {
       const baseUrl =
         channel.platform === "vk"
@@ -461,9 +523,18 @@ export class ChannelsRepository {
             : channel.platform === "telegram"
               ? env.TELEGRAM_API_BASE_URL
               : undefined;
-      return await publisher.verify(parsed.data, { baseUrl });
+      result = await publisher.verify(parsed.data, { baseUrl });
     } catch {
-      return { ok: false, reason: "Connection test failed unexpectedly" };
+      result = { ok: false, reason: "Connection test failed unexpectedly", indeterminate: true };
     }
+    await this.saveHealth(
+      orgId,
+      id,
+      channel.credentialsEncrypted,
+      result.ok ? true : result.indeterminate ? null : false,
+    );
+    // The endpoint's existing contract remains {ok, reason}; the extra bit is
+    // only for cache semantics, never a claim a browser has to interpret.
+    return result.ok ? result : { ok: false, reason: result.reason };
   }
 }

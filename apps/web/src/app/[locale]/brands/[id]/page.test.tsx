@@ -220,6 +220,40 @@ function installHandlers(
   });
 }
 
+describe("cached channel health", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows a failed real check and the number of scheduled posts depending on it", async () => {
+    installHandlers([
+      {
+        id: "c1",
+        platform: "telegram",
+        name: "Main",
+        health: { state: "failed", checkedAt: new Date().toISOString() },
+        scheduledCount: 3,
+      },
+    ]);
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(await screen.findByText(en.Channels.health.failed)).toBeVisible();
+    expect(screen.getByText(/3 scheduled posts depend on this channel/)).toBeVisible();
+  });
+
+  it("leaves an unchecked channel neutral", async () => {
+    installHandlers([
+      {
+        id: "c1",
+        platform: "telegram",
+        name: "Main",
+        health: { state: "unknown", checkedAt: null },
+        scheduledCount: 1,
+      },
+    ]);
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(await screen.findByText(en.Channels.health.unknown)).toBeVisible();
+    expect(screen.queryByText(en.Channels.health.failed)).not.toBeInTheDocument();
+  });
+});
+
 /**
  * Removing a channel destroys credentials that are encrypted at rest and never
  * returned by any endpoint — nothing on this screen and nothing in the

@@ -531,6 +531,12 @@
     "autoMetricsOff": "Métricas: desactivadas",
     "autoMetricsHint": "Comprueba cada hora las publicaciones recientes de VK. Tras una lectura correcta, cada publicación se actualiza como máximo una vez al día.",
     "testOk": "OK — conectado como {account}, puede publicar en {target}",
+    "health": {
+      "ok": "Comprobación correcta",
+      "failed": "Falló la última comprobación",
+      "unknown": "Sin comprobar"
+    },
+    "scheduledDependents": "{count, plural, one {# publicación programada depende de este canal} other {# publicaciones programadas dependen de este canal}}",
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "empty": "Todavía no hay canales.",
     "emptyAddAction": "Añade tu primer canal",
@@ -609,6 +615,10 @@
       "sendAbandoned": "El envío a {channel} se detuvo antes de llegar a la plataforma y no queda ningún reintento. No se envió nada: publica ahora para volver a intentarlo."
     },
     "channelsUnavailable": "No se pudieron cargar los nombres de los canales, así que se muestran por ID.",
+    "channelHealthTitle": "Canales que requieren atención",
+    "channelHealthFailed": "Falló la comprobación",
+    "channelHealthRisk": "{channel}: {count, plural, one {# publicación programada depende de esta conexión} other {# publicaciones programadas dependen de esta conexión}}.",
+    "channelHealthReview": "Revisar canal",
     "tryAgain": "Reintentar",
     "loadMore": "Cargar más"
   },

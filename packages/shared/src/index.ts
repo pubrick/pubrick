@@ -4,6 +4,11 @@ export {
   preferredCredential,
 } from "./ai-credential-order.js";
 export {
+  CHANNEL_HEALTH_TTL_MS,
+  type ChannelHealthState,
+  channelHealthState,
+} from "./channel-health.js";
+export {
   AI_CALL_OUTCOMES,
   AI_COST_SOURCES,
   type AiCallOutcome,

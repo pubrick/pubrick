@@ -34,7 +34,7 @@ export interface PublishResult {
 
 export type VerifyResult =
   | { ok: true; account: string; target: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; indeterminate?: true };
 
 export interface PublisherOptions {
   baseUrl?: string;

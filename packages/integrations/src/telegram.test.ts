@@ -958,7 +958,11 @@ describe("telegramPublisher.verify", () => {
   it("reports the reason instead of throwing when getMe's result is malformed", async () => {
     const fetchImpl = fetchReturning({ ok: true, result: null });
     const result = await telegramPublisher.verify(CREDS, { fetchImpl });
-    expect(result).toEqual({ ok: false, reason: "Telegram returned an unexpected getMe response" });
+    expect(result).toEqual({
+      ok: false,
+      reason: "Telegram returned an unexpected getMe response",
+      indeterminate: true,
+    });
   });
 
   it("reports the reason instead of throwing when getChat's result is malformed", async () => {
@@ -977,6 +981,7 @@ describe("telegramPublisher.verify", () => {
     expect(result).toEqual({
       ok: false,
       reason: "Telegram returned an unexpected getChat response",
+      indeterminate: true,
     });
   });
 
@@ -1005,7 +1010,16 @@ describe("telegramPublisher.verify", () => {
     expect(result).toEqual({
       ok: false,
       reason: "Telegram returned an unexpected getChatMember response",
+      indeterminate: true,
     });
+  });
+
+  it("keeps a temporary transport failure inconclusive for cached health", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(new Error("connection reset")) as unknown as typeof fetch;
+    const result = await telegramPublisher.verify(CREDS, { fetchImpl });
+    expect(result).toMatchObject({ ok: false, indeterminate: true });
   });
 });
 

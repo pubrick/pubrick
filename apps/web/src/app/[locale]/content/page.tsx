@@ -79,7 +79,14 @@ const RETRY_REFUSAL_KEYS: Partial<Record<ErrorCode, string>> = {
   invalid_request: "retryNotRepeatable",
 };
 
-type Channel = { id: string; platform: string; name: string };
+type Channel = {
+  id: string;
+  brandId: string;
+  platform: string;
+  name: string;
+  scheduledCount?: number;
+  health?: { state: "ok" | "failed" | "unknown" };
+};
 
 type Adaptation = {
   id: string;
@@ -548,16 +555,28 @@ export default function ContentQueuePage() {
     // this the only symptom of a dead GET /api/channels is that every row is
     // labelled with a UUID, which reads as a data problem rather than as the
     // request that it is.
-    api<Channel[]>("/api/channels")
-      .then((cs) => {
-        setChannels(cs);
-        setChannelsFailed(false);
-      })
-      // Except when the account has no active organization: every request on
-      // this screen fails that way at once, the effect below is already
-      // leaving for onboarding, and three alerts on the way out is noise about
-      // one thing.
-      .catch((err) => setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg)));
+    let active = true;
+    const refresh = () => {
+      api<Channel[]>("/api/channels")
+        .then((cs) => {
+          if (!active) return;
+          setChannels(cs);
+          setChannelsFailed(false);
+        })
+        // Except when the account has no active organization: every request
+        // already redirects to onboarding. Hide old health warnings if this
+        // read fails; an old verdict is not a current warning.
+        .catch((err) => {
+          if (active) setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg));
+        });
+    };
+    refresh();
+    // Poll only the cached database view; this never calls a platform.
+    const timer = window.setInterval(refresh, 5 * 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const {
@@ -685,6 +704,10 @@ export default function ContentQueuePage() {
     const ch = channels.find((c) => c.id === channelId);
     return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
   }
+
+  const channelsAtRisk = (channelsFailed ? [] : channels).filter(
+    (channel) => channel.health?.state === "failed" && (channel.scheduledCount ?? 0) > 0,
+  );
 
   /**
    * One compact strip per open run, above the cards.
@@ -909,6 +932,31 @@ export default function ContentQueuePage() {
         <p role="alert" className="mb-4 text-sm text-danger">
           {t("channelsUnavailable")}
         </p>
+      )}
+
+      {channelsAtRisk.length > 0 && (
+        <Card className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold text-fg">{t("channelHealthTitle")}</h2>
+          <ul className="space-y-2">
+            {channelsAtRisk.map((channel) => (
+              <li key={channel.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <StatusBadge status="review">{t("channelHealthFailed")}</StatusBadge>
+                <span>
+                  {t("channelHealthRisk", {
+                    channel: platformChannelLabel(channel.platform, channel.name),
+                    count: channel.scheduledCount ?? 0,
+                  })}
+                </span>
+                <Link
+                  href={`/${locale}/brands/${channel.brandId}#channels`}
+                  className="font-semibold text-accent underline-offset-2 hover:underline"
+                >
+                  {t("channelHealthReview")}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
 
       {openRuns.length > 0 && (
