@@ -18,12 +18,14 @@ import {
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
+  type ContentImageRegenerate,
   type ContentImagesReplace,
   type ContentUpdate,
   type ContentVersionListQuery,
   type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
+  contentImageRegenerateSchema,
   contentImagesReplaceSchema,
   contentUpdateSchema,
   contentVersionListQuerySchema,
@@ -125,6 +127,17 @@ export class ContentController {
     @Body(new ZodValidationPipe(contentImagesReplaceSchema)) body: ContentImagesReplace,
   ) {
     return this.contentImages.replace(orgId, id, body);
+  }
+
+  @Post(":id/images/:slotId/regenerate")
+  @HttpCode(200)
+  regenerateImage(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("slotId", ParseUUIDPipe) slotId: string,
+    @Body(new ZodValidationPipe(contentImageRegenerateSchema)) body: ContentImageRegenerate,
+  ) {
+    return this.contentImages.regenerate(orgId, id, slotId, body);
   }
 
   @Get(":id/versions")

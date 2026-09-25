@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +9,8 @@ import { contentImagesStateSchema } from "@pubrick/shared";
 import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GeminiImageCaller } from "../media/gemini-image.caller";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -17,6 +19,12 @@ describe.skipIf(!url)("article image slots e2e", () => {
   let mediaDir: string;
   let direct: ReturnType<typeof createDb>;
   let png: Buffer;
+  const modelCall = vi.fn<GeminiImageCaller["call"]>(async () => ({
+    bytes: png,
+    mimeType: "image/png",
+    outcome: "completed",
+    responseMs: 1,
+  }));
 
   beforeAll(async () => {
     mediaDir = await mkdtemp(path.join(tmpdir(), "pubrick-article-images-"));
@@ -28,7 +36,10 @@ describe.skipIf(!url)("article image slots e2e", () => {
       .png()
       .toBuffer();
     const { AppModule } = await import("../app.module");
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(GeminiImageCaller)
+      .useValue({ call: modelCall })
+      .compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
@@ -41,6 +52,8 @@ describe.skipIf(!url)("article image slots e2e", () => {
     await direct.pool.end();
     await rm(mediaDir, { recursive: true, force: true });
   });
+
+  beforeEach(() => modelCall.mockClear());
 
   async function agent() {
     const client = request.agent(app.getHttpServer());
@@ -370,5 +383,151 @@ describe.skipIf(!url)("article image slots e2e", () => {
         .from(schema.mediaAssets)
         .where(eq(schema.mediaAssets.id, image.body.id)),
     ).toEqual([]);
+  });
+
+  it("regenerates only one slot and requires review before approval", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Regenerate article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const original = await upload(owner, brand.body.id);
+    const untouched = await upload(owner, brand.body.id);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const uri = `/api/content/${item.body.id}/images`;
+    const saved = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [
+          { mediaId: original.body.id, afterParagraph: 0, alt: "Original", caption: "Clear me" },
+          { mediaId: untouched.body.id, afterParagraph: 1, alt: "Keep me" },
+        ],
+      })
+      .expect(200);
+    const slotId = saved.body.images[0].id;
+    const result = await owner
+      .post(`${uri}/${slotId}/regenerate`)
+      .send({ expectedRevision: saved.body.revision })
+      .expect(200);
+    expect(contentImagesStateSchema.safeParse(result.body).success).toBe(true);
+    expect(result.body.revision).toBe(2);
+    expect(result.body.images[0]).toMatchObject({
+      id: slotId,
+      afterParagraph: 0,
+      caption: null,
+      needsReview: true,
+    });
+    expect(result.body.images[0].alt).toContain("review before publishing");
+    expect(result.body.images[0].mediaId).not.toBe(original.body.id);
+    expect(result.body.images[1]).toEqual(saved.body.images[1]);
+    expect((await owner.get(uri).expect(200)).body).toEqual(result.body);
+    expect(modelCall).toHaveBeenCalledTimes(1);
+    expect(modelCall.mock.calls[0]?.[0]).toBe("test-google-key");
+    expect(modelCall.mock.calls[0]?.[1]).toContain("First.");
+    expect(modelCall.mock.calls[0]?.[2]).toEqual(
+      await readFile(path.join(mediaDir, `${original.body.id}.jpg`)),
+    );
+    await owner.get(`/api/media/${original.body.id}/file`).expect(200);
+    await owner.get(`/api/media/${result.body.images[0].mediaId}/file`).expect(200);
+    const [brandRow] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    const usage = await direct.db
+      .select({ step: schema.usageLedger.step })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, brandRow?.orgId ?? ""));
+    expect(usage).toContainEqual({ step: "image_regenerate" });
+    const blocked = await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(409);
+    expect(blocked.body.code).toBe("content_images_need_review");
+  });
+
+  it("refuses stale, foreign, or pinned slots before making a paid image call", async () => {
+    const owner = await agent();
+    const stranger = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Guarded article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const image = await upload(owner, brand.body.id);
+    const uri = `/api/content/${item.body.id}/images`;
+    const saved = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId: image.body.id, afterParagraph: 0, alt: "Original" }],
+      })
+      .expect(200);
+    const slotId = saved.body.images[0].id;
+    const regenerateUri = `${uri}/${slotId}/regenerate`;
+    await owner
+      .post(regenerateUri)
+      .send({ expectedRevision: 1, prompt: "Use this untrusted client prompt" })
+      .expect(400);
+    await stranger.post(regenerateUri).send({ expectedRevision: 1 }).expect(404);
+    const stale = await owner.post(regenerateUri).send({ expectedRevision: 0 }).expect(409);
+    expect(stale.body.code).toBe("content_images_changed");
+    await owner.post(`${uri}/${randomUUID()}/regenerate`).send({ expectedRevision: 1 }).expect(404);
+    await direct.db
+      .update(schema.contentItems)
+      .set({ status: "approved" })
+      .where(eq(schema.contentItems.id, item.body.id));
+    const pinned = await owner.post(regenerateUri).send({ expectedRevision: 1 }).expect(409);
+    expect(pinned.body.code).toBe("content_media_pinned");
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a paid image in the library when another editor replaces its slot", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Racing article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const original = await upload(owner, brand.body.id);
+    const newer = await upload(owner, brand.body.id);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const uri = `/api/content/${item.body.id}/images`;
+    const saved = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId: original.body.id, afterParagraph: 0, alt: "First" }],
+      })
+      .expect(200);
+    let entered!: () => void;
+    let release!: () => void;
+    const callStarted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const callMayFinish = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    modelCall.mockImplementationOnce(async () => {
+      entered();
+      await callMayFinish;
+      return { bytes: png, mimeType: "image/png", outcome: "completed", responseMs: 1 };
+    });
+    const pending = owner
+      .post(`${uri}/${saved.body.images[0].id}/regenerate`)
+      .send({ expectedRevision: 1 })
+      .then((response) => response);
+    await callStarted;
+    const winner = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 1,
+        images: [{ mediaId: newer.body.id, afterParagraph: 1, alt: "Second" }],
+      })
+      .expect(200);
+    release();
+    const stale = await pending;
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("content_images_changed");
+    expect((await owner.get(uri).expect(200)).body).toEqual(winner.body);
+    const library = await owner.get(`/api/media?brandId=${brand.body.id}`).expect(200);
+    expect(library.body).toHaveLength(3);
+    expect(library.body.some((asset: { id: string }) => asset.id === newer.body.id)).toBe(true);
+    expect(modelCall).toHaveBeenCalledTimes(1);
   });
 });

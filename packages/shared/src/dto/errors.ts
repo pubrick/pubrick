@@ -106,6 +106,7 @@ export const API_ERROR_CODES = [
   "content_media_pinned",
   "content_image_position_invalid",
   "content_image_body_conflict",
+  "content_image_not_found",
   "content_images_changed",
   "content_images_need_review",
   "media_invalid",

@@ -33,6 +33,12 @@ export const contentImagesReplaceSchema = z
   });
 export type ContentImagesReplace = z.infer<typeof contentImagesReplaceSchema>;
 
+/** The server derives the prompt and source from the selected slot. */
+export const contentImageRegenerateSchema = z.strictObject({
+  expectedRevision: z.number().int().nonnegative(),
+});
+export type ContentImageRegenerate = z.infer<typeof contentImageRegenerateSchema>;
+
 export const contentImageDtoSchema = contentImageInputSchema.extend({
   id: z.uuid(),
   caption: z.string().nullable(),
