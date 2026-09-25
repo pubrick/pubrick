@@ -2659,7 +2659,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         <Button variant="secondary" onClick={() => setShowMedia((current) => !current)}>
           {item.coverMediaId || item.videoMediaId ? tm("selected") : tm("title")}
         </Button>
-        {["draft", "rejected", "failed"].includes(item.status) && (
+        {["draft", "rejected", "failed"].includes(item.status) && !item.videoMediaId && (
           <CoverRegenerate
             itemId={item.id}
             title={item.title}

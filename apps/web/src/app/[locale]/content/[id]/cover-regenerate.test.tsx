@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "@/lib/api";
-import { render, screen, waitFor, within } from "@/test/render";
+import { act, render, screen, waitFor, within } from "@/test/render";
 import es from "../../../../../messages/es.json";
 import { CoverRegenerate } from "./cover-regenerate";
 
@@ -16,6 +16,42 @@ beforeEach(() => {
 });
 
 describe("draft cover regeneration", () => {
+  it("keeps an edited prompt when old-cover metadata arrives late", async () => {
+    let resolveAsset!: (value: unknown) => void;
+    const assetRequest = new Promise((resolve) => {
+      resolveAsset = resolve;
+    });
+    mockApi.mockImplementation(async (path) => {
+      if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;
+      if (path === "/api/media/old-cover") return assetRequest as never;
+      throw new Error(`Unexpected ${path}`);
+    });
+    render(
+      <CoverRegenerate
+        itemId="post-1"
+        title="Harbor"
+        coverMediaId="old-cover"
+        onChanged={() => {}}
+        onOpenLibrary={() => {}}
+      />,
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: "Regenerate cover" }));
+    const prompt = within(screen.getByRole("dialog")).getByRole("textbox", {
+      name: "Describe the image",
+    });
+    await userEvent.setup().clear(prompt);
+    await userEvent.setup().type(prompt, "My own carefully edited prompt");
+    await act(async () => {
+      resolveAsset({ name: "AI image: Old generated prompt" });
+      await assetRequest;
+    });
+    expect(prompt).toHaveValue("My own carefully edited prompt");
+    expect(mockApi).not.toHaveBeenCalledWith(
+      "/api/media/posts/post-1/cover/regenerate",
+      expect.anything(),
+    );
+  });
+
   it("prefills a saved generated prompt, makes one deliberate call, and previews the attached cover", async () => {
     mockApi.mockImplementation(async (path) => {
       if (path === "/api/ai-credentials") return [{ provider: "google" }] as never;

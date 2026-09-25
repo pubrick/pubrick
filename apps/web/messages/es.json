@@ -1424,7 +1424,8 @@
     "publication_comments_refresh_cooldown": "Las respuestas se comprobaron hace poco. Intenta recopilarlas de nuevo en 15 minutos.",
     "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",
     "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación.",
-    "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla."
+    "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla.",
+    "media_cover_video_selected": "Quita el video seleccionado antes de regenerar la portada."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",

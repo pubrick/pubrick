@@ -874,6 +874,27 @@ describe.skipIf(!url)("media library e2e", () => {
       .send(body)
       .expect(409);
     expect(archived.body.code).toBe("content_archived");
+    const videoDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A video draft", channelIds: [channel.body.id] })
+      .expect(201);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "clip.mp4", contentType: "video/mp4" })
+      .expect(201);
+    await owner
+      .patch(`/api/media/posts/${videoDraft.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    const videoBlocked = await owner
+      .post(`/api/media/posts/${videoDraft.body.id}/cover/regenerate`)
+      .send(body)
+      .expect(409);
+    expect(videoBlocked.body.code).toBe("media_cover_video_selected");
+    expect((await owner.get(`/api/content/${videoDraft.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: null,
+      videoMediaId: video.body.id,
+    });
     expect(modelCall).not.toHaveBeenCalled();
   });
 
@@ -950,6 +971,48 @@ describe.skipIf(!url)("media library e2e", () => {
     );
     await owner.get(`/api/media/${first.body.asset.id}/file`).expect(200);
     await owner.get(`/api/media/${second.body.asset.id}/file`).expect(200);
+    const videoDraft = await owner
+      .post("/api/content")
+      .send({ brandId: brand.body.id, body: "A video draft", channelIds: [channel.body.id] })
+      .expect(201);
+    const video = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", tinyMp4, { filename: "new-video.mp4", contentType: "video/mp4" })
+      .expect(201);
+    let videoEntered!: () => void;
+    let videoRelease!: () => void;
+    const videoProviderEntered = new Promise<void>((resolve) => {
+      videoEntered = resolve;
+    });
+    const videoProviderMayFinish = new Promise<void>((resolve) => {
+      videoRelease = resolve;
+    });
+    modelCall.mockImplementationOnce(async () => {
+      videoEntered();
+      await videoProviderMayFinish;
+      return { bytes: generatedPng, mimeType: "image/png", outcome: "completed", responseMs: 1 };
+    });
+    const videoPending = owner
+      .post(`/api/media/posts/${videoDraft.body.id}/cover/regenerate`)
+      .send({ prompt: "A cover for the video draft", expectedCoverMediaId: null })
+      .then((response) => response);
+    await videoProviderEntered;
+    await owner
+      .patch(`/api/media/posts/${videoDraft.body.id}/video`)
+      .send({ mediaId: video.body.id })
+      .expect(200);
+    videoRelease();
+    const videoResult = await videoPending;
+    expect(videoResult.status).toBe(201);
+    expect(videoResult.body).toMatchObject({
+      attached: false,
+      reason: "media_cover_video_selected",
+    });
+    expect((await owner.get(`/api/content/${videoDraft.body.id}`).expect(200)).body).toMatchObject({
+      coverMediaId: null,
+      videoMediaId: video.body.id,
+    });
+    await owner.get(`/api/media/${videoResult.body.asset.id}/file`).expect(200);
     const [brandRow] = await direct.db
       .select({ orgId: schema.brands.orgId })
       .from(schema.brands)
@@ -958,7 +1021,7 @@ describe.skipIf(!url)("media library e2e", () => {
       .select()
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.orgId, brandRow?.orgId ?? ""));
-    expect(ledger.filter((row) => row.step === "image_regenerate")).toHaveLength(2);
-    expect(modelCall).toHaveBeenCalledTimes(2);
+    expect(ledger.filter((row) => row.step === "image_regenerate")).toHaveLength(3);
+    expect(modelCall).toHaveBeenCalledTimes(3);
   });
 });

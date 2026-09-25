@@ -2,7 +2,7 @@
 
 import type { MediaAssetDto, MediaCoverRegenerateResult } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,11 +38,11 @@ export function CoverRegenerate({
       .catch(() => setHasKey(false));
   }, []);
 
-  function close() {
+  const close = useCallback(() => {
     if (busyRef.current) return;
     prefillToken.current += 1;
     setOpen(false);
-  }
+  }, []);
 
   async function show() {
     const token = ++prefillToken.current;
@@ -62,6 +62,7 @@ export function CoverRegenerate({
 
   async function regenerate() {
     if (busyRef.current || hasKey !== true || prompt.trim().length < 8) return;
+    prefillToken.current += 1;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -156,7 +157,10 @@ export function CoverRegenerate({
               value={prompt}
               maxLength={2000}
               disabled={busy}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => {
+                prefillToken.current += 1;
+                setPrompt(event.target.value);
+              }}
             />
             {error && (
               <p role="alert" className="text-sm text-danger">

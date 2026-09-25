@@ -1424,7 +1424,8 @@
     "publication_comments_refresh_cooldown": "Replies were checked recently. Try collecting again in 15 minutes.",
     "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
     "metrics_unavailable": "Automatic metrics are unavailable for this publication.",
-    "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating."
+    "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating.",
+    "media_cover_video_selected": "Remove the selected video before regenerating a cover."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

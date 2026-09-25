@@ -221,6 +221,7 @@ export class MediaRepository {
           brandId: schema.contentItems.brandId,
           status: schema.contentItems.status,
           coverMediaId: schema.contentItems.coverMediaId,
+          videoMediaId: schema.contentItems.videoMediaId,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
@@ -236,6 +237,11 @@ export class MediaRepository {
         );
       if (item.coverMediaId !== expectedCoverMediaId)
         throw conflict("media_cover_changed", "The cover changed; reload before regenerating");
+      if (item.videoMediaId)
+        throw conflict(
+          "media_cover_video_selected",
+          "Remove the selected video before regenerating a cover",
+        );
       await this.requireNoPartialTelegram(tx, orgId, itemId);
       const targets = await tx
         .select({ platform: schema.channels.platform })
@@ -396,6 +402,7 @@ export class MediaRepository {
           brandId: schema.contentItems.brandId,
           status: schema.contentItems.status,
           coverMediaId: schema.contentItems.coverMediaId,
+          videoMediaId: schema.contentItems.videoMediaId,
           body: schema.contentItems.body,
         })
         .from(schema.contentItems)
@@ -415,6 +422,12 @@ export class MediaRepository {
       }
       if (expectedCoverMediaId !== undefined && item.coverMediaId !== expectedCoverMediaId) {
         throw conflict("media_cover_changed", "The cover changed; select the new image manually");
+      }
+      if (expectedCoverMediaId !== undefined && item.videoMediaId) {
+        throw conflict(
+          "media_cover_video_selected",
+          "A video was selected while the image was generated; the new image remains in the library",
+        );
       }
       await this.requireNoPartialTelegram(tx, orgId, itemId);
       if (mediaId) {

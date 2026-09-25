@@ -108,8 +108,10 @@ call Gemini. Confirming makes one text-to-image request through the same Google
 key, organization-wide 12-calls-per-hour limit, lock and usage ledger as library
 generation. The new JPEG is saved as a separate brand asset before Pubrick
 tries to attach it. Attachment rechecks the post's organization, brand, editable
-status, partial Telegram recovery, supported channels and original cover under
-a row lock. If another editor has changed the cover, the new paid image stays
+status, partial Telegram recovery, supported channels, absence of a selected
+video, and original cover under a row lock. A draft with a selected video refuses
+regeneration before billing; if a video is selected while Gemini is running, it
+is preserved. If another editor has changed the cover, the new paid image stays
 in the library and the dialog shows it with a path to manual selection. The
 previous asset is never deleted. Approval and publication still require normal
 human review. Approved and archived posts refuse regeneration before billing.

@@ -1424,7 +1424,8 @@
     "publication_comments_refresh_cooldown": "As respostas foram recolhidas recentemente. Tente recolher novamente daqui a 15 minutos.",
     "metrics_refresh_cooldown": "Esta publicação foi consultada recentemente. Tente novamente em 15 minutos.",
     "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação.",
-    "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la."
+    "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la.",
+    "media_cover_video_selected": "Remova o vídeo selecionado antes de regenerar a capa."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
