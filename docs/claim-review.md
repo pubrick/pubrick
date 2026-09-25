@@ -46,18 +46,25 @@ The search transport's bounds and provider response format are documented in
 
 ## Suggested corrections
 
-When a ready review finds a conflicting snippet, the editor may request one
-paid replacement suggestion for the exact quoted claim. Pubrick shows the
-original wording, suggested replacement, explanation, and the search results
-used for the suggestion. Search results are leads: open the linked pages and
-check them before choosing **Accept**. The model never applies a correction
-automatically.
+When a ready review finds a conflicting snippet in an AI-generated draft,
+the editor may request a paid replacement suggestion for the exact quoted
+claim. Pubrick shows the original wording, suggested replacement, explanation,
+and search results used for the suggestion. Search results are leads: open the
+linked pages and check them before choosing **Accept**. The model never applies
+a correction automatically.
 
 The suggestion belongs to one saved body and one review. A changed draft or a
 new review makes it stale. **Accept** replaces only the exact claim in an
-unchanged draft and records the model-written fragment in version history;
+unchanged draft and records an AI fragment and accepted-correction receipt;
 **Discard** removes the pending suggestion. A claim that occurs more than once
 must be edited manually, because an automatic replacement would be ambiguous.
 Empty or unavailable search results cannot produce a correction suggestion.
 The call uses the organization's AI key and shares the editor's hourly AI
-allowance; a failed model response may still incur provider cost.
+allowance. It can make up to two billable model calls when a structured reply
+needs repair; a failed response may still incur provider cost.
+
+Accepted corrections remain in the card's **Accepted corrections** history,
+with the original claim, replacement, explanation, saved search-result links,
+and the AI fragment version created by Accept. The history is loaded only when
+opened and can be paged without losing older receipts. It does not claim that
+the linked pages were fetched or independently verified.
