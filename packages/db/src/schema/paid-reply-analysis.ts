@@ -221,3 +221,14 @@ export const paidReplyAnalysisAttempts = pgTable(
     ),
   ],
 );
+
+/** One-time post-schema backfill fence; NULL completion means retry is safe. */
+export const paidReplyBackfillState = pgTable(
+  "paid_reply_backfill_state",
+  {
+    id: integer("id").primaryKey().default(1),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [check("paid_reply_backfill_state_singleton_check", sql`${t.id} = 1`)],
+);

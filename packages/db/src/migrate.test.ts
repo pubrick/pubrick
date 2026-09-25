@@ -1154,6 +1154,39 @@ describe.skipIf(!url)("runMigrations", () => {
             )
           ).rows.map((row) => [row.id, row.comments_sample_version]),
         ).toEqual(originalVersions);
+        const recollected = await after.query<{ comments_sample_version: string }>(
+          "UPDATE news_items SET comments_sample_version = gen_random_uuid(), comments_checked_at = now() + interval '1 minute' WHERE id = $1 RETURNING comments_sample_version",
+          [admittedItem],
+        );
+        const newVersion = recollected.rows[0]?.comments_sample_version;
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM paid_reply_analysis_attempts WHERE target_id = $1 AND sample_version = $2",
+              [admittedItem, newVersion],
+            )
+          ).rows,
+        ).toEqual([{ count: 0 }]);
+        // Simulate an interrupted post-schema backfill. Its durable start fence
+        // still excludes a sample recollected after the first attempt began.
+        await after.query("UPDATE paid_reply_backfill_state SET completed_at = NULL WHERE id = 1");
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM paid_reply_analysis_attempts WHERE target_id = $1 AND sample_version = $2",
+              [admittedItem, newVersion],
+            )
+          ).rows,
+        ).toEqual([{ count: 0 }]);
+        expect(
+          (
+            await after.query<{ completed: boolean }>(
+              "SELECT completed_at IS NOT NULL AS completed FROM paid_reply_backfill_state WHERE id = 1",
+            )
+          ).rows,
+        ).toEqual([{ completed: true }]);
         expect(
           (
             await after.query<{ valid: boolean }>(

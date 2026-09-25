@@ -67,20 +67,23 @@ async function prepareUsageBrandIndex(client: pg.PoolClient): Promise<void> {
  * Each page commits independently. Selecting pages by the stable primary key
  * also lets a failed post-migration step resume without changing assigned UUIDs.
  */
-async function backfillPages(client: pg.PoolClient, sql: string): Promise<void> {
+async function backfillPages(client: pg.PoolClient, sql: string, startedAt?: Date): Promise<void> {
   let cursor: string | null = null;
   for (;;) {
-    const result: pg.QueryResult<{ cursor: string }> = await client.query(sql, [cursor, 500]);
+    const params = startedAt ? [cursor, 500, startedAt] : [cursor, 500];
+    const result: pg.QueryResult<{ cursor: string }> = await client.query(sql, params);
     if (!result.rows[0]) return;
     cursor = result.rows[0].cursor;
   }
 }
 
 async function backfillPaidReplyHistory(client: pg.PoolClient): Promise<void> {
-  const exists = await client.query<{ exists: string | null }>(
-    "SELECT to_regclass('public.paid_reply_analysis_attempts')::text AS exists",
+  const state = await client.query<{ started_at: Date; completed_at: Date | null }>(
+    "SELECT started_at, completed_at FROM paid_reply_backfill_state WHERE id = 1",
   );
-  if (!exists.rows[0]?.exists) return;
+  if (!state.rows[0]) throw new Error("Paid reply backfill state is missing");
+  if (state.rows[0].completed_at) return;
+  const startedAt = state.rows[0].started_at;
 
   // Explicit defaults do not infer paid consent from the existing free feature.
   await backfillPages(
@@ -184,7 +187,8 @@ async function backfillPaidReplyHistory(client: pg.PoolClient): Promise<void> {
     client,
     `
     WITH batch AS (
-      SELECT id, org_id, brand_id, comments_sample_version AS sample_version
+      SELECT id, org_id, brand_id, comments_sample_version AS sample_version,
+        comments_checked_at AS checked_at
       FROM news_items WHERE ($1::uuid IS NULL OR id > $1::uuid)
       ORDER BY id LIMIT $2
     ), inserted AS (
@@ -196,17 +200,21 @@ async function backfillPaidReplyHistory(client: pg.PoolClient): Promise<void> {
       FROM batch b JOIN LATERAL (
         SELECT id FROM analysis_admissions
         WHERE org_id = b.org_id AND target_kind = 'source_comment' AND target_id = b.id
+          AND requested_at <= $3::timestamptz
         ORDER BY requested_at DESC, id DESC LIMIT 1
       ) a ON true WHERE b.sample_version IS NOT NULL
+        AND (b.checked_at IS NULL OR b.checked_at <= $3::timestamptz)
       ON CONFLICT DO NOTHING RETURNING id
     )
     SELECT id AS cursor FROM batch ORDER BY id DESC LIMIT 1`,
+    startedAt,
   );
   await backfillPages(
     client,
     `
     WITH batch AS (
-      SELECT publication_id AS id, org_id, brand_id, sample_version
+      SELECT publication_id AS id, org_id, brand_id, sample_version,
+        checked_at
       FROM publication_comment_samples
       WHERE ($1::uuid IS NULL OR publication_id > $1::uuid)
       ORDER BY publication_id LIMIT $2
@@ -219,11 +227,17 @@ async function backfillPaidReplyHistory(client: pg.PoolClient): Promise<void> {
       FROM batch b JOIN LATERAL (
         SELECT id FROM analysis_admissions
         WHERE org_id = b.org_id AND target_kind = 'publication_comment' AND target_id = b.id
+          AND requested_at <= $3::timestamptz
         ORDER BY requested_at DESC, id DESC LIMIT 1
       ) a ON true WHERE b.sample_version IS NOT NULL
+        AND (b.checked_at IS NULL OR b.checked_at <= $3::timestamptz)
       ON CONFLICT DO NOTHING RETURNING id
     )
     SELECT id AS cursor FROM batch ORDER BY id DESC LIMIT 1`,
+    startedAt,
+  );
+  await client.query(
+    "UPDATE paid_reply_backfill_state SET completed_at = now() WHERE id = 1 AND completed_at IS NULL",
   );
 }
 
