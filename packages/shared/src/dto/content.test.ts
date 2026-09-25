@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ADAPTATION_STATUSES,
+  adaptationDtoSchema,
   adaptationUpdateSchema,
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
@@ -19,6 +20,8 @@ import {
   OUTSTANDING_ADAPTATION_STATUSES,
   REFINE_VERBS,
   refineRequestSchema,
+  TELEGRAM_FOLLOWUP_OUTCOMES,
+  TELEGRAM_PARTIAL_PRIMARY_KINDS,
 } from "./content.js";
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
@@ -439,6 +442,29 @@ describe("which deliveries still have a publish job", () => {
  * the SHAPE of the derivation and preserves the column's own order.
  */
 describe("what the wire can say about a delivery", () => {
+  it("reads old photo receipts and new message or fully confirmed checkpoints", () => {
+    const partial = adaptationDtoSchema.shape.partialTelegram;
+    const oldPhoto = {
+      photoId: "123",
+      photoUrl: "https://t.me/channel/123",
+      followupText: "Reply",
+      followupOutcome: "unknown",
+    };
+    expect(partial.parse(oldPhoto)).toEqual(oldPhoto);
+    expect(partial.parse({ ...oldPhoto, primaryKind: null })?.primaryKind).toBeNull();
+    expect(
+      partial.parse({
+        ...oldPhoto,
+        primaryKind: "message",
+        followupText: "",
+        followupOutcome: "confirmed",
+      }),
+    ).toMatchObject({ primaryKind: "message", followupText: "", followupOutcome: "confirmed" });
+    expect(partial.safeParse({ ...oldPhoto, primaryKind: "video" }).success).toBe(false);
+    expect(TELEGRAM_PARTIAL_PRIMARY_KINDS).toEqual(["photo", "message"]);
+    expect(TELEGRAM_FOLLOWUP_OUTCOMES).toContain("confirmed");
+  });
+
   it("adds only unresolved and partial outcomes to the adaptation column's own", () => {
     expect(
       DELIVERY_OUTCOMES.filter((o) => !(ADAPTATION_STATUSES as readonly string[]).includes(o)),

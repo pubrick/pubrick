@@ -182,8 +182,18 @@ export function isOutstandingAdaptation(status: AdaptationStatus): boolean {
 export const PUBLICATION_STATUSES = ["in_flight", "published", "failed", "unknown"] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 
-/** State of the required Telegram reply after its cover was accepted. */
-export const TELEGRAM_FOLLOWUP_OUTCOMES = ["pending", "not_sent", "rejected", "unknown"] as const;
+/** First accepted Telegram request in a staged multi-message delivery. */
+export const TELEGRAM_PARTIAL_PRIMARY_KINDS = ["photo", "message"] as const;
+export type TelegramPartialPrimaryKind = (typeof TELEGRAM_PARTIAL_PRIMARY_KINDS)[number];
+
+/** Outcome of the next Telegram part after a first message was accepted. */
+export const TELEGRAM_FOLLOWUP_OUTCOMES = [
+  "pending",
+  "not_sent",
+  "rejected",
+  "unknown",
+  "confirmed",
+] as const;
 export type TelegramFollowupOutcome = (typeof TELEGRAM_FOLLOWUP_OUTCOMES)[number];
 
 /**
@@ -804,6 +814,8 @@ export const adaptationDtoSchema = z.strictObject({
   deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
   partialTelegram: z
     .object({
+      /** Old API versions omit this field; old checkpoint rows are photo-first. */
+      primaryKind: z.enum(TELEGRAM_PARTIAL_PRIMARY_KINDS).nullable().optional(),
       photoId: z.string().nullable(),
       photoUrl: z.string().nullable(),
       followupText: z.string(),
