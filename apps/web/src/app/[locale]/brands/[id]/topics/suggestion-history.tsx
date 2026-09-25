@@ -12,7 +12,13 @@ import { api, errorMessage } from "@/lib/api";
 
 const PAGE_SIZE = 20;
 
-export function SuggestionHistory({ brandId }: { brandId: string }) {
+export function SuggestionHistory({
+  brandId,
+  refreshKey,
+}: {
+  brandId: string;
+  refreshKey: string;
+}) {
   const t = useTranslations("Topics");
   const te = useTranslations("Errors");
   const locale = useLocale();
@@ -24,11 +30,14 @@ export function SuggestionHistory({ brandId }: { brandId: string }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
+  const firstPageGeneration = useRef(0);
+  const lastRefresh = useRef<{ brandId: string; key: string } | null>(null);
   const activeBrandId = useRef(brandId);
   activeBrandId.current = brandId;
 
   const loadFirst = useCallback(() => {
     const request = ++generation.current;
+    const firstPageRequest = ++firstPageGeneration.current;
     setState(null);
     setError(null);
     setLoadingMore(false);
@@ -36,11 +45,20 @@ export function SuggestionHistory({ brandId }: { brandId: string }) {
       `/api/topics/suggestions/history?brandId=${brandId}&limit=${PAGE_SIZE}`,
     )
       .then((page) => {
-        if (request !== generation.current || activeBrandId.current !== brandId) return;
+        if (
+          request !== generation.current ||
+          firstPageRequest !== firstPageGeneration.current ||
+          activeBrandId.current !== brandId
+        )
+          return;
         setState({ brandId, rows: page.rows, nextCursor: page.nextCursor });
       })
       .catch((err) => {
-        if (request === generation.current && activeBrandId.current === brandId)
+        if (
+          request === generation.current &&
+          firstPageRequest === firstPageGeneration.current &&
+          activeBrandId.current === brandId
+        )
           setError(errorMessage(err, t("historyError"), te));
       });
   }, [brandId, t, te]);
@@ -51,6 +69,46 @@ export function SuggestionHistory({ brandId }: { brandId: string }) {
       generation.current++;
     };
   }, [loadFirst]);
+
+  useEffect(() => {
+    const previous = lastRefresh.current;
+    lastRefresh.current = { brandId, key: refreshKey };
+    if (!previous || previous.brandId !== brandId || previous.key === refreshKey) return;
+    const brandRequest = generation.current;
+    const firstPageRequest = ++firstPageGeneration.current;
+    api<TopicSuggestionHistoryPage>(
+      `/api/topics/suggestions/history?brandId=${brandId}&limit=${PAGE_SIZE}`,
+    )
+      .then((page) => {
+        if (
+          brandRequest !== generation.current ||
+          firstPageRequest !== firstPageGeneration.current ||
+          activeBrandId.current !== brandId
+        )
+          return;
+        setState((current) =>
+          current?.brandId === brandId
+            ? {
+                brandId,
+                rows: [
+                  ...page.rows,
+                  ...current.rows.filter((old) => !page.rows.some((row) => row.id === old.id)),
+                ],
+                nextCursor: current.rows.length ? current.nextCursor : page.nextCursor,
+              }
+            : { brandId, rows: page.rows, nextCursor: page.nextCursor },
+        );
+        setError(null);
+      })
+      .catch((err) => {
+        if (
+          brandRequest === generation.current &&
+          firstPageRequest === firstPageGeneration.current &&
+          activeBrandId.current === brandId
+        )
+          setError(errorMessage(err, t("historyError"), te));
+      });
+  }, [brandId, refreshKey, t, te]);
 
   async function loadMore() {
     if (!state?.nextCursor || loadingMore || state.brandId !== brandId) return;

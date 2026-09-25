@@ -61,7 +61,7 @@ describe("topic suggestion history", () => {
           })
         : firstPage;
     });
-    const view = render(<SuggestionHistory key="initial" brandId={BRAND} />);
+    const view = render(<SuggestionHistory brandId={BRAND} refreshKey="request-1:running" />);
     expect(await screen.findByText(en.Topics.historyOrigin_manual)).toBeInTheDocument();
     expect(screen.getByText(en.Topics.historyStatus_succeeded)).toBeInTheDocument();
     expect(screen.getByText(/Ideas added: 2/)).toBeInTheDocument();
@@ -73,10 +73,46 @@ describe("topic suggestion history", () => {
     expect(urls.at(-1)).toContain(`cursor=${FIRST}`);
     expect(urls.every((url) => url.includes("limit=20"))).toBe(true);
     firstPage = response({ rows: [row(SECOND, { status: "running" })], nextCursor: null });
-    view.rerender(<SuggestionHistory key="new-request" brandId={BRAND} />);
+    view.rerender(<SuggestionHistory brandId={BRAND} refreshKey="request-1:succeeded" />);
     expect(await screen.findByText(en.Topics.historyStatus_running)).toBeInTheDocument();
-    expect(screen.queryByText(en.Topics.historyStatus_succeeded)).not.toBeInTheDocument();
+    expect(screen.getByText(en.Topics.historyStatus_succeeded)).toBeInTheDocument();
+    expect(screen.queryByText(en.Topics.historyStatus_failed)).not.toBeInTheDocument();
     expect(urls).toHaveLength(3);
+  });
+
+  it("keeps an in-flight older page through heartbeat updates", async () => {
+    let resolveOlder!: (value: Response) => void;
+    const older = new Promise<Response>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const urls: string[] = [];
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = String(input);
+      urls.push(url);
+      return url.includes("cursor=")
+        ? older
+        : Promise.resolve(
+            response({
+              rows: [row(FIRST, { status: "running", suggestionCount: 0 })],
+              nextCursor: FIRST,
+            }),
+          );
+    });
+    const view = render(<SuggestionHistory brandId={BRAND} refreshKey="request-1:running" />);
+    expect(await screen.findByText(en.Topics.historyStatus_running)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Topics.historyLoadMore }));
+    expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
+    view.rerender(<SuggestionHistory brandId={BRAND} refreshKey="request-1:running" />);
+    expect(urls).toHaveLength(2);
+    await act(async () => {
+      resolveOlder(response({ rows: [row(SECOND, { origin: "automatic" })], nextCursor: null }));
+      await older;
+    });
+    expect(screen.getByText(en.Topics.historyOrigin_automatic)).toBeInTheDocument();
+    expect(screen.getByText(en.Topics.historyOrigin_manual)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.Topics.historyLoadMore }),
+    ).not.toBeInTheDocument();
   });
 
   it("drops a late response from the previous brand", async () => {
@@ -94,8 +130,8 @@ describe("topic suggestion history", () => {
             }),
       ).then((result) => result),
     );
-    const view = render(<SuggestionHistory brandId={BRAND} />);
-    view.rerender(<SuggestionHistory brandId={OTHER_BRAND} />);
+    const view = render(<SuggestionHistory brandId={BRAND} refreshKey="" />);
+    view.rerender(<SuggestionHistory brandId={OTHER_BRAND} refreshKey="" />);
     expect(await screen.findByText(en.Topics.historyOrigin_automatic)).toBeInTheDocument();
     await act(async () => {
       resolveOld(response({ rows: [row(FIRST)], nextCursor: null }));

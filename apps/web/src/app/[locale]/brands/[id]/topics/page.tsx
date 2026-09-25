@@ -607,8 +607,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
         )}
       </Card>
       <SuggestionHistory
-        key={`${id}:${suggestionRequest?.id ?? ""}:${suggestionRequest?.updatedAt ?? ""}`}
         brandId={id}
+        refreshKey={`${suggestionRequest?.id ?? ""}:${suggestionRequest?.status ?? ""}`}
       />
       <Modal
         open={editing !== null}
