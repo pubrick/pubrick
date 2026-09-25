@@ -62,9 +62,11 @@ export {
   PROMPT_ROLES,
   type PromptRevisionCreate,
   type PromptRevisionDto,
+  type PromptRevisionUsageDto,
   type PromptRole,
   promptRevisionCreateSchema,
   promptRevisionDtoSchema,
+  promptRevisionUsageDtoSchema,
   promptRoleSchema,
 } from "./dto/prompts.js";
 export * from "./dto/runs.js";

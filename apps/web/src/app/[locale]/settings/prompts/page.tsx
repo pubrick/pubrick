@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  CONTENT_STATUSES,
   PROMPT_ROLES,
   type PromptRevisionDto,
+  type PromptRevisionUsageDto,
   type PromptRole,
   promptRevisionCreateSchema,
+  RUN_STATUSES,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
@@ -29,6 +32,10 @@ export default function PromptsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [usageRevisionId, setUsageRevisionId] = useState<string | null>(null);
+  const [usageDays, setUsageDays] = useState<7 | 30 | 90>(30);
+  const [usage, setUsage] = useState<PromptRevisionUsageDto | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const requestSequence = useRef(0);
 
   const load = useCallback(async () => {
@@ -53,6 +60,25 @@ export default function PromptsPage() {
       requestSequence.current += 1;
     };
   }, [load]);
+
+  useEffect(() => {
+    if (!usageRevisionId) return;
+    let current = true;
+    setUsage(null);
+    setUsageError(null);
+    void api<PromptRevisionUsageDto>(
+      `/api/prompts/${role}/revisions/${usageRevisionId}/usage?days=${usageDays}`,
+    )
+      .then((result) => {
+        if (current) setUsage(result);
+      })
+      .catch(() => {
+        if (current) setUsageError(t("usageError"));
+      });
+    return () => {
+      current = false;
+    };
+  }, [role, usageRevisionId, usageDays, t]);
 
   async function save(nextGuidance: string) {
     const parsed = promptRevisionCreateSchema.safeParse({ guidance: nextGuidance });
@@ -116,7 +142,11 @@ export default function PromptsPage() {
             label={t("role")}
             value={role}
             disabled={busy}
-            onChange={(event) => setRole(event.target.value as PromptRole)}
+            onChange={(event) => {
+              setUsageRevisionId(null);
+              setUsage(null);
+              setRole(event.target.value as PromptRole);
+            }}
           >
             {PROMPT_ROLES.map((value) => (
               <option key={value} value={value}>
@@ -161,19 +191,99 @@ export default function PromptsPage() {
               title={t("version", { version: revision.version })}
               meta={new Date(revision.createdAt).toLocaleString(locale)}
               trailing={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy || revision.id === history[0]?.id}
-                  onClick={() => void save(revision.guidance)}
-                >
-                  {t("restore")}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setUsageRevisionId(revision.id)}
+                    aria-pressed={usageRevisionId === revision.id}
+                  >
+                    {t("usage")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || revision.id === history[0]?.id}
+                    onClick={() => void save(revision.guidance)}
+                  >
+                    {t("restore")}
+                  </Button>
+                </div>
               }
             />
           ))
         )}
       </Card>
+      {usageRevisionId && (
+        <Card className="mt-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-fg">
+              {t("usageTitle", {
+                version:
+                  history?.find((revision) => revision.id === usageRevisionId)?.version ?? "?",
+              })}
+            </h2>
+            <Select
+              label={t("usageWindow")}
+              value={usageDays}
+              onChange={(event) => setUsageDays(Number(event.target.value) as 7 | 30 | 90)}
+            >
+              {[7, 30, 90].map((days) => (
+                <option key={days} value={days}>
+                  {t("days", { days })}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <p className="text-sm text-fg-secondary">{t("usageCaveat")}</p>
+          {usageError ? (
+            <p role="alert" className="text-sm text-danger">
+              {usageError}
+            </p>
+          ) : usage === null ? (
+            <Skeleton lines={3} />
+          ) : (
+            <div className="space-y-3 text-sm text-fg">
+              <p>{t("runCount", { count: usage.runCount })}</p>
+              {usage.runCount === 0 ? (
+                <p className="text-fg-secondary">{t("noUsage")}</p>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="font-medium">{t("runStatusTitle")}</h3>
+                    <ul className="mt-1 space-y-1 text-fg-secondary">
+                      {RUN_STATUSES.filter((status) => (usage.runsByStatus[status] ?? 0) > 0).map(
+                        (status) => (
+                          <li key={status}>
+                            {t(`runStatuses.${status}`)}: {usage.runsByStatus[status]}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                  <div>
+                    <h3 className="font-medium">{t("itemStatusTitle")}</h3>
+                    <ul className="mt-1 space-y-1 text-fg-secondary">
+                      {CONTENT_STATUSES.filter(
+                        (status) => (usage.currentItemStatuses[status] ?? 0) > 0,
+                      ).map((status) => (
+                        <li key={status}>
+                          {t(`itemStatuses.${status}`)}: {usage.currentItemStatuses[status]}
+                        </li>
+                      ))}
+                      {usage.withoutCurrentItem > 0 && (
+                        <li>
+                          {t("withoutCurrentItem")}: {usage.withoutCurrentItem}
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
     </AppShell>
   );
 }

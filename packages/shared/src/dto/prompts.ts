@@ -18,3 +18,15 @@ export const promptRevisionDtoSchema = z.object({
   createdAt: z.string(),
 });
 export type PromptRevisionDto = z.infer<typeof promptRevisionDtoSchema>;
+
+/** Observed run and current draft states, never an efficacy or A/B score. */
+export const promptRevisionUsageDtoSchema = z.object({
+  revisionId: z.string().uuid(),
+  role: promptRoleSchema,
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+  runCount: z.number().int().nonnegative(),
+  runsByStatus: z.record(z.string(), z.number().int().nonnegative()),
+  currentItemStatuses: z.record(z.string(), z.number().int().nonnegative()),
+  withoutCurrentItem: z.number().int().nonnegative(),
+});
+export type PromptRevisionUsageDto = z.infer<typeof promptRevisionUsageDtoSchema>;

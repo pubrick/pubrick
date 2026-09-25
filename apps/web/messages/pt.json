@@ -716,6 +716,33 @@
     "noHistory": "Ainda não há orientações personalizadas. Salve uma versão para começar.",
     "version": "Versão {version}",
     "restore": "Restaurar",
+    "usage": "Execuções fixadas",
+    "usageTitle": "Versão {version}: execuções fixadas",
+    "usageWindow": "Período",
+    "days": "Últimos {days} dias",
+    "usageCaveat": "Cada execução fixa as versões de todas as funções ao começar, mesmo que uma função nunca chegue ao modelo. O estado atual do rascunho pode ter mudado depois. Esses números não medem a qualidade das orientações.",
+    "usageError": "Não foi possível carregar o uso. Tente novamente.",
+    "runCount": "Execuções: {count}",
+    "noUsage": "Nenhuma execução fixou esta versão neste período.",
+    "runStatusTitle": "Estado da execução",
+    "itemStatusTitle": "Estado atual do rascunho",
+    "withoutCurrentItem": "Sem rascunho vinculado atualmente",
+    "runStatuses": {
+      "queued": "Na fila",
+      "running": "Em andamento",
+      "succeeded": "Concluída",
+      "failed": "Falhou",
+      "cancelled": "Cancelada"
+    },
+    "itemStatuses": {
+      "draft": "Rascunho",
+      "approved": "Aprovado",
+      "partially_published": "Parcialmente publicado",
+      "rejected": "Rejeitado",
+      "published": "Publicado",
+      "failed": "Falhou",
+      "archived": "Arquivado"
+    },
     "tooLong": "As orientações devem ter no máximo 6000 caracteres.",
     "genericError": "Não foi possível carregar ou salvar as orientações. Tente novamente.",
     "roles": {

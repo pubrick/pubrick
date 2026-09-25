@@ -716,6 +716,33 @@
     "noHistory": "Todavía no hay guía personalizada. Guarda una versión para empezar.",
     "version": "Versión {version}",
     "restore": "Restaurar",
+    "usage": "Ejecuciones fijadas",
+    "usageTitle": "Versión {version}: ejecuciones fijadas",
+    "usageWindow": "Período",
+    "days": "Últimos {days} días",
+    "usageCaveat": "Cada ejecución fija las versiones de todos los roles al comenzar, aunque un rol nunca llegue al modelo. El estado actual del borrador puede haber cambiado. Estos datos no miden la calidad de la guía.",
+    "usageError": "No se pudo cargar el uso. Inténtalo de nuevo.",
+    "runCount": "Ejecuciones: {count}",
+    "noUsage": "Ninguna ejecución fijó esta versión en este período.",
+    "runStatusTitle": "Estado de la ejecución",
+    "itemStatusTitle": "Estado actual del borrador",
+    "withoutCurrentItem": "Sin borrador vinculado actualmente",
+    "runStatuses": {
+      "queued": "En cola",
+      "running": "En curso",
+      "succeeded": "Completada",
+      "failed": "Fallida",
+      "cancelled": "Cancelada"
+    },
+    "itemStatuses": {
+      "draft": "Borrador",
+      "approved": "Aprobado",
+      "partially_published": "Parcialmente publicado",
+      "rejected": "Rechazado",
+      "published": "Publicado",
+      "failed": "Fallido",
+      "archived": "Archivado"
+    },
     "tooLong": "La guía debe tener como máximo 6000 caracteres.",
     "genericError": "No se pudo cargar o guardar la guía. Inténtalo de nuevo.",
     "roles": {

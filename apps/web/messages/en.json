@@ -716,6 +716,33 @@
     "noHistory": "No custom guidance yet. Save a version to begin.",
     "version": "Version {version}",
     "restore": "Restore",
+    "usage": "Pinned runs",
+    "usageTitle": "Version {version}: pinned runs",
+    "usageWindow": "Time window",
+    "days": "Last {days} days",
+    "usageCaveat": "A run pins all role versions when it starts, even if a role never reaches the model. Draft statuses are current and may have changed later. These counts do not measure prompt quality.",
+    "usageError": "Usage could not be loaded. Try again.",
+    "runCount": "Runs: {count}",
+    "noUsage": "No runs pinned this version in this window.",
+    "runStatusTitle": "Run status",
+    "itemStatusTitle": "Current draft status",
+    "withoutCurrentItem": "No current linked draft",
+    "runStatuses": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "itemStatuses": {
+      "draft": "Draft",
+      "approved": "Approved",
+      "partially_published": "Partially published",
+      "rejected": "Rejected",
+      "published": "Published",
+      "failed": "Failed",
+      "archived": "Archived"
+    },
     "tooLong": "Guidance must be at most 6,000 characters.",
     "genericError": "Guidance could not be loaded or saved. Try again.",
     "roles": {

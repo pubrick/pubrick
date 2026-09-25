@@ -1,5 +1,15 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from "@nestjs/common";
+import {
+  analyticsDaysSchema,
   type PromptRevisionCreate,
   type PromptRole,
   promptRevisionCreateSchema,
@@ -37,5 +47,15 @@ export class PromptsController {
     @Body(new ZodValidationPipe(promptRevisionCreateSchema)) body: PromptRevisionCreate,
   ) {
     return this.prompts.append(orgId, role, body);
+  }
+
+  @Get(":role/revisions/:revisionId/usage")
+  usage(
+    @OrgId() orgId: string,
+    @Param("role", new ZodValidationPipe(promptRoleSchema)) role: PromptRole,
+    @Param("revisionId", ParseUUIDPipe) revisionId: string,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+  ) {
+    return this.prompts.usage(orgId, role, revisionId, days);
   }
 }

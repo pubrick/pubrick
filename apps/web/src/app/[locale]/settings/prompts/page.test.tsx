@@ -70,4 +70,44 @@ describe("generation guidance page", () => {
     pending.get("/api/prompts/researcher/revisions")?.([]);
     await waitFor(() => expect(screen.getByDisplayValue("Writer guidance")).toBeInTheDocument());
   });
+
+  it("shows observed usage for the selected version and clears it when the role changes", async () => {
+    const revision = {
+      id: "9e3abb7b-95b2-4d6f-b0df-e0801685d5ba",
+      role: "researcher",
+      version: 1,
+      guidance: "Find sources",
+      createdAt: "2026-09-23T00:00:00.000Z",
+    };
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === `/api/prompts/researcher/revisions/${revision.id}/usage?days=30`) {
+        return {
+          revisionId: revision.id,
+          role: "researcher",
+          days: 30,
+          runCount: 2,
+          runsByStatus: { queued: 0, running: 0, succeeded: 1, failed: 1, cancelled: 0 },
+          currentItemStatuses: {
+            draft: 0,
+            approved: 1,
+            partially_published: 0,
+            rejected: 0,
+            published: 0,
+            failed: 0,
+            archived: 0,
+          },
+          withoutCurrentItem: 1,
+        };
+      }
+      if (path === "/api/prompts/researcher/revisions") return [revision];
+      return [];
+    });
+    render(<PromptsPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Prompts.usage }));
+    expect(await screen.findByText("Runs: 2")).toBeInTheDocument();
+    expect(screen.getByText("No current linked draft: 1")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(en.Prompts.role), "writer");
+    await waitFor(() => expect(screen.queryByText("Runs: 2")).not.toBeInTheDocument());
+  });
 });
