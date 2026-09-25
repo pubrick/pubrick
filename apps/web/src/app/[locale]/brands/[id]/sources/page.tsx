@@ -11,11 +11,12 @@ import {
   newsItemListQuerySchema,
   newsRerankRequestSchema,
   newsSourceCreateSchema,
+  newsSourceNameSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
@@ -37,6 +38,22 @@ type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
 type Run = { id: string };
 const FORM_ID = "source-add-form";
+const SCORE_PERCENT_OPTIONS = Array.from({ length: 21 }, (_, index) => index * 5);
+const NEWS_RELEVANCE_PARAM = "news_relevance";
+
+function parseRelevance(brandId: string, value: string | null): number | null {
+  if (value === null) return null;
+  const result = newsItemListQuerySchema.safeParse({ brandId, minScorePercent: value });
+  return result.success ? (result.data.minScorePercent ?? null) : null;
+}
+
+function relevanceFromUrl(brandId: string): number | null {
+  if (!window.location.pathname.replace(/\/$/, "").endsWith(`/${brandId}/sources`)) return null;
+  return parseRelevance(
+    brandId,
+    new URLSearchParams(window.location.search).get(NEWS_RELEVANCE_PARAM),
+  );
+}
 
 export default function SourcesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -44,17 +61,22 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const urlSearchParams = useSearchParams();
   const [brand, setBrand] = useState<Brand | null>(null);
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
+  const [minScorePercent, setMinScorePercent] = useState<number | null>(() =>
+    parseRelevance(id, urlSearchParams.get(NEWS_RELEVANCE_PARAM)),
+  );
   const [sourceFilter, setSourceFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const loadVersion = useRef(0);
   const inFlight = useRef<{ key: string; version: number } | null>(null);
   const renderedBrandId = useRef(id);
+  const editVersion = useRef(0);
   const [rerankCursor, setRerankCursor] = useState<NewsRerankCursor | null>(null);
   const [rerankBusy, setRerankBusy] = useState(false);
   const feedbackVersion = useRef(0);
@@ -68,6 +90,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NewsSourceDto | null>(null);
+  const [editingSource, setEditingSource] = useState<NewsSourceDto | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<NewsItemDto | null>(null);
   const [commentsItem, setCommentsItem] = useState<NewsItemDto | null>(null);
   const [comments, setComments] = useState<NewsCommentDto[] | null>(null);
@@ -96,10 +123,33 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     return () => window.clearTimeout(timer);
   }, [searchInput, search]);
 
+  const updateMinScorePercent = useCallback((score: number | null) => {
+    const url = new URL(window.location.href);
+    if (score === null) url.searchParams.delete(NEWS_RELEVANCE_PARAM);
+    else url.searchParams.set(NEWS_RELEVANCE_PARAM, String(score));
+    window.history.replaceState(window.history.state, "", url);
+    loadVersion.current++;
+    setItems(null);
+    setMinScorePercent(score);
+  }, []);
+
+  useEffect(() => {
+    const restoreFromUrl = () => {
+      const score = relevanceFromUrl(id);
+      if (score === minScorePercent) return;
+      loadVersion.current++;
+      setItems(null);
+      setMinScorePercent(score);
+    };
+    window.addEventListener("popstate", restoreFromUrl);
+    return () => window.removeEventListener("popstate", restoreFromUrl);
+  }, [id, minScorePercent]);
+
   useEffect(() => {
     if (renderedBrandId.current === id) return;
     renderedBrandId.current = id;
     loadVersion.current++;
+    editVersion.current++;
     setBrand(null);
     setSources(null);
     setItems(null);
@@ -108,6 +158,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setSearch("");
     setSort("recent");
     setStatus("all");
+    setMinScorePercent(relevanceFromUrl(id));
+    setEditingSource(null);
+    setEditBusy(false);
+    setEditError(null);
   }, [id]);
 
   const load = useCallback(
@@ -117,6 +171,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         brandId: id,
         sort,
         status,
+        ...(minScorePercent !== null ? { minScorePercent } : {}),
         ...(sourceFilter ? { sourceId: sourceFilter } : {}),
         ...(search ? { search } : {}),
       });
@@ -158,7 +213,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           if (inFlight.current?.version === version) inFlight.current = null;
         });
     },
-    [id, sort, status, sourceFilter, searchInput, search, describeError],
+    [id, sort, status, minScorePercent, sourceFilter, searchInput, search, describeError],
   );
 
   useEffect(() => {
@@ -229,6 +284,70 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       load();
     } catch (err) {
       setError(describeError(err));
+    }
+  }
+
+  function openEdit(source: NewsSourceDto) {
+    editVersion.current++;
+    setEditingSource(source);
+    setEditName(source.name);
+    setEditUrl(source.url);
+    setEditError(null);
+    setEditBusy(false);
+  }
+
+  const closeEdit = useCallback(() => {
+    if (editBusy) return;
+    editVersion.current++;
+    setEditingSource(null);
+    setEditError(null);
+  }, [editBusy]);
+
+  async function saveSource() {
+    if (!editingSource || editBusy) return;
+    const validName = newsSourceNameSchema.safeParse(editName);
+    if (!validName.success) {
+      setEditError(t("invalidName"));
+      return;
+    }
+    const body: { name?: string; url?: string } = {};
+    if (validName.data !== editingSource.name) body.name = validName.data;
+    if (editingSource.kind !== "telegram_private") {
+      const validSource = newsSourceCreateSchema.safeParse({
+        brandId: id,
+        kind: editingSource.kind,
+        name: validName.data,
+        url: editUrl,
+      });
+      if (!validSource.success) {
+        setEditError(
+          t(editingSource.kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"),
+        );
+        return;
+      }
+      if (validSource.data.url !== editingSource.url) body.url = validSource.data.url;
+    }
+    if (Object.keys(body).length === 0) {
+      closeEdit();
+      return;
+    }
+    const version = editVersion.current;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      await api(`/api/sources/${editingSource.id}?brandId=${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      if (version !== editVersion.current || renderedBrandId.current !== id) return;
+      setEditingSource(null);
+      setNotice(t("saved"));
+      load();
+    } catch (err) {
+      if (version === editVersion.current && renderedBrandId.current === id)
+        setEditError(describeError(err));
+    } finally {
+      if (version === editVersion.current) setEditBusy(false);
     }
   }
 
@@ -440,6 +559,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  const hasNewsFilters =
+    status !== "all" || Boolean(sourceFilter || searchInput) || minScorePercent !== null;
+
   return (
     <AppShell
       title={brand ? t("title", { brand: brand.name }) : <Skeleton lines={1} className="w-40" />}
@@ -589,6 +711,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               }
               trailing={
                 <>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(source)}>
+                    {t("edit")}
+                  </Button>
                   <Button
                     variant="secondary"
                     size="sm"
@@ -662,10 +787,40 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <option value="scored">{t("statusScored")}</option>
           <option value="failed">{t("statusFailed")}</option>
         </Select>
+        <Select
+          label={t("minScoreLabel")}
+          value={minScorePercent === null ? "" : String(minScorePercent)}
+          onChange={(event) =>
+            updateMinScorePercent(event.target.value === "" ? null : Number(event.target.value))
+          }
+        >
+          <option value="">{t("minScoreAny")}</option>
+          {minScorePercent !== null && !SCORE_PERCENT_OPTIONS.includes(minScorePercent) && (
+            <option value={minScorePercent}>
+              {t("minScoreAtLeast", { score: minScorePercent })}
+            </option>
+          )}
+          {SCORE_PERCENT_OPTIONS.map((score) => (
+            <option key={score} value={score}>
+              {t(score === 0 ? "minScoreZero" : "minScoreAtLeast", { score })}
+            </option>
+          ))}
+        </Select>
+        {minScorePercent !== null && (
+          <Button
+            variant="ghost"
+            className="self-end"
+            aria-label={t("clearMinScore")}
+            onClick={() => updateMinScorePercent(null)}
+          >
+            {t("clear")}
+          </Button>
+        )}
         <Button variant="secondary" onClick={rerankNews} disabled={rerankBusy} className="self-end">
           {t(rerankBusy ? "reranking" : rerankCursor ? "rerankContinue" : "rerank")}
         </Button>
       </div>
+      <p className="mb-3 text-sm text-fg-secondary">{t("minScoreHint")}</p>
       <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
       <RecheckPanel brandId={id} onFinished={load} />
       <Card padded={false}>
@@ -675,17 +830,16 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </div>
         ) : items.length === 0 ? (
           <EmptyState
-            title={t(
-              status === "all" && !sourceFilter && !searchInput ? "emptyNews" : "emptyFiltered",
-            )}
+            title={t(hasNewsFilters ? "emptyFiltered" : "emptyNews")}
             action={
-              status === "all" && !sourceFilter && !searchInput ? (
+              !hasNewsFilters ? (
                 <span className="text-sm text-fg-secondary">{t("emptyNewsHint")}</span>
               ) : (
                 <Button
                   variant="secondary"
                   onClick={() => {
                     setStatus("all");
+                    updateMinScorePercent(null);
                     setSourceFilter("");
                     setSearchInput("");
                   }}
@@ -953,6 +1107,48 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         </section>
       </Modal>
 
+      <Modal
+        open={editingSource !== null}
+        onClose={closeEdit}
+        title={t("editTitle")}
+        footer={
+          <>
+            <Button variant="secondary" disabled={editBusy} onClick={closeEdit}>
+              {t("cancel")}
+            </Button>
+            <Button disabled={editBusy} onClick={saveSource}>
+              {t("save")}
+            </Button>
+          </>
+        }
+      >
+        {editError && (
+          <p role="alert" className="mb-4 text-sm text-danger">
+            {editError}
+          </p>
+        )}
+        <div className="space-y-4">
+          <Input
+            label={t("name")}
+            value={editName}
+            onChange={(event) => setEditName(event.target.value)}
+            maxLength={120}
+            required
+          />
+          {editingSource?.kind === "telegram_private" ? (
+            <p className="text-sm text-fg-secondary">{t("privateIdentityFixed")}</p>
+          ) : (
+            <Input
+              label={t(editingSource?.kind === "telegram" ? "telegramUrl" : "url")}
+              value={editUrl}
+              onChange={(event) => setEditUrl(event.target.value)}
+              inputMode="url"
+              maxLength={2048}
+              required
+            />
+          )}
+        </div>
+      </Modal>
       <Modal
         open={pendingDelete !== null}
         onClose={closeDelete}

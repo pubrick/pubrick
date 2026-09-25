@@ -60,6 +60,11 @@ export const notificationSettingsUpdateSchema = z.object({
 
 export type NotificationSettingsUpdate = z.infer<typeof notificationSettingsUpdateSchema>;
 
+export const manualDigestResponseSchema = z.object({
+  status: z.enum(["queued", "already_queued", "already_sent"]),
+});
+export type ManualDigestResponse = z.infer<typeof manualDigestResponseSchema>;
+
 export const NOTIFICATION_EVENTS = [
   "draft_ready",
   "delivery_failed",

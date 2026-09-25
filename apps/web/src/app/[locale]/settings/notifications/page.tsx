@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type ManualDigestResponse,
   type NotificationHistory,
   type NotificationSettings,
   notificationSettingsUpdateSchema,
@@ -32,6 +33,11 @@ export default function NotificationsPage() {
   const [history, setHistory] = useState<NotificationHistory | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [savedDigests, setSavedDigests] = useState<
+    Map<string, { timezone: string; localHour: number }>
+  >(new Map());
+  const [savedNotificationsEnabled, setSavedNotificationsEnabled] = useState(false);
+  const [sendingDigest, setSendingDigest] = useState<string | null>(null);
 
   const loadHistory = useCallback(
     async (cursor?: string) => {
@@ -57,7 +63,19 @@ export default function NotificationsPage() {
 
   const load = useCallback(async () => {
     try {
-      setSettings(await api<NotificationSettings>("/api/notifications"));
+      const loaded = await api<NotificationSettings>("/api/notifications");
+      setSettings(loaded);
+      setSavedNotificationsEnabled(loaded.enabled);
+      setSavedDigests(
+        new Map(
+          loaded.digests
+            .filter((digest) => digest.enabled)
+            .map((digest) => [
+              digest.brandId,
+              { timezone: digest.timezone, localHour: digest.localHour },
+            ]),
+        ),
+      );
       setError(null);
     } catch (err) {
       setError(errorMessage(err, t("genericError"), te));
@@ -109,6 +127,17 @@ export default function NotificationsPage() {
         body: JSON.stringify(parsed.data),
       });
       setSettings(saved);
+      setSavedNotificationsEnabled(saved.enabled);
+      setSavedDigests(
+        new Map(
+          saved.digests
+            .filter((digest) => digest.enabled)
+            .map((digest) => [
+              digest.brandId,
+              { timezone: digest.timezone, localHour: digest.localHour },
+            ]),
+        ),
+      );
       setBotToken("");
       setChatId("");
       setValidationError(null);
@@ -131,6 +160,25 @@ export default function NotificationsPage() {
       setError(errorMessage(err, t("genericError"), te));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function sendDigest(brandId: string) {
+    if (sendingDigest) return;
+    setSendingDigest(brandId);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await api<ManualDigestResponse>(
+        `/api/notifications/digests/${encodeURIComponent(brandId)}/send`,
+        { method: "POST" },
+      );
+      setNotice(t(`digestSend_${result.status}`));
+      await loadHistory();
+    } catch (err) {
+      setError(errorMessage(err, t("genericError"), te));
+    } finally {
+      setSendingDigest(null);
     }
   }
 
@@ -277,6 +325,26 @@ export default function NotificationsPage() {
                             />
                           </div>
                         </Advanced>
+                        {savedDigests.get(digest.brandId)?.timezone === digest.timezone &&
+                          savedDigests.get(digest.brandId)?.localHour === digest.localHour &&
+                          digest.enabled &&
+                          savedNotificationsEnabled &&
+                          settings.enabled &&
+                          settings.hasCredentials && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="mt-3"
+                              disabled={
+                                busy || sendingDigest !== null || botToken !== "" || chatId !== ""
+                              }
+                              onClick={() => void sendDigest(digest.brandId)}
+                            >
+                              {sendingDigest === digest.brandId
+                                ? t("digestSending")
+                                : t("digestSend")}
+                            </Button>
+                          )}
                       </div>
                     ))}
                   </div>

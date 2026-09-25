@@ -26,15 +26,19 @@ const feedUrl = z
   .max(2048)
   .refine(
     (value) => {
-      const parsed = new URL(value);
-      return (
-        !parsed.username &&
-        !parsed.password &&
-        !(
-          ["t.me", "telegram.me", "telegram.dog"].includes(parsed.hostname.toLowerCase()) &&
-          /^\/(?:\+|joinchat\/)/i.test(parsed.pathname)
-        )
-      );
+      try {
+        const parsed = new URL(value);
+        return (
+          !parsed.username &&
+          !parsed.password &&
+          !(
+            ["t.me", "telegram.me", "telegram.dog"].includes(parsed.hostname.toLowerCase()) &&
+            /^\/(?:\+|joinchat\/)/i.test(parsed.pathname)
+          )
+        );
+      } catch {
+        return false;
+      }
     },
     { message: "Feed URL must not contain credentials or a Telegram invite" },
   );
@@ -181,6 +185,13 @@ export const newsItemListQuerySchema = z.object({
   status: z.enum(["all", "unscored", "scored", "failed"]).default("all"),
   sourceId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(200).optional(),
+  minScorePercent: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" && /^(?:100|[1-9]?\d)$/.test(value) ? Number(value) : value,
+      z.number().int().min(0).max(100),
+    )
+    .optional(),
 });
 export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;
 

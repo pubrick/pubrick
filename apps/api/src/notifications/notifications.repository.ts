@@ -1,9 +1,15 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
 import {
   decryptJson,
   encryptJson,
+  type ManualDigestResponse,
   type NotificationHistory,
   type NotificationHistoryQuery,
   type NotificationSettingsUpdate,
@@ -11,9 +17,73 @@ import {
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { QueueService } from "../queue/queue.service";
 
 @Injectable()
 export class NotificationsRepository {
+  constructor(private readonly queue: QueueService) {}
+
+  /** Snapshot admission is serialized on the brand's digest config row. */
+  async sendDigest(orgId: string, brandId: string): Promise<ManualDigestResponse> {
+    return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .limit(1);
+      if (!brand) throw new NotFoundException("Brand not found");
+      const [config] = await tx
+        .select({
+          enabled: schema.notificationDigestConfigs.enabled,
+          timezone: schema.notificationDigestConfigs.timezone,
+        })
+        .from(schema.notificationDigestConfigs)
+        .where(
+          and(
+            eq(schema.notificationDigestConfigs.orgId, orgId),
+            eq(schema.notificationDigestConfigs.brandId, brandId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!config?.enabled) throw new ConflictException("Enable the brand digest first");
+      const [destination] = await tx
+        .select({
+          enabled: schema.notificationSettings.enabled,
+          hasCredentials: sql<boolean>`${schema.notificationSettings.credentialsEncrypted} is not null`,
+        })
+        .from(schema.notificationSettings)
+        .where(eq(schema.notificationSettings.orgId, orgId))
+        .limit(1);
+      if (!destination?.enabled || !destination.hasCredentials)
+        throw new ConflictException("Enable Telegram notifications first");
+      const [clock] = await tx
+        .select({ localDate: sql<string>`(timezone(${config.timezone}, now())::date)::text` })
+        .from(schema.notificationDigestConfigs)
+        .where(eq(schema.notificationDigestConfigs.brandId, brandId))
+        .limit(1);
+      if (!clock) throw new ConflictException("Digest date is unavailable");
+      const [existing] = await tx
+        .select({ id: schema.notificationDigestSnapshots.id })
+        .from(schema.notificationDigestSnapshots)
+        .where(
+          and(
+            eq(schema.notificationDigestSnapshots.orgId, orgId),
+            eq(schema.notificationDigestSnapshots.brandId, brandId),
+            eq(schema.notificationDigestSnapshots.localDate, clock.localDate),
+          ),
+        )
+        .limit(1);
+      if (existing) return { status: "already_sent" };
+      const queued = await this.queue.enqueueManualDigest(tx, {
+        orgId,
+        brandId,
+        localDate: clock.localDate,
+      });
+      return { status: queued ? "queued" : "already_queued" };
+    });
+  }
+
   async history(orgId: string, query: NotificationHistoryQuery): Promise<NotificationHistory> {
     let before: { id: string; createdAt: Date } | undefined;
     if (query.cursor) {

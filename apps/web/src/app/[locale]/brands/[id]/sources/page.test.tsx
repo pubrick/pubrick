@@ -7,9 +7,9 @@ import {
 } from "@pubrick/shared";
 import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
-import { routerMock } from "@/test/next-navigation.stub";
+import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import SourcesPage from "./page";
@@ -34,7 +34,10 @@ describe("watched sources page", () => {
   beforeEach(() => {
     signedInSession();
     vi.stubGlobal("fetch", vi.fn());
+    window.history.replaceState({}, "", `/en/brands/${BRAND_ID}/sources`);
   });
+
+  afterEach(() => window.history.replaceState({}, "", "/"));
 
   function install(
     items: unknown[] = [],
@@ -240,6 +243,193 @@ describe("watched sources page", () => {
     );
   });
 
+  it("edits a feed in place without deleting its collected stories", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "New journal");
+    await user.clear(within(dialog).getByLabelText(en.Sources.url));
+    await user.type(within(dialog).getByLabelText(en.Sources.url), "https://example.com/new.xml");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === "PATCH" && call.url.includes(SOURCE_ID))).toBe(
+        true,
+      ),
+    );
+    expect(calls.find((call) => call.method === "PATCH" && call.url.includes(SOURCE_ID))).toEqual({
+      url: `/api/sources/${SOURCE_ID}?brandId=${BRAND_ID}`,
+      method: "PATCH",
+      body: { name: "New journal", url: "https://example.com/new.xml" },
+    });
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("sends only the changed feed name, preserving a newer URL from another editor", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Updated journal");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
+      name: "Updated journal",
+    });
+  });
+
+  it("rejects an invalid edited feed URL before the API and cancels without a write", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.url));
+    await user.type(within(dialog).getByLabelText(en.Sources.url), "javascript:bad");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(en.Sources.invalidFeedUrl);
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.cancel }));
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("edits a private Telegram source name without exposing its identity as an input", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Internal",
+          kind: "telegram_private",
+          url: "https://t.me/c/123456",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    expect(within(dialog).getByText(en.Sources.privateIdentityFixed)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(en.Sources.url)).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(en.Sources.telegramUrl)).not.toBeInTheDocument();
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Staff");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ name: "Staff" });
+  });
+
+  it("closes a source edit when navigating to another brand in the same page instance", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/feed.xml",
+          isActive: true,
+        },
+      ],
+    );
+    const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await userEvent.click(screen.getByRole("button", { name: en.Sources.edit }));
+    expect(screen.getByRole("dialog", { name: en.Sources.editTitle })).toBeInTheDocument();
+    await act(async () => {
+      view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument(),
+    );
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("does not show an old brand save after navigating away during the request", async () => {
+    install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/feed.xml",
+          isActive: true,
+        },
+      ],
+    );
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let resolvePatch: ((result: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (init?.method === "PATCH" && String(input).includes(`/api/sources/${SOURCE_ID}`)) {
+        return new Promise<Response>((resolve) => {
+          resolvePatch = resolve;
+        });
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Updated journal");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(resolvePatch).toBeDefined());
+    await act(async () => {
+      view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
+    });
+    await act(async () => resolvePatch?.(response(200, {})));
+    expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Sources.saved)).not.toBeInTheDocument();
+  });
+
   it("sends a private invite only in the protected request body and clears the field", async () => {
     const calls = install();
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
@@ -431,6 +621,7 @@ describe("watched sources page", () => {
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.selectOptions(screen.getByLabelText(en.Sources.minScoreLabel), "75");
     await user.type(screen.getByLabelText(en.Sources.searchLabel), "Сводка 100%_");
     await waitFor(() =>
       expect(
@@ -450,6 +641,7 @@ describe("watched sources page", () => {
       brandId: BRAND_ID,
       sort: "recent",
       status: "all",
+      minScorePercent: "75",
       sourceId: SOURCE_ID,
       search: "Сводка 100%_",
     });
@@ -457,7 +649,122 @@ describe("watched sources page", () => {
     await user.click(screen.getByRole("button", { name: en.Sources.showAll }));
     expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
     expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("");
+    expect(new URLSearchParams(window.location.search).has("news_relevance")).toBe(false);
     await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
+  });
+
+  it("shows all stories by default and treats a zero threshold as scored only", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const threshold = screen.getByLabelText(en.Sources.minScoreLabel);
+    expect(threshold).toHaveValue("");
+    expect(screen.getByRole("option", { name: en.Sources.minScoreZero })).toHaveValue("0");
+    expect(screen.getByText(en.Sources.minScoreHint)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.selectOptions(threshold, "0");
+    expect(new URLSearchParams(window.location.search).get("news_relevance")).toBe("0");
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.includes("/api/sources/items?") &&
+            new URL(call.url, "http://localhost").searchParams.get("minScorePercent") === "0",
+        ),
+      ).toBe(true),
+    );
+    const filtered = calls.find(
+      (call) => new URL(call.url, "http://localhost").searchParams.get("minScorePercent") === "0",
+    );
+    expect(
+      newsItemListQuerySchema.parse(
+        Object.fromEntries(new URL(filtered?.url ?? "", "http://localhost").searchParams),
+      ).minScorePercent,
+    ).toBe(0);
+    expect(screen.getByText(en.Sources.emptyFiltered)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Sources.clearMinScore }));
+    expect(threshold).toHaveValue("");
+    expect(new URLSearchParams(window.location.search).has("news_relevance")).toBe(false);
+    await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
+  });
+
+  it("restores the AI threshold after remount and browser back navigation", async () => {
+    window.history.replaceState({}, "", `?view=compact&news_relevance=40`);
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    const calls = install();
+    const first = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const threshold = screen.getByLabelText(en.Sources.minScoreLabel);
+    expect(threshold).toHaveValue("40");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("minScorePercent=40"))).toBe(true),
+    );
+
+    const user = userEvent.setup();
+    await user.selectOptions(threshold, "75");
+    expect(window.location.search).toBe("?view=compact&news_relevance=75");
+    first.unmount();
+
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("75");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("minScorePercent=75"))).toBe(true),
+    );
+
+    window.history.replaceState({}, "", `?view=compact&news_relevance=40`);
+    await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("40");
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("compact");
+  });
+
+  it("hides stories from the previous threshold while back navigation reloads", async () => {
+    window.history.replaceState({}, "", "?news_relevance=75");
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    const oldItem = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Previously filtered story",
+      summary: "Earlier result",
+      url: "https://example.com/previous",
+      publishedAt: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const newItem = {
+      ...oldItem,
+      id: "12912ad4-8693-42f6-8286-80f7b9004ac5",
+      title: "Restored threshold story",
+      url: "https://example.com/restored",
+    };
+    install([oldItem]);
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let resolveNewItems: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (
+        url.includes("/api/sources/items?") &&
+        new URL(url, "http://localhost").searchParams.get("minScorePercent") === "40"
+      ) {
+        return new Promise<Response>((resolve) => {
+          resolveNewItems = resolve;
+        });
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText(oldItem.title)).toBeVisible();
+
+    window.history.replaceState({}, "", "?news_relevance=40");
+    await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("40");
+    expect(screen.queryByText(oldItem.title)).not.toBeInTheDocument();
+    await waitFor(() => expect(resolveNewItems).toBeDefined());
+    expect(screen.queryByText(newItem.title)).not.toBeInTheDocument();
+
+    await act(async () => resolveNewItems?.(response(200, [newItem])));
+    expect(await screen.findByText(newItem.title)).toBeVisible();
   });
 
   it("clears a selected source after that source is removed", async () => {
@@ -524,14 +831,17 @@ describe("watched sources page", () => {
     const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.selectOptions(screen.getByLabelText(en.Sources.minScoreLabel), "75");
     await user.type(screen.getByLabelText(en.Sources.searchLabel), "first");
     await waitFor(() => expect(calls.some((call) => call.url.includes("search=first"))).toBe(true));
+    window.history.replaceState({}, "", `/en/brands/${OTHER_BRAND_ID}/sources`);
     await act(async () => {
       view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
     });
     await waitFor(() => {
       expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
       expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
+      expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("");
     });
     await waitFor(() =>
       expect(
@@ -541,7 +851,8 @@ describe("watched sources page", () => {
           return (
             query.get("brandId") === OTHER_BRAND_ID &&
             !query.has("sourceId") &&
-            !query.has("search")
+            !query.has("search") &&
+            !query.has("minScorePercent")
           );
         }),
       ).toBe(true),

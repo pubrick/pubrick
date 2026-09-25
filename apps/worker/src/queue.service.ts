@@ -14,9 +14,12 @@ import {
   MANUAL_AUTOPILOT_DLQ,
   MANUAL_AUTOPILOT_QUEUE,
   MANUAL_AUTOPILOT_QUEUE_OPTIONS,
+  MANUAL_DIGEST_QUEUE,
+  MANUAL_DIGEST_QUEUE_OPTIONS,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   type ManualAutopilotJob,
+  type ManualDigestJob,
   type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
@@ -200,6 +203,11 @@ export class QueueService {
     }
 
     if (this.notifications && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
+      await boss.updateQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
+      await boss.work<ManualDigestJob>(MANUAL_DIGEST_QUEUE, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.notifications?.sendDigest(job.data);
+      });
       await boss.createQueue("notification-scan");
       await boss.schedule("notification-scan", "* * * * *");
       await boss.work("notification-scan", { batchSize: 1 }, async () =>

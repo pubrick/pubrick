@@ -71,6 +71,14 @@ export const MANUAL_AUTOPILOT_QUEUE_OPTIONS = {
   expireInSeconds: 120,
   deadLetter: MANUAL_AUTOPILOT_DLQ,
 } as const;
+/** Operator-requested daily digest. The snapshot/outbox remains the delivery authority. */
+export const MANUAL_DIGEST_QUEUE = "notification-digest-manual";
+export type ManualDigestJob = { orgId: string; brandId: string; localDate: string };
+export const MANUAL_DIGEST_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 30,
+  expireInSeconds: 120,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";

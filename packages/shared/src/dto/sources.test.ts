@@ -16,6 +16,18 @@ describe("watched source inputs", () => {
     });
   });
 
+  it("reports a malformed feed URL as a validation failure without throwing", () => {
+    expect(
+      newsSourceCreateSchema.safeParse({
+        brandId,
+        name: "Journal",
+        kind: "rss",
+        url: "javascript:bad",
+      }).success,
+    ).toBe(false);
+    expect(newsSourceUpdateSchema.safeParse({ url: "not a URL" }).success).toBe(false);
+  });
+
   it("canonicalizes Telegram names and refuses credential-bearing or non-channel URLs", () => {
     const input = {
       brandId,

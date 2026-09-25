@@ -16,9 +16,12 @@ import {
   MANUAL_AUTOPILOT_DLQ,
   MANUAL_AUTOPILOT_QUEUE,
   MANUAL_AUTOPILOT_QUEUE_OPTIONS,
+  MANUAL_DIGEST_QUEUE,
+  MANUAL_DIGEST_QUEUE_OPTIONS,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   type ManualAutopilotJob,
+  type ManualDigestJob,
   type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
@@ -133,6 +136,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(MANUAL_AUTOPILOT_DLQ);
     await boss.createQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
     await boss.updateQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+    await boss.createQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
+    await boss.updateQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
@@ -240,6 +245,23 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     if (id === null) throw new ConflictException("Manual Autopilot request is already queued");
+  }
+
+  /** Caller holds the digest config lock; a terminal job without a snapshot may be retried. */
+  async enqueueManualDigest(tx: Tx, payload: ManualDigestJob): Promise<boolean> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const connection = fromDrizzle(tx, sql);
+    const jobs = await this.boss.findJobs<ManualDigestJob>(MANUAL_DIGEST_QUEUE, {
+      data: payload,
+      db: connection,
+    });
+    if (jobs.some((job) => ["created", "retry", "active"].includes(job.state))) return false;
+    const id = await this.boss.send(MANUAL_DIGEST_QUEUE, payload, {
+      group: { id: payload.orgId },
+      db: connection,
+    });
+    if (id === null) throw new ConflictException("Manual digest could not be queued");
+    return true;
   }
 
   /**

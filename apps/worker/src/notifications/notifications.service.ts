@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
+import type { ManualDigestJob } from "@pubrick/shared";
 import { decryptJson, type NotificationEvent } from "@pubrick/shared";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -50,6 +51,12 @@ export function draftReviewUrl(rawOrigin: string, itemId: string): string | null
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
+  async sendDigest(job: ManualDigestJob): Promise<void> {
+    await this.snapshotDigest(job.orgId, job.brandId, job.localDate);
+    // The outbox claims before provider I/O; a queue retry can never resend it.
+    await this.scan();
+  }
+
   /** Five-minute, bounded keyset scan. Each brand/date is claimed transactionally. */
   async scanDigests(): Promise<void> {
     let after: string | null = null;
@@ -95,7 +102,7 @@ export class NotificationsService {
     }
   }
 
-  private async snapshotDigest(orgId: string, brandId: string): Promise<void> {
+  private async snapshotDigest(orgId: string, brandId: string, manualDate?: string): Promise<void> {
     await db.transaction(async (tx) => {
       const [config] = await tx
         .select({
@@ -137,7 +144,11 @@ export class NotificationsService {
         .from(schema.notificationDigestConfigs)
         .where(eq(schema.notificationDigestConfigs.brandId, brandId))
         .limit(1);
-      if (!clock || clock.localHour !== config.localHour) return;
+      if (
+        !clock ||
+        (manualDate ? clock.localDate !== manualDate : clock.localHour !== config.localHour)
+      )
+        return;
       const previousStart = sql`((${clock.previousDate}::date)::timestamp at time zone ${config.timezone})`;
       const todayStart = sql`((${clock.localDate}::date)::timestamp at time zone ${config.timezone})`;
       const [runs] = await tx
