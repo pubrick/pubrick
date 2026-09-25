@@ -311,5 +311,33 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
           .where(eq(schema.relevanceBatches.id, orphan.id))
       )[0]?.status,
     ).toBe("partial");
+
+    await db
+      .update(schema.newsItems)
+      .set({ dismissedAt: new Date() })
+      .where(eq(schema.newsItems.id, fifth));
+    const [hiddenBatch] = await db
+      .insert(schema.relevanceBatches)
+      .values({ orgId, brandId: brand.id, days: 7, selectedCount: 1 })
+      .returning({ id: schema.relevanceBatches.id });
+    if (!hiddenBatch) throw new Error("hidden batch fixture");
+    await db.insert(schema.relevanceBatchItems).values({
+      orgId,
+      brandId: brand.id,
+      batchId: hiddenBatch.id,
+      itemId: fifth,
+    });
+    expect(await repo.claimBatch(orgId, brand.id, hiddenBatch.id, fifth)).toEqual({
+      missing: true,
+    });
+    await repo.finishBatch(orgId, brand.id, hiddenBatch.id, fifth, { kind: "skipped" });
+    const [hiddenProgress] = await db
+      .select({
+        status: schema.relevanceBatches.status,
+        skipped: schema.relevanceBatches.skippedCount,
+      })
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, hiddenBatch.id));
+    expect(hiddenProgress).toEqual({ status: "partial", skipped: 1 });
   });
 });

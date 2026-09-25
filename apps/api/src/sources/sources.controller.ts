@@ -229,6 +229,24 @@ export class SourcesController {
     return this.sources.score(orgId, brandId, id);
   }
 
+  @Post("items/:id/dismiss")
+  dismiss(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.dismiss(orgId, brandId, id);
+  }
+
+  @Post("items/:id/restore")
+  restore(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.sources.restore(orgId, brandId, id);
+  }
+
   @Get("items/:itemId/comments")
   comments(
     @OrgId() orgId: string,

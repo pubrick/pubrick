@@ -603,6 +603,13 @@
       "when": 1790328414842,
       "tag": "0086_careful_zaran",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790333781989,
+      "tag": "0087_news_dismiss",
+      "breakpoints": true
     }
   ]
 }

@@ -1125,6 +1125,14 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(
         (await repo.similarRelatedNews(up.orgId, up.brandId, query)).map((story) => story.id),
       ).toEqual([upStory?.id]);
+      await db
+        .update(schema.newsItems)
+        .set({ dismissedAt: new Date() })
+        .where(eq(schema.newsItems.id, upStory?.id as string));
+      expect(await repo.hasRelatedNews(up.orgId, up.brandId)).toBe(false);
+      expect(await repo.hasIndexedRelatedNews(up.orgId, up.brandId)).toBe(false);
+      expect(await repo.lexicalRelatedNews(up.orgId, up.brandId, "Autumn menu")).toEqual([]);
+      expect(await repo.similarRelatedNews(up.orgId, up.brandId, query)).toEqual([]);
     });
 
     it("uses only recent scored public stories of this brand, without fetching their URLs", async () => {

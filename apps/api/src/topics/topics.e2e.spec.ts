@@ -100,6 +100,9 @@ describe.skipIf(!url)("topic bank e2e", () => {
       status: "idea",
       newsItemId: itemId,
     });
+    expect(
+      (await owner.agent.get(`/api/sources/items?brandId=${brand.body.id}`).expect(200)).body[0],
+    ).toMatchObject({ editorSignal: "relevant" });
     await expect(
       db.execute(sql`update topics set status = 'apprved' where id = ${saved.body.id}`),
     ).rejects.toMatchObject({ cause: { code: "23514" } });
@@ -110,6 +113,20 @@ describe.skipIf(!url)("topic bank e2e", () => {
       .post(`/api/topics/from-news/${itemId}?brandId=${brand.body.id}`)
       .expect(201);
     expect(again.body.id).toBe(saved.body.id);
+    await owner.agent
+      .post(`/api/sources/items/${itemId}/dismiss?brandId=${brand.body.id}`)
+      .expect(201);
+    const hiddenConversion = await owner.agent
+      .post(`/api/topics/from-news/${itemId}?brandId=${brand.body.id}`)
+      .expect(409);
+    expect(hiddenConversion.body.code).toBe("news_item_dismissed");
+    await owner.agent
+      .post(`/api/sources/items/${itemId}/restore?brandId=${brand.body.id}`)
+      .expect(201);
+    const afterRestore = await owner.agent
+      .post(`/api/topics/from-news/${itemId}?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(afterRestore.body.id).toBe(saved.body.id);
     const unapproved = await owner.agent
       .post(`/api/topics/${saved.body.id}/run?brandId=${brand.body.id}`)
       .send({ channelIds: [channel.body.id] })

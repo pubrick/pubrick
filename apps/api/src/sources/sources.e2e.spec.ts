@@ -613,6 +613,106 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(201);
   });
 
+  it("dismisses stories without deleting URL identity and restores prior feedback", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Editorial news" }).expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Journal", url: "https://example.com/dismiss.xml" })
+      .expect(201);
+    const db = (await import("../db")).db;
+    const [standalone, linked, racing] = await db
+      .insert(schema.newsItems)
+      .values(
+        ["standalone", "linked", "racing"].map((name) => ({
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: name,
+          url: `https://example.com/${name}`,
+          editorSignal: name === "standalone" ? ("relevant" as const) : null,
+        })),
+      )
+      .returning({ id: schema.newsItems.id });
+    if (!standalone || !linked || !racing) throw new Error("News seed failed");
+    const list = `/api/sources/items?brandId=${brand.body.id}`;
+    const dismiss = (itemId: string) =>
+      `/api/sources/items/${itemId}/dismiss?brandId=${brand.body.id}`;
+    const restore = (itemId: string) =>
+      `/api/sources/items/${itemId}/restore?brandId=${brand.body.id}`;
+    const before = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId));
+    await other.post(dismiss(standalone.id)).expect(404);
+    await other.post(restore(standalone.id)).expect(404);
+    await owner.post(dismiss(standalone.id)).expect(201);
+    await owner.post(dismiss(standalone.id)).expect(201);
+    await owner
+      .post(`/api/sources/items/${standalone.id}/score?brandId=${brand.body.id}`)
+      .expect(404);
+    expect(
+      (await owner.get(list).expect(200)).body.map((item: { id: string }) => item.id),
+    ).not.toContain(standalone.id);
+    const hidden = await owner.get(`${list}&view=dismissed`).expect(200);
+    expect(hidden.body).toMatchObject([
+      { id: standalone.id, editorSignal: "irrelevant", dismissedAt: expect.any(String) },
+    ]);
+    expect(
+      (
+        await db
+          .select({ id: schema.newsItems.id, url: schema.newsItems.url })
+          .from(schema.newsItems)
+          .where(eq(schema.newsItems.id, standalone.id))
+      )[0],
+    ).toEqual({ id: standalone.id, url: "https://example.com/standalone" });
+    await owner.post(restore(standalone.id)).expect(201);
+    await owner.post(restore(standalone.id)).expect(201);
+    expect(
+      (await owner.get(list).expect(200)).body.find(
+        (item: { id: string }) => item.id === standalone.id,
+      ),
+    ).toMatchObject({ editorSignal: "relevant", dismissedAt: null });
+
+    await owner.post(`/api/topics/from-news/${linked.id}?brandId=${brand.body.id}`).expect(201);
+    await owner.post(dismiss(linked.id)).expect(201);
+    expect(
+      (await owner.get(`${list}&view=dismissed`).expect(200)).body.find(
+        (item: { id: string }) => item.id === linked.id,
+      ),
+    ).toMatchObject({ editorSignal: "relevant" });
+    await owner.post(restore(linked.id)).expect(201);
+
+    const [conversion, dismissal] = await Promise.all([
+      owner.post(`/api/topics/from-news/${racing.id}?brandId=${brand.body.id}`),
+      owner.post(dismiss(racing.id)),
+    ]);
+    expect(dismissal.status).toBe(201);
+    expect([201, 409]).toContain(conversion.status);
+    if (conversion.status === 409) {
+      expect(conversion.body.code).toBe("news_item_dismissed");
+      await owner.post(restore(racing.id)).expect(201);
+      await owner.post(`/api/topics/from-news/${racing.id}?brandId=${brand.body.id}`).expect(201);
+      await owner.post(dismiss(racing.id)).expect(201);
+    }
+    const [raceResult] = await db
+      .select({
+        editorSignal: schema.newsItems.editorSignal,
+        dismissedAt: schema.newsItems.dismissedAt,
+      })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, racing.id));
+    expect(raceResult).toMatchObject({ editorSignal: "relevant", dismissedAt: expect.any(Date) });
+    expect(
+      await db
+        .select({ id: schema.usageLedger.id })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId)),
+    ).toEqual(before);
+    expect(analysisRun).not.toHaveBeenCalled();
+  });
+
   it("searches literal title and summary text before the news limit within a source and brand", async () => {
     const { agent: owner, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();

@@ -52,6 +52,18 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       })
       .returning({ id: schema.newsItems.id });
     if (!item) throw new Error("Article seed failed");
+    const [hiddenItem] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: source.id,
+        title: "Dismissed article",
+        url: "https://example.com/dismissed",
+        dismissedAt: new Date(),
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!hiddenItem) throw new Error("Dismissed article seed failed");
     const [privateSource] = await db
       .insert(schema.newsSources)
       .values({
@@ -205,6 +217,11 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
     expect((await repo.unscored()).some((candidate) => candidate.itemId === privateItem.id)).toBe(
       false,
     );
+    expect((await repo.unscored()).some((candidate) => candidate.itemId === hiddenItem.id)).toBe(
+      false,
+    );
+    expect(await repo.claim(stamp, brand.id, hiddenItem.id)).toBeNull();
+    expect(await repo.isVisible(stamp, brand.id, hiddenItem.id)).toBe(false);
     expect(await repo.claim("wrong-org", brand.id, item.id)).toBeNull();
     expect(await repo.claim(stamp, "00000000-0000-4000-8000-000000000001", item.id)).toBeNull();
     expect(await repo.claim(stamp, brand.id, item.id)).toMatchObject({

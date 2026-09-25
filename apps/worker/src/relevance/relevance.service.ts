@@ -127,6 +127,13 @@ export class RelevanceService {
     // Read feedback before the paid call: an unavailable database must not
     // create model spend for a result we cannot safely score.
     const feedback = await this.repo.recentFeedback(job.orgId, job.brandId, job.itemId);
+    if (!(await this.repo.isVisible(job.orgId, job.brandId, job.itemId))) {
+      if (batchId)
+        await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+          kind: "skipped",
+        });
+      return;
+    }
     let verdict: z.infer<typeof verdictSchema>;
     try {
       verdict = await generateStructured({
