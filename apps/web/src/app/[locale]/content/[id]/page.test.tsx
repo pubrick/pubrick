@@ -55,10 +55,11 @@ type Adaptation = {
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
   partialTelegram?: {
+    primaryKind?: "photo" | "message" | null;
     photoId: string | null;
     photoUrl: string | null;
     followupText: string;
-    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown" | "confirmed";
   } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
@@ -2534,6 +2535,73 @@ describe("settling a delivery nobody can speak for", () => {
       expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(body);
     },
   );
+
+  it("shows the accepted first message and exact remaining text for a multipart text post", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "failed",
+          adaptations: [
+            makeAdaptation({
+              status: "failed",
+              deliveryOutcome: "partial",
+              partialTelegram: {
+                primaryKind: "message",
+                photoId: "4711",
+                photoUrl: "https://t.me/mychannel/4711",
+                followupText: "Exact remaining text",
+                followupOutcome: "unknown",
+              },
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = resultsList();
+    expect(
+      within(results).getByRole("link", { name: en.Publish.partialTelegramViewMessage }),
+    ).toHaveAttribute("href", "https://t.me/mychannel/4711");
+    expect(within(results).getByText("Exact remaining text")).toBeInTheDocument();
+    expect(within(results).getByText(en.Publish.partialTelegramVerifyNextPart)).toBeInTheDocument();
+    expect(within(results).queryByText(en.Publish.partialTelegramViewPhoto)).toBeNull();
+  });
+
+  it("explains a complete Telegram acceptance without offering an empty suffix to copy", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "failed",
+          adaptations: [
+            makeAdaptation({
+              status: "failed",
+              deliveryOutcome: "partial",
+              partialTelegram: {
+                primaryKind: "message",
+                photoId: "4711",
+                photoUrl: null,
+                followupText: "",
+                followupOutcome: "confirmed",
+              },
+            }),
+          ],
+        }),
+      },
+      [],
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = resultsList();
+    expect(
+      within(results).getByText(en.Publish.partialTelegramAllPartsAccepted),
+    ).toBeInTheDocument();
+    expect(within(results).getByText("Accepted message ID: 4711")).toBeInTheDocument();
+    expect(
+      within(results).queryByRole("button", { name: en.Publish.partialTelegramCopyRemainingText }),
+    ).toBeNull();
+  });
 
   it("offers both verdicts, and says what pressing one asserts", async () => {
     installBaseHandlers({ current: unknownRow() }, []);

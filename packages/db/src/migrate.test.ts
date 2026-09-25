@@ -540,6 +540,7 @@ const NON_ENUM_CHECKS = [
   // 0084: the accepted Telegram cover and pending reply must remain a coherent receipt.
   // The nullable enum pin is exercised against real rows by the worker repository spec.
   "publications_partial_followup_outcome_check",
+  "publications_partial_primary_kind_check",
   "publications_partial_telegram_check",
 ];
 
@@ -916,6 +917,137 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("0101 preserves old photo checkpoints and admits bounded message and confirmed checkpoints", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0101_telegram_partial_primary_kind");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let receiptId: string;
+      let untouchedId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        const seed = await seedEveryTable(old, "telegram_partial_migration");
+        const receipt = await old.query<{ id: string }>(
+          `UPDATE publications SET status = 'unknown', partial_photo_id = '123',
+             partial_photo_url = 'https://t.me/channel/123', partial_followup_text = 'Exact old reply',
+             partial_followup_outcome = 'unknown'
+           WHERE adaptation_id = $1 RETURNING id`,
+          [seed.adaptationId],
+        );
+        receiptId = receipt.rows[0]?.id as string;
+        const untouched = await old.query<{ id: string }>(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status)
+           VALUES ('telegram_partial_migration', $1, $2, 'unknown') RETURNING id`,
+          [seed.adaptationId, seed.channelId],
+        );
+        untouchedId = untouched.rows[0]?.id as string;
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const current = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const rows = await current.query<{
+          id: string;
+          partial_primary_kind: string | null;
+          partial_photo_id: string | null;
+          partial_photo_url: string | null;
+          partial_followup_text: string | null;
+          partial_followup_outcome: string | null;
+        }>(
+          `SELECT id, partial_primary_kind, partial_photo_id, partial_photo_url,
+                  partial_followup_text, partial_followup_outcome
+           FROM publications WHERE id IN ($1, $2) ORDER BY id`,
+          [receiptId, untouchedId],
+        );
+        const photo = rows.rows.find((row) => row.id === receiptId);
+        expect(photo).toMatchObject({
+          partial_primary_kind: "photo",
+          partial_photo_id: "123",
+          partial_photo_url: "https://t.me/channel/123",
+          partial_followup_text: "Exact old reply",
+          partial_followup_outcome: "unknown",
+        });
+        expect(rows.rows.find((row) => row.id === untouchedId)?.partial_primary_kind).toBeNull();
+
+        // Old workers do not know the new kind column when clearing or writing a checkpoint.
+        await current.query(
+          `UPDATE publications SET partial_photo_id = NULL, partial_photo_url = NULL,
+             partial_followup_text = NULL, partial_followup_outcome = NULL WHERE id = $1`,
+          [receiptId],
+        );
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_photo_id = '124', partial_followup_text = 'old reply',
+               partial_followup_outcome = 'pending' WHERE id = $1`,
+            [untouchedId],
+          ),
+        ).toBeNull();
+
+        await current.query(
+          `UPDATE publications SET partial_primary_kind = 'message', partial_photo_id = '125',
+             partial_followup_text = $2, partial_followup_outcome = 'pending' WHERE id = $1`,
+          [receiptId, "x".repeat(12_000)],
+        );
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_followup_text = $2 WHERE id = $1`,
+            [receiptId, "x".repeat(12_001)],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_followup_text = '' WHERE id = $1`,
+            [receiptId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_followup_text = '', partial_followup_outcome = 'confirmed'
+             WHERE id = $1`,
+            [receiptId],
+          ),
+        ).toBeNull();
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_followup_text = 'not empty' WHERE id = $1`,
+            [receiptId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            current,
+            `UPDATE publications SET partial_primary_kind = 'video' WHERE id = $1`,
+            [receiptId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const checks = await current.query<{ conname: string; convalidated: boolean }>(
+          `SELECT conname, convalidated FROM pg_constraint
+           WHERE conname IN ('publications_partial_primary_kind_check',
+                             'publications_partial_followup_outcome_check',
+                             'publications_partial_telegram_check') ORDER BY conname`,
+        );
+        expect(checks.rows).toEqual([
+          { conname: "publications_partial_followup_outcome_check", convalidated: true },
+          { conname: "publications_partial_primary_kind_check", convalidated: true },
+          { conname: "publications_partial_telegram_check", convalidated: true },
+        ]);
+      } finally {
+        await current.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  }, 60_000);
+
   it("adds immutable tenant-bound role templates without activating or rewriting existing runs", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0093_medical_red_skull");

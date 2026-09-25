@@ -1,15 +1,18 @@
 import type { PLATFORM_IDS } from "./dto/channels.js";
 import { MAX_BODY_LENGTH } from "./dto/content.js";
+import { TELEGRAM_LONG_POST_LENGTH } from "./telegram-photo-parts.js";
 
 /**
  * Maximum post length per platform, in characters.
  *
  * This lives here, as data, rather than on the `Publisher` interface: the
  * generation pipeline needs a limit for every platform a channel can exist
- * for, but only telegram has a publisher today. `telegramPublisher` reads
- * this same constant so the two cannot drift.
+ * for. Telegram deliberately remains at its stage-1 authoring limit while
+ * its adapter prepares for longer reviewed posts.
  */
 export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], number> = {
+  // Stage 1 keeps the authoring limit at 4096. The publisher's preflight is
+  // ready for TELEGRAM_LONG_POST_LENGTH; raising this value is a later release.
   telegram: 4096,
   vk: 16000,
   dzen: 20000,
@@ -19,6 +22,8 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
   mastodon: 500,
   x: 280,
 };
+
+export const TELEGRAM_ADAPTER_MAX_TEXT_LENGTH = TELEGRAM_LONG_POST_LENGTH;
 
 /**
  * How long an adaptation for this platform may be: `min(platform limit,

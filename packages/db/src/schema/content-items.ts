@@ -5,6 +5,7 @@ import {
   PUBLICATION_STATUSES,
   PUBLISH_FAILURE_REASONS,
   TELEGRAM_FOLLOWUP_OUTCOMES,
+  TELEGRAM_PARTIAL_PRIMARY_KINDS,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -446,7 +447,11 @@ export const publications = pgTable(
     externalId: text("external_id"),
     externalUrl: text("external_url"),
     error: text("error"),
-    /** Frozen evidence after Telegram accepted a cover before its reply was confirmed. */
+    /** First accepted Telegram request. Null on old photo checkpoints. */
+    partialPrimaryKind: text("partial_primary_kind", {
+      enum: TELEGRAM_PARTIAL_PRIMARY_KINDS,
+    }),
+    /** Compatibility storage for the first accepted message ID/URL and remaining suffix. */
     partialPhotoId: text("partial_photo_id"),
     partialPhotoUrl: text("partial_photo_url"),
     partialFollowupText: text("partial_followup_text"),
@@ -582,13 +587,20 @@ export const publications = pgTable(
       t.partialFollowupOutcome,
       TELEGRAM_FOLLOWUP_OUTCOMES,
     ),
+    enumCheck(
+      "publications_partial_primary_kind_check",
+      t.partialPrimaryKind,
+      TELEGRAM_PARTIAL_PRIMARY_KINDS,
+    ),
     check(
       "publications_partial_telegram_check",
       sql`(${t.partialFollowupText} is null and ${t.partialPhotoId} is null and ${t.partialPhotoUrl} is null and ${t.partialFollowupOutcome} is null)
         or (${t.status} in ('in_flight', 'unknown') and ${t.partialFollowupText} is not null
-          and length(${t.partialFollowupText}) between 1 and 4096
+          and length(${t.partialFollowupText}) between 0 and 12000
           and ${t.partialFollowupOutcome} is not null
-          and ${t.partialFollowupOutcome} in ('pending', 'not_sent', 'rejected', 'unknown'))`,
+          and ((${t.partialFollowupOutcome} = 'confirmed' and length(${t.partialFollowupText}) = 0)
+            or (${t.partialFollowupOutcome} in ('pending', 'not_sent', 'rejected', 'unknown')
+              and length(${t.partialFollowupText}) >= 1)))`,
     ),
   ],
 );

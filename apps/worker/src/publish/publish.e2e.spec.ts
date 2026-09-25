@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -77,6 +77,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   /** sendMessage requests whose BODY the fake server actually received. */
   const sendCounts = new Map<string, number>();
   const sentTexts = new Map<string, string>();
+  const sentMessages = new Map<string, Array<Record<string, unknown>>>();
   const vkRequests: URLSearchParams[] = [];
   const maxRequests: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
 
@@ -128,6 +129,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
           };
           chatId = String(payload.chat_id);
           if (typeof payload.text === "string") sentTexts.set(chatId, payload.text);
+          sentMessages.set(chatId, [...(sentMessages.get(chatId) ?? []), payload]);
         } catch {
           // Falls through to "no fake response configured" below.
         }
@@ -360,6 +362,180 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     expect(job.state).toBe("completed");
   }, 25_000);
 
+  it("checkpoints every accepted part of a long Telegram post before recording one receipt", async () => {
+    const chatId = `-100${Date.now()}19`;
+    const reviewed = "A sentence with plain text and no markup. ".repeat(240);
+    expect(reviewed.length).toBeGreaterThan(8192);
+    expect(reviewed.length).toBeLessThanOrEqual(12_000);
+    fakeScripts.set(
+      chatId,
+      [4711, 4712, 4713].map((messageId) => ({
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: messageId, chat: { id: Number(chatId), username: "mychannel" } },
+        },
+      })),
+    );
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+    await db
+      .update(schema.adaptations)
+      .set({ body: reviewed })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    const checkpoints: Array<{
+      accepted: boolean;
+      kind: string | null;
+      remaining: string | null;
+      outcome: string | null;
+      status: string;
+    }> = [];
+    const originalCheckpoint = repo.markTelegramPartAccepted.bind(repo);
+    const checkpointSpy = vi
+      .spyOn(repo, "markTelegramPartAccepted")
+      .mockImplementation(async (...args) => {
+        const accepted = await originalCheckpoint(...args);
+        if (args[1] === adaptationId) {
+          const claim = await publicationFor(adaptationId);
+          if (!claim) throw new Error("Accepted Telegram part has no durable claim");
+          checkpoints.push({
+            accepted,
+            kind: claim.partialPrimaryKind,
+            remaining: claim.partialFollowupText,
+            outcome: claim.partialFollowupOutcome,
+            status: claim.status,
+          });
+        }
+        return accepted;
+      });
+
+    try {
+      const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+      if (!jobId) throw new Error("boss.send returned null");
+
+      expect((await waitUntilLeftQueued(adaptationId)).status).toBe("published");
+      expect((await waitForJobState(jobId)).state).toBe("completed");
+
+      const messages = sentMessages.get(chatId) ?? [];
+      expect(messages).toHaveLength(3);
+      const parts = messages.map((message) => message.text);
+      expect(parts.every((part) => typeof part === "string" && part.length <= 4096)).toBe(true);
+      expect(parts.join("")).toBe(reviewed);
+      expect(messages[0]).toEqual({
+        chat_id: chatId,
+        text: parts[0],
+        link_preview_options: { is_disabled: true },
+      });
+      for (const message of messages.slice(1)) {
+        expect(message).toEqual({
+          chat_id: chatId,
+          text: message.text,
+          link_preview_options: { is_disabled: true },
+          reply_parameters: { message_id: 4711, allow_sending_without_reply: false },
+        });
+      }
+
+      expect(checkpoints).toEqual([
+        {
+          accepted: true,
+          kind: "message",
+          remaining: `${parts[1]}${parts[2]}`,
+          outcome: "pending",
+          status: "in_flight",
+        },
+        {
+          accepted: true,
+          kind: "message",
+          remaining: parts[2],
+          outcome: "pending",
+          status: "in_flight",
+        },
+        {
+          accepted: true,
+          kind: "message",
+          remaining: "",
+          outcome: "confirmed",
+          status: "in_flight",
+        },
+      ]);
+      const publications = await db
+        .select()
+        .from(schema.publications)
+        .where(eq(schema.publications.adaptationId, adaptationId));
+      expect(publications).toHaveLength(1);
+      expect(publications[0]).toMatchObject({
+        status: "published",
+        externalId: "4711",
+        externalUrl: "https://t.me/mychannel/4711",
+        partialPrimaryKind: null,
+        partialFollowupText: null,
+        partialFollowupOutcome: null,
+      });
+    } finally {
+      checkpointSpy.mockRestore();
+    }
+  }, 25_000);
+
+  it("freezes the exact unsent suffix when Telegram refuses a later part", async () => {
+    const chatId = `-100${Date.now()}20`;
+    const reviewed = "A second long post that must stay intact. ".repeat(240);
+    fakeScripts.set(chatId, [
+      ...[5811, 5812].map((messageId) => ({
+        status: 200,
+        body: {
+          ok: true,
+          result: { message_id: messageId, chat: { id: Number(chatId), username: "mychannel" } },
+        },
+      })),
+      { status: 400, body: { ok: false, error_code: 400, description: "reply rejected" } },
+    ]);
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+    await db
+      .update(schema.adaptations)
+      .set({ body: reviewed })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null");
+    const adaptation = await waitUntilLeftQueued(adaptationId);
+    expect(adaptation.status).toBe("failed");
+    expect(adaptation.failureReason).toBe("outcome_unknown");
+    expect(adaptation.attemptCount).toBe(1);
+    expect((await waitForJobState(jobId)).state).toBe("completed");
+
+    const messages = sentMessages.get(chatId) ?? [];
+    expect(messages).toHaveLength(3);
+    const parts = messages.map((message) => message.text);
+    expect(parts.join("")).toBe(reviewed);
+    expect(messages[1]?.reply_parameters).toEqual({
+      message_id: 5811,
+      allow_sending_without_reply: false,
+    });
+    expect(messages[2]?.reply_parameters).toEqual({
+      message_id: 5811,
+      allow_sending_without_reply: false,
+    });
+    const publications = await db
+      .select()
+      .from(schema.publications)
+      .where(eq(schema.publications.adaptationId, adaptationId));
+    expect(publications).toHaveLength(1);
+    expect(publications[0]).toMatchObject({
+      status: "unknown",
+      partialPrimaryKind: "message",
+      partialPhotoId: "5811",
+      partialPhotoUrl: "https://t.me/mychannel/5811",
+      partialFollowupText: parts[2],
+      partialFollowupOutcome: "rejected",
+    });
+
+    const redeliveryId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!redeliveryId) throw new Error("boss.send returned null for redelivery");
+    expect((await waitForJobState(redeliveryId)).state).toBe("completed");
+    expect(sendCounts.get(chatId)).toBe(3);
+    expect((await publicationFor(adaptationId))?.partialFollowupText).toBe(parts[2]);
+  }, 25_000);
+
   it("publishes a VK community post through the real registry and records its wall link", async () => {
     const { encryptJson } = await import("@pubrick/shared");
     const [channel] = await db
@@ -530,10 +706,11 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       body: { ok: true, result: { message_id: 1, chat: { id: Number(chatId) } } },
     });
     const { adaptationId } = await seedQueuedAdaptation(chatId);
-    // Past telegram's own 4096 limit: the guard is in the adapter, above fetch.
+    // Past the adapter's 12000 limit: the guard is above fetch. The editor's
+    // lower 4096 limit stays in force until long-post authoring is enabled.
     await db
       .update(schema.adaptations)
-      .set({ body: "x".repeat(5000) })
+      .set({ body: "x".repeat(12_001) })
       .where(eq(schema.adaptations.id, adaptationId));
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });

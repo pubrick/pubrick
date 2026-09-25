@@ -281,6 +281,46 @@ async function validateBodyRevision(client: pg.PoolClient): Promise<void> {
   }
 }
 
+/** 0101's row rewrite runs in committed pages, outside Drizzle's DDL transaction. */
+async function backfillTelegramPartialPrimaryKind(client: pg.PoolClient): Promise<void> {
+  await backfillPages(
+    client,
+    `WITH batch AS (
+       SELECT id FROM publications
+       WHERE ($1::uuid IS NULL OR id > $1::uuid)
+         AND partial_followup_text IS NOT NULL AND partial_primary_kind IS NULL
+       ORDER BY id LIMIT $2
+     ), updated AS (
+       UPDATE publications p SET partial_primary_kind = 'photo'
+       FROM batch b WHERE p.id = b.id AND p.partial_followup_text IS NOT NULL
+         AND p.partial_primary_kind IS NULL RETURNING p.id
+     )
+     SELECT id AS cursor FROM batch ORDER BY id DESC LIMIT 1`,
+  );
+}
+
+/** Validate online: VALIDATE takes a weaker lock after the DDL transaction commits. */
+async function validateTelegramPartialConstraints(client: pg.PoolClient): Promise<void> {
+  const names = [
+    "publications_partial_primary_kind_check",
+    "publications_partial_followup_outcome_check",
+    "publications_partial_telegram_check",
+  ];
+  const constraints = await client.query<{ conname: string; convalidated: boolean }>(
+    `SELECT conname, convalidated FROM pg_constraint
+     WHERE conrelid = to_regclass('public.publications') AND conname = ANY($1::text[])`,
+    [names],
+  );
+  for (const name of names) {
+    const state = constraints.rows.find((row) => row.conname === name);
+    if (!state) throw new Error(`Telegram partial constraint is missing: ${name}`);
+    if (!state.convalidated) {
+      // Identifiers come only from the fixed array above, never from DB/user input.
+      await client.query(`ALTER TABLE "publications" VALIDATE CONSTRAINT "${name}"`);
+    }
+  }
+}
+
 function migrationsFolder(): string {
   // dist/ and src/ both sit one level below the package root, where migrations/ lives.
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -323,6 +363,8 @@ export async function runMigrations(connectionString: string): Promise<void> {
         await prepareTemplateCohortIndex(client);
         await backfillPaidReplyHistory(client);
         await validateBodyRevision(client);
+        await backfillTelegramPartialPrimaryKind(client);
+        await validateTelegramPartialConstraints(client);
       } finally {
         await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]);
       }

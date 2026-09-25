@@ -10,6 +10,7 @@ import {
   PlatformRejectionError,
   type PublishResult,
   TELEGRAM_REQUEST_TIMEOUT_MS,
+  type TelegramPartCheckpoint,
   TransientPublishError,
   UnknownOutcomePublishError,
 } from "@pubrick/integrations";
@@ -89,6 +90,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     // later write of this attempt addresses that row through it.
     claimSend: vi.fn().mockResolvedValue(CLAIM),
     markTelegramPhotoAccepted: vi.fn().mockResolvedValue(true),
+    markTelegramPartAccepted: vi.fn().mockResolvedValue(true),
     releaseSend: vi.fn().mockResolvedValue(true),
     markPublished: vi.fn().mockResolvedValue(undefined),
     markAlreadyPublished: vi.fn().mockResolvedValue(undefined),
@@ -246,6 +248,98 @@ describe("PublishService.handle", () => {
       else process.env.MEDIA_STORAGE_DIR = previous;
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("wires long text Telegram callbacks to the durable per-part checkpoint", async () => {
+    const { repo } = fixture({ itemBody: "x".repeat(9000) });
+    const primary = { externalId: "4711", externalUrl: null };
+    const first = {
+      primaryKind: "message" as const,
+      primary,
+      previousRemaining: null,
+      remaining: "second third",
+    };
+    const final = { ...first, previousRemaining: "second third", remaining: "" };
+    const publish = vi.fn(
+      async (
+        _credentials: unknown,
+        _input: unknown,
+        options: {
+          onTelegramPartAccepted: (part: TelegramPartCheckpoint) => Promise<void>;
+        },
+      ) => {
+        await options.onTelegramPartAccepted(first);
+        await options.onTelegramPartAccepted(final);
+        return primary;
+      },
+    );
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+    await service.handle({ adaptationId: "a1", orgId: "o1" });
+    expect(repo.markTelegramPartAccepted).toHaveBeenNthCalledWith(1, "o1", "a1", CLAIM, first);
+    expect(repo.markTelegramPartAccepted).toHaveBeenNthCalledWith(2, "o1", "a1", CLAIM, final);
+    expect(repo.markPublished).toHaveBeenCalledWith("o1", "a1", primary, CLAIM);
+    expect(repo.markTelegramPhotoAccepted).not.toHaveBeenCalled();
+  });
+
+  it("stops a long Telegram sequence when its first accepted part cannot be checkpointed", async () => {
+    const { repo } = fixture({ itemBody: "x".repeat(9000) });
+    repo.markTelegramPartAccepted.mockResolvedValue(false);
+    const primary = { externalId: "4711", externalUrl: null };
+    let attemptedReply = false;
+    const publish = vi.fn(
+      async (
+        _credentials: unknown,
+        _input: unknown,
+        options: {
+          onTelegramPartAccepted: (part: {
+            primaryKind: "message";
+            primary: PublishResult;
+            previousRemaining: null;
+            remaining: string;
+          }) => Promise<void>;
+        },
+      ) => {
+        const part = {
+          primaryKind: "message" as const,
+          primary,
+          previousRemaining: null,
+          remaining: "remaining",
+        };
+        try {
+          await options.onTelegramPartAccepted(part);
+        } catch {
+          throw new PartialTelegramPublishError(
+            "Accepted primary but checkpoint failed",
+            primary,
+            part.remaining,
+            "not_sent",
+            "message",
+          );
+        }
+        attemptedReply = true;
+        return primary;
+      },
+    );
+    const service = new PublishService(repo as never, () => publisherStub(publish), "https://api");
+    await expect(service.handle({ adaptationId: "a1", orgId: "o1" })).resolves.toBeUndefined();
+    expect(attemptedReply).toBe(false);
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      expect.stringContaining("checkpoint failed"),
+      "outcome_unknown",
+      { status: "publishing", attemptCount: 1 },
+      "unknown",
+      CLAIM,
+      {
+        primaryKind: "message",
+        photoId: "4711",
+        photoUrl: null,
+        followupText: "remaining",
+        followupOutcome: "not_sent",
+      },
+    );
+    expect(repo.markPublished).not.toHaveBeenCalled();
   });
 
   it("loads a stored cover and passes its bytes to the VK publisher", async () => {
@@ -642,7 +736,7 @@ describe("PublishService.handle", () => {
   // the request AND the recording that follows it.
   it("waits out a whole publish attempt before a graceful stop gives up on it", () => {
     expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
-      TELEGRAM_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS,
+      TELEGRAM_REQUEST_TIMEOUT_MS * 4 + PUBLISH_RECORD_BUDGET_MS,
     );
     expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
       BLUESKY_REQUEST_TIMEOUT_MS * 4 + PUBLISH_RECORD_BUDGET_MS,

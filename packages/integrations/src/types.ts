@@ -41,6 +41,17 @@ export interface PublisherOptions {
   fetchImpl?: typeof fetch;
   /** Persist the accepted Telegram photo and frozen reply before attempting the reply. */
   onTelegramPhotoAccepted?: (primary: PublishResult, followup: string) => Promise<void>;
+  /** Persist each accepted part before another request; first previousRemaining is null. */
+  onTelegramPartAccepted?: (checkpoint: TelegramPartCheckpoint) => Promise<void>;
+}
+
+export interface TelegramPartCheckpoint {
+  primaryKind: "photo" | "message";
+  primary: PublishResult;
+  /** Null for the primary; otherwise the exact suffix before this accepted reply. */
+  previousRemaining: string | null;
+  /** Exact unconfirmed suffix; empty after the last accepted reply. */
+  remaining: string;
 }
 
 export interface Publisher<C = Record<string, string>> {
@@ -118,13 +129,14 @@ export class UnknownOutcomePublishError extends Error {
   }
 }
 
-/** A photo is live, but its required text reply has not been confirmed. */
+/** A Telegram primary is live, but its complete delivery has not been confirmed. */
 export class PartialTelegramPublishError extends UnknownOutcomePublishError {
   constructor(
     message: string,
     readonly primary: PublishResult,
     readonly followup: string,
     readonly followupOutcome: "not_sent" | "rejected" | "unknown",
+    readonly primaryKind: "photo" | "message" = "photo",
   ) {
     super(message);
   }

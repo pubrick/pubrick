@@ -1289,7 +1289,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(adaptation).toMatchObject({
       status: "failed",
       failureReason: "outcome_unknown",
-      lastError: expect.stringContaining("accepted the cover"),
+      lastError: expect.stringContaining("accepted part of this post"),
     });
     const receipts = await publicationsFor(adaptationId);
     expect(receipts).toHaveLength(1);
@@ -1603,6 +1603,118 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.markTelegramPhotoAccepted(orgId, adaptationId, claim, partial)).toBe(false);
   });
 
+  it("checkpoints every accepted Telegram part with an exact suffix CAS, including the final empty suffix", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    await repo.markPublishing(orgId, adaptationId, null);
+    const claim = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
+    const primary = { externalId: "4711", externalUrl: null };
+    const first = {
+      primaryKind: "message" as const,
+      primary,
+      previousRemaining: null,
+      remaining: "Second. Third.",
+    };
+    expect(await repo.markTelegramPartAccepted(strangerOrgId, adaptationId, claim, first)).toBe(
+      false,
+    );
+    expect(await repo.markTelegramPartAccepted(orgId, adaptationId, claim, first)).toBe(true);
+    expect(await repo.markTelegramPartAccepted(orgId, adaptationId, claim, first)).toBe(false);
+    expect(
+      await repo.markTelegramPartAccepted(
+        orgId,
+        adaptationId,
+        { ...claim, attempt: 2 },
+        {
+          ...first,
+          previousRemaining: "Second. Third.",
+          remaining: "Third.",
+        },
+      ),
+    ).toBe(false);
+    expect(
+      await repo.markTelegramPartAccepted(orgId, adaptationId, claim, {
+        ...first,
+        primary: { externalId: "another-message", externalUrl: null },
+        previousRemaining: "Second. Third.",
+        remaining: "Third.",
+      }),
+    ).toBe(false);
+    expect(
+      await repo.markTelegramPartAccepted(orgId, adaptationId, claim, {
+        ...first,
+        previousRemaining: "Second. Third.",
+        remaining: "changed",
+      }),
+    ).toBe(false);
+    expect(
+      await repo.markTelegramPartAccepted(orgId, adaptationId, claim, {
+        ...first,
+        previousRemaining: "Second. Third.",
+        remaining: "Third.",
+      }),
+    ).toBe(true);
+    expect(
+      await repo.markTelegramPartAccepted(orgId, adaptationId, claim, {
+        ...first,
+        previousRemaining: "Second. Third.",
+        remaining: "Third.",
+      }),
+    ).toBe(false);
+    expect(
+      await repo.markTelegramPartAccepted(orgId, adaptationId, claim, {
+        ...first,
+        previousRemaining: "Third.",
+        remaining: "",
+      }),
+    ).toBe(true);
+    const [checkpoint] = await db
+      .select({
+        kind: schema.publications.partialPrimaryKind,
+        firstId: schema.publications.partialPhotoId,
+        firstUrl: schema.publications.partialPhotoUrl,
+        remaining: schema.publications.partialFollowupText,
+        outcome: schema.publications.partialFollowupOutcome,
+      })
+      .from(schema.publications)
+      .where(eq(schema.publications.id, claim.id));
+    expect(checkpoint).toEqual({
+      kind: "message",
+      firstId: "4711",
+      firstUrl: null,
+      remaining: "",
+      outcome: "confirmed",
+    });
+
+    // A delayed error after an older part cannot lengthen the frozen suffix.
+    expect(
+      await repo.markFailed(
+        orgId,
+        adaptationId,
+        "late reply error",
+        "outcome_unknown",
+        { status: "publishing", attemptCount: 1 },
+        "unknown",
+        claim,
+        {
+          primaryKind: "message",
+          photoId: "4711",
+          photoUrl: null,
+          followupText: "Second. Third.",
+          followupOutcome: "unknown",
+        },
+      ),
+    ).toBe(true);
+    const [finished] = await db
+      .select({
+        status: schema.publications.status,
+        remaining: schema.publications.partialFollowupText,
+        outcome: schema.publications.partialFollowupOutcome,
+      })
+      .from(schema.publications)
+      .where(eq(schema.publications.id, claim.id));
+    expect(finished).toEqual({ status: "unknown", remaining: "", outcome: "confirmed" });
+  });
+
   it("releaseSend takes only the in-flight claim, never a terminal record", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markFailed(orgId, adaptationId, "first attempt", "platform_rejected", {
@@ -1803,18 +1915,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.claimSend(orgId, adaptationId, 3)).toBeNull();
   });
 
-  /**
-   * The same fence as `releaseSend`, one method over — and this one needs it
-   * MORE, because `markPublished` is deliberately unfenced on the adaptation: a
-   * post that went out is a fact, and it is recorded whatever the row says now.
-   *
-   * So an overtaken attempt DOES reach `resolveClaim` here. Addressing the claim
-   * by "whatever is in flight for this adaptation" would have it stamp its own
-   * delivery onto a live successor's claim, freeing the in-flight slot the
-   * successor is relying on. Its own row, by primary key, or a fresh record —
-   * never somebody else's claim.
-   */
-  it("markPublished resolves its OWN claim, never a successor's, when it comes back late", async () => {
+  it("markPublished cannot override an operator verdict or a successor's live claim", async () => {
     const adaptationId = await seedAdaptation("queued");
     await repo.markPublishing(orgId, adaptationId, null);
     const hung = (await repo.claimSend(orgId, adaptationId, 1)) as SendClaim;
@@ -1830,6 +1931,14 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
       },
       "unknown",
     );
+    expect(
+      await repo.markPublished(
+        orgId,
+        adaptationId,
+        { externalId: "11", externalUrl: "https://t.me/x/11" },
+        hung,
+      ),
+    ).toBe(false);
     await db
       .update(schema.adaptations)
       .set({ status: "queued" })
@@ -1837,23 +1946,24 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     await repo.markPublishing(orgId, adaptationId, null);
     const live = (await repo.claimSend(orgId, adaptationId, 2)) as SendClaim;
 
-    await repo.markPublished(
-      orgId,
-      adaptationId,
-      { externalId: "11", externalUrl: "https://t.me/x/11" },
-      hung,
-    );
+    expect(
+      await repo.markPublished(
+        orgId,
+        adaptationId,
+        { externalId: "11", externalUrl: "https://t.me/x/11" },
+        hung,
+      ),
+    ).toBe(false);
 
     expect(
       (await publicationById(live.id))?.status,
       "a live attempt's send claim was consumed by an overtaken one",
     ).toBe("in_flight");
     expect(await publicationById(hung.id)).toMatchObject({ status: "unknown" });
-    const published = (await publicationsFor(adaptationId)).filter(
-      (row) => row.status === "published",
-    );
-    expect(published).toHaveLength(1);
-    expect(published[0]).toMatchObject({ externalId: "11" });
+    expect(
+      (await publicationsFor(adaptationId)).filter((row) => row.status === "published"),
+    ).toHaveLength(0);
+    expect((await repo.load(orgId, adaptationId))?.status).toBe("publishing");
   });
 
   /**

@@ -13,6 +13,7 @@ import {
   type Publisher,
   type PublishResult,
   TELEGRAM_REQUEST_TIMEOUT_MS,
+  type TelegramPartCheckpoint,
   UnknownOutcomePublishError,
   VK_REQUEST_TIMEOUT_MS,
 } from "@pubrick/integrations";
@@ -107,8 +108,8 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
   Math.max(
-    // A covered Telegram post may send a photo and then one text reply.
-    TELEGRAM_REQUEST_TIMEOUT_MS * 2,
+    // A long covered post may send one photo and three text replies.
+    TELEGRAM_REQUEST_TIMEOUT_MS * 4,
     VK_REQUEST_TIMEOUT_MS,
     MAX_REQUEST_TIMEOUT_MS,
     // Bluesky: session, mention resolution, optional cover upload, createRecord.
@@ -590,24 +591,36 @@ export class PublishService {
         { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
         {
           baseUrl,
-          ...(adaptation.platform === "telegram" && image
+          ...(adaptation.platform === "telegram" && text.length > 4096 && !video
             ? {
-                onTelegramPhotoAccepted: async (primary: PublishResult, followup: string) => {
-                  const checkpointed = await this.repo.markTelegramPhotoAccepted(
+                onTelegramPartAccepted: async (checkpoint: TelegramPartCheckpoint) => {
+                  const saved = await this.repo.markTelegramPartAccepted(
                     job.orgId,
                     job.adaptationId,
                     claim,
-                    {
-                      photoId: primary.externalId,
-                      photoUrl: primary.externalUrl,
-                      followupText: followup,
-                      followupOutcome: "pending",
-                    },
+                    checkpoint,
                   );
-                  if (!checkpointed) throw new Error("The send claim is no longer active");
+                  if (!saved) throw new Error("The send claim or suffix is no longer active");
                 },
               }
-            : {}),
+            : adaptation.platform === "telegram" && image
+              ? {
+                  onTelegramPhotoAccepted: async (primary: PublishResult, followup: string) => {
+                    const checkpointed = await this.repo.markTelegramPhotoAccepted(
+                      job.orgId,
+                      job.adaptationId,
+                      claim,
+                      {
+                        photoId: primary.externalId,
+                        photoUrl: primary.externalUrl,
+                        followupText: followup,
+                        followupOutcome: "pending",
+                      },
+                    );
+                    if (!checkpointed) throw new Error("The send claim is no longer active");
+                  },
+                }
+              : {}),
         },
       );
     } catch (error) {
@@ -623,6 +636,7 @@ export class PublishService {
         const partial: PartialTelegramDelivery | undefined =
           error instanceof PartialTelegramPublishError
             ? {
+                ...(text.length > 4096 ? { primaryKind: error.primaryKind } : {}),
                 photoId: error.primary.externalId,
                 photoUrl: error.primary.externalUrl,
                 followupText: error.followup,
@@ -955,7 +969,13 @@ export class PublishService {
   ): Promise<void> {
     for (let attempt = 1; attempt <= MARK_PUBLISHED_MAX_ATTEMPTS; attempt++) {
       try {
-        await this.repo.markPublished(orgId, adaptationId, result, claim);
+        const recorded = await this.repo.markPublished(orgId, adaptationId, result, claim);
+        if (recorded === false) {
+          this.logger.warn(
+            `Publication receipt not recorded: this claim was superseded by a newer decision. ` +
+              `orgId=${orgId} adaptationId=${adaptationId} claimId=${claim.id}`,
+          );
+        }
         return;
       } catch (error) {
         // Not a failure: a `published` publications row for this adaptation
