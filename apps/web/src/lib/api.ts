@@ -161,6 +161,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   unread_ai_draft_open_only: "unread_ai_draft_open_only",
   delivery_outcome_unknown: "delivery_outcome_unknown",
   partial_telegram_unresolved: "partial_telegram_unresolved",
+  delivery_in_flight: "delivery_in_flight",
   delivery_outcome_already_known: "delivery_outcome_already_known",
   manual_schedule_unsupported: "manual_schedule_unsupported",
   manual_publication_pending: "manual_publication_pending",

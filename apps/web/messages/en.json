@@ -1252,6 +1252,7 @@
     "content_partially_published": "Part of this post is already live; leave it, or send the rest.",
     "delivery_outcome_unknown": "The platform never confirmed this post, so a copy may already be live. Open the channel and say what you found before sending it again.",
     "partial_telegram_unresolved": "A Telegram cover is already live. Resolve its missing reply before editing this post.",
+    "delivery_in_flight": "This post is being sent. Wait for the channel result before rejecting it.",
     "delivery_outcome_already_known": "This delivery's outcome is already known, so there is nothing left to say about it.",
     "content_no_channels_left": "This post has no channels left to publish to — every channel it was written for has been deleted.",
     "unread_ai_draft": "No one has read this AI-written draft yet. Open it, or edit it, before approving.",

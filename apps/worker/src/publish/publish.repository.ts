@@ -791,7 +791,9 @@ export class PublishRepository {
    * statement rather than passed in, so it cannot drift from the count
    * `markPublishing` just bumped. The INSERT ... SELECT also makes "the
    * adaptation exists" a condition of the claim: zero rows selected inserts
-   * nothing, and the caller is told so.
+   * nothing, and the caller is told so. The SELECT locks and rechecks the
+   * publishing row after a concurrent Reject, so a rejected attempt cannot
+   * create a claim and send after Reject commits.
    *
    * Deliberately NOT inside `markPublishing`'s update: a unique violation
    * inside a transaction aborts the whole transaction, and the two claims have
@@ -803,9 +805,10 @@ export class PublishRepository {
     try {
       const result = await db.execute(sql`
         insert into publications (org_id, adaptation_id, channel_id, status, attempt)
-        select org_id, id, channel_id, 'in_flight', attempt_count
-          from adaptations
-         where org_id = ${orgId} and id = ${adaptationId}
+        select a.org_id, a.id, a.channel_id, 'in_flight', a.attempt_count
+          from adaptations a
+         where a.org_id = ${orgId} and a.id = ${adaptationId} and a.status = 'publishing'
+           for update of a
         returning id, attempt
       `);
       const row = result.rows[0] as { id: string; attempt: number } | undefined;

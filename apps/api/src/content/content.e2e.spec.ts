@@ -8057,6 +8057,83 @@ describe.skipIf(!url)("content e2e", () => {
       },
     );
 
+    it("serializes reject with a photo checkpoint and never requeues the unresolved cover", async () => {
+      const agent = await orgAgent();
+      const { itemId, adaptationId, channelId } = await oneChannel(agent);
+      await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      const initialJobs = await publishJobCount(adaptationId);
+      expect(initialJobs).toBe(1);
+
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const orgId = await orgOf(itemId);
+        await db.execute(
+          `UPDATE adaptations SET status = 'publishing', attempt_count = 1 WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `INSERT INTO publications (org_id, adaptation_id, channel_id, status, attempt)
+           VALUES ('${orgId}', '${adaptationId}', '${channelId}', 'in_flight', 1)`,
+        );
+        const beforeCheckpoint = await agent
+          .post(`/api/content/${itemId}/reject`)
+          .send({})
+          .expect(409);
+        expect(beforeCheckpoint.body.code).toBe("delivery_in_flight");
+
+        // Hold the adaptation lock while Reject queues behind it. The photo
+        // checkpoint lands before that lock is released, so Reject must read
+        // the claim after the wait and leave the adaptation publishing.
+        const holder = await pool.connect();
+        await holder.query("BEGIN");
+        let rejecting: Promise<request.Response> | undefined;
+        try {
+          await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
+          rejecting = Promise.resolve(agent.post(`/api/content/${itemId}/reject`).send({}));
+          await waitForAdaptationLockWaiters(db, 1);
+          await holder.query(
+            `UPDATE publications SET partial_photo_id = '4711',
+               partial_photo_url = 'https://t.me/mychannel/4711',
+               partial_followup_text = 'Frozen missing reply',
+               partial_followup_outcome = 'pending'
+             WHERE adaptation_id = $1 AND status = 'in_flight'`,
+            [adaptationId],
+          );
+        } finally {
+          await holder.query("COMMIT");
+          holder.release();
+        }
+        const refused = await rejecting;
+        expect(refused.status).toBe(409);
+        expect(refused.body.code).toBe("delivery_in_flight");
+
+        const during = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(during.body.adaptations[0].status).toBe("publishing");
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+
+        // Model the worker's terminal reply refusal on the same real rows.
+        await db.execute(
+          `UPDATE adaptations SET status = 'failed', failure_reason = 'outcome_unknown'
+            WHERE id = '${adaptationId}'`,
+        );
+        await db.execute(
+          `UPDATE publications SET status = 'unknown', partial_followup_outcome = 'rejected'
+            WHERE adaptation_id = '${adaptationId}' AND status = 'in_flight'`,
+        );
+        const partial = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(partial.body.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(partial.body.adaptations[0].partialTelegram.followupText).toBe(
+          "Frozen missing reply",
+        );
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(await publishJobCount(adaptationId)).toBe(initialJobs);
+      } finally {
+        await pool.end();
+      }
+    });
+
     /**
      * THE SKIP IS PER ROW, and this is the test that says so.
      *

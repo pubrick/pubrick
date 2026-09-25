@@ -1252,6 +1252,7 @@
     "content_partially_published": "Parte desta publicação já está no ar; deixe como está ou envie o resto.",
     "delivery_outcome_unknown": "A plataforma nunca confirmou esta publicação, portanto pode já haver uma cópia publicada. Abra o canal e diga o que encontrou antes de enviá-la de novo.",
     "partial_telegram_unresolved": "A capa já está publicada no Telegram. Resolva a resposta pendente antes de editar esta publicação.",
+    "delivery_in_flight": "Esta publicação está a ser enviada. Aguarde o resultado do canal antes de rejeitá-la.",
     "delivery_outcome_already_known": "O resultado deste envio já é conhecido, portanto não resta nada a dizer sobre ele.",
     "content_no_channels_left": "Esta publicação não tem mais canais para publicar: todos os canais para os quais ela foi escrita foram excluídos.",
     "unread_ai_draft": "Ninguém leu ainda este rascunho escrito pela IA. Abra-o, ou edite-o, antes de aprovar.",

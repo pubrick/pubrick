@@ -17,6 +17,10 @@ photo but omits its message ID stops before the reply and follows the same path.
 The reply request refuses to send as a standalone message if Telegram can no
 longer find the photo. A dead-lettered attempt with a saved photo checkpoint
 also keeps the partial outcome instead of becoming a plain failed send.
+Reject is refused while a send claim is in flight, including the interval
+between Telegram accepting the photo and the worker saving its checkpoint.
+After the attempt finishes, the operator resolves an unknown or partial
+outcome before approving another send.
 
 The operator checks the channel first. If the reply is already live, or the
 operator posts the missing text as a reply to the accepted photo, they confirm

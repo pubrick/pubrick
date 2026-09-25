@@ -213,6 +213,8 @@ export const API_ERROR_CODES = [
   "delivery_outcome_unknown",
   /** The reviewed draft stays frozen until its live Telegram photo is resolved. */
   "partial_telegram_unresolved",
+  /** A send claim is still in flight; rejecting it could hide a live post. */
+  "delivery_in_flight",
   /**
    * The resolver, on a delivery whose outcome is NOT in doubt.
    *
