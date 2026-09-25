@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createDb, schema } from "@pubrick/db";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -99,5 +100,41 @@ describe.skipIf(!url)("notification settings repository", () => {
     expect((await repo.get(second)).digests).toEqual([
       { brandId: foreign?.id, brandName: "Foreign", enabled: false, timezone: "UTC", localHour: 9 },
     ]);
+  });
+
+  it("pages delivery outcomes within the active organization without exposing destinations", async () => {
+    const now = Date.now();
+    const entries = Array.from({ length: 23 }, (_, index) => ({
+      orgId: first,
+      event: "delivery_failed" as const,
+      subjectId: randomUUID(),
+      targetId: randomUUID(),
+      status: index % 2 === 0 ? ("sent" as const) : ("attempted" as const),
+      createdAt: new Date(now + index * 1000),
+    }));
+    await direct.db.insert(schema.notificationEvents).values(entries);
+    const [foreign] = await direct.db
+      .insert(schema.notificationEvents)
+      .values({
+        orgId: second,
+        event: "draft_ready",
+        subjectId: randomUUID(),
+        targetId: randomUUID(),
+      })
+      .returning({ id: schema.notificationEvents.id });
+
+    const page = await repo.history(first, {});
+    expect(page.events).toHaveLength(20);
+    expect(page.events[0]?.createdAt).toBe(entries.at(-1)?.createdAt.toISOString());
+    expect(page.events.every((event) => !JSON.stringify(event).includes("123:secret"))).toBe(true);
+    expect(page.nextCursor).toBe(page.events.at(-1)?.id);
+    const last = await repo.history(first, { cursor: page.nextCursor as string });
+    expect(last.events).toHaveLength(3);
+    expect(last.nextCursor).toBeNull();
+    expect(new Set([...page.events, ...last.events].map((event) => event.id)).size).toBe(23);
+    expect((await repo.history(second, {})).events.map((event) => event.id)).toEqual([foreign?.id]);
+    await expect(repo.history(first, { cursor: foreign?.id as string })).rejects.toThrow(
+      "Invalid notification history cursor",
+    );
   });
 });

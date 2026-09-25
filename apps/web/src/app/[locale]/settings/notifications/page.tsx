@@ -1,6 +1,10 @@
 "use client";
 
-import { type NotificationSettings, notificationSettingsUpdateSchema } from "@pubrick/shared";
+import {
+  type NotificationHistory,
+  type NotificationSettings,
+  notificationSettingsUpdateSchema,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
@@ -25,6 +29,31 @@ export default function NotificationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [history, setHistory] = useState<NotificationHistory | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const loadHistory = useCallback(
+    async (cursor?: string) => {
+      setHistoryBusy(true);
+      setHistoryError(null);
+      try {
+        const page = await api<NotificationHistory>(
+          `/api/notifications/events${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        setHistory((current) =>
+          cursor && current
+            ? { events: [...current.events, ...page.events], nextCursor: page.nextCursor }
+            : page,
+        );
+      } catch (err) {
+        setHistoryError(errorMessage(err, t("genericError"), te));
+      } finally {
+        setHistoryBusy(false);
+      }
+    },
+    [t, te],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +66,9 @@ export default function NotificationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -272,6 +304,55 @@ export default function NotificationsPage() {
               {notice}
             </p>
           )}
+        </Card>
+        <Card>
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-fg">{t("historyTitle")}</h2>
+              <p className="text-sm text-fg-secondary">{t("historyHint")}</p>
+            </div>
+            <Button variant="secondary" disabled={historyBusy} onClick={() => void loadHistory()}>
+              {t("historyRefresh")}
+            </Button>
+          </div>
+          {history === null && !historyError ? <Skeleton lines={3} /> : null}
+          {history?.events.length === 0 ? (
+            <p className="text-sm text-fg-secondary">{t("historyEmpty")}</p>
+          ) : null}
+          {history && history.events.length > 0 ? (
+            <ol className="divide-y divide-border-soft border-y border-border-soft">
+              {history.events.map((event) => (
+                <li
+                  key={event.id}
+                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3 text-sm"
+                >
+                  <span className="font-medium text-fg">{t(`historyEvent_${event.event}`)}</span>
+                  <span className="text-fg-secondary">{t(`historyStatus_${event.status}`)}</span>
+                  <time dateTime={event.createdAt} className="w-full text-xs text-fg-tertiary">
+                    {new Intl.DateTimeFormat(locale, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(event.createdAt))}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          {historyError ? (
+            <p aria-live="polite" className="mt-3 text-sm text-danger">
+              {historyError}
+            </p>
+          ) : null}
+          {history?.nextCursor ? (
+            <Button
+              variant="secondary"
+              className="mt-4"
+              disabled={historyBusy}
+              onClick={() => void loadHistory(history.nextCursor ?? undefined)}
+            >
+              {t("historyMore")}
+            </Button>
+          ) : null}
         </Card>
       </div>
     </AppShell>
