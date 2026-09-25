@@ -1,7 +1,8 @@
 # Bounded multi-message Telegram posts
 
-Status: proposed. This extends the existing reviewed Telegram cover delivery;
-it does not import the reference publisher's HTML mode or its optimistic
+Status: compatible delivery implemented; long-post authoring pending. This
+extends the existing reviewed Telegram cover delivery; it does not import the
+reference publisher's HTML mode or its optimistic
 `success=True` after a dropped tail.
 
 ## User contract
