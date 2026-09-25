@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
-describe.skipIf(!url)("manual VC.ru publication e2e", () => {
+describe.skipIf(!url)("manual publication e2e", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
@@ -168,6 +168,70 @@ describe.skipIf(!url)("manual VC.ru publication e2e", () => {
     expect(confirmed.body.adaptations[0].assertedAt).toEqual(expect.any(String));
     await agent.post(endpoint).send({ url: "https://vc.ru/marketing/123-review" }).expect(409);
   });
+
+  it.each([
+    ["dzen", "https://dzen.ru/a/reviewed-post"],
+    ["instagram", "https://www.instagram.com/p/reviewed-post/"],
+    ["youtube", "https://www.youtube.com/watch?v=reviewed"],
+    ["rutube", "https://rutube.ru/video/reviewed-post/"],
+    ["tenchat", "https://tenchat.ru/media/reviewed-post"],
+  ])(
+    "prepares %s without a send and records only its confirmed link",
+    async (platform, publicUrl) => {
+      const { agent, orgId } = await orgAgent();
+      const brand = await agent.post("/api/brands").send({ name: "Manual brand" }).expect(201);
+      const channel = await agent
+        .post("/api/channels")
+        .send({ brandId: brand.body.id, platform, name: platform })
+        .expect(201);
+      const item = await agent
+        .post("/api/content")
+        .send({
+          brandId: brand.body.id,
+          title: "Reviewed title",
+          body: "Reviewed body",
+          channelIds: [channel.body.id],
+        })
+        .expect(201);
+      const adaptationId = item.body.adaptations[0].id as string;
+      const endpoint = `/api/content/${item.body.id}/adaptations/${adaptationId}/manual-publication`;
+      const approved = await agent
+        .post(`/api/content/${item.body.id}/approve`)
+        .send({})
+        .expect(200);
+      expect(approved.body.adaptations[0].status).toBe("manual_ready");
+      await agent.post(endpoint).send({ url: "https://vc.ru/post/on-wrong-platform" }).expect(400);
+
+      const { db, pool } = createDb(url as string);
+      try {
+        const jobs = await db.execute(
+          sql`select count(*)::int as n from pgboss.job where name = 'publish' and data::jsonb->>'adaptationId' = ${adaptationId}`,
+        );
+        expect((jobs.rows[0] as { n: number }).n).toBe(0);
+      } finally {
+        await pool.end();
+      }
+      const confirmed = await agent.post(endpoint).send({ url: publicUrl }).expect(200);
+      expect(confirmed.body.status).toBe("published");
+      expect(confirmed.body.adaptations[0]).toMatchObject({
+        status: "published",
+        externalUrl: publicUrl,
+        assertedByName: "VC editor",
+      });
+      const receipt = createDb(url as string);
+      try {
+        const rows = await receipt.db.execute(
+          sql`select external_url, asserted_at from publications where org_id = ${orgId} and adaptation_id = ${adaptationId}`,
+        );
+        expect(rows.rows).toHaveLength(1);
+        expect(rows.rows[0]).toMatchObject({ external_url: publicUrl });
+        expect(rows.rows[0]?.asserted_at).toBeTruthy();
+      } finally {
+        await receipt.pool.end();
+      }
+      await agent.post(endpoint).send({ url: publicUrl }).expect(409);
+    },
+  );
 
   it("lets the reviewer withdraw preparation, and keeps another org out", async () => {
     const { agent } = await orgAgent();

@@ -1,5 +1,9 @@
 # VC.ru manual publishing
 
+The shared workflow for all manual channels is in
+[Manual publication channels](manual-publications.md). This page records the
+VC.ru-specific package and native API decision.
+
 Pubrick prepares and reviews a VC.ru article, but a person publishes it in the
 VC.ru editor. The old Content Factory called an undocumented Osnova endpoint at
 `api.vc.ru/v2.8/entry/create`. Its JSON `entry` payload differs from the

@@ -45,8 +45,12 @@ import { type AnyPgColumn, check } from "drizzle-orm/pg-core";
  * being placed inside.
  */
 export function enumCheck(name: string, column: AnyPgColumn, values: readonly string[]) {
-  const list = values.map(assertQuotable).join(", ");
-  return check(name, sql`${column} in (${sql.raw(list)})`);
+  return check(name, sql`${column} in (${enumSqlLiterals(values)})`);
+}
+
+/** The same safely quoted literal list for composite CHECK constraints. */
+export function enumSqlLiterals(values: readonly string[]) {
+  return sql.raw(values.map(assertQuotable).join(", "));
 }
 
 /**

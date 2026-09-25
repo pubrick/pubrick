@@ -3,10 +3,11 @@ import { MAX_BODY_LENGTH, MAX_CHANNEL_BODY_LENGTH } from "./dto/content.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "./telegram-photo-parts.js";
 
 /**
- * Maximum post length per platform, in characters.
+ * Pubrick's adaptation writing targets, in characters. These are product
+ * bounds, not a claim that a platform currently enforces the same limit.
  *
  * This lives here, as data, rather than on the `Publisher` interface: the
- * generation pipeline needs a limit for every platform a channel can exist
+ * generation pipeline needs a target for every platform a channel can exist
  * for. Telegram's review limit is the bounded multi-message delivery limit.
  */
 export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], number> = {
@@ -14,6 +15,10 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
   vk: 16000,
   dzen: 20000,
   vc_ru: 20000,
+  instagram: 2200,
+  youtube: MAX_BODY_LENGTH,
+  rutube: MAX_BODY_LENGTH,
+  tenchat: MAX_BODY_LENGTH,
   max: 4000,
   bluesky: 300,
   mastodon: 500,

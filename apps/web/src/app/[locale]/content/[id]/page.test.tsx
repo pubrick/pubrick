@@ -376,7 +376,9 @@ describe("editorial roles on content detail", () => {
     );
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     expect(await screen.findByText(en.Publish.resultsTitle)).toBeInTheDocument();
-    expect(screen.getByText(en.Publish.vcManualInstructions)).toBeInTheDocument();
+    expect(
+      screen.getByText(en.Publish.manualInstructions.replaceAll("{platform}", "VC.ru")),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: en.Publish.markDelivered }),
     ).not.toBeInTheDocument();
@@ -4503,6 +4505,49 @@ describe("a post whose channels disagreed", () => {
 });
 
 describe("VC.ru manual publication", () => {
+  it("exports a Dzen draft without treating RSS as a publication receipt", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "dzen", name: "Dzen" };
+    const current = makeItem({
+      title: "Reviewed title",
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Reviewed Dzen body." })],
+    });
+    installBaseHandlers({ current }, [], undefined, [manualChannel]);
+    const user = userEvent.setup();
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: copy },
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = within(resultsList());
+    expect(results.getByText(en.Publish.manualDzenHint)).toBeInTheDocument();
+    expect(results.queryByRole("button", { name: en.Publish.downloadVcPackage })).toBeNull();
+    expect(results.getByRole("link", { name: "Open Dzen" })).toHaveAttribute(
+      "href",
+      "https://dzen.ru/",
+    );
+    await user.click(results.getByRole("button", { name: en.Publish.copyAll }));
+    expect(copy).toHaveBeenCalledWith("Reviewed title\n\nReviewed Dzen body.");
+  });
+
+  it("offers an attached video for a manual YouTube upload", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "youtube", name: "YouTube" };
+    const current = makeItem({
+      status: "approved",
+      videoMediaId: "11111111-1111-4111-8111-111111111111",
+      adaptations: [makeAdaptation({ status: "manual_ready" })],
+    });
+    installBaseHandlers({ current }, [], undefined, [manualChannel]);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = within(resultsList());
+    expect(results.getByText(en.Publish.manualVideoHint)).toBeInTheDocument();
+    expect(results.getByRole("link", { name: en.Publish.downloadVideo })).toHaveAttribute(
+      "href",
+      "/api/media/11111111-1111-4111-8111-111111111111/file",
+    );
+  });
+
   it("refuses a package if another editor withdrew manual approval before the click", async () => {
     const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
     const current = makeItem({
@@ -4582,10 +4627,11 @@ describe("VC.ru manual publication", () => {
     expect(
       screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
     ).not.toBeInTheDocument();
-    expect(results.getByRole("link", { name: en.Publish.openVc })).toHaveAttribute(
-      "href",
-      "https://vc.ru/",
-    );
+    expect(
+      results.getByRole("link", {
+        name: en.Publish.openManualPlatform.replace("{platform}", "VC.ru"),
+      }),
+    ).toHaveAttribute("href", "https://vc.ru/");
     const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -4594,7 +4640,9 @@ describe("VC.ru manual publication", () => {
     await user.click(results.getByRole("button", { name: en.Publish.copyBody }));
     expect(copy).toHaveBeenCalledWith("Reviewed VC article.");
     await user.type(
-      results.getByRole("textbox", { name: en.Publish.vcUrlLabel }),
+      results.getByRole("textbox", {
+        name: en.Publish.manualUrlLabel.replace("{platform}", "VC.ru"),
+      }),
       "https://vc.ru/marketing/123-article",
     );
     await user.click(results.getByRole("button", { name: en.Publish.recordManualPublication }));

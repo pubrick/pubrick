@@ -1378,7 +1378,9 @@ describe("BrandPage — the platform picker", () => {
     await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByRole("combobox"), "vc_ru");
-    expect(screen.getByText(en.Channels.vcManualHint)).toBeInTheDocument();
+    expect(
+      screen.getByText(en.Channels.manualHint.replaceAll("{platform}", "VC.ru")),
+    ).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: en.Channels.namePlaceholder }), "VC blog");
     await user.click(screen.getByRole("button", { name: en.Channels.add }));
     await waitFor(() => expect(requests).toHaveLength(1));
@@ -1388,6 +1390,29 @@ describe("BrandPage — the platform picker", () => {
     });
     expect(JSON.parse(requests[0]?.body ?? "{}")).not.toHaveProperty("credentials");
   });
+
+  it.each(["dzen", "instagram", "youtube", "rutube", "tenchat"])(
+    "offers %s as a manual channel without credentials",
+    async (platform) => {
+      const requests: string[] = [];
+      installHandlers([], (url, init) => {
+        if (url.endsWith("/api/channels") && init?.method === "POST") {
+          requests.push(init.body as string);
+          return jsonResponse(201, { id: "manual1", platform, name: "Manual" });
+        }
+        return undefined;
+      });
+      await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+      const user = userEvent.setup();
+      await user.selectOptions(screen.getByRole("combobox"), platform);
+      expect(screen.getByText(/manual channel/)).toBeInTheDocument();
+      await user.type(screen.getByRole("textbox", { name: en.Channels.namePlaceholder }), "Manual");
+      await user.click(screen.getByRole("button", { name: en.Channels.add }));
+      await waitFor(() => expect(requests).toHaveLength(1));
+      expect(JSON.parse(requests[0] ?? "{}")).toMatchObject({ platform, name: "Manual" });
+      expect(JSON.parse(requests[0] ?? "{}")).not.toHaveProperty("credentials");
+    },
+  );
 
   for (const platform of unsupported) {
     it(`names ${platform} but will not let it be chosen`, async () => {

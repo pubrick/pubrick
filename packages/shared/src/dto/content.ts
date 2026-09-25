@@ -2,6 +2,7 @@ import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
 import { projectRichBody, richBodySchema } from "../rich-body.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "../telegram-photo-parts.js";
+import type { ManualPlatformId } from "./channels.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
@@ -705,19 +706,47 @@ export const deliveryAssertionSchema = z.object({
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
 
-/** A person supplied the public VC.ru article URL after publishing it there. */
-export const manualPublicationSchema = z.object({
-  url: z.url().refine((value) => {
-    const parsed = new URL(value);
+/** The URL is a person's assertion. These host checks prevent an accidental or spoofed destination. */
+const MANUAL_PUBLICATION_HOSTS: Record<ManualPlatformId, readonly string[]> = {
+  vc_ru: ["vc.ru"],
+  dzen: ["dzen.ru", "www.dzen.ru"],
+  instagram: ["instagram.com", "www.instagram.com"],
+  youtube: ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"],
+  rutube: ["rutube.ru", "www.rutube.ru"],
+  tenchat: ["tenchat.ru", "www.tenchat.ru"],
+};
+
+export function isManualPublicationUrl(platform: ManualPlatformId, value: string): boolean {
+  try {
+    const url = new URL(value);
     return (
-      parsed.protocol === "https:" &&
-      parsed.hostname === "vc.ru" &&
-      parsed.port === "" &&
-      parsed.username === "" &&
-      parsed.password === "" &&
-      parsed.pathname !== "/"
+      url.protocol === "https:" &&
+      MANUAL_PUBLICATION_HOSTS[platform].includes(url.hostname) &&
+      url.port === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      /[^/]/.test(url.pathname)
     );
-  }, "Enter an HTTPS vc.ru article URL"),
+  } catch {
+    return false;
+  }
+}
+
+/** A person supplied a public post URL after publishing outside Pubrick. */
+export const manualPublicationSchema = z.object({
+  url: z
+    .url()
+    .max(2048)
+    .refine((value) => {
+      const parsed = new URL(value);
+      return (
+        parsed.protocol === "https:" &&
+        parsed.port === "" &&
+        parsed.username === "" &&
+        parsed.password === "" &&
+        /[^/]/.test(parsed.pathname)
+      );
+    }, "Enter an HTTPS post URL"),
 });
 export type ManualPublication = z.infer<typeof manualPublicationSchema>;
 

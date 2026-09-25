@@ -1,4 +1,4 @@
-import { type BrandLinkPolicy, PLATFORM_IDS } from "@pubrick/shared";
+import { type BrandLinkPolicy, MANUAL_PLATFORM_IDS, PLATFORM_IDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -12,7 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
-import { enumCheck } from "./enum-check.js";
+import { enumCheck, enumSqlLiterals } from "./enum-check.js";
 
 export const brands = pgTable(
   "brands",
@@ -79,9 +79,14 @@ export const channels = pgTable(
      * no limit — see `enumCheck`.
      */
     enumCheck("channels_platform_check", t.platform, PLATFORM_IDS),
+    /**
+     * Existing Dzen rows may hold an encrypted token from before the manual
+     * workflow. Preserve those bytes on upgrade; new Dzen channels are created
+     * without credentials, and the API never reads legacy Dzen tokens to send.
+     */
     check(
       "channels_credentials_mode_check",
-      sql`(${t.platform} = 'vc_ru') = (${t.credentialsEncrypted} is null)`,
+      sql`${t.platform} = 'dzen' or ((${t.platform} in (${enumSqlLiterals(MANUAL_PLATFORM_IDS.filter((platform) => platform !== "dzen"))})) = (${t.credentialsEncrypted} is null))`,
     ),
     check(
       "channels_metrics_auto_refresh_vk_check",

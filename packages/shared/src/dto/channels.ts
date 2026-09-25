@@ -5,6 +5,10 @@ export const PLATFORM_IDS = [
   "vk",
   "dzen",
   "vc_ru",
+  "instagram",
+  "youtube",
+  "rutube",
+  "tenchat",
   "max",
   "bluesky",
   "mastodon",
@@ -49,7 +53,14 @@ export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max", "bluesky", "ma
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
 /** Channels that prepare a post for a person to publish outside Pubrick. */
-export const MANUAL_PLATFORM_IDS = ["vc_ru"] as const;
+export const MANUAL_PLATFORM_IDS = [
+  "vc_ru",
+  "dzen",
+  "instagram",
+  "youtube",
+  "rutube",
+  "tenchat",
+] as const;
 export type ManualPlatformId = (typeof MANUAL_PLATFORM_IDS)[number];
 
 export function isManualPlatform(id: string): id is ManualPlatformId {
@@ -73,8 +84,12 @@ export function isPublishablePlatform(id: string): id is PublishablePlatformId {
 export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly string[]> = {
   telegram: ["botToken", "chatId"],
   vk: ["accessToken", "groupId"],
-  dzen: ["token"],
+  dzen: [],
   vc_ru: [],
+  instagram: [],
+  youtube: [],
+  rutube: [],
+  tenchat: [],
   max: ["accessToken", "chatId"],
   bluesky: ["handle", "appPassword"],
   mastodon: ["instanceUrl", "accessToken"],
