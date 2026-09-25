@@ -718,6 +718,56 @@ describe("approve now (Step 2)", () => {
 });
 
 describe("approve with a schedule (Step 3)", () => {
+  it("approves for 30 minutes after the click without reading a previously chosen time", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation({ status: "pending" })] }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/approve") {
+        served.current = { ...served.current, status: "approved" };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+    fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+      target: { value: scheduleValue(2) },
+    });
+
+    const before = Date.now();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Publish.approveAfterThirtyMinutes }));
+    const after = Date.now();
+    await screen.findByText(en.Content.status.approved);
+
+    const approveCall = calls.find((call) => call.path === "/api/content/c1/approve");
+    const payload = contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""));
+    const scheduled = new Date(payload.scheduledAt ?? "").getTime();
+    expect(approveCall?.method).toBe("POST");
+    expect(scheduled).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(scheduled).toBeLessThanOrEqual(after + 30 * 60_000);
+    expect(payload.scheduledAt).not.toBe(new Date(scheduleValue(2)).toISOString());
+  });
+
+  it("does not offer the shortcut for an already scheduled post", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "scheduled", scheduledAt: scheduleValue() })],
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.approved);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
+  });
+
   it("sends the chosen datetime-local value as an ISO scheduledAt", async () => {
     const served = { current: makeItem({ status: "draft" }) };
     const calls: Call[] = [];
@@ -752,12 +802,9 @@ describe("approve with a schedule (Step 3)", () => {
   });
 
   /**
-   * The `!scheduledAt` half of the button's `disabled` is load-bearing and
-   * irreversible if lost: `approve(true)` with an empty date falls through to
-   * the `{}` body, which is the "publish immediately" request. Weakening the
-   * guard to `disabled={isPublished}` would turn "Approve with schedule" into
-   * "publish now" for anyone who clicks it before filling the field, and the
-   * post is live in the channel by the time anyone notices.
+   * The schedule action stays unavailable until a date is chosen. The click
+   * handler also refuses an empty date, so a stale UI can never send the
+   * immediate-publication body from the scheduled path.
    */
   it("keeps the schedule button disabled until a date is chosen, and issues no request if clicked", async () => {
     const served = { current: makeItem({ status: "draft" }) };
@@ -3948,6 +3995,9 @@ describe("VC.ru manual publication", () => {
     expect(results.getByText(en.Content.adaptationStatus.manual_ready)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Publish.manualReadyAction })).toBeDisabled();
     expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
     expect(results.getByRole("link", { name: en.Publish.openVc })).toHaveAttribute(
       "href",
       "https://vc.ru/",

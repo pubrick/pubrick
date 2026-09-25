@@ -1,5 +1,12 @@
 # Reschedule one channel
 
+The review screen also offers **Approve, send in 30 min** for an unsent draft
+with automatic channels. It records a human approval and schedules the channels
+30 minutes from the click using the existing transactional approval path. It
+never approves a draft automatically, and the reviewer can still choose an
+exact time. This shortcut is unavailable for manual channels and posts already
+in delivery; use the per-channel action below to move an existing slot.
+
 A reviewer can move one scheduled automatic channel from the post's Results
 section. The **Reschedule** action is secondary to publishing and appears only
 on a scheduled adaptation. The form shows the browser's local time and sends

@@ -707,6 +707,7 @@
     "approveNow": "Опубликовать сейчас",
     "scheduleLabel": "Или запланировать на",
     "approveScheduled": "Одобрить с расписанием",
+    "approveAfterThirtyMinutes": "Одобрить и отправить через 30 мин",
     "reject": "Отклонить",
     "retractApproval": "Отменить одобрение",
     "archive": "Архивировать",
