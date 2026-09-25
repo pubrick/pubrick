@@ -12,7 +12,6 @@ import { and, eq, isNull } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { conflict } from "../api-error";
-import { MediaImageService } from "../media/media-image.service";
 import { DraftRevisionCaller, type DraftRevisionOutcome } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 
@@ -36,6 +35,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     ({ db, pool } = createDb(url as string));
+    const { MediaImageService } = await import("../media/media-image.service");
     const { AppModule } = await import("../app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DraftRevisionCaller)
