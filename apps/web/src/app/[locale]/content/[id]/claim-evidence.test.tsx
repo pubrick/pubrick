@@ -494,4 +494,29 @@ describe("claim evidence", () => {
     await user.click(screen.getByText(en.ClaimEvidence.historyTitle));
     expect(request.mock.calls.filter(([path]) => path.startsWith(historyEndpoint))).toHaveLength(2);
   });
+
+  it("clears accepted history when the editor switches to another article", async () => {
+    const anotherId = "a2f41fa3-bb34-465a-a3a9-114b0d26703c";
+    request.mockImplementation(async (path) => {
+      if (path === endpoint || path === `/api/content/${anotherId}/claim-review`) return null;
+      if (path === correctionEndpoint || path === `/api/content/${anotherId}/claim-correction`)
+        return null;
+      if (path === historyEndpoint) return { rows: [acceptedCorrection()], nextCursor: null };
+      if (path === `/api/content/${anotherId}/claim-corrections`)
+        return {
+          rows: [acceptedCorrection({ id: anotherId, claim: "A different article's claim." })],
+          nextCursor: null,
+        };
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    const { rerender } = await renderAsync(
+      <ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.ClaimEvidence.historyTitle));
+    expect(await screen.findByText(acceptedCorrection().reason)).toBeVisible();
+    rerender(<ClaimEvidence itemId={anotherId} savedBody={body} draftBody={body} editable />);
+    expect(await screen.findByText("A different article's claim.")).toBeVisible();
+    expect(screen.queryByText(acceptedCorrection().claim)).not.toBeInTheDocument();
+  });
 });

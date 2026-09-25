@@ -64,6 +64,7 @@ export function ClaimEvidence({
   const loadGeneration = useRef(0);
   const proposalGeneration = useRef(0);
   const historyGeneration = useRef(0);
+  const historyItemId = useRef(itemId);
   const proposalHeading = useRef<HTMLHeadingElement>(null);
   const focusProposal = useRef(false);
   const endpoint = `/api/content/${itemId}/claim-review`;
@@ -121,6 +122,17 @@ export function ClaimEvidence({
     },
     [historyEndpoint, t, te],
   );
+
+  useEffect(() => {
+    if (historyItemId.current === itemId) return;
+    historyItemId.current = itemId;
+    historyGeneration.current += 1;
+    setHistoryRows([]);
+    setHistoryNext(null);
+    setHistoryLoaded(false);
+    setHistoryLoading(false);
+    setHistoryError(null);
+  }, [itemId]);
 
   // The server computes staleness against the persisted body, so saving an edit
   // must refresh even if the endpoint and load callback have not changed.
