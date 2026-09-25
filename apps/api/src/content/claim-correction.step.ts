@@ -10,12 +10,12 @@ const outputSchema = z.object({
     .string()
     .min(1)
     .max(1_000)
-    .refine((value) => !value.includes("\u0000")),
+    .refine((value) => value.trim().length > 0 && !value.includes("\u0000")),
   reason: z
     .string()
     .min(1)
     .max(200)
-    .refine((value) => !value.includes("\u0000")),
+    .refine((value) => value.trim().length > 0 && !value.includes("\u0000")),
 });
 
 export type ClaimCorrectionInput = {

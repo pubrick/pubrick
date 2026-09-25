@@ -137,6 +137,8 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     status: "ready" | "failed" = "ready",
     outcome: ClaimReviewOutcome = "evidence_conflicts",
     createdAt?: Date,
+    reviewedBody = source,
+    reviewedClaim = claim,
   ) {
     const evidence = [
       {
@@ -150,12 +152,12 @@ describe.skipIf(!url)("explicit claim corrections", () => {
       .values({
         orgId,
         contentItemId: itemId,
-        bodyHash: createHash("sha256").update(source).digest("hex"),
+        bodyHash: createHash("sha256").update(reviewedBody).digest("hex"),
         status,
         createdAt,
         completedAt: new Date(),
         errorCode: status === "failed" ? "provider_unavailable" : null,
-        claims: [{ claim, outcome, evidence }],
+        claims: [{ claim: reviewedClaim, outcome, evidence }],
       })
       .returning({ id: schema.claimReviews.id });
     if (!row) throw new Error("Review insert failed");
@@ -363,5 +365,83 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     );
     expect((await visitor.get(`/api/content/${itemId}`).expect(200)).body.body).toBe(source);
     expect((await visitor.get(path).expect(200)).body.id).toBe(proposed.body.id);
+  });
+
+  it("rejects whitespace-only model output after metering, without a database error", async () => {
+    const { visitor, orgId, itemId } = await actor();
+    const reviewId = await review(orgId, itemId);
+    const path = `/api/content/${itemId}/claim-correction`;
+    outcome = {
+      ...outcome,
+      ok: true,
+      replacement: " \n ",
+      reason: "No evidence supports the number.",
+    };
+    expect(
+      (await visitor.post(path).send({ expectedBody: source, reviewId, claimIndex: 0 }).expect(409))
+        .body.code,
+    ).toBe("claim_correction_failed");
+    outcome = { ...outcome, ok: true, replacement, reason: " \t " };
+    expect(
+      (await visitor.post(path).send({ expectedBody: source, reviewId, claimIndex: 0 }).expect(409))
+        .body.code,
+    ).toBe("claim_correction_failed");
+    const ledger = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, CLAIM_CORRECTION_STEP),
+        ),
+      );
+    expect(ledger).toHaveLength(2);
+    expect((await visitor.get(path).expect(200)).text).toBe("null");
+  });
+
+  it("refuses a quote inside a human sentence before spending, while allowing the entire sentence", async () => {
+    const { visitor, orgId, itemId } = await actor();
+    const partialBody = `${claim} Human note: Buyers praised the design.`;
+    const partialClaim = "Buyers praised the design.";
+    await visitor.patch(`/api/content/${itemId}`).send({ body: partialBody }).expect(200);
+    const partialReview = await review(
+      orgId,
+      itemId,
+      "ready",
+      "evidence_conflicts",
+      undefined,
+      partialBody,
+      partialClaim,
+    );
+    const path = `/api/content/${itemId}/claim-correction`;
+    expect(
+      (
+        await visitor
+          .post(path)
+          .send({ expectedBody: partialBody, reviewId: partialReview, claimIndex: 0 })
+          .expect(409)
+      ).body.code,
+    ).toBe("claim_correction_ineligible");
+    expect(calls).toHaveLength(0);
+
+    const fullClaim = "The company never disclosed shipments.";
+    const fullBody = `${fullClaim} Buyers praised the design.`;
+    await visitor.patch(`/api/content/${itemId}`).send({ body: fullBody }).expect(200);
+    const fullReview = await review(
+      orgId,
+      itemId,
+      "ready",
+      "evidence_conflicts",
+      undefined,
+      fullBody,
+      fullClaim,
+    );
+    const proposed = await visitor
+      .post(path)
+      .send({ expectedBody: fullBody, reviewId: fullReview, claimIndex: 0 })
+      .expect(201);
+    expect(calls).toHaveLength(1);
+    const accepted = await visitor.post(`${path}/${proposed.body.id}/accept`).expect(200);
+    expect(accepted.body.body).toBe(fullBody.replace(fullClaim, replacement));
   });
 });

@@ -2493,8 +2493,8 @@ export class ContentRepository {
         "The exact claim must occur once in the saved draft",
       );
     }
-    const [aiDraft] = await db
-      .select({ id: schema.contentVersions.id })
+    const aiRows = await db
+      .select({ body: schema.contentVersions.body, scope: schema.contentVersions.scope })
       .from(schema.contentVersions)
       .where(
         and(
@@ -2502,12 +2502,28 @@ export class ContentRepository {
           eq(schema.contentVersions.contentItemId, id),
           isNull(schema.contentVersions.adaptationId),
           eq(schema.contentVersions.origin, "ai"),
-          eq(schema.contentVersions.scope, "full"),
         ),
-      )
-      .limit(1);
-    if (!aiDraft)
+      );
+    if (!aiRows.some((row) => row.scope === "full"))
       throw conflict("claim_correction_ineligible", "AI corrections require a generated draft");
+    // A sentinel probes the same provenance rule Accept uses. It catches the
+    // impossible case where replacing only this quote would absorb human text
+    // that sits outside the quote. The actual model reply is checked again at
+    // Accept, since its sentence boundaries and duplicate text can differ.
+    const sentinel = `Correction ${hash.slice(0, 16)}.`;
+    const preflight = planRefineAccept({
+      body: item.body,
+      start,
+      end: start + selected.claim.length,
+      proposal: sentinel,
+      aiRows,
+    });
+    if (!preflight.ok && preflight.reason === "would_launder") {
+      throw conflict(
+        "claim_correction_ineligible",
+        "Select the entire human-authored sentence before requesting an AI correction",
+      );
+    }
     if (await this.overEditorAiBudget(orgId)) {
       throw conflict(
         "claim_correction_limit_reached",
@@ -2545,6 +2561,12 @@ export class ContentRepository {
       );
     }
     const replacement = normalizeNewlines(outcome.replacement);
+    if (replacement.trim().length === 0 || outcome.reason.trim().length === 0) {
+      throw conflict(
+        "claim_correction_failed",
+        "The model returned an empty correction; the draft was not changed",
+      );
+    }
     if (
       replacement === selected.claim ||
       item.body.length - selected.claim.length + replacement.length > MAX_BODY_LENGTH
