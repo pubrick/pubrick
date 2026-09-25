@@ -530,10 +530,11 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       body: { ok: true, result: { message_id: 1, chat: { id: Number(chatId) } } },
     });
     const { adaptationId } = await seedQueuedAdaptation(chatId);
-    // Past telegram's own 4096 limit: the guard is in the adapter, above fetch.
+    // Past the adapter's 12000 limit: the guard is above fetch. The editor's
+    // lower 4096 limit stays in force until long-post authoring is enabled.
     await db
       .update(schema.adaptations)
-      .set({ body: "x".repeat(5000) })
+      .set({ body: "x".repeat(12_001) })
       .where(eq(schema.adaptations.id, adaptationId));
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
