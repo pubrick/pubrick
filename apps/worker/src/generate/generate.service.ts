@@ -48,6 +48,7 @@ import {
   type TerminalPayload,
 } from "./generate.repository";
 import { applyLinkPolicy } from "./link-policy";
+import { freezeRelatedNews } from "./related-news";
 
 export type { GenerateJob } from "@pubrick/shared";
 
@@ -188,6 +189,18 @@ const knowledgeContextSchema = z.object({
       }),
     )
     .max(5),
+  // Old checkpoints have only entries. A resume may read one after deployment.
+  relatedNews: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        title: z.string(),
+        summary: z.string(),
+        url: z.url().nullable(),
+      }),
+    )
+    .max(2)
+    .default([]),
 });
 
 const coverOutputSchema = z.object({
@@ -457,9 +470,13 @@ export class GenerateService {
       },
     };
 
-    // Skip the step entirely for brands with no notes: existing runs keep the
-    // same checkpoints and make no additional model call.
-    if (state.checkpoints.knowledge || (await this.repo.hasKnowledge(run.orgId, run.brandId))) {
+    // Reuse the one metered query embedding for both brand notes and news.
+    // Brands with neither retain the original no-call path.
+    if (
+      state.checkpoints.knowledge ||
+      (await this.repo.hasKnowledge(run.orgId, run.brandId)) ||
+      (await this.repo.hasRelatedNews(run.orgId, run.brandId))
+    ) {
       const topic = (input.text ?? (input.kind === "source" ? input.material : "")).slice(0, 2000);
       const knowledge = await this.runStep(
         state,
@@ -468,7 +485,10 @@ export class GenerateService {
           schema: knowledgeContextSchema,
           run: async (ctx) => {
             let entries: Awaited<ReturnType<GenerateRepository["lexicalKnowledge"]>>;
-            const indexed = await this.repo.hasIndexedKnowledge(run.orgId, run.brandId);
+            let related: Awaited<ReturnType<GenerateRepository["lexicalRelatedNews"]>>;
+            const indexed =
+              (await this.repo.hasIndexedKnowledge(run.orgId, run.brandId)) ||
+              (await this.repo.hasIndexedRelatedNews(run.orgId, run.brandId));
             const key = indexed ? await this.repo.googleKnowledgeKey(run.orgId) : undefined;
             if (key && topic.trim()) {
               const started = Date.now();
@@ -528,17 +548,35 @@ export class GenerateService {
                   0,
                   5,
                 );
+                const similarNews = await this.repo.similarRelatedNews(
+                  run.orgId,
+                  run.brandId,
+                  result.embedding,
+                );
+                const lexicalNews = await this.repo.lexicalRelatedNews(
+                  run.orgId,
+                  run.brandId,
+                  topic,
+                );
+                const seenNews = new Set(similarNews.map((entry) => entry.id));
+                related = [
+                  ...similarNews,
+                  ...lexicalNews.filter((entry) => !seenNews.has(entry.id)),
+                ].slice(0, 2);
               } else {
                 entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+                related = await this.repo.lexicalRelatedNews(run.orgId, run.brandId, topic);
               }
             } else {
               entries = await this.repo.lexicalKnowledge(run.orgId, run.brandId, topic);
+              related = await this.repo.lexicalRelatedNews(run.orgId, run.brandId, topic);
             }
             return {
               entries: entries.map((entry) => ({
                 ...entry,
                 content: entry.content.slice(0, 3000),
               })),
+              relatedNews: freezeRelatedNews(related),
             };
           },
         },
@@ -546,6 +584,7 @@ export class GenerateService {
       );
       if (knowledge === STOPPED) return STOPPED;
       state.ctx.knowledge = knowledge.entries;
+      state.ctx.relatedNews = knowledge.relatedNews;
     }
 
     const research = await this.runStep(state, RESEARCHER, undefined);
@@ -597,7 +636,7 @@ export class GenerateService {
     // could be mistaken for a check having happened.
     const checked = await this.runStep(state, FACTCHECK, {
       body: edited.body,
-      sources: factcheckSources(state.ctx.knowledge, state.ctx.material),
+      sources: factcheckSources(state.ctx.knowledge, state.ctx.material, state.ctx.relatedNews),
     });
     if (checked === STOPPED) return STOPPED;
 

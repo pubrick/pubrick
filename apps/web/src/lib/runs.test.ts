@@ -14,6 +14,7 @@ import {
   runEditorChanges,
   runFailureMessage,
   runKnowledgeNotes,
+  runRelatedNews,
   runStepStates,
   sourceHost,
 } from "./runs";
@@ -502,6 +503,82 @@ describe("runClaims", () => {
       steps: { factcheck: { status: "succeeded", output: { claims: many } } },
     });
     expect(runClaims(run)).toEqual(many);
+  });
+});
+
+describe("frozen related news", () => {
+  const id = "66666666-6666-4666-8666-666666666666";
+  it("renders only a succeeded, valid news snapshot and backs excerpts with its exact text", () => {
+    const run = makeRun({
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [],
+            relatedNews: [
+              {
+                id,
+                title: "Market hall",
+                summary: "Opened on Tuesday.",
+                url: "https://example.com/story",
+              },
+            ],
+          },
+        },
+        factcheck: {
+          status: "succeeded",
+          output: {
+            claims: [
+              {
+                text: "The hall opened Tuesday.",
+                needsCheck: true,
+                sourceId: `news:${id}`,
+                sourceQuote: "Opened on Tuesday.",
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(runRelatedNews(run)).toEqual([
+      { id, title: "Market hall", summary: "Opened on Tuesday.", url: "https://example.com/story" },
+    ]);
+    expect(runClaims(run)?.[0]).toMatchObject({
+      sourceId: `news:${id}`,
+      sourceQuote: "Opened on Tuesday.",
+    });
+    const forged = makeRun({
+      ...run,
+      steps: {
+        ...run.steps,
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [],
+            relatedNews: [
+              { id, title: "Market hall", summary: "Changed.", url: "javascript:alert(1)" },
+            ],
+          },
+        },
+      },
+    });
+    expect(runRelatedNews(forged)?.[0]?.url).toBeNull();
+    expect(runClaims(forged)?.[0]).toMatchObject({ sourceId: null, sourceQuote: null });
+    const malformed = makeRun({
+      ...run,
+      steps: {
+        knowledge: {
+          status: "succeeded",
+          output: {
+            entries: [],
+            relatedNews: [
+              { id: "not-an-id", title: "Fake", summary: "Text", url: "https://example.com" },
+            ],
+          },
+        },
+      },
+    });
+    expect(runRelatedNews(malformed)).toBeNull();
   });
 });
 

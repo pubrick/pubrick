@@ -130,9 +130,19 @@ vectors; inspect the ledger before retrying. The SDK makes no internal retry
 for an embedding call. Generating a query vector is checkpointed as a `knowledge`
 step, so a resumed run does not pay for it again after a successful checkpoint.
 
-Retrieval currently covers the brand's knowledge notes. It does not search
-historical posts, published content, or monitored news. The API returns the
-whole note list for a brand; server-side filtering and pagination are not yet
+Retrieval covers brand knowledge notes and up to two related public watched
+stories. The story query requires the same organization and brand, a scored
+relevance of at least 0.5, no explicit irrelevant editor signal, and a date
+within the last 30 days. Private Telegram sources are excluded. Compatible
+768-dimensional news vectors share the one metered query embedding already
+used by knowledge retrieval; text search works when indexing or the Google key
+is unavailable. The selected title and summary are frozen in the run checkpoint
+and limited to 2 KiB of UTF-8 across both stories, so a retry uses the same
+context without another retrieval call. Story URLs appear only as safe HTTP
+links in the run receipt, never in model material. Feed excerpts are context,
+not independent verification; claims remain for a human to check. Historical
+posts and published content are not searched. The API still returns the whole
+note list for a brand; server-side filtering and pagination are not yet
 available.
 
 ## API
