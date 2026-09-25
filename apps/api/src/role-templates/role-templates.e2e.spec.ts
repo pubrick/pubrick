@@ -398,6 +398,63 @@ describe.skipIf(!url)("role template manager API", () => {
       .get(`/api/prompts/writer/templates/revisions/${oldest.id}/usage?brandId=${brandId}&days=30`)
       .expect(200);
     expect(usage.body).toEqual(second.body.rows[1]);
+    const [removedItem] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Removed after review" })
+      .returning({ id: schema.contentItems.id });
+    if (!removedItem) throw new Error("No removable item");
+    const [removedRun] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId,
+        brandId,
+        input,
+        status: "succeeded",
+        contentItemId: removedItem.id,
+        templateSnapshot: snapshot(),
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const [removedDecision] = await db
+      .insert(schema.promptDecisions)
+      .values({
+        orgId,
+        contentItemId: removedItem.id,
+        runId: removedRun?.id,
+        ordinal: 1,
+        verdict: "approved",
+      })
+      .returning({ id: schema.promptDecisions.id, createdAt: schema.promptDecisions.createdAt });
+    await db.insert(schema.promptDecisionTemplateRevisions).values({
+      orgId,
+      decisionId: removedDecision?.id as string,
+      role: "writer",
+      revisionId: null,
+      version: null,
+      isDefault: true,
+      decidedAt: removedDecision?.createdAt as Date,
+    });
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, removedItem.id));
+    expect((await owner.agent.get(path).expect(200)).body.default).toMatchObject({
+      runCount: 2,
+      withoutCurrentItem: 1,
+      reviewActs: { approved: 3, rejected: 0 },
+    });
+    const bulkSnapshot = snapshot();
+    await db.insert(schema.pipelineRuns).values(
+      Array.from({ length: 501 }, () => ({
+        orgId,
+        brandId,
+        input,
+        status: "failed" as const,
+        templateSnapshot: bulkSnapshot,
+      })),
+    );
+    expect((await owner.agent.get(path).expect(200)).body.default).toMatchObject({
+      runCount: 503,
+      succeededRuns: 2,
+      withoutCurrentItem: 502,
+      reviewActs: { approved: 3, rejected: 0 },
+    });
     await other.agent.get(path).expect(404);
     await owner.agent
       .get(`/api/prompts/editor/templates/revisions/${oldest.id}/usage?brandId=${brandId}&days=30`)

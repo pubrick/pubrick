@@ -20,7 +20,7 @@ import {
   type RoleTemplatePreviewDto,
   type RoleTemplateRevisionDto,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, exists, gt, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import { badRequest } from "../api-error";
 import { db } from "../db";
 
@@ -245,6 +245,17 @@ export class RoleTemplatesRepository {
   ): Promise<void> {
     const byId = new Map(rows.map((row) => [row.revisionId, row]));
     const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+    const roleKind = sql<string>`jsonb_extract_path_text(${schema.pipelineRuns.templateSnapshot}, 'roles', ${role}, 'kind')`;
+    const roleRevisionId = sql<string>`jsonb_extract_path_text(${schema.pipelineRuns.templateSnapshot}, 'roles', ${role}, 'revisionId')`;
+    const eligible = or(
+      defaultRow ? eq(roleKind, "default") : undefined,
+      revisions.length
+        ? inArray(
+            roleRevisionId,
+            revisions.map((revision) => revision.id),
+          )
+        : undefined,
+    );
     const window = sql`${schema.pipelineRuns.createdAt} >= now()::timestamp - (${days} * interval '1 day')`;
     const hasReceipt = exists(
       db
@@ -289,10 +300,16 @@ export class RoleTemplatesRepository {
             eq(schema.pipelineRuns.orgId, orgId),
             eq(schema.pipelineRuns.brandId, brandId),
             window,
-            afterId ? gt(schema.pipelineRuns.id, afterId) : undefined,
+            isNotNull(schema.pipelineRuns.templateSnapshot),
+            eligible,
+            afterId
+              ? sql`(${schema.pipelineRuns.createdAt}, ${schema.pipelineRuns.id}) >
+                  (SELECT cursor_run.created_at, cursor_run.id FROM pipeline_runs AS cursor_run
+                   WHERE cursor_run.id = ${afterId}::uuid AND cursor_run.org_id = ${orgId})`
+              : undefined,
           ),
         )
-        .orderBy(asc(schema.pipelineRuns.id))
+        .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
         .limit(500);
       for (const run of page) {
         if (!run.templateSnapshot) continue;
@@ -347,7 +364,6 @@ export class RoleTemplatesRepository {
         and(
           eq(schema.pipelineRuns.id, schema.promptDecisions.runId),
           eq(schema.pipelineRuns.orgId, orgId),
-          eq(schema.pipelineRuns.contentItemId, schema.promptDecisions.contentItemId),
         ),
       )
       .where(
