@@ -43,7 +43,9 @@ at most 10 opted-in brands and 50 eligible publications per brand. It checks
 only live, published public Telegram posts at least six hours old with no prior
 sample. Each result contains at most 50 readable replies. A checked publication
 is not collected again automatically; operators can use the manual Collect
-action after its ordinary cooldown. A lost queued job leaves no pending sample
+action after its ordinary cooldown. When no workspace Telegram account is
+connected, Results shows that enabled collection is waiting for an owner or
+admin to connect one in Settings. A lost queued job leaves no pending sample
 and can be picked up in a later pass after the queue singleton expires.
 
 Turning the setting off fences queued work, including work already reading

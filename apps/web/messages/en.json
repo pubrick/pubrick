@@ -1593,6 +1593,8 @@
     "autoRepliesLimits": "Each hourly pass visits at most 10 brands, 50 publications per brand and 50 readable replies per publication. Only publications without a prior sample are checked; the sample is not a total comment count.",
     "autoRepliesOn": "Automatic collection is on",
     "autoRepliesOff": "Automatic collection is off",
+    "autoRepliesConnection": "A workspace owner or admin must connect a Telegram account in Settings before collection can run.",
+    "autoRepliesWaitingConnection": "Collection is waiting for a workspace owner or admin to connect a Telegram account in Settings.",
     "autoRepliesEnable": "Enable collection",
     "autoRepliesDisable": "Disable collection",
     "autoRepliesSaving": "Saving…",

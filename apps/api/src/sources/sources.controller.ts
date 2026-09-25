@@ -95,7 +95,7 @@ export class SourcesController {
   }
 
   @Get("telegram-connection")
-  @BrandScope({ kind: "org", roles: "manager" })
+  @BrandScope({ kind: "org", roles: "member" })
   telegramConnection(@OrgId() orgId: string) {
     return this.sources.telegramConnection(orgId);
   }
