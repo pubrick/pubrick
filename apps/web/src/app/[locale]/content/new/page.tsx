@@ -39,7 +39,7 @@ import {
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
-type SourcePreview = SourceExtractionResponse & { origin: "article" | "transcript" };
+type SourcePreview = SourceExtractionResponse & { origin: "article" | "video" | "transcript" };
 type AiAvailability = { configured: boolean; googleConfigured: boolean };
 
 const FORM_ID = "new-content-form";
@@ -215,7 +215,7 @@ export default function NewContentPage() {
         body: JSON.stringify({ ...parsed.data, brandId }),
       });
       if (requestId === sourceRequestId.current) {
-        setSourcePreview({ ...preview, origin: "article" });
+        setSourcePreview({ ...preview, origin: preview.kind === "video" ? "video" : "article" });
       }
     } catch (err) {
       if (err instanceof ApiError && err.noActiveOrg) {
@@ -743,7 +743,7 @@ export default function NewContentPage() {
                 >
                   <p className="text-sm font-semibold text-fg">
                     {t(
-                      sourcePreview.origin === "transcript"
+                      sourcePreview.origin === "transcript" || sourcePreview.origin === "video"
                         ? "transcriptPreviewTitle"
                         : "sourcePreviewTitle",
                     )}

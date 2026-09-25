@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { guardedFetchText, isGuardedFetchError } from "guarded-fetch";
 import { JSDOM } from "jsdom";
+import { extractYoutubeTranscript, isYoutubeUrl, youtubeVideoId } from "./youtube-transcript";
 
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 
@@ -34,7 +35,18 @@ function boundedMaterial(text: string): { material: string; truncated: boolean }
 export async function extractSource(
   url: string,
   fetchText: FetchText = guardedFetchText,
+  fetchVideo: typeof extractYoutubeTranscript = extractYoutubeTranscript,
 ): Promise<SourceExtractionResponse> {
+  const parsedUrl = new URL(url);
+  if (isYoutubeUrl(parsedUrl)) {
+    const videoId = youtubeVideoId(parsedUrl);
+    if (!videoId) {
+      throw new BadRequestException(
+        refusalBody(400, "source_transcript_unavailable", "A YouTube video URL is required"),
+      );
+    }
+    return fetchVideo(videoId);
+  }
   let html: string;
   try {
     html = await fetchText(url, {
@@ -76,7 +88,7 @@ export async function extractSource(
       );
     }
     const combined = title ? `${title}\n\n${body}` : body;
-    return { title, ...boundedMaterial(combined) };
+    return { kind: "article", title, ...boundedMaterial(combined) };
   } catch (error) {
     if (error instanceof BadRequestException) throw error;
     throw new BadRequestException(
