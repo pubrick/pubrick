@@ -839,6 +839,52 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     });
   });
 
+  it("reviews fetched YouTube captions before generating from the accepted text", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (path === "/api/source-extraction" && method === "POST") {
+          return {
+            kind: "video",
+            title: "",
+            material: "A real caption.\nAnother cue.",
+            truncated: false,
+          };
+        }
+        if (path === "/api/runs" && method === "POST") return { id: "caption-run" };
+        return undefined;
+      },
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await open(user);
+    await user.type(
+      screen.getByLabelText(en.ContentNew.sourceUrlLabel),
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
+    await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
+      "A real caption.\nAnother cue.",
+    );
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/caption-run"),
+    );
+    expect(parsedBody(calls.find((call) => call.path === "/api/runs"))).toMatchObject({
+      material: "A real caption.\nAnother cue.",
+      sourceUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+  });
+
   it("reviews an uploaded SRT, then sends only accepted text and the optional video URL", async () => {
     const calls: Call[] = [];
     installHandlers(

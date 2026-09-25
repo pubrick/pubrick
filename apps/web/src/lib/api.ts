@@ -215,6 +215,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   unreadable_credentials: "unreadable_credentials",
   run_not_found: "run_not_found",
   source_fetch_failed: "source_fetch_failed",
+  source_transcript_unavailable: "source_transcript_unavailable",
   source_response_too_large: "source_response_too_large",
   source_unreadable: "source_unreadable",
   topic_not_found: "topic_not_found",

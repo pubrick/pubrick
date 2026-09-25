@@ -18,6 +18,7 @@ export const sourceExtractionRequestSchema = z.object({
 export type SourceExtractionRequest = z.infer<typeof sourceExtractionRequestSchema>;
 
 export const sourceExtractionResponseSchema = z.object({
+  kind: z.enum(["article", "video"]).optional(),
   title: z.string().max(500),
   material: z.string().min(1).max(MAX_SOURCE_TEXT_LENGTH),
   truncated: z.boolean(),
