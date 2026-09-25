@@ -34,9 +34,11 @@ export {
 export {
   buildPaidReplyRequest,
   countPaidReplyTokens,
+  generatePaidReply,
   PAID_REPLY_MAX_OUTPUT_TOKENS,
   PAID_REPLY_MAX_REQUEST_BYTES,
   PAID_REPLY_MODEL_ID,
+  type PaidReplyGeneration,
   type PaidReplyRequest,
 } from "./paid-reply-request.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";

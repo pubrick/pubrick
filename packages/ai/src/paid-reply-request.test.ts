@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPaidReplyRequest,
   countPaidReplyTokens,
+  generatePaidReply,
   PAID_REPLY_MAX_OUTPUT_TOKENS,
 } from "./paid-reply-request.js";
 
@@ -46,6 +47,82 @@ describe("paid reply request preflight", () => {
     expect(fetcher).not.toHaveBeenCalled();
     await expect(countPaidReplyTokens(request, "test-key", fetcher)).rejects.toThrow(
       "paid_reply_count_unavailable",
+    );
+  });
+
+  it("makes one generation call and persists thought-inclusive usage before returning a result", async () => {
+    const request = buildPaidReplyRequest({ title: "Post", comments: ["Helpful?", "Yes"] });
+    const events: string[] = [];
+    const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
+      expect(init.body).toBe(request.body);
+      events.push("provider");
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      summary: "Helpful response.",
+                      sentiment: { positive: 1, neutral: 0, negative: 0 },
+                      themes: [{ label: "Helpfulness", mentions: 2 }],
+                      feedback: [],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 100,
+            candidatesTokenCount: 20,
+            thoughtsTokenCount: 10,
+            cachedContentTokenCount: 5,
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const sink = vi.fn(
+      async (usage: {
+        outputTokens: number;
+        reasoningTokens: number;
+        costUsd: number | null;
+        outcome: string;
+      }) => {
+        expect(usage).toMatchObject({
+          outputTokens: 30,
+          reasoningTokens: 10,
+          outcome: "completed",
+        });
+        expect(usage.costUsd).toBeGreaterThan(0);
+        events.push("metered");
+      },
+    );
+    const result = await generatePaidReply(request, "test-key", sink, fetcher as typeof fetch);
+    events.push("returned");
+    expect(result).toMatchObject({ ok: true, result: { summary: "Helpful response." } });
+    expect(events).toEqual(["provider", "metered", "returned"]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+      expect.objectContaining({ method: "POST", body: request.body }),
+    );
+  });
+
+  it("records an ambiguous malformed response and never retries the model", async () => {
+    const request = buildPaidReplyRequest({ title: "Post", comments: ["Reply"] });
+    const fetcher = vi.fn(async () => new Response("broken", { status: 200 }));
+    const sink = vi.fn(async () => {});
+    expect(await generatePaidReply(request, "test-key", sink, fetcher)).toEqual({
+      ok: false,
+      failure: "unknown",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "unknown", costUsd: null }),
     );
   });
 });

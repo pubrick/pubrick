@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import { type CommentAnalysisResult, commentAnalysisResultSchema } from "@pubrick/shared";
 import { z } from "zod";
+import { estimateCostUsd, priceFor } from "./pricing.js";
+import type { UsageRecord } from "./usage.js";
 
 /** A fixed Google request shape can be counted, frozen and sent without re-rendering. */
 export const PAID_REPLY_MODEL_ID = "gemini-3.7-flash";
@@ -85,19 +88,26 @@ export function buildPaidReplyRequest(args: {
 
 const countResponseSchema = z.object({ totalTokens: z.number().int().nonnegative() });
 
+function assertFrozenRequest(request: PaidReplyRequest): object {
+  if (request.modelId !== PAID_REPLY_MODEL_ID) throw new Error("paid_reply_request_changed");
+  if (createHash("sha256").update(request.body).digest("hex") !== request.digest)
+    throw new Error("paid_reply_request_changed");
+  if (Buffer.byteLength(request.body, "utf8") > PAID_REPLY_MAX_REQUEST_BYTES)
+    throw new Error("request_too_large");
+  const body: unknown = JSON.parse(request.body);
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new Error("paid_reply_request_changed");
+  return body;
+}
+
 /** Google's full-request count endpoint has no inference charge. Fail closed on any ambiguity. */
 export async function countPaidReplyTokens(
   request: PaidReplyRequest,
   apiKey: string,
   fetcher: typeof fetch = fetch,
 ): Promise<{ counted: number; allowance: number }> {
-  if (request.modelId !== PAID_REPLY_MODEL_ID || !apiKey.trim())
-    throw new Error("paid_reply_preflight_unavailable");
-  if (createHash("sha256").update(request.body).digest("hex") !== request.digest)
-    throw new Error("paid_reply_request_changed");
-  if (Buffer.byteLength(request.body, "utf8") > PAID_REPLY_MAX_REQUEST_BYTES)
-    throw new Error("request_too_large");
-  const body = JSON.parse(request.body) as object;
+  if (!apiKey.trim()) throw new Error("paid_reply_preflight_unavailable");
+  const body = assertFrozenRequest(request);
   const response = await fetcher(`${baseUrl}/${request.modelId}:countTokens`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
@@ -114,4 +124,105 @@ export async function countPaidReplyTokens(
   // The count API can differ slightly from eventual usage. Admission reserves
   // another 10% and 256 tokens; this is an estimate, not an invoice cap.
   return { counted, allowance: Math.ceil(counted * 1.1) + 256 };
+}
+
+const responseSchemaFromGoogle = z.object({
+  candidates: z
+    .array(
+      z.object({
+        finishReason: z.string().optional(),
+        content: z.object({ parts: z.array(z.object({ text: z.string().optional() })) }),
+      }),
+    )
+    .optional(),
+  usageMetadata: z
+    .object({
+      promptTokenCount: z.number().int().nonnegative(),
+      candidatesTokenCount: z.number().int().nonnegative().optional(),
+      thoughtsTokenCount: z.number().int().nonnegative().optional(),
+      cachedContentTokenCount: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});
+
+export type PaidReplyGeneration =
+  | { ok: true; result: CommentAnalysisResult }
+  | { ok: false; failure: "failed" | "unknown" };
+
+/** Exactly one physical call. The awaited sink must persist metering before a result is returned. */
+export async function generatePaidReply(
+  request: PaidReplyRequest,
+  apiKey: string,
+  onUsage: (record: UsageRecord) => Promise<void>,
+  fetcher: typeof fetch = fetch,
+): Promise<PaidReplyGeneration> {
+  if (!apiKey.trim()) throw new Error("paid_reply_dispatch_unavailable");
+  assertFrozenRequest(request);
+  const started = Date.now();
+  let outcome: UsageRecord["outcome"] = "unknown";
+  let status: UsageRecord["status"] = "errored";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let reasoningTokens = 0;
+  let cachedInputTokens = 0;
+  let result: CommentAnalysisResult | null = null;
+  try {
+    const response = await fetcher(`${baseUrl}/${request.modelId}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: request.body,
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      outcome = "refused";
+    } else {
+      // A successful HTTP response may already be billable even if its body is bad.
+      const raw = await response.text();
+      if (Buffer.byteLength(raw, "utf8") <= 256 * 1024) {
+        const parsed = responseSchemaFromGoogle.safeParse(JSON.parse(raw));
+        if (parsed.success) {
+          const usage = parsed.data.usageMetadata;
+          if (usage) {
+            inputTokens = usage.promptTokenCount;
+            reasoningTokens = usage.thoughtsTokenCount ?? 0;
+            outputTokens = (usage.candidatesTokenCount ?? 0) + reasoningTokens;
+            cachedInputTokens = usage.cachedContentTokenCount ?? 0;
+            outcome = "completed";
+          }
+          const candidates = parsed.data.candidates;
+          if (usage && candidates?.length === 1 && candidates[0]?.finishReason === "STOP") {
+            const text = candidates[0].content.parts.map((part) => part.text ?? "").join("");
+            const structured = commentAnalysisResultSchema.safeParse(JSON.parse(text));
+            if (
+              structured.success &&
+              structured.data.themes.every((theme) => theme.mentions <= request.sampleSize)
+            ) {
+              result = structured.data;
+              status = "ok";
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // A timeout or malformed 2xx body can have incurred a charge. Never redial.
+  }
+  const rate = outcome === "completed" ? priceFor("google", request.modelId, new Date()) : null;
+  const costUsd = rate ? estimateCostUsd(rate, { inputTokens, outputTokens }) : null;
+  await onUsage({
+    provider: "google",
+    modelId: request.modelId,
+    attempt: 1,
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    reasoningTokens,
+    costUsd,
+    costSource: rate ? "price_table" : "unknown",
+    responseMs: Date.now() - started,
+    status,
+    outcome,
+  });
+  if (result) return { ok: true, result };
+  return { ok: false, failure: outcome === "unknown" ? "unknown" : "failed" };
 }
