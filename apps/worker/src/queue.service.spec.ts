@@ -296,7 +296,12 @@ describe("QueueService.registerAll", () => {
 
   it("consumes manual topic planning only on production queues", async () => {
     const boss = bossStub();
-    const planner = { scan: vi.fn(), planBrand: vi.fn().mockResolvedValue(1) };
+    const planner = {
+      scan: vi.fn(),
+      handleManual: vi.fn(),
+      exhausted: vi.fn(),
+      sweepManual: vi.fn(),
+    };
     const { publish, generate } = serviceStub();
     const service = new QueueService(
       publish as never,
@@ -323,9 +328,15 @@ describe("QueueService.registerAll", () => {
     });
     const handler = boss.work.mock.calls.find(
       (call) => call[0] === MANUAL_TOPIC_PLAN_QUEUE,
-    )?.[2] as (jobs: { data: { orgId: string; brandId: string } }[]) => Promise<void>;
-    await handler([{ data: { orgId: "org", brandId: "brand" } }]);
-    expect(planner.planBrand).toHaveBeenCalledWith("org", "brand");
+    )?.[2] as (
+      jobs: { data: { orgId: string; brandId: string; attemptId: string } }[],
+    ) => Promise<void>;
+    await handler([{ data: { orgId: "org", brandId: "brand", attemptId: "attempt" } }]);
+    expect(planner.handleManual).toHaveBeenCalledWith({
+      orgId: "org",
+      brandId: "brand",
+      attemptId: "attempt",
+    });
 
     boss.createQueue.mockClear();
     boss.work.mockClear();

@@ -8,6 +8,7 @@ import {
   autopilotManualAttemptSchema,
   autopilotScanPageSchema,
   LIVE_RUN_STATUSES,
+  manualTopicPlanAttemptSchema,
 } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -383,7 +384,12 @@ export class AutopilotRepository {
       if (config.cooldownActive) {
         throw conflict("topic_planning_cooldown", "Wait one minute before planning again");
       }
-      await this.queue.enqueueManualTopicPlan(tx, { orgId, brandId });
+      const [attempt] = await tx
+        .insert(schema.manualTopicPlanAttempts)
+        .values({ orgId, brandId })
+        .returning({ id: schema.manualTopicPlanAttempts.id });
+      if (!attempt) throw new Error("Manual topic plan attempt insert returned no row");
+      await this.queue.enqueueManualTopicPlan(tx, { orgId, brandId, attemptId: attempt.id });
       await tx
         .update(schema.autopilotConfigs)
         .set({ lastManualPlanAt: sql`clock_timestamp()` })
@@ -393,7 +399,68 @@ export class AutopilotRepository {
             eq(schema.autopilotConfigs.brandId, brandId),
           ),
         );
-      return { status: "queued" as const };
+      return { id: attempt.id, status: "queued" as const };
+    });
+  }
+
+  async planningAttempts(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const rows = await db
+      .select({
+        id: schema.manualTopicPlanAttempts.id,
+        status: schema.manualTopicPlanAttempts.status,
+        errorCode: schema.manualTopicPlanAttempts.errorCode,
+        createdCount: schema.manualTopicPlanAttempts.createdCount,
+        createdAt: schema.manualTopicPlanAttempts.createdAt,
+        startedAt: schema.manualTopicPlanAttempts.startedAt,
+        completedAt: schema.manualTopicPlanAttempts.completedAt,
+      })
+      .from(schema.manualTopicPlanAttempts)
+      .where(
+        and(
+          eq(schema.manualTopicPlanAttempts.orgId, orgId),
+          eq(schema.manualTopicPlanAttempts.brandId, brandId),
+        ),
+      )
+      .orderBy(
+        desc(schema.manualTopicPlanAttempts.createdAt),
+        desc(schema.manualTopicPlanAttempts.id),
+      )
+      .limit(20);
+    const slots = rows.length
+      ? await db
+          .select({
+            id: schema.calendarSlots.id,
+            attemptId: schema.calendarSlots.manualPlanAttemptId,
+            scheduledAt: schema.calendarSlots.scheduledAt,
+            topicTitle: schema.calendarSlots.topicTitle,
+          })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              inArray(
+                schema.calendarSlots.manualPlanAttemptId,
+                rows.map((row) => row.id),
+              ),
+            ),
+          )
+          .orderBy(asc(schema.calendarSlots.scheduledAt), asc(schema.calendarSlots.id))
+      : [];
+    return rows.map((row) => {
+      const linked = slots.filter((slot) => slot.attemptId === row.id);
+      return manualTopicPlanAttemptSchema.parse({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        startedAt: row.startedAt?.toISOString() ?? null,
+        completedAt: row.completedAt?.toISOString() ?? null,
+        slots: linked.map((slot) => ({
+          id: slot.id,
+          scheduledAt: slot.scheduledAt.toISOString(),
+          topicTitle: slot.topicTitle,
+        })),
+      });
     });
   }
 

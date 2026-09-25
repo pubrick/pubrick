@@ -20,6 +20,43 @@ describe("brand calendar", () => {
   beforeEach(() => {
     signedInSession();
     vi.stubGlobal("fetch", vi.fn());
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("opens and focuses a linked manual planning slot on its calendar day", async () => {
+    const slotId = "ef60273c-180e-4d7c-82f8-9f0153b9c355";
+    const day = new Date(Date.now() + 65 * 86_400_000);
+    day.setHours(10, 0, 0, 0);
+    const scheduledAt = day.toISOString();
+    window.history.replaceState({}, "", `/?slot=${slotId}&at=${encodeURIComponent(scheduledAt)}`);
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/calendar/slots"))
+        return jsonResponse([
+          {
+            id: slotId,
+            scheduledAt,
+            brief: "Linked planning slot",
+            contentType: "social_post",
+            seoKeywords: [],
+            topicId: null,
+            topicTitle: "Linked planning slot",
+            channelIds: [],
+            generateCover: false,
+            notes: null,
+            runId: null,
+            errorCode: null,
+            retryAfter: null,
+          },
+        ]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    const linked = await screen.findByText("Linked planning slot");
+    await waitFor(() => expect(linked.closest(`#calendar-slot-${slotId}`)).toHaveFocus());
+    expect(linked.closest(`#calendar-slot-${slotId}`)).toHaveClass("outline-accent");
   });
 
   it("schedules a reviewed draft for the selected brand and channel", async () => {

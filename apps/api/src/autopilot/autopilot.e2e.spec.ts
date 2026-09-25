@@ -235,8 +235,19 @@ describe.skipIf(!url)("autopilot API", () => {
     expect([first.status, second.status].sort()).toEqual([202, 409]);
     const accepted = first.status === 202 ? first : second;
     const denied = first.status === 409 ? first : second;
-    expect(accepted.body).toEqual({ status: "queued" });
+    expect(accepted.body).toEqual({ id: expect.any(String), status: "queued" });
     expect(denied.body.code).toBe("topic_planning_cooldown");
+    const attemptsUrl = `${planUrl}/attempts`;
+    const attempts = await owner.agent.get(attemptsUrl).expect(200);
+    expect(attempts.body).toEqual([
+      expect.objectContaining({
+        id: accepted.body.id,
+        status: "queued",
+        createdCount: 0,
+        slots: [],
+      }),
+    ]);
+    await other.agent.get(attemptsUrl).expect(404);
 
     const jobs = await db.execute(sql`
       SELECT id, state FROM pgboss.job
@@ -244,6 +255,7 @@ describe.skipIf(!url)("autopilot API", () => {
         AND data @> ${JSON.stringify({ orgId: owner.orgId, brandId: brand.body.id })}::jsonb
     `);
     expect(jobs.rows).toHaveLength(1);
+    expect(jobs.rows[0]?.id).toBe(accepted.body.id);
     const admitted = await db
       .select({ lastManualPlanAt: schema.autopilotConfigs.lastManualPlanAt })
       .from(schema.autopilotConfigs)
@@ -304,6 +316,7 @@ describe.skipIf(!url)("autopilot API", () => {
         and(eq(schema.member.organizationId, owner.orgId), eq(schema.member.userId, owner.userId)),
       );
     await owner.agent.post(planUrl).expect(403);
+    await owner.agent.get(attemptsUrl).expect(403);
   });
 
   it("rolls back the admission clock if enqueue fails", async () => {
@@ -342,6 +355,11 @@ describe.skipIf(!url)("autopilot API", () => {
       .from(schema.autopilotConfigs)
       .where(eq(schema.autopilotConfigs.brandId, brand.body.id));
     expect(config?.lastManualPlanAt).toBeNull();
+    const attempts = await db
+      .select({ id: schema.manualTopicPlanAttempts.id })
+      .from(schema.manualTopicPlanAttempts)
+      .where(eq(schema.manualTopicPlanAttempts.brandId, brand.body.id));
+    expect(attempts).toHaveLength(0);
     await owner.agent.post(`${configUrl}/plan-topics`).expect(202);
   });
 

@@ -88,6 +88,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const router = useRouter();
   const [month, setMonth] = useState(() => monthStart(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
@@ -112,10 +113,27 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [editing, setEditing] = useState<Slot | null>(null);
   const [removing, setRemoving] = useState<Slot | null>(null);
   const loadSequence = useRef(0);
+  const focusedSlot = useRef(false);
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("topicId");
     if (requested) setSelectedTopicId(requested);
+    const query = new URLSearchParams(window.location.search);
+    const slotId = query.get("slot");
+    const at = query.get("at");
+    if (
+      slotId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slotId) &&
+      at &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at)
+    ) {
+      const date = new Date(at);
+      if (!Number.isNaN(date.getTime()) && date.toISOString() === at) {
+        setSelectedSlotId(slotId);
+        setMonth(monthStart(date));
+        setSelectedDay(dayKey(date));
+      }
+    }
   }, []);
   useEffect(() => {
     api<AiCredentialPublic[]>("/api/ai-credentials")
@@ -173,6 +191,19 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    if (
+      !selectedSlotId ||
+      focusedSlot.current ||
+      !slots?.some((slot) => slot.id === selectedSlotId)
+    )
+      return;
+    const element = document.getElementById(`calendar-slot-${selectedSlotId}`);
+    if (!element) return;
+    element.focus();
+    element.scrollIntoView?.({ block: "center" });
+    focusedSlot.current = true;
+  }, [selectedSlotId, slots]);
 
   const byDay = useMemo(() => {
     const result = new Map<string, Slot[]>();
@@ -695,78 +726,89 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         ) : (
           <div className="space-y-3">
             {selected.map((slot) => (
-              <Card key={slot.id}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-fg">{slot.brief}</p>
-                    {slot.topicId && (
-                      <p className="mt-1 text-xs text-fg-secondary">{t("linkedTopic")}</p>
-                    )}
-                    <p className="mt-1 text-sm text-fg-secondary">
-                      {new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(
-                        new Date(slot.scheduledAt),
+              <div
+                key={slot.id}
+                id={`calendar-slot-${slot.id}`}
+                tabIndex={-1}
+                className={
+                  selectedSlotId === slot.id ? "rounded-card outline outline-2 outline-accent" : ""
+                }
+              >
+                <Card>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-fg">{slot.brief}</p>
+                      {slot.topicId && (
+                        <p className="mt-1 text-xs text-fg-secondary">{t("linkedTopic")}</p>
                       )}
-                      {" · "}
-                      {slot.channelIds
-                        .map(
-                          (id) =>
-                            channels?.find((channel) => channel.id === id)?.name ??
-                            t("missingChannel"),
-                        )
-                        .join(", ")}
-                    </p>
-                    {slot.notes && <p className="mt-2 text-sm text-fg-secondary">{slot.notes}</p>}
-                    {slot.generateCover && (
-                      <p className="mt-2 text-sm text-fg-secondary">{tc("generateCover")}</p>
-                    )}
-                    {slot.contentType && slot.contentType !== "social_post" && (
-                      <p className="mt-2 text-sm text-fg-secondary">
-                        {tc(`contentType.${slot.contentType}`)}
+                      <p className="mt-1 text-sm text-fg-secondary">
+                        {new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(
+                          new Date(slot.scheduledAt),
+                        )}
+                        {" · "}
+                        {slot.channelIds
+                          .map(
+                            (id) =>
+                              channels?.find((channel) => channel.id === id)?.name ??
+                              t("missingChannel"),
+                          )
+                          .join(", ")}
                       </p>
-                    )}
-                    {slot.seoKeywords.length > 0 && (
-                      <p className="mt-2 text-sm text-fg-secondary">
-                        {tt("savedKeywords", { count: slot.seoKeywords.length })}:{" "}
-                        {slot.seoKeywords.join(", ")}
-                      </p>
-                    )}
-                    {slot.generateInlineImages && (
-                      <p className="mt-2 text-sm text-fg-secondary">{tc("generateInlineImages")}</p>
-                    )}
-                    {slot.retryAfter && !slot.runId && (
-                      <p className="mt-2 text-sm text-fg-secondary">{t("waitingCapacity")}</p>
-                    )}
-                    {slot.errorCode && (
-                      <p role="alert" className="mt-2 text-sm text-danger">
-                        {slot.errorCode === "channels_missing"
-                          ? t("channelsMissing")
-                          : slot.errorCode === "topic_changed"
-                            ? t("topicChanged")
-                            : t("invalidInput")}
-                      </p>
-                    )}
+                      {slot.notes && <p className="mt-2 text-sm text-fg-secondary">{slot.notes}</p>}
+                      {slot.generateCover && (
+                        <p className="mt-2 text-sm text-fg-secondary">{tc("generateCover")}</p>
+                      )}
+                      {slot.contentType && slot.contentType !== "social_post" && (
+                        <p className="mt-2 text-sm text-fg-secondary">
+                          {tc(`contentType.${slot.contentType}`)}
+                        </p>
+                      )}
+                      {slot.seoKeywords.length > 0 && (
+                        <p className="mt-2 text-sm text-fg-secondary">
+                          {tt("savedKeywords", { count: slot.seoKeywords.length })}:{" "}
+                          {slot.seoKeywords.join(", ")}
+                        </p>
+                      )}
+                      {slot.generateInlineImages && (
+                        <p className="mt-2 text-sm text-fg-secondary">
+                          {tc("generateInlineImages")}
+                        </p>
+                      )}
+                      {slot.retryAfter && !slot.runId && (
+                        <p className="mt-2 text-sm text-fg-secondary">{t("waitingCapacity")}</p>
+                      )}
+                      {slot.errorCode && (
+                        <p role="alert" className="mt-2 text-sm text-danger">
+                          {slot.errorCode === "channels_missing"
+                            ? t("channelsMissing")
+                            : slot.errorCode === "topic_changed"
+                              ? t("topicChanged")
+                              : t("invalidInput")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      {slot.runId ? (
+                        <Link
+                          href={`/${locale}/content/runs/${slot.runId}`}
+                          className="text-sm text-accent underline"
+                        >
+                          {t("viewRun")}
+                        </Link>
+                      ) : (
+                        <>
+                          <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
+                            {t("edit")}
+                          </Button>
+                          <Button size="sm" variant="danger" onClick={() => setRemoving(slot)}>
+                            {t("remove")}
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    {slot.runId ? (
-                      <Link
-                        href={`/${locale}/content/runs/${slot.runId}`}
-                        className="text-sm text-accent underline"
-                      >
-                        {t("viewRun")}
-                      </Link>
-                    ) : (
-                      <>
-                        <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
-                          {t("edit")}
-                        </Button>
-                        <Button size="sm" variant="danger" onClick={() => setRemoving(slot)}>
-                          {t("remove")}
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </Card>
+                </Card>
+              </div>
             ))}
           </div>
         )}

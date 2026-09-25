@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutopilotDiagnostics } from "./diagnostics";
+import { ManualPlanningAttempts } from "./manual-planning-attempts";
 import { AutopilotManualTrigger } from "./manual-trigger";
 import { AutopilotScheduledChecks } from "./scheduled-checks";
 
@@ -54,6 +55,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
   const [planOpen, setPlanOpen] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [planQueued, setPlanQueued] = useState(false);
+  const [planningHistoryVersion, setPlanningHistoryVersion] = useState(0);
 
   const describeError = useCallback(
     (err: unknown, fallback = t("genericError")) => {
@@ -128,6 +130,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
     try {
       await api<unknown>(`/api/brands/${id}/autopilot/plan-topics`, { method: "POST" });
       setPlanQueued(true);
+      setPlanningHistoryVersion((value) => value + 1);
       setPlanOpen(false);
     } catch (err) {
       setPlanOpen(false);
@@ -355,6 +358,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
       )}
       <AutopilotDiagnostics brandId={id} />
       <AutopilotManualTrigger brandId={id} disabled={busy || dirty || !persistedConfig} />
+      <ManualPlanningAttempts brandId={id} refreshVersion={planningHistoryVersion} />
       <AutopilotScheduledChecks brandId={id} />
       <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>

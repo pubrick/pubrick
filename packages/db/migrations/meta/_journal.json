@@ -624,6 +624,13 @@
       "when": 1790338930313,
       "tag": "0089_daily_topic_semantic_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1790340824811,
+      "tag": "0090_manual_topic_plan_history",
+      "breakpoints": true
     }
   ]
 }

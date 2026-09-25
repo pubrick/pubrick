@@ -12,6 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
+import { manualTopicPlanAttempts } from "./autopilot.js";
 import { brands } from "./content.js";
 import { enumCheck } from "./enum-check.js";
 import { pipelineRuns } from "./generation.js";
@@ -33,6 +34,10 @@ export const calendarSlots = pgTable(
     contentType: text("content_type", { enum: CONTENT_TYPES }).default("social_post").notNull(),
     seoKeywords: jsonb("seo_keywords").$type<string[]>().notNull().default([]),
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "no action" }),
+    manualPlanAttemptId: uuid("manual_plan_attempt_id").references(
+      () => manualTopicPlanAttempts.id,
+      { onDelete: "set null" },
+    ),
     topicTitle: text("topic_title"),
     topicDescription: text("topic_description"),
     topicSourceUrl: text("topic_source_url"),
@@ -54,6 +59,7 @@ export const calendarSlots = pgTable(
   (t) => [
     index("calendar_slots_org_brand_date_idx").on(t.orgId, t.brandId, t.scheduledAt),
     index("calendar_slots_topic_idx").on(t.topicId),
+    index("calendar_slots_manual_plan_attempt_idx").on(t.manualPlanAttemptId),
     index("calendar_slots_due_idx")
       .on(t.scheduledAt)
       .where(sql`${t.runId} is null and ${t.errorCode} is null`),

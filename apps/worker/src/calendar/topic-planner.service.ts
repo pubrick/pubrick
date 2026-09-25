@@ -40,6 +40,66 @@ export class TopicPlannerService {
   }
 
   async planBrand(orgId: string, brandId: string, now = new Date()): Promise<number> {
+    return this.planBrandPass(orgId, brandId, now);
+  }
+
+  async handleManual(job: { orgId: string; brandId: string; attemptId: string }): Promise<void> {
+    // Jobs queued before attempt IDs were introduced still deserve their
+    // original planning pass during a rolling upgrade.
+    if (!job.attemptId) {
+      await this.planBrand(job.orgId, job.brandId);
+      return;
+    }
+    await db
+      .update(schema.manualTopicPlanAttempts)
+      .set({
+        status: "running",
+        startedAt: sql`coalesce(${schema.manualTopicPlanAttempts.startedAt}, clock_timestamp())`,
+      })
+      .where(
+        and(
+          eq(schema.manualTopicPlanAttempts.orgId, job.orgId),
+          eq(schema.manualTopicPlanAttempts.brandId, job.brandId),
+          eq(schema.manualTopicPlanAttempts.id, job.attemptId),
+          eq(schema.manualTopicPlanAttempts.status, "queued"),
+        ),
+      );
+    await this.planBrandPass(job.orgId, job.brandId, new Date(), job.attemptId);
+  }
+
+  async exhausted(job: { orgId: string; brandId: string; attemptId: string }): Promise<void> {
+    if (!job.attemptId) return;
+    await db
+      .update(schema.manualTopicPlanAttempts)
+      .set({ status: "failed", errorCode: "worker_failed", completedAt: sql`clock_timestamp()` })
+      .where(
+        and(
+          eq(schema.manualTopicPlanAttempts.orgId, job.orgId),
+          eq(schema.manualTopicPlanAttempts.brandId, job.brandId),
+          eq(schema.manualTopicPlanAttempts.id, job.attemptId),
+          inArray(schema.manualTopicPlanAttempts.status, ["queued", "running"]),
+        ),
+      );
+  }
+
+  async sweepManual(): Promise<void> {
+    await db
+      .update(schema.manualTopicPlanAttempts)
+      .set({ status: "failed", errorCode: "worker_failed", completedAt: sql`clock_timestamp()` })
+      .where(
+        and(
+          inArray(schema.manualTopicPlanAttempts.status, ["queued", "running"]),
+          sql`${schema.manualTopicPlanAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+        ),
+      );
+  }
+
+  private async planBrandPass(
+    orgId: string,
+    brandId: string,
+    now: Date,
+    attemptId?: string,
+  ): Promise<number> {
     return db.transaction(async (tx) => {
       // All manual calendar writes take this brand lock before topic locks too.
       // It serializes the daily cap and linked-topic uniqueness across replicas.
@@ -50,6 +110,40 @@ export class TopicPlannerService {
         .for("no key update")
         .limit(1);
       if (!brand) return 0;
+
+      if (attemptId) {
+        const [attempt] = await tx
+          .select({ status: schema.manualTopicPlanAttempts.status })
+          .from(schema.manualTopicPlanAttempts)
+          .where(
+            and(
+              eq(schema.manualTopicPlanAttempts.orgId, orgId),
+              eq(schema.manualTopicPlanAttempts.brandId, brandId),
+              eq(schema.manualTopicPlanAttempts.id, attemptId),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (!attempt || (attempt.status !== "queued" && attempt.status !== "running")) return 0;
+      }
+      const finish = async (created: number) => {
+        if (attemptId)
+          await tx
+            .update(schema.manualTopicPlanAttempts)
+            .set({
+              status: "completed",
+              createdCount: created,
+              completedAt: sql`clock_timestamp()`,
+            })
+            .where(
+              and(
+                eq(schema.manualTopicPlanAttempts.orgId, orgId),
+                eq(schema.manualTopicPlanAttempts.brandId, brandId),
+                eq(schema.manualTopicPlanAttempts.id, attemptId),
+              ),
+            );
+        return created;
+      };
 
       const [config] = await tx
         .select({
@@ -67,9 +161,9 @@ export class TopicPlannerService {
         )
         .for("update")
         .limit(1);
-      if (!config?.autoPlanTopics || !config.channelIds.length) return 0;
+      if (!config?.autoPlanTopics || !config.channelIds.length) return finish(0);
       const selected = [...new Set(config.channelIds)];
-      if (selected.length !== config.channelIds.length) return 0;
+      if (selected.length !== config.channelIds.length) return finish(0);
       const channels = await tx
         .select({ id: schema.channels.id })
         .from(schema.channels)
@@ -80,7 +174,7 @@ export class TopicPlannerService {
             inArray(schema.channels.id, selected),
           ),
         );
-      if (channels.length !== selected.length) return 0;
+      if (channels.length !== selected.length) return finish(0);
 
       const clock = await tx.execute(sql`
         select (timezone(${config.timezone}, ${now}::timestamptz)::date)::text as day
@@ -117,7 +211,7 @@ export class TopicPlannerService {
         )
         .orderBy(asc(schema.topics.id))
         .for("update");
-      if (!topics.length) return 0;
+      if (!topics.length) return finish(0);
 
       const existing = await tx
         .select({ topicId: schema.calendarSlots.topicId })
@@ -176,6 +270,7 @@ export class TopicPlannerService {
         await tx.insert(schema.calendarSlots).values({
           orgId,
           brandId,
+          manualPlanAttemptId: attemptId,
           scheduledAt,
           brief,
           topicId: topic.id,
@@ -192,7 +287,7 @@ export class TopicPlannerService {
         dailyCounts.set(day, (dailyCounts.get(day) ?? 0) + 1);
         created++;
       }
-      return created;
+      return finish(created);
     });
   }
 }

@@ -74,6 +74,13 @@ export class AutopilotController {
     return this.autopilot.planTopics(orgId, brandId);
   }
 
+  @Get("plan-topics/attempts")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  planningAttempts(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.planningAttempts(orgId, brandId);
+  }
+
   @Post("trigger")
   @BrandScope({ kind: "brand", source: "param", roles: "manager" })
   @HttpCode(202)
