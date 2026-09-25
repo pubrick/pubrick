@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { PaidReplyBrandSettings } from "@/components/paid-reply-brand-settings";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -233,6 +234,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
       <div className="space-y-6">
         <p className="text-sm text-fg-secondary">{t("intro")}</p>
         <AutoReplies brandId={id} />
+        <PaidReplyBrandSettings brandId={id} kind="publication" />
         <Segmented
           options={PERIODS.map((value) => ({
             value: String(value),

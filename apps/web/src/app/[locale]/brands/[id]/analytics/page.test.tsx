@@ -7,6 +7,11 @@ import en from "../../../../../../messages/en.json";
 import es from "../../../../../../messages/es.json";
 import BrandAnalyticsPage from "./page";
 
+// Paid admission has its own contract tests; keep this page suite focused on results.
+vi.mock("@/components/paid-reply-brand-settings", () => ({
+  PaidReplyBrandSettings: () => null,
+}));
+
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const VK_ID = "40a21268-4c10-4ad9-b05d-519c11231322";
 const TG_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";

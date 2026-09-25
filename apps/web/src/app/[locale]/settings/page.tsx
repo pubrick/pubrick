@@ -15,6 +15,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
+import { PaidReplyOrganizationSettings } from "@/components/paid-reply-organization-settings";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -592,6 +593,8 @@ export default function SettingsPage() {
             </Advanced>
           </form>
         </Card>
+
+        {organization && <PaidReplyOrganizationSettings canManage={canManageApiKeys} />}
 
         <Card>
           <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>

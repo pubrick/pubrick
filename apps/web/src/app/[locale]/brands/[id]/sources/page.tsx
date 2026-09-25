@@ -20,6 +20,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { PaidReplyBrandSettings } from "@/components/paid-reply-brand-settings";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -714,6 +715,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       </Card>
 
       <AutoComments brandId={id} telegramConnected={telegramConnected} />
+      <PaidReplyBrandSettings brandId={id} kind="source" />
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
       <Card padded={false} className="mb-8">
