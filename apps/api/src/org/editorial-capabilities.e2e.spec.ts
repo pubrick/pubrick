@@ -109,6 +109,13 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
       .put(`/api/brands/${grantedBrand}/access`)
       .send({ memberIds: [authorMemberId, editorMemberId, legacyMemberId] })
       .expect(200);
+    const emptyAvailability = { configured: false, googleConfigured: false };
+    expect((await author.agent.get("/api/ai-credentials/availability").expect(200)).body).toEqual(
+      emptyAvailability,
+    );
+    expect((await editor.agent.get("/api/ai-credentials/availability").expect(200)).body).toEqual(
+      emptyAvailability,
+    );
     await author.agent.get(`/api/brands/${grantedBrand}`).expect(200);
     await author.agent.get(`/api/brands/${hiddenBrand}`).expect(404);
     expect((await author.agent.get("/api/channels").expect(200)).body).toEqual(
@@ -169,6 +176,40 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
       .expect(201);
     expect(run.body.input.material).toBe(preview.body.material);
     expect(run.body.input.sourceUrl).toBe(sourceUrl);
+
+    const secret = "sk-test-never-return-this-1234567890";
+    await owner.agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: secret })
+      .expect(200);
+    const availability = { configured: true, googleConfigured: true };
+    for (const actor of [author, editor, legacyMember, owner]) {
+      const answer = await actor.agent.get("/api/ai-credentials/availability").expect(200);
+      expect(answer.body).toEqual(availability);
+      expect(JSON.stringify(answer.body)).not.toContain(secret);
+    }
+    const otherOwner = await person("other-owner");
+    const otherOrg = await otherOwner.agent
+      .post("/api/auth/organization/create")
+      .send({ name: "Other workspace", slug: `other-${randomUUID()}` })
+      .expect(200);
+    await otherOwner.agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: otherOrg.body.id })
+      .expect(200);
+    expect(
+      (await otherOwner.agent.get("/api/ai-credentials/availability").expect(200)).body,
+    ).toEqual(emptyAvailability);
+    await otherOwner.agent
+      .put("/api/ai-credentials")
+      .send({ provider: "openrouter", apiKey: secret })
+      .expect(200);
+    expect(
+      (await otherOwner.agent.get("/api/ai-credentials/availability").expect(200)).body,
+    ).toEqual({ configured: true, googleConfigured: false });
+    expect((await author.agent.get("/api/ai-credentials/availability").expect(200)).body).toEqual(
+      availability,
+    );
 
     // A malformed body reaches validation only when the capability permits it.
     const badSchedule = { scheduledAt: "not-a-date" };

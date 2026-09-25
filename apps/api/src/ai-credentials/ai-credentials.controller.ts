@@ -60,6 +60,13 @@ export class AiCredentialsController {
     return this.credentials.list(orgId);
   }
 
+  /** A boolean status, with no provider names, models, or ciphertext. */
+  @Get("availability")
+  @BrandScope({ kind: "org", roles: "member" })
+  availability(@OrgId() orgId: string) {
+    return this.credentials.availability(orgId);
+  }
+
   /** Declared before any `:provider` route so the literal wins the match. */
   @Get("spend")
   spend(@OrgId() orgId: string) {
