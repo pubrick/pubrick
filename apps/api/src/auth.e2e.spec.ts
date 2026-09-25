@@ -115,6 +115,96 @@ describe.skipIf(!url)("auth e2e", () => {
     expect(session.body.session.activeOrganizationId ?? null).toBeNull();
   });
 
+  describe("invitation role boundary", () => {
+    let owner: ReturnType<typeof request.agent>;
+    let member: ReturnType<typeof request.agent>;
+    let orgId: string;
+    const fresh = () => `role-${Date.now()}-${Math.floor(Math.random() * 1e9)}@example.com`;
+
+    beforeAll(async () => {
+      owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({ name: "Role Boundary", slug: `role-boundary-${Date.now()}` })
+        .expect(200);
+      orgId = org.body.id as string;
+
+      const memberEmail = fresh();
+      const invitation = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+      member = request.agent(app.getHttpServer());
+      await member
+        .post("/api/auth/sign-up/email")
+        .send({ email: memberEmail, password: "password1234", name: "Member" })
+        .expect(200);
+      await member
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId: invitation.body.id })
+        .expect(200);
+    });
+
+    it("rejects a member's elevated role requests through the raw auth route", async () => {
+      for (const role of [
+        "admin",
+        "owner",
+        "member,admin",
+        ["member", "admin"],
+        ["owner", "member"],
+      ]) {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role, organizationId: orgId })
+          .expect(403);
+        const { db } = await import("./db");
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      }
+    });
+
+    it("keeps an existing invitation intact when a member attempts an elevated re-invite or resend", async () => {
+      const email = fresh();
+      const original = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: orgId })
+        .expect(200);
+      for (const resend of [false, true]) {
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId: orgId, resend })
+          .expect(403);
+      }
+      const { db } = await import("./db");
+      const rows = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, email));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: original.body.id, role: "member", status: "pending" });
+      expect(rows[0].expiresAt.toISOString()).toBe(original.body.expiresAt);
+    });
+
+    it("still lets a member invite an ordinary member and an owner invite an admin", async () => {
+      const ordinary = await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email: fresh(), role: "member", organizationId: orgId })
+        .expect(200);
+      expect(ordinary.body.role).toBe("member");
+      const elevated = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: fresh(), role: "admin", organizationId: orgId })
+        .expect(200);
+      expect(elevated.body.role).toBe("admin");
+    });
+  });
+
   /**
    * Registration posture. Pubrick's own docs tell operators to put this on a public URL,
    * and until now that URL accepted anyone's sign-up, unverified, with permission to
