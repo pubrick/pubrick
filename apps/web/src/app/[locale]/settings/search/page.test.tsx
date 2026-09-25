@@ -71,4 +71,18 @@ describe("search key settings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(en.SearchSettings.managerOnly);
     expect(screen.queryByRole("button", { name: en.SearchSettings.save })).not.toBeInTheDocument();
   });
+
+  it("guides a signed-in user without a workspace to onboarding", async () => {
+    request.mockRejectedValue(
+      new ApiError(403, "No active organization", true, "no_active_organization"),
+    );
+    await renderAsync(<SearchSettingsPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.Errors.no_active_organization);
+    expect(screen.queryByText(en.SearchSettings.managerOnly)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.SearchSettings.onboarding })).toHaveAttribute(
+      "href",
+      "/en/onboarding",
+    );
+    expect(screen.queryByRole("button", { name: en.SearchSettings.save })).not.toBeInTheDocument();
+  });
 });

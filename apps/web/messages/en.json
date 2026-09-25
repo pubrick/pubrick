@@ -856,6 +856,7 @@
     "cancel": "Cancel",
     "retry": "Try again",
     "managerOnly": "Only workspace owners and admins can manage this key.",
+    "onboarding": "Create or join a workspace",
     "invalidCredential": "Enter a valid folder ID and API key.",
     "genericError": "The search key could not be saved. Try again."
   },

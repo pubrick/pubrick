@@ -856,6 +856,7 @@
     "cancel": "Cancelar",
     "retry": "Reintentar",
     "managerOnly": "Solo los propietarios y administradores del espacio pueden gestionar esta clave.",
+    "onboarding": "Crear un espacio o unirse a uno",
     "invalidCredential": "Introduce un ID de carpeta y una clave API válidos.",
     "genericError": "No se pudo guardar la clave de búsqueda. Inténtalo de nuevo."
   },

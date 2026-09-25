@@ -80,6 +80,24 @@ describe("claim evidence", () => {
     expect(request.mock.calls).toHaveLength(1);
   });
 
+  it("refreshes the saved-body review after an edit is saved", async () => {
+    request.mockResolvedValueOnce(review()).mockResolvedValueOnce(review({ stale: true }));
+    const { rerender } = await renderAsync(
+      <ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />,
+    );
+    expect(await screen.findByText("Annual report")).toBeVisible();
+    rerender(
+      <ClaimEvidence
+        itemId={itemId}
+        savedBody={`${body} Updated.`}
+        draftBody={`${body} Updated.`}
+        editable
+      />,
+    );
+    expect(await screen.findByText(en.ClaimEvidence.stale)).toBeVisible();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("links to search setup when a key is missing", async () => {
     request.mockImplementation(async (_path, options) => {
       if (options?.method === "POST")

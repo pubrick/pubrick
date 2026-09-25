@@ -24,6 +24,7 @@ export default function SearchSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [accessDenied, setAccessDenied] = useState(false);
+  const [noOrganization, setNoOrganization] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -33,10 +34,18 @@ export default function SearchSettingsPage() {
       setCredential(result);
       setFolderId(result.folderId ?? "");
       setAccessDenied(false);
+      setNoOrganization(false);
       setError(null);
     } catch (err) {
+      if (err instanceof ApiError && err.noActiveOrg) {
+        setNoOrganization(true);
+        setAccessDenied(false);
+        setError(null);
+        return;
+      }
       if (err instanceof ApiError && err.status === 403) {
         setAccessDenied(true);
+        setNoOrganization(false);
         setError(null);
         return;
       }
@@ -97,7 +106,7 @@ export default function SearchSettingsPage() {
     <AppShell
       title={t("title")}
       primaryAction={
-        accessDenied ? undefined : (
+        accessDenied || noOrganization ? undefined : (
           <Button type="submit" form={FORM_ID} disabled={busy || credential === null}>
             {t("save")}
           </Button>
@@ -131,7 +140,19 @@ export default function SearchSettingsPage() {
             </p>
           )}
         </Card>
-        {accessDenied ? (
+        {noOrganization ? (
+          <Card>
+            <p role="alert" className="text-sm text-fg-secondary">
+              {te("no_active_organization")}
+            </p>
+            <Link
+              href={`/${locale}/onboarding`}
+              className="mt-3 inline-block text-sm text-accent underline"
+            >
+              {t("onboarding")}
+            </Link>
+          </Card>
+        ) : accessDenied ? (
           <Card>
             <p role="alert" className="text-sm text-fg-secondary">
               {t("managerOnly")}

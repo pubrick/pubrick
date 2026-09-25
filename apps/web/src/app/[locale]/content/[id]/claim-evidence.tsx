@@ -3,7 +3,7 @@
 import { type ClaimReviewDto, claimReviewStartSchema } from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -26,22 +26,30 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [missingKey, setMissingKey] = useState<"search" | "ai" | null>(null);
+  const loadGeneration = useRef(0);
   const endpoint = `/api/content/${itemId}/claim-review`;
   const hasUnsavedText = draftBody !== savedBody;
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const result = await api<ClaimReviewDto | null>(endpoint);
+      if (generation !== loadGeneration.current) return;
       setReview(result);
       setError(null);
     } catch (err) {
+      if (generation !== loadGeneration.current) return;
       setError(errorMessage(err, t("genericError"), te));
     }
   }, [endpoint, t, te]);
 
+  // The server computes staleness against the persisted body, so saving an edit
+  // must refresh even if the endpoint and load callback have not changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: savedBody is a deliberate refresh trigger.
   useEffect(() => {
+    setReview(undefined);
     void load();
-  }, [load]);
+  }, [load, savedBody]);
 
   useEffect(() => {
     if (review?.status !== "queued" && review?.status !== "running") return;
@@ -54,6 +62,7 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
     setBusy(true);
     setError(null);
     setMissingKey(null);
+    loadGeneration.current += 1;
     try {
       const body = claimReviewStartSchema.parse({ expectedBody: savedBody });
       setReview(

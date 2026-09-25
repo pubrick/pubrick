@@ -856,6 +856,7 @@
     "cancel": "Cancelar",
     "retry": "Tentar novamente",
     "managerOnly": "Só os proprietários e administradores do espaço podem gerir esta chave.",
+    "onboarding": "Criar ou aderir a um espaço",
     "invalidCredential": "Introduza um ID de pasta e uma chave API válidos.",
     "genericError": "Não foi possível guardar a chave de pesquisa. Tente novamente."
   },
