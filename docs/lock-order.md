@@ -118,6 +118,14 @@ writing and matches the job's request timestamp, so a stale read cannot
 overwrite a later sample. The receipt lock follows the channel lock because
 channel deletion stamps that receipt in a trigger.
 
+Automatic Telegram reply collection uses the same parent-first order at its
+final write: organization, brand, then source and story for a news sample, or
+adaptation, channel, item and publication receipt for an owned post. It checks
+the collection config revision under a row lock only after the live target is
+locked. Opt-out therefore wins before a final write or waits for it; neither
+path can hold the config while waiting for a target that deletion already
+holds. The Telegram network read remains outside the transaction.
+
 Paid comment analysis admission has a short organization-scoped transaction:
 it locks `organization FOR NO KEY UPDATE`, expires any stale active admission
 for the target, counts the previous rolling hour's admissions across source

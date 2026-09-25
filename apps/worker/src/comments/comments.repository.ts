@@ -276,22 +276,22 @@ export class CommentsRepository {
     return row && publicStoryUrl.test(row.url) ? row : null;
   }
 
-  /** Config lock serializes the final write with an owner's opt-out/update. */
+  /** Parent and target locks precede config, so opt-out and deletion cannot race the final write. */
   private async lockAuto(tx: Tx, job: AutoJob, url: string) {
-    const [config] = await tx
-      .select({ revision: schema.newsCommentCollectionConfigs.revision })
-      .from(schema.newsCommentCollectionConfigs)
-      .where(
-        and(
-          eq(schema.newsCommentCollectionConfigs.orgId, job.orgId),
-          eq(schema.newsCommentCollectionConfigs.brandId, job.brandId),
-          eq(schema.newsCommentCollectionConfigs.enabled, true),
-          eq(schema.newsCommentCollectionConfigs.revision, job.revision),
-        ),
-      )
+    const [organization] = await tx
+      .select({ id: schema.organization.id })
+      .from(schema.organization)
+      .where(eq(schema.organization.id, job.orgId))
       .limit(1)
-      .for("share");
-    if (!config) return null;
+      .for("key share");
+    if (!organization) return null;
+    const [brand] = await tx
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, job.orgId), eq(schema.brands.id, job.brandId)))
+      .limit(1)
+      .for("key share");
+    if (!brand) return null;
     const [source] = await tx
       .select({ id: schema.newsSources.id })
       .from(schema.newsItems)
@@ -334,7 +334,21 @@ export class CommentsRepository {
       )
       .limit(1)
       .for("update");
-    return item && publicStoryUrl.test(url) ? item : null;
+    if (!item || !publicStoryUrl.test(url)) return null;
+    const [config] = await tx
+      .select({ revision: schema.newsCommentCollectionConfigs.revision })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(
+        and(
+          eq(schema.newsCommentCollectionConfigs.orgId, job.orgId),
+          eq(schema.newsCommentCollectionConfigs.brandId, job.brandId),
+          eq(schema.newsCommentCollectionConfigs.enabled, true),
+          eq(schema.newsCommentCollectionConfigs.revision, job.revision),
+        ),
+      )
+      .limit(1)
+      .for("share");
+    return config ? item : null;
   }
 
   async saveAuto(job: AutoJob, url: string, result: ChannelComments): Promise<void> {
@@ -545,6 +559,20 @@ export class CommentsRepository {
     const current = await this.publication(job.orgId, job.brandId, job.publicationId);
     if (!current || current.url !== url) return;
     await db.transaction(async (tx) => {
+      const [organization] = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, job.orgId))
+        .limit(1)
+        .for("key share");
+      if (!organization) return;
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, job.orgId), eq(schema.brands.id, job.brandId)))
+        .limit(1)
+        .for("key share");
+      if (!brand || !(await this.lockLivePublication(tx, job, current))) return;
       const [config] = await tx
         .select({ revision: schema.publicationCommentCollectionConfigs.revision })
         .from(schema.publicationCommentCollectionConfigs)
@@ -558,7 +586,7 @@ export class CommentsRepository {
         )
         .limit(1)
         .for("share");
-      if (!config || !(await this.lockLivePublication(tx, job, current))) return;
+      if (!config) return;
       const [existing] = await tx
         .select({ id: schema.publicationCommentSamples.publicationId })
         .from(schema.publicationCommentSamples)
