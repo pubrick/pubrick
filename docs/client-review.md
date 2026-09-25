@@ -19,7 +19,10 @@ publication action.
   owner or admin, and can be replaced with a new link.
 - Approval applies to the exact saved master, channel texts, channel selection,
   and cover shown to the guest. A change to that material closes the link and
-  calls for a new review. Local unsaved edits are not part of the preview.
+  calls for a new review. Changing inline image slots also closes the link,
+  conservatively, even though the guest page currently previews only the
+  selected cover. The workspace editor must review inline images before
+  internal approval. Local unsaved edits are not part of the preview.
 - An open link holds back internal approval. A client approval permits the
   usual internal review gate; a request for changes does not. A recorded
   approval stays valid after the link expires while the saved draft is

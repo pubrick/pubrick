@@ -410,6 +410,7 @@ describe("rich master integration", () => {
           proposedTitle: "Clearer launch post",
           proposal: savedBody,
           reason: "The headline is clearer.",
+          imagePlan: null,
         },
       }),
     };

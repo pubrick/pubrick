@@ -188,6 +188,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   schedule_already_publishing: "schedule_already_publishing",
   refine_limit_reached: "refine_limit_reached",
   draft_revision_stale: "draft_revision_stale",
+  draft_revision_incomplete: "draft_revision_incomplete",
   draft_revision_note_not_found: "draft_revision_note_not_found",
   draft_revision_needs_ai_draft: "draft_revision_needs_ai_draft",
   draft_revision_limit_reached: "draft_revision_limit_reached",
