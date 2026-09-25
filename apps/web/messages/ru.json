@@ -743,7 +743,7 @@
     "costReceiptApproximate": "Учтено примерно {amount}",
     "costReceiptRecorded": "Учтено {amount}",
     "costReceiptEmpty": "Для этого материала нет записанных вызовов модели.",
-    "costReceiptUnrecorded": "{count, plural, one {# вызов не удалось записать} few {# вызова не удалось записать} other {# вызовов не удалось записать}} в журнал. Сумма неполная.",
+    "costReceiptUnrecorded": "{count, plural, one {# вызов не удалось записать} few {# вызова не удалось записать} many {# вызовов не удалось записать} other {# вызовов не удалось записать}} в журнал. Сумма неполная.",
     "costReceiptLegacy": "У старого запуска нет счётчика пропущенных вызовов. Сумма может быть неполной.",
     "costReceiptTokens": "Вход: {input} · выход: {output} токенов",
     "costReceiptAttempt": "попытка {count}",
