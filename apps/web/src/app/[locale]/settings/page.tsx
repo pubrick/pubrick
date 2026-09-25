@@ -143,9 +143,17 @@ const INVITE_FAILURE_KEYS: Record<string, string> = {
 type OrganizationInvitation = {
   id: string;
   email: string;
+  role?: string;
   status: string;
   expiresAt: string | Date;
 };
+
+type WorkspaceRole = "admin" | "editor" | "author" | "member";
+const WORKSPACE_ROLES: WorkspaceRole[] = ["member", "author", "editor", "admin"];
+
+function isWorkspaceRole(role: string): role is WorkspaceRole {
+  return WORKSPACE_ROLES.some((candidate) => candidate === role);
+}
 
 /** Live means BOTH facts, exactly as the api's gate reads them. */
 function isLiveInvitation(invitation: OrganizationInvitation): boolean {
@@ -293,6 +301,7 @@ export default function SettingsPage() {
    */
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<WorkspaceRole>("member");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ email: string; link: string; expiresAt: string } | null>(
@@ -300,6 +309,14 @@ export default function SettingsPage() {
   );
   const [copied, setCopied] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<OrganizationInvitation | null>(null);
+  const [roleChange, setRoleChange] = useState<{
+    id: string;
+    email: string;
+    role: WorkspaceRole;
+  } | null>(null);
+  const [nextRole, setNextRole] = useState<WorkspaceRole>("member");
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
 
   /**
    * `useCallback`, and it is load-bearing rather than tidy.
@@ -317,9 +334,14 @@ export default function SettingsPage() {
     setInviteOpen(false);
     setCreated(null);
     setInviteEmail("");
+    setInviteRole("member");
     setInviteError(null);
     setCopied(false);
   }, []);
+
+  const closeRoleChange = useCallback(() => {
+    if (!roleSaving) setRoleChange(null);
+  }, [roleSaving]);
 
   async function invite(e: React.FormEvent) {
     e.preventDefault();
@@ -331,10 +353,11 @@ export default function SettingsPage() {
     try {
       const result = await authClient.organization.inviteMember({
         email: inviteEmail.trim(),
-        // Every member is equal in this product and every member may invite —
-        // see the access control in apps/api/src/auth.ts. Sending anything else
-        // here would create a role the product has no screen to see or change.
-        role: "member",
+        // The browser plugin only infers its built-in roles. The API's
+        // organization plugin validates the additional author/editor roles.
+        role: (canManageApiKeys ? inviteRole : "member") as Parameters<
+          typeof authClient.organization.inviteMember
+        >[0]["role"],
       });
       if (result.error) {
         const key = result.error.code ? INVITE_FAILURE_KEYS[result.error.code] : undefined;
@@ -455,6 +478,37 @@ export default function SettingsPage() {
     (member) =>
       member.user.id === session?.user?.id && (member.role === "owner" || member.role === "admin"),
   );
+  const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
+  const canInvite = currentRole === "owner" || currentRole === "admin" || currentRole === "member";
+  const roleLabels: Record<WorkspaceRole, string> = {
+    admin: t("peopleRoleAdmin"),
+    editor: t("peopleRoleEditor"),
+    author: t("peopleRoleAuthor"),
+    member: t("peopleRoleMember"),
+  };
+  const roleOptions = WORKSPACE_ROLES.map((role) => ({ value: role, label: roleLabels[role] }));
+
+  async function saveRole() {
+    if (!roleChange || roleSaving || nextRole === roleChange.role) return;
+    setRoleSaving(true);
+    setRoleError(null);
+    try {
+      const result = await authClient.organization.updateMemberRole({
+        memberId: roleChange.id,
+        role: nextRole,
+      });
+      if (result.error) {
+        setRoleError(t("genericError"));
+        return;
+      }
+      await refetchOrganization?.();
+      setRoleChange(null);
+    } catch {
+      setRoleError(t("genericError"));
+    } finally {
+      setRoleSaving(false);
+    }
+  }
   const invitations = (organization?.invitations ?? []).filter(isLiveInvitation);
 
   const themeOptions = [
@@ -704,7 +758,44 @@ export default function SettingsPage() {
                     key={member.id}
                     title={member.user.email}
                     meta={
-                      member.user.email === session?.user?.email ? t("peopleYou") : member.user.name
+                      <>
+                        <span>
+                          {member.user.email === session?.user?.email
+                            ? t("peopleYou")
+                            : member.user.name}
+                        </span>
+                        {" · "}
+                        <span>
+                          {isWorkspaceRole(member.role)
+                            ? roleLabels[member.role]
+                            : member.role === "owner"
+                              ? t("peopleRoleOwner")
+                              : member.role}
+                        </span>
+                      </>
+                    }
+                    trailing={
+                      canManageApiKeys &&
+                      member.user.id !== session?.user?.id &&
+                      member.role !== "owner" &&
+                      (member.role !== "admin" || currentRole === "owner") &&
+                      isWorkspaceRole(member.role) ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setRoleChange({
+                              id: member.id,
+                              email: member.user.email,
+                              role: member.role as WorkspaceRole,
+                            });
+                            setNextRole(member.role as WorkspaceRole);
+                            setRoleError(null);
+                          }}
+                        >
+                          {t("peopleChangeRole")}
+                        </Button>
+                      ) : undefined
                     }
                   />
                 ))}
@@ -712,17 +803,24 @@ export default function SettingsPage() {
                   <ListRow
                     key={invitation.id}
                     title={invitation.email}
-                    meta={t("peoplePending", {
-                      expires: new Date(invitation.expiresAt).toLocaleString(locale),
-                    })}
+                    meta={
+                      t("peoplePending", {
+                        expires: new Date(invitation.expiresAt).toLocaleString(locale),
+                      }) +
+                      (invitation.role && isWorkspaceRole(invitation.role)
+                        ? ` · ${roleLabels[invitation.role]}`
+                        : "")
+                    }
                     trailing={
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => setPendingRevoke(invitation)}
-                      >
-                        {t("remove")}
-                      </Button>
+                      canInvite ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => setPendingRevoke(invitation)}
+                        >
+                          {t("remove")}
+                        </Button>
+                      ) : undefined
                     }
                   />
                 ))}
@@ -737,16 +835,18 @@ export default function SettingsPage() {
               {/* Secondary: this screen's one primary action is the key form's
                   Save, up in the header. Two primaries on one screen is the
                   other half of the same rule. */}
-              <Button
-                variant="secondary"
-                className="mt-3"
-                onClick={() => {
-                  setInviteError(null);
-                  setInviteOpen(true);
-                }}
-              >
-                {t("peopleInvite")}
-              </Button>
+              {canInvite && (
+                <Button
+                  variant="secondary"
+                  className="mt-3"
+                  onClick={() => {
+                    setInviteError(null);
+                    setInviteOpen(true);
+                  }}
+                >
+                  {t("peopleInvite")}
+                </Button>
+              )}
             </>
           )}
         </Card>
@@ -787,6 +887,20 @@ export default function SettingsPage() {
               required
               className="w-full"
             />
+            {canManageApiKeys && (
+              <Select
+                label={t("peopleRoleLabel")}
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value as WorkspaceRole)}
+              >
+                {roleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <p className="text-sm text-fg-secondary">{t("peopleBrandAccessHint")}</p>
             {inviteError && (
               <p role="alert" className="text-sm text-danger">
                 {inviteError}
@@ -814,6 +928,48 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={roleChange !== null}
+        onClose={closeRoleChange}
+        title={t("peopleChangeRoleTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRoleChange(null)} disabled={roleSaving}>
+              {t("peopleInviteCancel")}
+            </Button>
+            <Button
+              onClick={() => void saveRole()}
+              disabled={roleSaving || nextRole === roleChange?.role}
+            >
+              {t("peopleChangeRole")}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-fg-secondary">
+            {t("peopleChangeRoleBody", { email: roleChange?.email ?? "" })}
+          </p>
+          <Select
+            label={t("peopleRoleLabel")}
+            value={nextRole}
+            onChange={(e) => setNextRole(e.target.value as WorkspaceRole)}
+          >
+            {roleOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+          <p className="text-sm text-fg-secondary">{t("peopleRoleResetHint")}</p>
+          {roleError && (
+            <p role="alert" className="text-sm text-danger">
+              {roleError}
+            </p>
+          )}
+        </div>
       </Modal>
 
       {/* Revoking is destructive in the way the constitution means: the link

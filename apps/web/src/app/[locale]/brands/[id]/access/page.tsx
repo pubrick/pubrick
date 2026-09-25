@@ -81,6 +81,13 @@ export default function BrandAccessPage({ params }: { params: Promise<{ id: stri
     selected.length !== original.length ||
     selected.some((memberId) => !original.includes(memberId));
   const ordinaryMembers = members?.filter((member) => !isManager(member)) ?? [];
+  const roleLabels: Record<string, string> = {
+    owner: t("roleOwner"),
+    admin: t("roleAdmin"),
+    editor: t("roleEditor"),
+    author: t("roleAuthor"),
+    member: t("roleMember"),
+  };
 
   function toggle(memberId: string) {
     if (saving) return;
@@ -145,6 +152,7 @@ export default function BrandAccessPage({ params }: { params: Promise<{ id: stri
           <h2 className="text-base font-semibold text-fg">{t("heading")}</h2>
           <p className="mt-2 text-sm text-fg-secondary">{t("hint")}</p>
           <p className="mt-2 text-sm text-fg-tertiary">{t("managerHint")}</p>
+          <p className="mt-2 text-sm text-fg-tertiary">{t("roleChangeHint")}</p>
         </Card>
         {status === "loading" && (
           <Card aria-busy="true">
@@ -198,7 +206,7 @@ export default function BrandAccessPage({ params }: { params: Promise<{ id: stri
                             {member.name || member.email}
                           </span>
                           <span className="block truncate text-sm text-fg-secondary">
-                            {member.email}
+                            {member.email} · {roleLabels[member.role] ?? member.role}
                           </span>
                         </span>
                         {manager && (

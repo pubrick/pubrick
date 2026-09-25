@@ -1,15 +1,17 @@
 # Import a public article as source material
 
-On **New post → Source**, paste a public HTTP(S) article URL and choose **Fetch
+On **New post**, select a brand. Under **Source**, paste a public HTTP(S) article URL and choose **Fetch
 article**. Pubrick shows an extracted text preview. Choose **Use this text** to
-place it in the editable source field, select the brand and destination channels,
+place it in the editable source field, select the destination channels,
 then choose **Generate**. The existing generation run stores that text by value
 and records the URL as attribution. The worker never revisits the URL. Fetching
 the preview makes no AI call; generation uses the organization's configured key.
 
-The API's authenticated `POST /api/source-extraction` accepts `{ "url": "…" }`
+The API's authenticated `POST /api/source-extraction` accepts `{ "url": "…", "brandId": "…" }`
 and returns `{ "title": "…", "material": "…", "truncated": false }`. It does
-not save content. [`guarded-fetch`](https://github.com/vercel-labs/guarded-fetch)
+not save content. Authors and editors must supply a brand they can access;
+existing workspace roles may still send only `url` for compatibility.
+[`guarded-fetch`](https://github.com/vercel-labs/guarded-fetch)
 protects against requests to private addresses and unsafe redirects, with a
 10-second timeout and 2 MiB response cap. Mozilla
 [`Readability`](https://github.com/mozilla/readability) extracts article text

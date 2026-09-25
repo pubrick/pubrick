@@ -195,6 +195,10 @@ export default function NewContentPage() {
 
   async function fetchSource() {
     setSourceError(null);
+    if (!brandId) {
+      setSourceError(t("noBrandSelected"));
+      return;
+    }
     const parsed = sourceExtractionRequestSchema.safeParse({ url: sourceUrl });
     if (!parsed.success) {
       setSourceError(t("sourceUrlNotHttp"));
@@ -208,7 +212,7 @@ export default function NewContentPage() {
     try {
       const preview = await api<SourceExtractionResponse>("/api/source-extraction", {
         method: "POST",
-        body: JSON.stringify(parsed.data),
+        body: JSON.stringify({ ...parsed.data, brandId }),
       });
       if (requestId === sourceRequestId.current) {
         setSourcePreview({ ...preview, origin: "article" });

@@ -798,6 +798,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(
       screen.getByLabelText(en.ContentNew.sourceUrlLabel),
@@ -809,6 +810,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
     expect(parsedBody(calls.find((c) => c.path === "/api/source-extraction"))).toEqual({
       url: "https://example.com/guide",
+      brandId: B1,
     });
     await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
@@ -938,6 +940,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(screen.getByLabelText(en.ContentNew.materialLabel), "Existing text.");
     await user.upload(
@@ -968,6 +971,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     fireEvent.change(screen.getByLabelText(en.ContentNew.sourceUrlLabel), {
       target: { value: "https://example.com/first" },
@@ -1003,6 +1007,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), "https://example.com/old");
     await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
