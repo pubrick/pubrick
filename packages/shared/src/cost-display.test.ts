@@ -211,6 +211,21 @@ describe("a round trip whose outcome we never learned", () => {
     expect(costTotals([image])).toEqual({ usd: 0, unpricedCalls: 1, estimatedCalls: 0 });
   });
 
+  it("counts a refusal that still metered input tokens as unpriced", () => {
+    const meteredRefusal: CostRow = {
+      costUsd: null,
+      costSource: "unknown",
+      inputTokens: 12,
+      outputTokens: 0,
+      outcome: "refused",
+    };
+    expect(costTotals([meteredRefusal])).toEqual({
+      usd: 0,
+      unpricedCalls: 1,
+      estimatedCalls: 0,
+    });
+  });
+
   it("still adds a PRICED row to the sum whatever its outcome says", () => {
     // The buckets are ordered: priced wins. An outcome column that could veto a
     // figure the provider itself reported would be a second, worse source of

@@ -1077,9 +1077,8 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           status: "ok",
         },
         {
-          // A 429. No tokens counted, so its cost is known to be zero — and the
-          // ledger is lifetime, so letting one blip stamp "≥" on the total would
-          // stamp it forever.
+          // A 429 explicitly refused before any tokens were counted. Its cost
+          // is known to be zero, so it cannot stamp "≥" on a lifetime total.
           orgId,
           step: "writer",
           provider: "google",
@@ -1089,6 +1088,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
           inputTokens: 0,
           outputTokens: 0,
           status: "errored",
+          outcome: "refused",
         },
       ]);
 
@@ -1292,6 +1292,13 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         {
           costUsd: null,
           costSource: "unknown",
+          inputTokens: 12,
+          outputTokens: 0,
+          outcome: "refused",
+        },
+        {
+          costUsd: null,
+          costSource: "unknown",
           inputTokens: 0,
           outputTokens: 0,
           outcome: "completed",
@@ -1317,9 +1324,9 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       expect(fromSql).toEqual(summarizeCost(costTotals(rows)));
       // Named too, so a day when both readers are wrong in the same way still
-      // fails: the token-bearing, lost, completed image, and legacy calls are
-      // uncertain; only the explicit refusal is known free.
-      expect(fromSql).toEqual({ kind: "atLeast", usd: 0.502, unpricedCalls: 4 });
+      // fails: the token-bearing, lost, completed image, legacy, and metered
+      // refusal calls are uncertain; only the token-free refusal is known free.
+      expect(fromSql).toEqual({ kind: "atLeast", usd: 0.502, unpricedCalls: 5 });
     });
 
     it("refuses an outcome outside the value set, in the database", async () => {

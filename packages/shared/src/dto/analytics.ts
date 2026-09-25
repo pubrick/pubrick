@@ -149,7 +149,7 @@ export const brandFormatSpendDtoSchema = z.object({
       meanKnownUsdPerRun: z.number().nonnegative(),
       pricedCalls: z.number().int().nonnegative(),
       estimatedCalls: z.number().int().nonnegative(),
-      /** Unknown-cost calls with tokens or an ambiguous provider outcome, not known-free refusals. */
+      /** Unpriced calls except explicit token-free refusals; includes images without token metadata. */
       unknownCostCalls: z.number().int().nonnegative(),
       /** Calls attempted by a run but not durably written to the usage ledger. */
       unrecordedCalls: z.number().int().nonnegative(),
