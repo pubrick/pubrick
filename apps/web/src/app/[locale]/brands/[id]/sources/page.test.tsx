@@ -547,8 +547,8 @@ describe("watched sources page", () => {
     await waitFor(() => expect(input).toHaveValue(""));
   });
 
-  it("labels a private channel with its safe link and does not offer public comment collection", async () => {
-    install(
+  it("collects a joined private story's replies manually without requesting paid analysis", async () => {
+    const calls = install(
       [
         {
           id: ITEM_ID,
@@ -558,6 +558,9 @@ describe("watched sources page", () => {
           summary: "A private story summary.",
           url: "https://t.me/c/123456/1",
           publishedAt: null,
+          commentsStatus: "available",
+          commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+          commentsErrorCode: null,
           createdAt: "2026-09-23T12:00:00.000Z",
           relevanceStatus: "unscored",
           relevanceScore: null,
@@ -584,7 +587,27 @@ describe("watched sources page", () => {
     expect((await screen.findAllByText("Joined channel")).length).toBeGreaterThan(0);
     expect(document.body.textContent).toContain(en.Sources.telegramPrivate);
     expect(document.body.textContent).toContain("https://t.me/c/123456");
-    expect(screen.queryByRole("button", { name: en.Sources.comments })).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(dialog.getByText(en.Sources.privateCommentsNotice)).toBeInTheDocument();
+    expect(
+      dialog.queryByRole("region", { name: en.Sources.analysisTitle }),
+    ).not.toBeInTheDocument();
+    expect(
+      dialog.queryByRole("button", { name: en.Sources.analyzeComments }),
+    ).not.toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: en.Sources.collectComments }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "POST" &&
+            call.url.includes(`/items/${ITEM_ID}/comments/refresh?brandId=${BRAND_ID}`),
+        ),
+      ).toBe(true),
+    );
+    expect(calls.some((call) => call.url.includes("comment-analysis"))).toBe(false);
   });
 
   it("starts a source run with the article summary, URL, and explicitly chosen channel", async () => {

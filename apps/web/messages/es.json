@@ -313,6 +313,7 @@
     "commentsNotChecked": "Aún no se han consultado los comentarios.",
     "commentsEmpty": "No hay comentarios legibles en esta muestra.",
     "commentsSample": "Muestra guardada de hasta 50 respuestas con texto. Se omiten las breves y duplicadas; no se guardan los autores. Si falla la consulta, la muestra anterior sigue visible.",
+    "privateCommentsNotice": "Esta noticia para miembros usa la cuenta de Telegram conectada para leer su debate vinculado. La cuenta debe tener acceso a ese debate. La recopilación es manual; la recopilación automática y el análisis con IA no están disponibles para noticias privadas.",
     "analysisTitle": "Análisis de comentarios",
     "analyzeComments": "Analizar muestra",
     "analysisWorking": "Analizando…",
