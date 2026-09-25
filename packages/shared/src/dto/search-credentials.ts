@@ -7,7 +7,7 @@ export const searchCredentialUpsertSchema = z.strictObject({
     .string()
     .trim()
     .min(1)
-    .max(256)
+    .max(50)
     .regex(/^[A-Za-z0-9_-]+$/),
 });
 export type SearchCredentialUpsert = z.infer<typeof searchCredentialUpsertSchema>;

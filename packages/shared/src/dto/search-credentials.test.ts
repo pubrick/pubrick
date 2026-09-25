@@ -19,6 +19,9 @@ describe("search credentials DTO", () => {
       searchCredentialUpsertSchema.parse({ apiKey: "test-api-key", folderId: "bad id" }),
     ).toThrow();
     expect(() =>
+      searchCredentialUpsertSchema.parse({ apiKey: "test-api-key", folderId: "a".repeat(51) }),
+    ).toThrow();
+    expect(() =>
       searchCredentialUpsertSchema.parse({
         apiKey: "test-api-key",
         folderId: "b1g_123",
