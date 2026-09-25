@@ -682,7 +682,7 @@
     "sourceUrlNotHttp": "A source link must be a full http:// or https:// address.",
     "sourceBlocksCreate": "The Source section holds something a post cannot carry: use Generate, or clear it.",
     "sourceBlocksCreateNoAi": "The Source section holds something a post cannot carry: add an AI key in Settings, or clear it.",
-    "aiNotConfigured": "Add an AI provider key to generate a post from a brief.",
+    "aiNotConfigured": "A workspace owner or admin needs to add an AI provider key before posts can be generated.",
     "aiSettingsLink": "Open Settings",
     "discardTitle": "Discard your draft?",
     "discardBody": "Generating starts a new post from your brief. The text you typed here is not saved.",

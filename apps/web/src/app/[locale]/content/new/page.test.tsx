@@ -84,7 +84,12 @@ function installHandlers(
       if (result !== undefined) return result;
     }
 
-    if (method === "GET" && path === "/api/ai-credentials") return credentials;
+    if (method === "GET" && path === "/api/ai-credentials/availability") {
+      return {
+        configured: credentials.length > 0,
+        googleConfigured: credentials.some((credential) => credential.provider === "google"),
+      };
+    }
     if (method === "GET" && path === "/api/brands") return brands;
     if (method === "GET" && path === `/api/channels?brandId=${B1}`) return acmeChannels;
     if (method === "GET" && path === `/api/channels?brandId=${B2}`) return widgetsChannels;
@@ -1568,7 +1573,7 @@ describe("'Create post' while the Source section holds something (Task 5 Step 3)
     // the Generate button is not rendered at all — `aiNotConfigured` and a
     // link to Settings take its place — so "use Generate" would point at a
     // control that is not on this screen. The Source section itself stays: it
-    // holds a person's typed text, and `credentials` reads `[]` for a FAILED
+    // holds a person's typed text, and availability reads false for a FAILED
     // request too, so hiding the section would delete a field over a GET that
     // did not answer.
     const calls: Call[] = [];

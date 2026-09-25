@@ -115,8 +115,10 @@ function spendLine(amount: string): string {
  */
 async function renderSettings(): Promise<void> {
   render(<SettingsPage />);
-  await waitFor(() => expect(mockApi).toHaveBeenCalledWith("/api/ai-credentials/spend"));
-  await screen.findByRole("heading", { name: en.SettingsPage.aiTitle });
+  if (screen.queryByRole("heading", { name: en.SettingsPage.aiTitle })) {
+    await waitFor(() => expect(mockApi).toHaveBeenCalledWith("/api/ai-credentials/spend"));
+  }
+  await screen.findByRole("heading", { name: en.SettingsPage.workspaceTitle });
 }
 
 beforeEach(() => {
@@ -919,6 +921,36 @@ describe("Settings — People", () => {
     );
   });
 
+  it("keeps the legacy member invitation limited to another member", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "member", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+      ],
+    });
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: { id: "inv-member", email: "bob@example.com", expiresAt: "2026-10-06T10:00:00.000Z" },
+      error: null,
+    });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).queryByLabelText(en.SettingsPage.peopleRoleLabel),
+    ).not.toBeInTheDocument();
+    await user.type(
+      within(dialog).getByLabelText(en.SettingsPage.peopleEmailLabel),
+      "bob@example.com",
+    );
+    await user.click(within(dialog).getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await waitFor(() =>
+      expect(mockAuthClient.organization.inviteMember).toHaveBeenCalledWith({
+        email: "bob@example.com",
+        role: "member",
+      }),
+    );
+  });
+
   it("requires confirmation before changing a teammate's role and explains revoked grants", async () => {
     organizationIs({
       members: [
@@ -962,6 +994,16 @@ describe("Settings — People", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: en.SettingsPage.remove })).not.toBeInTheDocument();
     expect(screen.getByText("bob@example.com")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: en.SettingsPage.aiTitle }),
+    ).not.toBeInTheDocument();
+    expect(mockApi).not.toHaveBeenCalledWith("/api/ai-credentials");
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.promptsOpen }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.notificationsOpen }),
+    ).not.toBeInTheDocument();
   });
 
   it("copies the link to the clipboard", async () => {

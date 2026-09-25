@@ -175,6 +175,10 @@ export default function SettingsPage() {
   } = authClient.useActiveOrganization();
   const locale = useLocale();
   const signOut = useSignOut();
+  const members = organization?.members ?? [];
+  const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
+  const canManageApiKeys = currentRole === "owner" || currentRole === "admin";
+  const canInvite = canManageApiKeys || currentRole === "member";
 
   const [pref, setPref] = useState<ThemePref>("system");
   // Stored pref is client-only state: reading it during the first render makes
@@ -234,7 +238,9 @@ export default function SettingsPage() {
       });
   }, [handleAiError, t, te]);
 
-  useEffect(loadAi, [loadAi]);
+  useEffect(() => {
+    if (canManageApiKeys) loadAi();
+  }, [canManageApiKeys, loadAi]);
 
   function changeTheme(value: string) {
     const next = value as ThemePref;
@@ -473,13 +479,6 @@ export default function SettingsPage() {
   // (`get-full-organization` returns members and invitations together), so
   // there is no second round trip and no way for the two to disagree about
   // which organization they describe.
-  const members = organization?.members ?? [];
-  const canManageApiKeys = members.some(
-    (member) =>
-      member.user.id === session?.user?.id && (member.role === "owner" || member.role === "admin"),
-  );
-  const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
-  const canInvite = currentRole === "owner" || currentRole === "admin" || currentRole === "member";
   const roleLabels: Record<WorkspaceRole, string> = {
     admin: t("peopleRoleAdmin"),
     editor: t("peopleRoleEditor"),
@@ -521,9 +520,11 @@ export default function SettingsPage() {
     <AppShell
       title={t("title")}
       primaryAction={
-        <Button type="submit" form={AI_FORM_ID} disabled={saving}>
-          {t("aiSave")}
-        </Button>
+        canManageApiKeys ? (
+          <Button type="submit" form={AI_FORM_ID} disabled={saving}>
+            {t("aiSave")}
+          </Button>
+        ) : undefined
       }
     >
       <div className="flex max-w-xl flex-col gap-4">
@@ -540,137 +541,143 @@ export default function SettingsPage() {
             no endpoint can give back. */}
         <LanguageCard hasUnsavedText={apiKey !== "" || defaultModel.trim() !== ""} />
 
-        <Card>
-          <h2 className="mb-1 text-base font-semibold text-fg">{t("aiTitle")}</h2>
-          {/* Three states, three sentences. The em dash used to stand for
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-1 text-base font-semibold text-fg">{t("aiTitle")}</h2>
+            {/* Three states, three sentences. The em dash used to stand for
               "loading" AND "the request failed", and both read as "nothing
               spent". */}
-          {spendError !== null ? (
-            <p role="alert" className="mb-3 text-sm text-danger">
-              {t("aiSpendError")}
-            </p>
-          ) : spend === null ? (
-            <Skeleton lines={1} className="mb-3 w-48 py-1" />
-          ) : (
-            <p className="mb-3 text-sm text-fg-secondary">
-              {t("aiSpend", { amount: costText(spend) })}
-            </p>
-          )}
+            {spendError !== null ? (
+              <p role="alert" className="mb-3 text-sm text-danger">
+                {t("aiSpendError")}
+              </p>
+            ) : spend === null ? (
+              <Skeleton lines={1} className="mb-3 w-48 py-1" />
+            ) : (
+              <p className="mb-3 text-sm text-fg-secondary">
+                {t("aiSpend", { amount: costText(spend) })}
+              </p>
+            )}
 
-          {aiError && (
-            <p role="alert" className="mb-3 text-sm text-danger">
-              {aiError}
-            </p>
-          )}
+            {aiError && (
+              <p role="alert" className="mb-3 text-sm text-danger">
+                {aiError}
+              </p>
+            )}
 
-          {credentials === null ? (
-            // Not an EmptyState: an empty state is a verdict, and we do not
-            // have one yet. And not a skeleton either once the read has
-            // FAILED — the sentence above is the answer, and a placeholder
-            // beside it would go on claiming the list is still coming.
-            aiError === null ? (
-              <Skeleton lines={2} className="mb-4 py-2" />
-            ) : null
-          ) : credentials.length === 0 ? (
-            <EmptyState title={t("aiEmpty")} className="py-6" />
-          ) : (
-            <div className="mb-4 overflow-hidden rounded-card border border-border">
-              {credentials.map((credential) => (
-                <ListRow
-                  key={credential.provider}
-                  title={PROVIDER_NAMES[credential.provider] ?? credential.provider}
-                  meta={
-                    testMeta(credential.provider) ??
-                    (credential.defaultModel || t("aiProviderDefault"))
-                  }
-                  trailing={
-                    <>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        // Every click is a real, billed call — two physical ones
-                        // when the repair retry fires — so an impatient
-                        // double-click must not be charged twice.
-                        disabled={testResults[credential.provider] === "loading"}
-                        onClick={() => testKey(credential.provider)}
-                      >
-                        {t("test")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => setPendingRemoval(credential.provider)}
-                      >
-                        {t("remove")}
-                      </Button>
-                    </>
-                  }
-                />
-              ))}
-            </div>
-          )}
-
-          <form id={AI_FORM_ID} onSubmit={saveKey} className="flex flex-col gap-3">
-            <div className="flex flex-wrap gap-3">
-              <Select
-                label={t("aiProviderLabel")}
-                value={provider}
-                onChange={(e) => setProvider(e.target.value as AiProviderId)}
-                className="min-w-[160px]"
-              >
-                {AI_PROVIDERS.map((id) => (
-                  <option key={id} value={id}>
-                    {PROVIDER_NAMES[id]}
-                  </option>
+            {credentials === null ? (
+              // Not an EmptyState: an empty state is a verdict, and we do not
+              // have one yet. And not a skeleton either once the read has
+              // FAILED — the sentence above is the answer, and a placeholder
+              // beside it would go on claiming the list is still coming.
+              aiError === null ? (
+                <Skeleton lines={2} className="mb-4 py-2" />
+              ) : null
+            ) : credentials.length === 0 ? (
+              <EmptyState title={t("aiEmpty")} className="py-6" />
+            ) : (
+              <div className="mb-4 overflow-hidden rounded-card border border-border">
+                {credentials.map((credential) => (
+                  <ListRow
+                    key={credential.provider}
+                    title={PROVIDER_NAMES[credential.provider] ?? credential.provider}
+                    meta={
+                      testMeta(credential.provider) ??
+                      (credential.defaultModel || t("aiProviderDefault"))
+                    }
+                    trailing={
+                      <>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          // Every click is a real, billed call — two physical ones
+                          // when the repair retry fires — so an impatient
+                          // double-click must not be charged twice.
+                          disabled={testResults[credential.provider] === "loading"}
+                          onClick={() => testKey(credential.provider)}
+                        >
+                          {t("test")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => setPendingRemoval(credential.provider)}
+                        >
+                          {t("remove")}
+                        </Button>
+                      </>
+                    }
+                  />
                 ))}
-              </Select>
-              <Input
-                type="password"
-                autoComplete="off"
-                label={t("aiKeyLabel")}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                required
-                className="min-w-[200px] flex-1"
-              />
-            </div>
-            {/* Constitution rule 2: the one option most people never set lives
+              </div>
+            )}
+
+            <form id={AI_FORM_ID} onSubmit={saveKey} className="flex flex-col gap-3">
+              <div className="flex flex-wrap gap-3">
+                <Select
+                  label={t("aiProviderLabel")}
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value as AiProviderId)}
+                  className="min-w-[160px]"
+                >
+                  {AI_PROVIDERS.map((id) => (
+                    <option key={id} value={id}>
+                      {PROVIDER_NAMES[id]}
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  label={t("aiKeyLabel")}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  required
+                  className="min-w-[200px] flex-1"
+                />
+              </div>
+              {/* Constitution rule 2: the one option most people never set lives
                 behind the shared disclosure, never loose on the form. */}
-            <Advanced dirty={defaultModel.trim() !== ""}>
-              <Input
-                label={t("aiModelLabel")}
-                placeholder={t("aiModelPlaceholder")}
-                value={defaultModel}
-                onChange={(e) => setDefaultModel(e.target.value)}
-                className="w-full"
-              />
-            </Advanced>
-          </form>
-        </Card>
+              <Advanced dirty={defaultModel.trim() !== ""}>
+                <Input
+                  label={t("aiModelLabel")}
+                  placeholder={t("aiModelPlaceholder")}
+                  value={defaultModel}
+                  onChange={(e) => setDefaultModel(e.target.value)}
+                  className="w-full"
+                />
+              </Advanced>
+            </form>
+          </Card>
+        )}
 
-        {organization && <PaidReplyOrganizationSettings canManage={canManageApiKeys} />}
+        {organization && canManageApiKeys && <PaidReplyOrganizationSettings canManage />}
 
-        <Card>
-          <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>
-          <p className="mb-3 text-sm text-fg-secondary">{t("promptsHint")}</p>
-          <Link
-            href={`/${locale}/settings/prompts`}
-            className="text-sm font-medium text-accent underline"
-          >
-            {t("promptsOpen")}
-          </Link>
-        </Card>
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("promptsHint")}</p>
+            <Link
+              href={`/${locale}/settings/prompts`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("promptsOpen")}
+            </Link>
+          </Card>
+        )}
 
-        <Card>
-          <h2 className="mb-2 text-base font-semibold text-fg">{t("notificationsTitle")}</h2>
-          <p className="mb-3 text-sm text-fg-secondary">{t("notificationsHint")}</p>
-          <Link
-            href={`/${locale}/settings/notifications`}
-            className="text-sm font-medium text-accent underline"
-          >
-            {t("notificationsOpen")}
-          </Link>
-        </Card>
+        {canManageApiKeys && (
+          <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("notificationsTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("notificationsHint")}</p>
+            <Link
+              href={`/${locale}/settings/notifications`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("notificationsOpen")}
+            </Link>
+          </Card>
+        )}
 
         {canManageApiKeys && (
           <Card>

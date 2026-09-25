@@ -686,7 +686,7 @@
     "sourceUrlNotHttp": "El enlace de la fuente debe ser una dirección http:// o https:// completa.",
     "sourceBlocksCreate": "La sección Fuente contiene algo que una publicación no puede llevar: usa Generar o vacíala.",
     "sourceBlocksCreateNoAi": "La sección Fuente contiene algo que una publicación no puede llevar: añade una clave de IA en Ajustes o vacíala.",
-    "aiNotConfigured": "Añade una clave de proveedor de IA para generar una publicación a partir de un brief.",
+    "aiNotConfigured": "Para generar publicaciones, el propietario o un administrador del espacio debe añadir una clave de IA.",
     "aiSettingsLink": "Abrir Ajustes",
     "discardTitle": "¿Descartar tu borrador?",
     "discardBody": "Generar crea una publicación nueva a partir de tu brief. El texto que escribiste aquí no se guarda.",

@@ -686,7 +686,7 @@
     "sourceUrlNotHttp": "O link da fonte precisa ser um endereço http:// ou https:// completo.",
     "sourceBlocksCreate": "A seção Fonte contém algo que uma publicação não pode carregar: use Gerar ou limpe-a.",
     "sourceBlocksCreateNoAi": "A seção Fonte contém algo que uma publicação não pode carregar: adicione uma chave de IA em Configurações ou limpe-a.",
-    "aiNotConfigured": "Adicione uma chave de provedor de IA para gerar uma publicação a partir de um briefing.",
+    "aiNotConfigured": "Para gerar publicações, o proprietário ou um administrador do espaço precisa adicionar uma chave de IA.",
     "aiSettingsLink": "Abrir Configurações",
     "discardTitle": "Descartar seu rascunho?",
     "discardBody": "Gerar cria uma nova publicação a partir do seu briefing. O texto digitado aqui não é salvo.",
