@@ -18,6 +18,7 @@ import {
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
+  type ContentImageCrop,
   type ContentImageRegenerate,
   type ContentImagesReplace,
   type ContentUpdate,
@@ -25,6 +26,7 @@ import {
   type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
+  contentImageCropSchema,
   contentImageRegenerateSchema,
   contentImagesReplaceSchema,
   contentUpdateSchema,
@@ -138,6 +140,17 @@ export class ContentController {
     @Body(new ZodValidationPipe(contentImageRegenerateSchema)) body: ContentImageRegenerate,
   ) {
     return this.contentImages.regenerate(orgId, id, slotId, body);
+  }
+
+  @Post(":id/images/:slotId/crop")
+  @HttpCode(200)
+  cropImage(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("slotId", ParseUUIDPipe) slotId: string,
+    @Body(new ZodValidationPipe(contentImageCropSchema)) body: ContentImageCrop,
+  ) {
+    return this.contentImages.crop(orgId, id, slotId, body);
   }
 
   @Get(":id/versions")

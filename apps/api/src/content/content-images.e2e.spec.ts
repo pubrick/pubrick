@@ -444,6 +444,104 @@ describe.skipIf(!url)("article image slots e2e", () => {
     expect(blocked.body.code).toBe("content_images_need_review");
   });
 
+  it("crops actual pixels atomically, keeps the original, and reopens image review", async () => {
+    const owner = await agent();
+    const stranger = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Crop article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const blue = await sharp({
+      create: { width: 4, height: 6, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+    const striped = await sharp({
+      create: { width: 8, height: 6, channels: 3, background: "#ff0000" },
+    })
+      .composite([{ input: blue, left: 4, top: 0 }])
+      .png()
+      .toBuffer();
+    const original = await owner
+      .post(`/api/media?brandId=${brand.body.id}`)
+      .attach("file", striped, { filename: "stripes.png", contentType: "image/png" })
+      .expect(201);
+    const uri = `/api/content/${item.body.id}/images`;
+    const saved = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [
+          {
+            mediaId: original.body.id,
+            afterParagraph: 0,
+            alt: "Blue and red stripes",
+            caption: "Colors",
+          },
+        ],
+      })
+      .expect(200);
+    const slotId = saved.body.images[0].id;
+    const cropUri = `${uri}/${slotId}/crop`;
+    const payload = {
+      expectedRevision: 1,
+      sourceMediaId: original.body.id,
+      x: 4,
+      y: 0,
+      width: 4,
+      height: 6,
+    };
+    await stranger.post(cropUri).send(payload).expect(404);
+    const bad = await owner
+      .post(cropUri)
+      .send({ ...payload, x: 5 })
+      .expect(400);
+    expect(bad.body.code).toBe("content_image_crop_invalid");
+    expect((await owner.get(uri)).body).toEqual(saved.body);
+    const cropped = await owner.post(cropUri).send(payload).expect(200);
+    expect(contentImagesStateSchema.safeParse(cropped.body).success).toBe(true);
+    expect(cropped.body.revision).toBe(2);
+    expect(cropped.body.images[0]).toMatchObject({
+      id: slotId,
+      afterParagraph: 0,
+      alt: "Blue and red stripes",
+      caption: "Colors",
+      needsReview: true,
+    });
+    const newId = cropped.body.images[0].mediaId;
+    expect(newId).not.toBe(original.body.id);
+    const pixels = await sharp(await readFile(path.join(mediaDir, `${newId}.jpg`)))
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(pixels.info.width).toBe(4);
+    expect(pixels.info.height).toBe(6);
+    expect(pixels.data[2]).toBeGreaterThan(pixels.data[0] ?? 0);
+    await owner.get(`/api/media/${original.body.id}/file`).expect(200);
+    expect((await owner.post(cropUri).send(payload).expect(409)).body.code).toBe(
+      "content_images_changed",
+    );
+    expect(
+      (await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(409)).body.code,
+    ).toBe("content_images_need_review");
+    await owner
+      .put(uri)
+      .send({
+        expectedRevision: 2,
+        reviewGeneratedImages: true,
+        images: [
+          { mediaId: newId, afterParagraph: 0, alt: "Cropped blue panel", caption: "Colors" },
+        ],
+      })
+      .expect(200);
+    await owner.post(`/api/content/${item.body.id}/approve`).send({}).expect(200);
+    expect(
+      (
+        await owner
+          .post(cropUri)
+          .send({ ...payload, expectedRevision: 3, sourceMediaId: newId })
+          .expect(409)
+      ).body.code,
+    ).toBe("content_media_pinned");
+  });
+
   it("refuses stale, foreign, or pinned slots before making a paid image call", async () => {
     const owner = await agent();
     const stranger = await agent();

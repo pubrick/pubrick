@@ -41,6 +41,17 @@ export const contentImageRegenerateSchema = z.strictObject({
 });
 export type ContentImageRegenerate = z.infer<typeof contentImageRegenerateSchema>;
 
+/** Pixel coordinates refer to the server-normalized original, not the CSS preview. */
+export const contentImageCropSchema = z.strictObject({
+  expectedRevision: z.number().int().nonnegative(),
+  sourceMediaId: z.uuid(),
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().positive().max(2400),
+  height: z.number().int().positive().max(2400),
+});
+export type ContentImageCrop = z.infer<typeof contentImageCropSchema>;
+
 export const contentImageDtoSchema = contentImageInputSchema.extend({
   id: z.uuid(),
   caption: z.string().nullable(),

@@ -1,9 +1,18 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { ContentImageRegenerate, ContentImagesReplace } from "@pubrick/shared";
+import type {
+  ContentImageCrop,
+  ContentImageRegenerate,
+  ContentImagesReplace,
+} from "@pubrick/shared";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import sharp from "sharp";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { IMAGE_MAX_UPLOAD_BYTES, mediaPath } from "../media/media.repository";
 import { MediaImageService } from "../media/media-image.service";
 
 const COLUMNS = {
@@ -195,6 +204,122 @@ export class ContentImagesRepository {
         .orderBy(asc(schema.contentImageSlots.afterParagraph), asc(schema.contentImageSlots.id));
       return { images, revision };
     });
+  }
+
+  /** Crop the server-normalized original and replace a slot in one guarded write. */
+  async crop(orgId: string, contentItemId: string, slotId: string, data: ContentImageCrop) {
+    let createdPath: string | null = null;
+    try {
+      return await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (!organization) throw notFound("content_not_found", "Content item not found");
+        const [item] = await tx
+          .select({
+            brandId: schema.contentItems.brandId,
+            status: schema.contentItems.status,
+            revision: schema.contentItems.imagesRevision,
+          })
+          .from(schema.contentItems)
+          .where(
+            and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)),
+          )
+          .limit(1)
+          .for("update");
+        if (!item) throw notFound("content_not_found", "Content item not found");
+        this.assertEditable(item.status);
+        if ((item.revision ?? 0) !== data.expectedRevision) this.changed();
+        const [slot] = await tx
+          .select({ mediaId: schema.contentImageSlots.mediaId })
+          .from(schema.contentImageSlots)
+          .where(
+            and(
+              eq(schema.contentImageSlots.orgId, orgId),
+              eq(schema.contentImageSlots.contentItemId, contentItemId),
+              eq(schema.contentImageSlots.id, slotId),
+            ),
+          )
+          .limit(1);
+        if (!slot) throw notFound("content_image_not_found", "Image slot not found");
+        if (slot.mediaId !== data.sourceMediaId) this.changed();
+        const [source] = await tx
+          .select({ width: schema.mediaAssets.width, height: schema.mediaAssets.height })
+          .from(schema.mediaAssets)
+          .where(
+            and(
+              eq(schema.mediaAssets.orgId, orgId),
+              eq(schema.mediaAssets.brandId, item.brandId),
+              eq(schema.mediaAssets.id, slot.mediaId),
+              eq(schema.mediaAssets.kind, "image"),
+            ),
+          )
+          .limit(1)
+          .for("key share");
+        if (!source?.width || !source.height) throw notFound("media_not_found", "Image not found");
+        if (data.x + data.width > source.width || data.y + data.height > source.height) {
+          throw badRequest("content_image_crop_invalid", "Crop must fit inside the source image");
+        }
+        let output: Buffer;
+        try {
+          const original = await readFile(mediaPath(slot.mediaId));
+          output = await sharp(original, { limitInputPixels: 40_000_000, failOn: "error" })
+            .extract({ left: data.x, top: data.y, width: data.width, height: data.height })
+            .jpeg({ quality: 85, mozjpeg: true })
+            .toBuffer();
+        } catch {
+          throw conflict("media_unavailable", "The source image is unavailable for cropping");
+        }
+        if (output.length > IMAGE_MAX_UPLOAD_BYTES) {
+          throw badRequest("content_image_crop_invalid", "The cropped image is too large");
+        }
+        const id = randomUUID();
+        const target = mediaPath(id);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, output, { flag: "wx", mode: 0o600 });
+        createdPath = target;
+        await tx.insert(schema.mediaAssets).values({
+          id,
+          orgId,
+          brandId: item.brandId,
+          name: "Cropped article image",
+          mimeType: "image/jpeg",
+          width: data.width,
+          height: data.height,
+          byteSize: output.length,
+        });
+        await tx
+          .update(schema.contentImageSlots)
+          .set({ mediaId: id, needsReview: true })
+          .where(
+            and(eq(schema.contentImageSlots.orgId, orgId), eq(schema.contentImageSlots.id, slotId)),
+          );
+        const revision = data.expectedRevision + 1;
+        await tx
+          .update(schema.contentItems)
+          .set({ imagesRevision: revision })
+          .where(
+            and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)),
+          );
+        const images = await tx
+          .select(COLUMNS)
+          .from(schema.contentImageSlots)
+          .where(
+            and(
+              eq(schema.contentImageSlots.orgId, orgId),
+              eq(schema.contentImageSlots.contentItemId, contentItemId),
+            ),
+          )
+          .orderBy(asc(schema.contentImageSlots.afterParagraph), asc(schema.contentImageSlots.id));
+        return { images, revision };
+      });
+    } catch (error) {
+      if (createdPath) await unlink(createdPath).catch(() => undefined);
+      throw error;
+    }
   }
 
   /**
