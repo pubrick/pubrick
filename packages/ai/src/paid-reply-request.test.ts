@@ -127,6 +127,20 @@ describe("paid reply request preflight", () => {
     );
   });
 
+  it("keeps a reservation for an ambiguous upstream failure", async () => {
+    const request = buildPaidReplyRequest({ title: "Post", comments: ["Reply"] });
+    const sink = vi.fn(async () => {});
+    const fetcher = vi.fn(async () => new Response("upstream failed", { status: 503 }));
+    expect(await generatePaidReply(request, "test-key", sink, fetcher)).toEqual({
+      ok: false,
+      failure: "unknown",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "unknown", costUsd: null }),
+    );
+  });
+
   it("ceil-reserves the full input allowance and output cap at the dated rate", () => {
     const before = pricePaidReplyReservation(new Date("2026-12-31T23:59:59Z"), 709);
     const after = pricePaidReplyReservation(new Date("2027-01-01T00:00:00Z"), 709);

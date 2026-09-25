@@ -709,7 +709,13 @@ export class AnalyticsRepository {
     if (attempt?.status === "queued" || attempt?.status === "dispatching")
       return { status: "in_progress" as const };
     if (attempt?.status === "unknown") return { status: "unknown" as const };
-    if (attempt?.status === "failed") return { status: "failed" as const };
+    if (
+      attempt?.status === "failed" ||
+      attempt?.status === "canceled" ||
+      attempt?.status === "stale" ||
+      attempt?.status === "legacy_consumed"
+    )
+      return { status: "failed" as const };
     const [key] = await db
       .select({ orgId: schema.aiCredentials.orgId })
       .from(schema.aiCredentials)

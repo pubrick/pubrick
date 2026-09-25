@@ -203,7 +203,9 @@ export async function generatePaidReply(
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) {
-      outcome = "refused";
+      // An upstream timeout, throttle, or 5xx can occur after inference. Only
+      // clear pre-inference request/auth refusals release the reservation.
+      if ([400, 401, 403, 404].includes(response.status)) outcome = "refused";
     } else {
       // A successful HTTP response may already be billable even if its body is bad.
       const raw = await response.text();

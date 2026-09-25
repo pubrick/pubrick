@@ -188,10 +188,10 @@ export class QueueService {
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
 
-    // Explicit rollout instant prevents accumulated pre-release handoffs from
-    // becoming paid calls when the first worker with this code starts.
-    if (this.paidReplies && names === DEFAULT_QUEUE_NAMES && env.PAID_REPLY_DISPATCH_AFTER) {
-      const start = new Date(env.PAID_REPLY_DISPATCH_AFTER);
+    // Manual requests always need a consumer and recovery sweep. The optional
+    // rollout instant gates only automatic collection handoffs.
+    if (this.paidReplies && names === DEFAULT_QUEUE_NAMES) {
+      const start = env.PAID_REPLY_DISPATCH_AFTER ? new Date(env.PAID_REPLY_DISPATCH_AFTER) : null;
       await boss.createQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
       await boss.updateQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
       await boss.work<PaidReplyAnalysisJob>(
@@ -204,7 +204,7 @@ export class QueueService {
       await boss.createQueue("paid-reply-reconcile");
       await boss.schedule("paid-reply-reconcile", "*/5 * * * *");
       await boss.work("paid-reply-reconcile", { batchSize: 1 }, async () => {
-        await this.paidReplies?.reconcile(boss, start);
+        if (start) await this.paidReplies?.reconcile(boss, start);
         await this.paidReplies?.sweep(boss);
       });
     }

@@ -8,6 +8,7 @@ import {
   GENERATE_WORK_OPTIONS,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  PAID_REPLY_ANALYSIS_QUEUE,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -55,6 +56,45 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("consumes manual paid analysis even without automatic rollout", async () => {
+    const boss = bossStub();
+    const { publish, generate } = serviceStub();
+    const paid = { handle: vi.fn(), reconcile: vi.fn(), sweep: vi.fn() };
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      paid as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(PAID_REPLY_ANALYSIS_QUEUE, expect.any(Object));
+    const consume = boss.work.mock.calls.find(
+      (call) => call[0] === PAID_REPLY_ANALYSIS_QUEUE,
+    )?.[2] as
+      | ((jobs: { data: { orgId: string; attemptId: string } }[]) => Promise<void>)
+      | undefined;
+    expect(consume).toBeDefined();
+    await consume?.([{ data: { orgId: "org", attemptId: "attempt" } }]);
+    expect(paid.handle).toHaveBeenCalledWith({ orgId: "org", attemptId: "attempt" });
+    const recover = boss.work.mock.calls.find((call) => call[0] === "paid-reply-reconcile")?.[2] as
+      | (() => Promise<void>)
+      | undefined;
+    await recover?.();
+    expect(paid.sweep).toHaveBeenCalledOnce();
+  });
+
   it("registers advisory reviews only for production queues and passes the expiry signal", async () => {
     const boss = bossStub();
     const claimReview = { handle: vi.fn(), exhausted: vi.fn(), sweepAbandoned: vi.fn() };

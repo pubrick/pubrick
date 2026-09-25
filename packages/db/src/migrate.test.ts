@@ -408,6 +408,9 @@ const NON_ENUM_CHECKS = [
   "paid_reply_analysis_handoffs_target_kind_check",
   "paid_reply_analysis_handoffs_status_check",
   "paid_reply_analysis_handoffs_revisions_check",
+  // 0094 and 0096 add a revision guard and a one-row backfill marker.
+  "content_items_body_revision_check",
+  "paid_reply_backfill_state_singleton_check",
   "paid_reply_analysis_handoffs_reason_check",
   // 0093: role-template heads are tenant/role-bound and activation starts off.
   // The focused migration test below writes rows to exercise these guards.
@@ -646,6 +649,10 @@ function expectNoRowRewritten(
           // an orphaned receipt may already have lost its item link.
           if (table === "content_items" && key === "is_safe_to_delete") {
             return afterRow[key] !== false;
+          }
+          // 0094 adds a metadata-only constant default for optimistic body edits.
+          if (table === "content_items" && key === "body_revision") {
+            return afterRow[key] !== 0;
           }
           // 0077 keeps existing channel text byte-for-byte while giving old
           // adaptations and their versions an explicitly empty tag list.
@@ -2264,7 +2271,12 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expect(rows.rows).toEqual(
-        seeded.map((row) => ({ ...row, outcome: null, analysis_admission_id: null })),
+        seeded.map((row) => ({
+          ...row,
+          outcome: null,
+          analysis_admission_id: null,
+          brand_id: null,
+        })),
       );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
