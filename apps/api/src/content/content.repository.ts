@@ -43,6 +43,7 @@ import {
   type RefineVerb,
   type RunInput,
   replaceHashtags,
+  stripHashtagSuffix,
   toLedgerCostUsd,
   withHashtags,
 } from "@pubrick/shared";
@@ -3108,7 +3109,13 @@ export class ContentRepository {
           "The source or channel text changed; ask for a new adaptation",
         );
       }
-      const proposedBody = withHashtags(proposal.proposal, adaptation.hashtags);
+      // The model sees the previously composed channel body. If it carries
+      // forward that exact managed final block, remove only that block before
+      // composing again. Any different authored tag paragraph stays intact.
+      const proposedBody = withHashtags(
+        stripHashtagSuffix(proposal.proposal, adaptation.hashtags),
+        adaptation.hashtags,
+      );
       const [channel] = await tx
         .select({ platform: schema.channels.platform })
         .from(schema.channels)

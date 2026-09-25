@@ -1120,6 +1120,69 @@ describe("per-channel override (Step 6)", () => {
     expect(JSON.parse(saved?.body ?? "{}")).toEqual({ cta: "Ask a question", expectedCta: null });
   });
 
+  it("keeps a newly materialized override in the editor after the master changes", async () => {
+    let adaptation = makeAdaptation();
+    const served = { current: makeItem({ body: "Original master", adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method, init) => {
+      if (method === "PATCH" && path === "/api/content/c1/adaptations/a1") {
+        const payload = JSON.parse(String(init?.body)) as { body?: string; cta?: string };
+        adaptation = {
+          ...adaptation,
+          body: adaptation.body ?? "Original master\n\n#news",
+          hashtags: ["news"],
+          cta: payload.cta ?? adaptation.cta,
+        };
+        served.current = { ...served.current, adaptations: [adaptation] };
+        return adaptation;
+      }
+      if (method === "PATCH" && path === "/api/content/c1") {
+        served.current = {
+          ...served.current,
+          body: (JSON.parse(String(init?.body)) as { body: string }).body,
+        };
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.hashtagsLabel }), {
+      target: { value: "news" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const override = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    await waitFor(() => expect(override).toHaveValue("Original master"));
+
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.bodyLabel }), {
+      target: { value: "Revised master" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    const preview = screen.getByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    await waitFor(() =>
+      expect(
+        within(preview).getByText(
+          (_, element) =>
+            element?.tagName === "P" && element.textContent === "Original master\n\n#news",
+        ),
+      ).toBeVisible(),
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.ctaLabel }), {
+      target: { value: "Ask a question" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const channelPatches = calls.filter(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(channelPatches[1]?.body ?? "{}")).toEqual({
+      cta: "Ask a question",
+      expectedCta: null,
+    });
+  });
+
   it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
     const served = { current: makeItem({ adaptations: [makeAdaptation({ body: "Saved text" })] }) };
     installBaseHandlers(served, []);

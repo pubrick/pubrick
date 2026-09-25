@@ -8276,7 +8276,7 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
       readaptOutcome = {
         ok: true,
-        text: "A revised channel post.",
+        text: "A revised channel post.\n\n#one #two",
         reason: "Shorter",
         usage: [],
       };
@@ -8297,6 +8297,26 @@ describe.skipIf(!url)("content e2e", () => {
         cta: "Ask a question",
         origin: "ai",
       });
+    });
+
+    it("keeps a different authored tag paragraph when re-adaptation retains it", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["one", "two"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "A revised channel post.\n\n#organic",
+        reason: "Keep the author's tag",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const accepted = await agent.post(`${path}/${staged.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0].body).toBe(
+        "A revised channel post.\n\n#organic\n\n#one #two",
+      );
     });
 
     it("refuses a re-adaptation whose managed tags exceed the channel limit", async () => {

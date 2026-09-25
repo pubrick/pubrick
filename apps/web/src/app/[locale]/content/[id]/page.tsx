@@ -688,7 +688,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       saved !== undefined &&
       value === bodyBaselines.current[adaptationId];
     try {
-      await api(`/api/content/${id}/adaptations/${adaptationId}`, {
+      const persisted = await api<Adaptation>(`/api/content/${id}/adaptations/${adaptationId}`, {
         method: "PATCH",
         body: JSON.stringify({
           ...(canSaveMetadataWithoutReplacingBody
@@ -706,10 +706,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         }),
       });
       await reload();
-      setTagDrafts((current) => ({ ...current, [adaptationId]: hashtags.join(", ") }));
-      if (tagsChanged) tagBaselines.current[adaptationId] = hashtags;
-      if (ctaChanged) ctaBaselines.current[adaptationId] = cta;
-      bodyBaselines.current[adaptationId] = value;
+      const persistedText =
+        persisted.body === null ? "" : stripHashtagSuffix(persisted.body, persisted.hashtags);
+      setOverrideDrafts((current) => ({ ...current, [adaptationId]: persistedText }));
+      setTagDrafts((current) => ({
+        ...current,
+        [adaptationId]: persisted.hashtags.join(", "),
+      }));
+      setCtaDrafts((current) => ({ ...current, [adaptationId]: persisted.cta ?? "" }));
+      bodyBaselines.current[adaptationId] = persistedText;
+      tagBaselines.current[adaptationId] = persisted.hashtags;
+      ctaBaselines.current[adaptationId] = persisted.cta;
     } catch (err) {
       handleError(err);
     }

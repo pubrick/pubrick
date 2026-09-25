@@ -13,6 +13,9 @@ from the locked body before recomposition. A generated adaptation is composed
 before its body and AI version are saved. A call to action is an
 editorial suggestion only: it is stored and versioned, but never sent unless
 an editor writes it into the body. The editor states this next to the field.
+When re-adapting an existing channel body, the model may carry forward its
+exact managed final tag block. Accept removes that exact block before
+reattaching current structured tags; a different authored tag paragraph stays.
 
 | Consumer | Text used |
 | --- | --- |
