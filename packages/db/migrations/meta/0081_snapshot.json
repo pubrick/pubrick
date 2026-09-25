@@ -1,5 +1,5 @@
 {
-  "id": "fc5d6ebd-5219-4f17-9d0f-f2f2e7fc95e1",
+  "id": "db64ac1b-80e1-48bc-a6ed-1ce2f64eb3e2",
   "prevId": "49e3ce21-c42e-4fd2-9450-f68377baa776",
   "version": "7",
   "dialect": "postgresql",
@@ -7977,7 +7977,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"news_relevance_batches\".\"status\" IN ('queued', 'running')",
+          "where": "\"news_relevance_batches\".\"status\" IN ('queued', 'running', 'halting')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -8024,14 +8024,16 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "news_relevance_batches_brand_id_brands_id_fk": {
-          "name": "news_relevance_batches_brand_id_brands_id_fk",
+        "news_relevance_batches_brand_org_fk": {
+          "name": "news_relevance_batches_brand_org_fk",
           "tableFrom": "news_relevance_batches",
           "tableTo": "brands",
           "columnsFrom": [
+            "org_id",
             "brand_id"
           ],
           "columnsTo": [
+            "org_id",
             "id"
           ],
           "onDelete": "cascade",
@@ -8056,7 +8058,7 @@
         },
         "news_relevance_batches_status_check": {
           "name": "news_relevance_batches_status_check",
-          "value": "\"news_relevance_batches\".\"status\" in ('queued', 'running', 'completed', 'partial', 'halted')"
+          "value": "\"news_relevance_batches\".\"status\" in ('queued', 'running', 'halting', 'completed', 'partial', 'halted')"
         },
         "news_relevance_batches_error_code_check": {
           "name": "news_relevance_batches_error_code_check",
