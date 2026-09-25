@@ -31,6 +31,14 @@ export {
   KNOWLEDGE_EMBEDDING_MODEL,
   type KnowledgeEmbeddingTask,
 } from "./knowledge-embedding.js";
+export {
+  buildPaidReplyRequest,
+  countPaidReplyTokens,
+  PAID_REPLY_MAX_OUTPUT_TOKENS,
+  PAID_REPLY_MAX_REQUEST_BYTES,
+  PAID_REPLY_MODEL_ID,
+  type PaidReplyRequest,
+} from "./paid-reply-request.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,
