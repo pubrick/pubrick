@@ -61,11 +61,13 @@ export * from "./dto/notifications.js";
 export {
   PROMPT_ROLES,
   type PromptDecisionHistoryDto,
+  type PromptOutcomeComparisonDto,
   type PromptRevisionCreate,
   type PromptRevisionDto,
   type PromptRevisionUsageDto,
   type PromptRole,
   promptDecisionHistoryDtoSchema,
+  promptOutcomeComparisonDtoSchema,
   promptRevisionCreateSchema,
   promptRevisionDtoSchema,
   promptRevisionUsageDtoSchema,

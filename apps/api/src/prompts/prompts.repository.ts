@@ -4,13 +4,14 @@ import {
   CONTENT_STATUSES,
   type ContentStatus,
   type PromptDecisionHistoryDto,
+  type PromptOutcomeComparisonDto,
   type PromptRevisionCreate,
   type PromptRevisionUsageDto,
   type PromptRole,
   RUN_STATUSES,
   type RunStatus,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gte, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 
 const COLUMNS = {
@@ -58,6 +59,143 @@ export function pinnedRunGroups(
 
 @Injectable()
 export class PromptsRepository {
+  /** Compare observations for the same brand and run-start cohort, newest revision first. */
+  async outcomes(
+    orgId: string,
+    brandId: string,
+    role: PromptRole,
+    days: 7 | 30 | 90,
+  ): Promise<PromptOutcomeComparisonDto> {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw new NotFoundException("Brand not found");
+
+    const revisions = await db
+      .select({ id: schema.promptRevisions.id, version: schema.promptRevisions.version })
+      .from(schema.promptRevisions)
+      .where(and(eq(schema.promptRevisions.orgId, orgId), eq(schema.promptRevisions.role, role)))
+      .orderBy(desc(schema.promptRevisions.version))
+      .limit(100);
+    const rows: PromptOutcomeComparisonDto["rows"] = revisions.map((revision) => ({
+      revisionId: revision.id,
+      version: revision.version,
+      runCount: 0,
+      succeededRuns: 0,
+      publishedRuns: 0,
+      currentItemStatuses: Object.fromEntries(CONTENT_STATUSES.map((status) => [status, 0])),
+      withoutCurrentItem: 0,
+      reviewActs: { approved: 0, rejected: 0 },
+    }));
+    if (revisions.length === 0) return { brandId, role, days, rows };
+
+    const byRevision = new Map(rows.map((row) => [row.revisionId, row]));
+    const revisionIds = revisions.map((revision) => revision.id);
+    const runRevisionId = sql<string>`${schema.pipelineRuns.guidanceSnapshot} -> ${role} ->> 'revisionId'`;
+    const runCohort = and(
+      eq(schema.pipelineRuns.orgId, orgId),
+      eq(schema.pipelineRuns.brandId, brandId),
+      // pipeline_runs.created_at is a naive timestamp. Compare in the DB
+      // session's clock, as the existing revision usage endpoint does.
+      sql`${schema.pipelineRuns.createdAt} >= now()::timestamp - (${days} * interval '1 day')`,
+      inArray(runRevisionId, revisionIds),
+    );
+    const hasReceipt = exists(
+      db
+        .select({ id: schema.publications.id })
+        .from(schema.adaptations)
+        .innerJoin(
+          schema.publications,
+          and(
+            eq(schema.publications.adaptationId, schema.adaptations.id),
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.status, "published"),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, schema.contentItems.id),
+          ),
+        ),
+    );
+    const groups = await db
+      .select({
+        revisionId: runRevisionId,
+        runStatus: schema.pipelineRuns.status,
+        itemStatus: schema.contentItems.status,
+        hasReceipt,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.pipelineRuns)
+      .leftJoin(
+        schema.contentItems,
+        and(
+          eq(schema.contentItems.id, schema.pipelineRuns.contentItemId),
+          eq(schema.contentItems.orgId, orgId),
+          eq(schema.contentItems.brandId, brandId),
+        ),
+      )
+      .where(runCohort)
+      .groupBy(
+        schema.pipelineRuns.guidanceSnapshot,
+        schema.pipelineRuns.status,
+        schema.contentItems.id,
+        schema.contentItems.status,
+      );
+    for (const group of groups) {
+      const row = byRevision.get(group.revisionId);
+      if (!row) continue;
+      row.runCount += group.count;
+      if (group.runStatus === "succeeded") row.succeededRuns += group.count;
+      if (group.itemStatus) {
+        row.currentItemStatuses[group.itemStatus] =
+          (row.currentItemStatuses[group.itemStatus] ?? 0) + group.count;
+      } else row.withoutCurrentItem += group.count;
+      if (group.hasReceipt) row.publishedRuns += group.count;
+    }
+
+    // The link table is append-only and unique per decision/role. A decision
+    // keeps its verified revision even if the live draft is later deleted.
+    const decisions = await db
+      .select({
+        revisionId: schema.promptDecisionRevisions.revisionId,
+        verdict: schema.promptDecisions.verdict,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.promptDecisionRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .innerJoin(
+        schema.pipelineRuns,
+        and(
+          eq(schema.pipelineRuns.id, schema.promptDecisions.runId),
+          eq(schema.pipelineRuns.orgId, orgId),
+        ),
+      )
+      .where(
+        and(
+          runCohort,
+          eq(schema.promptDecisionRevisions.orgId, orgId),
+          eq(schema.promptDecisionRevisions.role, role),
+          sql`${schema.promptDecisionRevisions.revisionId}::text = ${runRevisionId}`,
+        ),
+      )
+      .groupBy(schema.promptDecisionRevisions.revisionId, schema.promptDecisions.verdict);
+    for (const decision of decisions) {
+      const row = byRevision.get(decision.revisionId);
+      if (row) row.reviewActs[decision.verdict] += decision.count;
+    }
+    return { brandId, role, days, rows };
+  }
+
   async decisions(
     orgId: string,
     role: PromptRole,

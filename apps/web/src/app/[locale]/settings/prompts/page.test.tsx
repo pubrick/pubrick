@@ -19,6 +19,84 @@ describe("generation guidance page", () => {
     vi.mocked(api).mockReset();
   });
 
+  it("compares pinned outcomes for one selected brand and refreshes on brand and role changes", async () => {
+    const firstBrand = "e335cba1-c28a-42e2-a193-151d18218f85";
+    const secondBrand = "7284f5b1-3077-4843-a057-dc3a998d5aea";
+    const revisionId = "9e3abb7b-95b2-4d6f-b0df-e0801685d5ba";
+    const calls: string[] = [];
+    vi.mocked(api).mockImplementation(async (path) => {
+      calls.push(path);
+      if (path === "/api/brands")
+        return [
+          { id: firstBrand, name: "First brand" },
+          { id: secondBrand, name: "Second brand" },
+        ];
+      if (path.endsWith("/outcomes?days=30"))
+        return {
+          brandId: path.includes(secondBrand) ? secondBrand : firstBrand,
+          role: path.includes("/writer/") ? "writer" : "researcher",
+          days: 30,
+          rows: [
+            {
+              revisionId,
+              version: 1,
+              runCount: path.includes(secondBrand) ? 3 : 2,
+              succeededRuns: 1,
+              publishedRuns: 1,
+              reviewActs: { approved: 1, rejected: 0 },
+              currentItemStatuses: { published: 1 },
+              withoutCurrentItem: 1,
+            },
+          ],
+        };
+      return [];
+    });
+    render(<PromptsPage />);
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.getByText(en.Prompts.outcomesCaveat)).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Version 1.*2.*1.*1.*1/ })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Prompts.outcomesBrand), secondBrand);
+    await waitFor(() =>
+      expect(calls).toContain(`/api/prompts/brands/${secondBrand}/researcher/outcomes?days=30`),
+    );
+    expect(await screen.findByRole("row", { name: /Version 1.*3.*1.*1.*1/ })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(en.Prompts.role), "writer");
+    await waitFor(() =>
+      expect(calls).toContain(`/api/prompts/brands/${secondBrand}/writer/outcomes?days=30`),
+    );
+  });
+
+  it("teaches the next action when no brand is available for outcome comparison", async () => {
+    vi.mocked(api).mockResolvedValue([]);
+    render(<PromptsPage />);
+    expect(await screen.findByText(en.Prompts.outcomesNoBrands)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.Prompts.outcomesAddBrand })).toHaveAttribute(
+      "href",
+      "/en/brands",
+    );
+  });
+
+  it("reloads the comparison after saving a new guidance revision", async () => {
+    const brandId = "e335cba1-c28a-42e2-a193-151d18218f85";
+    const outcomePath = `/api/prompts/brands/${brandId}/researcher/outcomes?days=30`;
+    let outcomeRequests = 0;
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === "/api/brands") return [{ id: brandId, name: "Brand" }];
+      if (path === outcomePath) {
+        outcomeRequests += 1;
+        return { brandId, role: "researcher", days: 30, rows: [] };
+      }
+      return [];
+    });
+    render(<PromptsPage />);
+    await waitFor(() => expect(outcomeRequests).toBe(1));
+    const save = screen.getByRole("button", { name: en.Prompts.save });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.setup().click(save);
+    await waitFor(() => expect(outcomeRequests).toBe(2));
+  });
+
   it("saves the selected role's guidance with the API schema payload", async () => {
     const calls: { path: string; method: string; body: unknown }[] = [];
     vi.mocked(api).mockImplementation(async (path, init) => {

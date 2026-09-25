@@ -182,4 +182,198 @@ describe.skipIf(!url)("versioned prompt guidance e2e", () => {
       await zoned.pool.end();
     }
   });
+
+  it("compares brand-scoped run cohorts without multiplying receipts or review acts", async () => {
+    const owner = await orgAgent();
+    const foreign = await orgAgent();
+    const firstBrand = (await owner.agent.post("/api/brands").send({ name: "First" }).expect(201))
+      .body.id as string;
+    const secondBrand = (await owner.agent.post("/api/brands").send({ name: "Second" }).expect(201))
+      .body.id as string;
+    const revision1 = (
+      await owner.agent.post("/api/prompts/writer/revisions").send({ guidance: "One" }).expect(201)
+    ).body.id as string;
+    const revision2 = (
+      await owner.agent.post("/api/prompts/writer/revisions").send({ guidance: "Two" }).expect(201)
+    ).body.id as string;
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId: owner.orgId, brandId: firstBrand, body: "Observed", status: "published" })
+      .returning({ id: schema.contentItems.id });
+    const input = {
+      kind: "source" as const,
+      text: null,
+      sourceUrl: null,
+      material: "Source",
+      channelIds: [],
+    };
+    const [observed] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: firstBrand,
+        input,
+        status: "succeeded",
+        contentItemId: item?.id,
+        guidanceSnapshot: { writer: { revisionId: revision1, version: 1, text: "One" } },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    await db.insert(schema.pipelineRuns).values([
+      {
+        orgId: owner.orgId,
+        brandId: firstBrand,
+        input,
+        status: "failed",
+        guidanceSnapshot: { writer: { revisionId: revision2, version: 2, text: "Two" } },
+      },
+      {
+        orgId: owner.orgId,
+        brandId: secondBrand,
+        input,
+        status: "succeeded",
+        guidanceSnapshot: { writer: { revisionId: revision1, version: 1, text: "One" } },
+      },
+      {
+        orgId: owner.orgId,
+        brandId: firstBrand,
+        input,
+        status: "succeeded",
+        createdAt: sql`now()::timestamp - interval '31 days'`,
+        guidanceSnapshot: { writer: { revisionId: revision1, version: 1, text: "One" } },
+      },
+    ]);
+    const channels = await db
+      .insert(schema.channels)
+      .values(
+        [1, 2].map((n) => ({
+          orgId: owner.orgId,
+          brandId: firstBrand,
+          platform: "vc_ru" as const,
+          name: `Channel ${n}`,
+        })),
+      )
+      .returning({ id: schema.channels.id });
+    const adaptations = await db
+      .insert(schema.adaptations)
+      .values(
+        channels.map((channel) => ({
+          orgId: owner.orgId,
+          contentItemId: item?.id as string,
+          channelId: channel.id,
+          status: "published" as const,
+        })),
+      )
+      .returning({ id: schema.adaptations.id });
+    await db.insert(schema.publications).values(
+      adaptations.map((adaptation, index) => ({
+        orgId: owner.orgId,
+        adaptationId: adaptation.id,
+        channelId: channels[index]?.id,
+        status: "published" as const,
+      })),
+    );
+    const [decision] = await db
+      .insert(schema.promptDecisions)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item?.id as string,
+        ordinal: 1,
+        runId: observed?.id,
+        verdict: "approved",
+      })
+      .returning({ id: schema.promptDecisions.id });
+    await db.insert(schema.promptDecisionRevisions).values({
+      orgId: owner.orgId,
+      decisionId: decision?.id as string,
+      role: "writer",
+      revisionId: revision1,
+      version: 1,
+      decidedAt: new Date(),
+    });
+    const path = `/api/prompts/brands/${firstBrand}/writer/outcomes?days=30`;
+    const result = await owner.agent.get(path).expect(200);
+    expect(result.body.rows).toMatchObject([
+      {
+        revisionId: revision2,
+        version: 2,
+        runCount: 1,
+        succeededRuns: 0,
+        publishedRuns: 0,
+        withoutCurrentItem: 1,
+        reviewActs: { approved: 0, rejected: 0 },
+      },
+      {
+        revisionId: revision1,
+        version: 1,
+        runCount: 1,
+        succeededRuns: 1,
+        publishedRuns: 1,
+        withoutCurrentItem: 0,
+        currentItemStatuses: { published: 1 },
+        reviewActs: { approved: 1, rejected: 0 },
+      },
+    ]);
+    const [removedItem] = await db
+      .insert(schema.contentItems)
+      .values({ orgId: owner.orgId, brandId: firstBrand, body: "Removed draft" })
+      .returning({ id: schema.contentItems.id });
+    const [removedRun] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: firstBrand,
+        input,
+        status: "succeeded",
+        contentItemId: removedItem?.id,
+        guidanceSnapshot: { writer: { revisionId: revision2, version: 2, text: "Two" } },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const [removedDecision] = await db
+      .insert(schema.promptDecisions)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: removedItem?.id as string,
+        runId: removedRun?.id,
+        ordinal: 1,
+        verdict: "rejected",
+      })
+      .returning({ id: schema.promptDecisions.id });
+    await db.insert(schema.promptDecisionRevisions).values({
+      orgId: owner.orgId,
+      decisionId: removedDecision?.id as string,
+      role: "writer",
+      revisionId: revision2,
+      version: 2,
+      decidedAt: new Date(),
+    });
+    await db.delete(schema.contentItems).where(sql`${schema.contentItems.id} = ${removedItem?.id}`);
+    expect((await owner.agent.get(path).expect(200)).body.rows[0]).toMatchObject({
+      revisionId: revision2,
+      runCount: 2,
+      succeededRuns: 1,
+      withoutCurrentItem: 2,
+      reviewActs: { approved: 0, rejected: 1 },
+    });
+    await foreign.agent.get(path).expect(404);
+    const otherBrand = await owner.agent
+      .get(`/api/prompts/brands/${secondBrand}/writer/outcomes?days=30`)
+      .expect(200);
+    expect(otherBrand.body.rows).toMatchObject([
+      { revisionId: revision2, runCount: 0, publishedRuns: 0, reviewActs: { approved: 0 } },
+      { revisionId: revision1, runCount: 1, publishedRuns: 0, reviewActs: { approved: 0 } },
+    ]);
+    expect(
+      (
+        await owner.agent
+          .get(`/api/prompts/brands/${firstBrand}/editor/outcomes?days=30`)
+          .expect(200)
+      ).body.rows,
+    ).toEqual([]);
+    await owner.agent.get(`/api/prompts/brands/${firstBrand}/writer/outcomes?days=5`).expect(400);
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(sql`${schema.member.organizationId} = ${owner.orgId}`);
+    await owner.agent.get(path).expect(403);
+  });
 });

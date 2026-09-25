@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import {
   analyticsDaysSchema,
+  type PromptOutcomeComparisonDto,
   type PromptRevisionCreate,
   type PromptRole,
   promptRevisionCreateSchema,
@@ -27,6 +28,17 @@ import { PromptsRepository } from "./prompts.repository";
 @BrandScope({ kind: "org", roles: "manager" })
 export class PromptsController {
   constructor(private readonly prompts: PromptsRepository) {}
+
+  @Get("brands/:brandId/:role/outcomes")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  outcomes(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("role", new ZodValidationPipe(promptRoleSchema)) role: PromptRole,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+  ): Promise<PromptOutcomeComparisonDto> {
+    return this.prompts.outcomes(orgId, brandId, role, days);
+  }
 
   @Get()
   list(@OrgId() orgId: string) {
