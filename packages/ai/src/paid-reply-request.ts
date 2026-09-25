@@ -9,6 +9,7 @@ export const PAID_REPLY_MODEL_ID = "gemini-3.7-flash";
 export const PAID_REPLY_MAX_OUTPUT_TOKENS = 1024;
 export const PAID_REPLY_MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_COUNTED_INPUT_TOKENS = 262_144;
+const MAX_INPUT_ALLOWANCE = Math.ceil(MAX_COUNTED_INPUT_TOKENS * 1.1) + 256;
 const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const responseSchema = {
@@ -56,6 +57,34 @@ export type PaidReplyRequest = {
   digest: string;
   sampleSize: number;
 };
+
+/** Identity and ceiling reservation for the exact dated model rate. */
+export function pricePaidReplyReservation(
+  at: Date,
+  inputAllowance: number,
+): { priceWindow: string; reservedMaxUsd: string } | null {
+  if (
+    !Number.isInteger(inputAllowance) ||
+    inputAllowance < 1 ||
+    inputAllowance > MAX_INPUT_ALLOWANCE
+  )
+    return null;
+  const rate = priceFor("google", PAID_REPLY_MODEL_ID, at);
+  if (!rate) return null;
+  const tier =
+    rate.longContext && inputAllowance > rate.longContext.fromInputTokens ? rate.longContext : rate;
+  // Rates are dollars per million tokens: multiplying by token counts gives
+  // microdollars directly. Round UP so the reservation cannot understate the
+  // table's own maximum through ordinary nearest-microdollar rounding.
+  const microdollars = Math.ceil(
+    inputAllowance * tier.inputPerMTok + PAID_REPLY_MAX_OUTPUT_TOKENS * tier.outputPerMTok,
+  );
+  if (!Number.isSafeInteger(microdollars) || microdollars <= 0) return null;
+  return {
+    priceWindow: createHash("sha256").update(JSON.stringify(rate)).digest("hex"),
+    reservedMaxUsd: (microdollars / 1_000_000).toFixed(6),
+  };
+}
 
 export function buildPaidReplyRequest(args: {
   title: string;

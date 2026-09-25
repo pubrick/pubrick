@@ -40,6 +40,7 @@ export {
   PAID_REPLY_MODEL_ID,
   type PaidReplyGeneration,
   type PaidReplyRequest,
+  pricePaidReplyReservation,
 } from "./paid-reply-request.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {

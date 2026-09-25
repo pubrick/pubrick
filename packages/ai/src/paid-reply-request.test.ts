@@ -4,6 +4,7 @@ import {
   countPaidReplyTokens,
   generatePaidReply,
   PAID_REPLY_MAX_OUTPUT_TOKENS,
+  pricePaidReplyReservation,
 } from "./paid-reply-request.js";
 
 describe("paid reply request preflight", () => {
@@ -124,5 +125,17 @@ describe("paid reply request preflight", () => {
     expect(sink).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "unknown", costUsd: null }),
     );
+  });
+
+  it("ceil-reserves the full input allowance and output cap at the dated rate", () => {
+    const before = pricePaidReplyReservation(new Date("2026-12-31T23:59:59Z"), 709);
+    const after = pricePaidReplyReservation(new Date("2027-01-01T00:00:00Z"), 709);
+    expect(before).toEqual({
+      priceWindow: expect.stringMatching(/^[0-9a-f]{64}$/),
+      reservedMaxUsd: "0.004372",
+    });
+    expect(after?.priceWindow).not.toBe(before?.priceWindow);
+    expect(Number(after?.reservedMaxUsd)).toBeGreaterThan(Number(before?.reservedMaxUsd));
+    expect(pricePaidReplyReservation(new Date(), 0)).toBeNull();
   });
 });
