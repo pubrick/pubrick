@@ -1,5 +1,9 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
@@ -37,6 +41,7 @@ import type { PgBoss } from "pg-boss";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
+import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
@@ -144,6 +149,7 @@ export class QueueService {
     @Optional() private readonly webhooks?: WebhooksService,
     @Optional() private readonly suggestionsScan?: SuggestionsScanService,
     @Optional() private readonly topicPlanner?: TopicPlannerService,
+    @Optional() private readonly claimReview?: ClaimReviewService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -161,6 +167,27 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    if (this.claimReview && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(CLAIM_REVIEW_DLQ);
+      await boss.createQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+      await boss.updateQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+      await boss.work<ClaimReviewJob>(
+        CLAIM_REVIEW_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.claimReview?.handle(job.data, job.signal);
+        },
+      );
+      await boss.work<ClaimReviewJob>(CLAIM_REVIEW_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.claimReview?.exhausted(job.data);
+      });
+      await boss.createQueue("claim-review-sweep");
+      await boss.schedule("claim-review-sweep", SWEEP_CRON);
+      await boss.work("claim-review-sweep", { batchSize: 1 }, async () => {
+        await this.claimReview?.sweepAbandoned();
+      });
+    }
 
     if (this.notifications && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue("notification-scan");

@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
+import { ClaimReviewWorkerRepository } from "./claim-review/claim-review.repository";
+import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateRepository } from "./generate/generate.repository";
@@ -27,6 +29,8 @@ import { WebhooksService } from "./webhooks/webhooks.service";
   providers: [
     AutopilotService,
     QueueService,
+    ClaimReviewWorkerRepository,
+    ClaimReviewService,
     PublishRepository,
     PublishService,
     GenerateRepository,

@@ -505,6 +505,13 @@
       "when": 1790296947755,
       "tag": "0072_spicy_maddog",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790298190725,
+      "tag": "0073_heavy_kate_bishop",
+      "breakpoints": true
     }
   ]
 }

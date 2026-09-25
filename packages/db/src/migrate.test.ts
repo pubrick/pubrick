@@ -120,6 +120,7 @@ const ZONED_COLUMNS = [
   "channels.updated_at",
   "claim_reviews.completed_at",
   "claim_reviews.created_at",
+  "claim_reviews.lease_expires_at",
   "claim_reviews.started_at",
   "client_review_links.created_at",
   "client_review_links.expires_at",
@@ -401,6 +402,7 @@ const NON_ENUM_CHECKS = [
   "claim_reviews_status_check",
   "claim_reviews_body_hash_check",
   "claim_reviews_error_code_check",
+  "claim_reviews_unrecorded_calls_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

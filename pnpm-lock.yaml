@@ -248,6 +248,9 @@ importers:
       '@pubrick/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@pubrick/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       '@pubrick/shared':
         specifier: workspace:*
         version: link:../../packages/shared

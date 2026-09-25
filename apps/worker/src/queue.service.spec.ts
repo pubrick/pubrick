@@ -1,4 +1,7 @@
 import {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
@@ -49,6 +52,66 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers advisory reviews only for production queues and passes the expiry signal", async () => {
+    const boss = bossStub();
+    const claimReview = { handle: vi.fn(), exhausted: vi.fn(), sweepAbandoned: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      claimReview as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(CLAIM_REVIEW_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(CLAIM_REVIEW_QUEUE, {
+      ...CLAIM_REVIEW_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(CLAIM_REVIEW_QUEUE, {
+      ...CLAIM_REVIEW_QUEUE_OPTIONS,
+    });
+    const handle = boss.work.mock.calls.find((call) => call[0] === CLAIM_REVIEW_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const exhausted = boss.work.mock.calls.find((call) => call[0] === CLAIM_REVIEW_DLQ)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const sweep = boss.work.mock.calls.find(
+      (call) => call[0] === "claim-review-sweep",
+    )?.[2] as () => Promise<void>;
+    const signal = new AbortController().signal;
+    const payload = { orgId: "org", reviewId: "review" };
+    await handle([{ data: payload, signal }]);
+    await exhausted([{ data: payload }]);
+    await sweep();
+    expect(claimReview.handle).toHaveBeenCalledWith(payload, signal);
+    expect(claimReview.exhausted).toHaveBeenCalledWith(payload);
+    expect(claimReview.sweepAbandoned).toHaveBeenCalledOnce();
+    boss.work.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.work).not.toHaveBeenCalledWith(
+      CLAIM_REVIEW_QUEUE,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("schedules daily suggestion discovery only for the production queue set", async () => {
     const boss = bossStub();
     const scan = { scan: vi.fn() };
