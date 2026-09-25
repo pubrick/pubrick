@@ -166,6 +166,8 @@ const ZONED_COLUMNS = [
   "prompt_revisions.created_at",
   "publication_comment_analyses.created_at",
   "publication_comment_analyses.sample_checked_at",
+  "publication_comment_collection_configs.last_scanned_at",
+  "publication_comment_collection_configs.updated_at",
   "publication_comment_samples.checked_at",
   "publication_comment_samples.requested_at",
   "publication_comments.published_at",

@@ -207,7 +207,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all(pools.map((pool) => pool.end()));
   await ownDatabase?.drop();
-});
+}, 60_000);
 
 /** The single row a query below must have returned, without an optional chain
  * that would turn a missing row into a passing assertion. */
