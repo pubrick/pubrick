@@ -35,6 +35,8 @@ the same saved version is reused instead of billed twice.
 Each run can make up to five Yandex searches and AI model calls on the
 organization's keys. Yandex bills search requests separately from model
 usage; see [Yandex pricing](https://aistudio.yandex.ru/en/docs/search-api/pricing).
+Pubrick reserves at most 100 search requests per organization per UTC day;
+requests with an uncertain outcome still count toward that limit.
 Pubrick records attempted searches and model usage, including attempts whose
 outcome is uncertain after a process failure. Provider outages and missing
 keys are shown as failures or unavailable evidence, not as verification.
