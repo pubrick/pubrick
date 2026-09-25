@@ -99,6 +99,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   telegram_login_busy: "telegram_login_busy",
   telegram_login_unavailable: "telegram_login_unavailable",
   content_not_found: "content_not_found",
+  content_image_not_found: "content_image_not_found",
   editorial_note_stale: "editorial_note_stale",
   publication_not_found: "publication_not_found",
   publication_comments_unavailable: "publication_comments_unavailable",

@@ -1,3 +1,4 @@
+import { contentImageRegenerateSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
@@ -223,8 +224,13 @@ describe("article image slots", () => {
     expect(calls.find((call) => call.path.endsWith("/regenerate"))).toEqual({
       path: "/api/content/post-1/images/slot-1/regenerate",
       method: "POST",
-      body: JSON.stringify({ expectedRevision: 4 }),
+      body: JSON.stringify({ expectedRevision: 4, expectedBody: props.savedBody }),
     });
+    expect(
+      contentImageRegenerateSchema.parse(
+        JSON.parse(calls.find((call) => call.path.endsWith("/regenerate"))?.body ?? ""),
+      ),
+    ).toEqual({ expectedRevision: 4, expectedBody: props.savedBody });
     expect(await screen.findByText("Generated image — review required")).toBeVisible();
     expect(screen.getAllByRole("img", { name: "New illustration to review" })[0]).toHaveAttribute(
       "src",

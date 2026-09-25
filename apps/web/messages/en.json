@@ -1013,6 +1013,7 @@
     "telegram_login_busy": "A Telegram sign-in is already in progress. Finish it or try again shortly.",
     "telegram_login_unavailable": "Telegram sign-in is temporarily unavailable. Try again later.",
     "content_not_found": "This post no longer exists — it may have been deleted.",
+    "content_image_not_found": "This image is no longer in the article. Reload the latest images.",
     "editorial_note_stale": "The saved draft changed. Reload it before adding a note.",
     "feed_not_found": "This public feed is unavailable. Enable it again if you want to share posts.",
     "feed_item_not_ready": "Add a title and publish this post before sharing it in a public feed.",

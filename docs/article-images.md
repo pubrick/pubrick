@@ -44,9 +44,10 @@ database ties each slot to an item and media asset of the same organization
 and brand. A media asset in a slot cannot be deleted until detached.
 
 For a saved slot, `POST /api/content/:id/images/:slotId/regenerate` with
-`{ "expectedRevision": 0 }` creates one metered Gemini variation from the
+`{ "expectedRevision": 0, "expectedBody": "…" }` creates one metered Gemini variation from the
 current image and the saved article context. The server checks the slot and
-revision before and after the model call, replaces only that slot, and requires
+revision and saved body before the model call, checks both again afterward,
+replaces only that slot, and requires
 the editor to review the new image, placement, and description before approval.
 If another editor changes the draft while the call runs, the endpoint returns
 409 and leaves the newly generated image in the brand's media library.

@@ -1013,6 +1013,7 @@
     "telegram_login_busy": "Ya hay un inicio de sesión de Telegram en curso. Termínelo o inténtelo pronto.",
     "telegram_login_unavailable": "El inicio de sesión de Telegram no está disponible temporalmente. Inténtelo más tarde.",
     "content_not_found": "Esta publicación ya no existe: es posible que se haya eliminado.",
+    "content_image_not_found": "Esta imagen ya no está en el artículo. Vuelve a cargar las imágenes actuales.",
     "editorial_note_stale": "El borrador guardado cambió. Vuelve a cargarlo antes de añadir una nota.",
     "feed_not_found": "Este feed público no está disponible. Actívalo de nuevo para compartir publicaciones.",
     "feed_item_not_ready": "Añade un título y publica esta entrada antes de compartirla en un feed público.",

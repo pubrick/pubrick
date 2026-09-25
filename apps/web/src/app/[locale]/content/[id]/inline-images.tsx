@@ -239,7 +239,7 @@ export function InlineImages({
     try {
       const saved = await api<ImageState>(`/api/content/${itemId}/images/${slotId}/regenerate`, {
         method: "POST",
-        body: JSON.stringify({ expectedRevision: revision }),
+        body: JSON.stringify({ expectedRevision: revision, expectedBody: savedBody }),
       });
       setSlots(saved.images);
       setRevision(saved.revision);
