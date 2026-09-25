@@ -11,6 +11,9 @@ import {
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
+  RELEVANCE_BATCH_DLQ,
+  RELEVANCE_BATCH_QUEUE,
+  RELEVANCE_BATCH_QUEUE_OPTIONS,
   RELEVANCE_DLQ,
   RELEVANCE_QUEUE,
   RELEVANCE_QUEUE_OPTIONS,
@@ -189,7 +192,14 @@ describe("QueueService.registerAll", () => {
 
   it("registers bounded relevance work, hourly scanning, and exhausted-job handling", async () => {
     const boss = bossStub();
-    const relevance = { handle: vi.fn(), scan: vi.fn(), exhausted: vi.fn() };
+    const relevance = {
+      handle: vi.fn(),
+      scan: vi.fn(),
+      exhausted: vi.fn(),
+      handleBatch: vi.fn(),
+      exhaustedBatch: vi.fn(),
+      reconcileBatches: vi.fn(),
+    };
     const { publish, generate } = serviceStub();
     const service = new QueueService(
       publish as never,
@@ -200,6 +210,11 @@ describe("QueueService.registerAll", () => {
     );
     await service.registerAll(boss as never);
     expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_BATCH_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_BATCH_QUEUE, {
+      ...RELEVANCE_BATCH_QUEUE_OPTIONS,
+    });
+    expect(boss.schedule).toHaveBeenCalledWith("news-relevance-batch-reconcile", "*/5 * * * *");
     expect(boss.createQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     expect(boss.updateQueue).toHaveBeenCalledWith(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
     expect(boss.schedule).toHaveBeenCalledWith(RELEVANCE_SCAN_QUEUE, "0 * * * *");
@@ -216,9 +231,25 @@ describe("QueueService.registerAll", () => {
     await handle([{ data: payload }]);
     await scan();
     await exhausted([{ data: payload }]);
+    const batchHandle = boss.work.mock.calls.find(
+      (call) => call[0] === RELEVANCE_BATCH_QUEUE,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const batchExhausted = boss.work.mock.calls.find(
+      (call) => call[0] === RELEVANCE_BATCH_DLQ,
+    )?.[2] as (jobs: unknown[]) => Promise<void>;
+    const reconcile = boss.work.mock.calls.find(
+      (call) => call[0] === "news-relevance-batch-reconcile",
+    )?.[2] as () => Promise<void>;
+    const batchJob = { ...payload, batchId: "batch" };
+    await batchHandle([{ data: batchJob }]);
+    await batchExhausted([{ data: batchJob }]);
+    await reconcile();
     expect(relevance.handle).toHaveBeenCalledWith(payload);
     expect(relevance.scan).toHaveBeenCalledWith(boss);
     expect(relevance.exhausted).toHaveBeenCalledWith(payload);
+    expect(relevance.handleBatch).toHaveBeenCalledWith(batchJob);
+    expect(relevance.exhaustedBatch).toHaveBeenCalledWith(batchJob);
+    expect(relevance.reconcileBatches).toHaveBeenCalledOnce();
   });
   it("registers the RSS poll and scan queues when the RSS service is installed", async () => {
     const boss = bossStub();

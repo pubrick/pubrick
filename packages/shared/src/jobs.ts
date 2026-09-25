@@ -27,6 +27,16 @@ export const RELEVANCE_QUEUE = "news-relevance";
 export const RELEVANCE_SCAN_QUEUE = "news-relevance-scan";
 export const RELEVANCE_DLQ = "news-relevance-dlq";
 export type RelevanceJob = { orgId: string; brandId: string; itemId: string };
+/** One article in an operator-approved paid recheck; never retried automatically. */
+export const RELEVANCE_BATCH_QUEUE = "news-relevance-batch";
+export const RELEVANCE_BATCH_DLQ = "news-relevance-batch-dlq";
+export type RelevanceBatchJob = RelevanceJob & { batchId: string };
+export const RELEVANCE_BATCH_QUEUE_OPTIONS = {
+  retryLimit: 0,
+  expireInSeconds: 180,
+  heartbeatSeconds: 30,
+  deadLetter: RELEVANCE_BATCH_DLQ,
+} as const;
 export const RELEVANCE_QUEUE_OPTIONS = {
   retryLimit: 2,
   retryDelay: 60,

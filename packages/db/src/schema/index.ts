@@ -26,6 +26,7 @@ export * from "./publication-comments.js";
 export * from "./publication-metrics.js";
 export * from "./readapt.js";
 export * from "./refine.js";
+export * from "./relevance-batches.js";
 export * from "./search.js";
 export * from "./sources.js";
 export * from "./topics.js";

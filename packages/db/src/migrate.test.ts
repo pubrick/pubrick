@@ -155,6 +155,10 @@ const ZONED_COLUMNS = [
   "news_items.created_at",
   "news_items.published_at",
   "news_items.relevance_scored_at",
+  "news_relevance_batch_items.completed_at",
+  "news_relevance_batches.completed_at",
+  "news_relevance_batches.created_at",
+  "news_relevance_batches.started_at",
   "news_sources.created_at",
   "news_sources.last_checked_at",
   "news_sources.updated_at",
@@ -395,6 +399,14 @@ const NON_ENUM_CHECKS = [
   "news_items_relevance_feedback_delta_check",
   "news_items_relevance_consistency_check",
   "news_items_relevance_attempts_check",
+  // 0080's paid recheck journal is created after the historical seed.
+  "news_relevance_batches_days_check",
+  "news_relevance_batches_counts_check",
+  "news_relevance_batches_unrecorded_check",
+  "news_relevance_batches_status_check",
+  "news_relevance_batches_error_code_check",
+  "news_relevance_batch_items_status_check",
+  "news_relevance_batch_items_error_code_check",
   // The metric table is created after the pre-0009 seed. Analytics e2e proves
   // measured zero and missing values; these checks pin the stored shape.
   "publication_metrics_status_check",

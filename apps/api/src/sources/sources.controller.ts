@@ -14,11 +14,14 @@ import {
 } from "@nestjs/common";
 import {
   type NewsItemListQuery,
+  type NewsRecheckRequest,
   type NewsRerankRequest,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsCommentCollectionUpdateSchema,
   newsItemListQuerySchema,
+  newsRecheckPreviewQuerySchema,
+  newsRecheckRequestSchema,
   newsRerankRequestSchema,
   newsSourceCreateSchema,
   newsSourceUpdateSchema,
@@ -33,6 +36,7 @@ import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { PrivateSourceOwnerGuard } from "./private-source-owner.guard";
+import { RecheckRepository } from "./recheck.repository";
 import { SourcesRepository } from "./sources.repository";
 import { TelegramLoginRepository } from "./telegram-login.repository";
 
@@ -42,6 +46,7 @@ import { TelegramLoginRepository } from "./telegram-login.repository";
 export class SourcesController {
   constructor(
     private readonly sources: SourcesRepository,
+    private readonly recheck: RecheckRepository,
     private readonly telegramLogin: TelegramLoginRepository,
   ) {}
 
@@ -185,6 +190,34 @@ export class SourcesController {
     @Body(new ZodValidationPipe(newsRerankRequestSchema)) body: NewsRerankRequest,
   ) {
     return this.sources.rerank(orgId, brandId, body);
+  }
+
+  @Get("items/recheck/preview")
+  @BrandScope({ kind: "brand", source: "query", roles: "manager" })
+  recheckPreview(
+    @OrgId() orgId: string,
+    @Query(new ZodValidationPipe(newsRecheckPreviewQuerySchema)) query: {
+      brandId: string;
+      days: number;
+    },
+  ) {
+    return this.recheck.preview(orgId, query.brandId, query.days);
+  }
+
+  @Get("items/recheck")
+  @BrandScope({ kind: "brand", source: "query", roles: "manager" })
+  latestRecheck(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.recheck.latest(orgId, brandId);
+  }
+
+  @Post("items/recheck")
+  @BrandScope({ kind: "brand", source: "query", roles: "manager" })
+  startRecheck(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Body(new ZodValidationPipe(newsRecheckRequestSchema)) body: NewsRecheckRequest,
+  ) {
+    return this.recheck.admit(orgId, brandId, body);
   }
 
   @Post("items/:id/score")
