@@ -3,11 +3,13 @@ import {
   TOPIC_ORIGINS,
   TOPIC_STATUSES,
   TOPIC_SUGGESTION_REQUEST_STATUSES,
+  TOPIC_SUGGESTION_SCAN_DECISIONS,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -93,6 +95,7 @@ export const topicSuggestionRequests = pgTable(
   },
   (t) => [
     index("topic_suggestion_requests_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
+    uniqueIndex("topic_suggestion_requests_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     uniqueIndex("topic_suggestion_requests_org_brand_local_date_idx")
       .on(t.orgId, t.brandId, t.localDate)
       .where(sql`${t.origin} = 'automatic' and ${t.localDate} is not null`),
@@ -107,5 +110,57 @@ export const topicSuggestionRequests = pgTable(
       "unreadable_key",
       "model_failed",
     ]),
+  ],
+);
+
+/** One meaningful automatic admission outcome per brand-local day. */
+export const topicSuggestionScanDecisions = pgTable(
+  "topic_suggestion_scan_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id").notNull(),
+    localDate: date("local_date").notNull(),
+    decision: text("decision", { enum: TOPIC_SUGGESTION_SCAN_DECISIONS }).notNull(),
+    requestId: uuid("request_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("topic_suggestion_scan_decisions_org_brand_day_idx").on(
+      t.orgId,
+      t.brandId,
+      t.localDate,
+    ),
+    index("topic_suggestion_scan_decisions_org_brand_created_idx").on(
+      t.orgId,
+      t.brandId,
+      t.createdAt,
+    ),
+    foreignKey({
+      name: "topic_suggestion_scan_decisions_brand_org_fk",
+      columns: [t.orgId, t.brandId],
+      foreignColumns: [brands.orgId, brands.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "topic_suggestion_scan_decisions_request_org_brand_fk",
+      columns: [t.orgId, t.brandId, t.requestId],
+      foreignColumns: [
+        topicSuggestionRequests.orgId,
+        topicSuggestionRequests.brandId,
+        topicSuggestionRequests.id,
+      ],
+    }).onDelete("cascade"),
+    enumCheck(
+      "topic_suggestion_scan_decisions_decision_check",
+      t.decision,
+      TOPIC_SUGGESTION_SCAN_DECISIONS,
+    ),
+    check(
+      "topic_suggestion_scan_decisions_request_check",
+      sql`(${t.decision} = 'queued' and ${t.requestId} is not null) or (${t.decision} <> 'queued' and ${t.requestId} is null)`,
+    ),
   ],
 );

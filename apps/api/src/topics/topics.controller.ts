@@ -68,6 +68,14 @@ export class TopicsController {
     return this.topics.suggestionHistory(orgId, brandId, query);
   }
 
+  @Get("suggestions/scan-decisions")
+  suggestionScanDecisions(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+  ) {
+    return this.topics.suggestionScanDecisions(orgId, brandId);
+  }
+
   @Post("suggestions")
   requestSuggestions(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
     return this.topics.requestSuggestions(orgId, brandId);

@@ -1,6 +1,10 @@
 "use client";
 
-import type { TopicSuggestionHistoryItem, TopicSuggestionHistoryPage } from "@pubrick/shared";
+import type {
+  TopicSuggestionHistoryItem,
+  TopicSuggestionHistoryPage,
+  TopicSuggestionScanDecision,
+} from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -29,6 +33,11 @@ export function SuggestionHistory({
   } | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [decisionState, setDecisionState] = useState<{
+    brandId: string;
+    rows: TopicSuggestionScanDecision[];
+  } | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
   const generation = useRef(0);
   const firstPageGeneration = useRef(0);
   const lastRefresh = useRef<{ brandId: string; key: string } | null>(null);
@@ -108,6 +117,25 @@ export function SuggestionHistory({
         )
           setError(errorMessage(err, t("historyError"), te));
       });
+  }, [brandId, refreshKey, t, te]);
+
+  useEffect(() => {
+    let active = true;
+    const requestKey = refreshKey;
+    setDecisionState(null);
+    setDecisionError(null);
+    api<TopicSuggestionScanDecision[]>(`/api/topics/suggestions/scan-decisions?brandId=${brandId}`)
+      .then((rows) => {
+        if (active && activeBrandId.current === brandId && lastRefresh.current?.key === requestKey)
+          setDecisionState({ brandId, rows });
+      })
+      .catch((err) => {
+        if (active && activeBrandId.current === brandId && lastRefresh.current?.key === requestKey)
+          setDecisionError(errorMessage(err, t("historyError"), te));
+      });
+    return () => {
+      active = false;
+    };
   }, [brandId, refreshKey, t, te]);
 
   async function loadMore() {
@@ -211,6 +239,26 @@ export function SuggestionHistory({
         <Button variant="secondary" className="mt-3" disabled={loadingMore} onClick={loadMore}>
           {loadingMore ? t("historyLoading") : t("historyLoadMore")}
         </Button>
+      )}
+      {decisionState?.brandId === brandId && decisionState.rows.length > 0 && (
+        <div className="mt-6">
+          <h3 className="mb-2 text-base font-semibold text-fg">{t("scanDecisionsTitle")}</h3>
+          <p className="mb-3 text-sm text-fg-secondary">{t("scanDecisionsHint")}</p>
+          <Card padded={false}>
+            {decisionState.rows.map((row) => (
+              <ListRow
+                key={row.id}
+                title={t(`scanDecision_${row.decision}`)}
+                meta={t("historyLocalDate", { date: row.localDate })}
+              />
+            ))}
+          </Card>
+        </div>
+      )}
+      {decisionError && (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          {decisionError}
+        </p>
       )}
     </section>
   );

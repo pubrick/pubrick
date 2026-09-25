@@ -19,6 +19,7 @@ export const TOPIC_SUGGESTION_REQUEST_STATUSES = [
   "succeeded",
   "failed",
 ] as const;
+export const TOPIC_SUGGESTION_SCAN_DECISIONS = ["ideas_pending", "no_ai_key", "queued"] as const;
 export type TopicStatus = (typeof TOPIC_STATUSES)[number];
 export const NEWS_FEEDBACK_SIGNALS = ["relevant", "irrelevant"] as const;
 
@@ -161,6 +162,17 @@ export const topicSuggestionHistoryPageSchema = z.object({
   nextCursor: z.uuid().nullable(),
 });
 export type TopicSuggestionHistoryPage = z.infer<typeof topicSuggestionHistoryPageSchema>;
+
+export const topicSuggestionScanDecisionSchema = z.object({
+  id: z.uuid(),
+  brandId: z.uuid(),
+  localDate: z.iso.date(),
+  decision: z.enum(TOPIC_SUGGESTION_SCAN_DECISIONS),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type TopicSuggestionScanDecision = z.infer<typeof topicSuggestionScanDecisionSchema>;
+export const topicSuggestionScanDecisionsSchema = z.array(topicSuggestionScanDecisionSchema);
 
 export const newsFeedbackSchema = z.object({
   signal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),

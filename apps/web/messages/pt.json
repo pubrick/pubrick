@@ -112,7 +112,13 @@
     "knowledgeOpen": "Abrir conhecimento",
     "mediaLink": "Biblioteca de mídia",
     "analyticsLink": "Resultados",
-    "accessLink": "Acesso da equipe"
+    "accessLink": "Acesso da equipe",
+    "removeTitle": "Remover marca",
+    "removeHint": "Remove permanentemente esta marca, seus canais e credenciais salvas, fontes, tópicos, rascunhos, conhecimentos, mídias e tarefas agendadas. O feed RSS público e os links de artigos hospedados no Pubrick deixarão de funcionar. Publicações já enviadas a canais externos permanecem lá.",
+    "remove": "Remover",
+    "removeCancel": "Cancelar",
+    "removeConfirmHint": "Digite o nome exato para remover {name} (ID {id}). Esta ação não pode ser desfeita.",
+    "removeConfirmLabel": "Nome da marca: {name}"
   },
   "BrandAccess": {
     "title": "Acesso da equipe",
@@ -1566,7 +1572,12 @@
     "historyStatus_succeeded": "Concluído",
     "historyStatus_failed": "Falhou",
     "historyCount": "Ideias adicionadas: {count}",
-    "historyLocalDate": "Para {date}"
+    "historyLocalDate": "Para {date}",
+    "scanDecisionsTitle": "Verificações diárias",
+    "scanDecisionsHint": "Porque foi ignorado o pedido automático de ideias. Os pedidos e os seus resultados aparecem acima.",
+    "scanDecision_ideas_pending": "Há três ideias à espera de revisão",
+    "scanDecision_no_ai_key": "Chave de IA em falta",
+    "scanDecision_queued": "Pedido diário em fila"
   },
   "Autopilot": {
     "title": "Piloto automático",

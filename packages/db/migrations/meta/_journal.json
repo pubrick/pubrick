@@ -610,6 +610,13 @@
       "when": 1790333781989,
       "tag": "0087_news_dismiss",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1790338340960,
+      "tag": "0088_topic_suggestion_scan_decisions",
+      "breakpoints": true
     }
   ]
 }

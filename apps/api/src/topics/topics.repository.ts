@@ -9,6 +9,7 @@ import {
   type TopicSuggestionHistoryQuery,
   type TopicUpdate,
   topicSuggestionHistoryPageSchema,
+  topicSuggestionScanDecisionsSchema,
 } from "@pubrick/shared";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
@@ -147,6 +148,36 @@ export class TopicsRepository {
       })),
       nextCursor: rows.length > query.limit ? page.at(-1)?.id : null,
     });
+  }
+
+  async suggestionScanDecisions(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const rows = await db
+      .select({
+        id: schema.topicSuggestionScanDecisions.id,
+        brandId: schema.topicSuggestionScanDecisions.brandId,
+        localDate: schema.topicSuggestionScanDecisions.localDate,
+        decision: schema.topicSuggestionScanDecisions.decision,
+        createdAt: schema.topicSuggestionScanDecisions.createdAt,
+        updatedAt: schema.topicSuggestionScanDecisions.updatedAt,
+      })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(
+        and(
+          eq(schema.topicSuggestionScanDecisions.orgId, orgId),
+          eq(schema.topicSuggestionScanDecisions.brandId, brandId),
+          sql`${schema.topicSuggestionScanDecisions.decision} <> 'queued'`,
+        ),
+      )
+      .orderBy(desc(schema.topicSuggestionScanDecisions.localDate))
+      .limit(20);
+    return topicSuggestionScanDecisionsSchema.parse(
+      rows.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+    );
   }
 
   async requestSuggestions(orgId: string, brandId: string) {

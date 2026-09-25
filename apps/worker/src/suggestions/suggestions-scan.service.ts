@@ -98,6 +98,33 @@ export class SuggestionsScanService {
         .limit(1);
       if (!clock) throw new Error("Daily topic suggestion clock unavailable");
       if (clock.hour < START_HOUR) return "before_start";
+      const recordSkip = async (decision: "ideas_pending" | "no_ai_key") => {
+        const [existing] = await tx
+          .select({
+            id: schema.topicSuggestionScanDecisions.id,
+            decision: schema.topicSuggestionScanDecisions.decision,
+          })
+          .from(schema.topicSuggestionScanDecisions)
+          .where(
+            and(
+              eq(schema.topicSuggestionScanDecisions.orgId, orgId),
+              eq(schema.topicSuggestionScanDecisions.brandId, brandId),
+              eq(schema.topicSuggestionScanDecisions.localDate, clock.day),
+            ),
+          )
+          .limit(1);
+        if (existing?.decision === decision) return;
+        if (existing) {
+          await tx
+            .update(schema.topicSuggestionScanDecisions)
+            .set({ decision, requestId: null, updatedAt: new Date() })
+            .where(eq(schema.topicSuggestionScanDecisions.id, existing.id));
+        } else {
+          await tx
+            .insert(schema.topicSuggestionScanDecisions)
+            .values({ orgId, brandId, localDate: clock.day, decision });
+        }
+      };
       const [requested] = await tx
         .select({ id: schema.topicSuggestionRequests.id })
         .from(schema.topicSuggestionRequests)
@@ -135,13 +162,19 @@ export class SuggestionsScanService {
             eq(schema.topics.status, "idea"),
           ),
         );
-      if ((pending?.count ?? 0) >= MAX_PENDING_IDEAS) return "ideas_pending";
+      if ((pending?.count ?? 0) >= MAX_PENDING_IDEAS) {
+        await recordSkip("ideas_pending");
+        return "ideas_pending";
+      }
       const [key] = await tx
         .select({ id: schema.aiCredentials.id })
         .from(schema.aiCredentials)
         .where(eq(schema.aiCredentials.orgId, orgId))
         .limit(1);
-      if (!key) return "no_ai_key";
+      if (!key) {
+        await recordSkip("no_ai_key");
+        return "no_ai_key";
+      }
       const [request] = await tx
         .insert(schema.topicSuggestionRequests)
         .values({ orgId, brandId, origin: "automatic", localDate: clock.day })
@@ -153,6 +186,17 @@ export class SuggestionsScanService {
         { id: request.id, group: { id: orgId }, db: fromDrizzle(tx, sql) },
       );
       if (id === null) throw new Error("Daily topic suggestion job was not enqueued");
+      await tx
+        .insert(schema.topicSuggestionScanDecisions)
+        .values({ orgId, brandId, localDate: clock.day, decision: "queued", requestId: request.id })
+        .onConflictDoUpdate({
+          target: [
+            schema.topicSuggestionScanDecisions.orgId,
+            schema.topicSuggestionScanDecisions.brandId,
+            schema.topicSuggestionScanDecisions.localDate,
+          ],
+          set: { decision: "queued", requestId: request.id, updatedAt: new Date() },
+        });
       return "queued";
     });
   }

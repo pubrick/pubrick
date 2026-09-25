@@ -112,7 +112,13 @@
     "knowledgeOpen": "Открыть знания",
     "mediaLink": "Медиатека",
     "analyticsLink": "Результаты",
-    "accessLink": "Доступ команды"
+    "accessLink": "Доступ команды",
+    "removeTitle": "Удалить бренд",
+    "removeHint": "Безвозвратно удаляет бренд, его каналы и сохранённые реквизиты, источники, темы, черновики, базу знаний, медиафайлы и запланированные задания. Публичная RSS-лента и ссылки на статьи, размещённые в Pubrick, перестанут работать. Уже опубликованные материалы останутся на внешних площадках.",
+    "remove": "Удалить",
+    "removeCancel": "Отмена",
+    "removeConfirmHint": "Введите точное название, чтобы удалить {name} (ID {id}). Отменить это действие нельзя.",
+    "removeConfirmLabel": "Название бренда: {name}"
   },
   "BrandAccess": {
     "title": "Доступ команды",
@@ -1566,7 +1572,12 @@
     "historyStatus_succeeded": "Завершён",
     "historyStatus_failed": "Ошибка",
     "historyCount": "Добавлено идей: {count}",
-    "historyLocalDate": "За {date}"
+    "historyLocalDate": "За {date}",
+    "scanDecisionsTitle": "Ежедневные проверки",
+    "scanDecisionsHint": "Почему автоматический запрос идей был пропущен. Запросы и их результаты показаны выше.",
+    "scanDecision_ideas_pending": "Три идеи ожидают проверки",
+    "scanDecision_no_ai_key": "Нет ключа ИИ",
+    "scanDecision_queued": "Ежедневный запрос в очереди"
   },
   "Autopilot": {
     "title": "Автопилот",

@@ -196,6 +196,8 @@ const ZONED_COLUMNS = [
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
   "topic_suggestion_requests.updated_at",
+  "topic_suggestion_scan_decisions.created_at",
+  "topic_suggestion_scan_decisions.updated_at",
   "topics.blocked_at",
   "topics.created_at",
   "topics.updated_at",
@@ -403,6 +405,8 @@ const NON_ENUM_CHECKS = [
   "topic_suggestion_requests_error_code_check",
   // 0057 adds an origin pin; historical request rows receive the manual default.
   "topic_suggestion_requests_origin_check",
+  "topic_suggestion_scan_decisions_decision_check",
+  "topic_suggestion_scan_decisions_request_check",
   "news_items_editor_signal_check",
   "news_items_relevance_status_check",
   "news_items_relevance_urgency_check",
@@ -2774,6 +2778,79 @@ describe.skipIf(!url)("runMigrations", () => {
       }
     } finally {
       await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("keeps daily topic scan decisions linked to their own brand and request", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('decision_a', 'A', 'decision-a'), ('decision_b', 'B', 'decision-b')",
+        );
+        const firstBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_a', 'A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const secondBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_b', 'B brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const sameOrgOtherBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_a', 'Another A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const firstRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_a', $1) RETURNING id",
+            [firstBrand],
+          )
+        ).rows[0]?.id as string;
+        const sameOrgOtherRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_a', $1) RETURNING id",
+            [sameOrgOtherBrand],
+          )
+        ).rows[0]?.id as string;
+        const otherOrgSameBrandRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_b', $1) RETURNING id",
+            [firstBrand],
+          )
+        ).rows[0]?.id as string;
+
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision) VALUES ('decision_a', $1, '2026-09-23', 'ideas_pending')",
+            [secondBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+            [firstBrand, sameOrgOtherRequest],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+            [firstBrand, otherOrgSameBrandRequest],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await pool.query(
+          "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+          [firstBrand, firstRequest],
+        );
+      } finally {
+        await pool.end();
+      }
+    } finally {
       await fresh.drop();
     }
   });

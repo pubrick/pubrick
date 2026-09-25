@@ -14,7 +14,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedSettings } from "@/components/feed-controls";
 import { Advanced } from "@/components/ui/advanced";
@@ -117,6 +117,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   );
   const canManageAccess = activeMember?.role === "owner" || activeMember?.role === "admin";
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [brandRemovalOpen, setBrandRemovalOpen] = useState(false);
+  const [brandRemovalName, setBrandRemovalName] = useState("");
+  const [brandRemovalError, setBrandRemovalError] = useState<string | null>(null);
+  const [brandRemovalBusy, setBrandRemovalBusy] = useState(false);
+  const brandRemovalBusyRef = useRef(false);
+  const closeBrandRemoval = useCallback(() => {
+    if (brandRemovalBusyRef.current) return;
+    setBrandRemovalOpen(false);
+    setBrandRemovalName("");
+    setBrandRemovalError(null);
+  }, []);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileDescription, setProfileDescription] = useState("");
@@ -236,6 +247,29 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       setProfileError(describeError(err));
     } finally {
       setProfileBusy(false);
+    }
+  }
+
+  async function removeBrand() {
+    if (
+      !brand ||
+      !canManageAccess ||
+      brandRemovalName !== brand.name ||
+      brandRemovalBusyRef.current
+    )
+      return;
+    brandRemovalBusyRef.current = true;
+    setBrandRemovalBusy(true);
+    setBrandRemovalError(null);
+    try {
+      await api(`/api/brands/${id}`, { method: "DELETE" });
+      router.replace(`/${locale}/brands`);
+      router.refresh();
+    } catch (err) {
+      setBrandRemovalError(describeError(err));
+    } finally {
+      brandRemovalBusyRef.current = false;
+      setBrandRemovalBusy(false);
     }
   }
 
@@ -798,6 +832,70 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Card>
 
       <FeedSettings brandId={id} />
+
+      {canManageAccess && brand && (
+        <Card className="mt-6">
+          <h2 className="text-lg font-semibold text-fg">{tb("removeTitle")}</h2>
+          <p className="mt-2 text-sm text-fg-secondary">{tb("removeHint")}</p>
+          <Button
+            className="mt-4"
+            type="button"
+            variant="danger"
+            aria-label={tb("removeTitle")}
+            onClick={() => {
+              setBrandRemovalName("");
+              setBrandRemovalError(null);
+              setBrandRemovalOpen(true);
+            }}
+          >
+            {tb("remove")}
+          </Button>
+        </Card>
+      )}
+
+      <Modal
+        open={brandRemovalOpen}
+        onClose={closeBrandRemoval}
+        title={tb("removeTitle")}
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={brandRemovalBusy}
+              onClick={closeBrandRemoval}
+            >
+              {tb("removeCancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              aria-label={tb("removeTitle")}
+              disabled={brandRemovalBusy || !brand || brandRemovalName !== brand.name}
+              onClick={() => void removeBrand()}
+            >
+              {tb("remove")}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-fg-secondary">{tb("removeHint")}</p>
+        <p className="mb-4 text-sm text-fg-secondary">
+          {tb("removeConfirmHint", { name: brand?.name ?? "", id: id.slice(0, 8) })}
+        </p>
+        <Input
+          value={brandRemovalName}
+          onChange={(event) => setBrandRemovalName(event.target.value)}
+          label={tb("removeConfirmLabel", { name: brand?.name ?? "" })}
+          autoComplete="off"
+          disabled={brandRemovalBusy}
+        />
+        {brandRemovalError && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {brandRemovalError}
+          </p>
+        )}
+      </Modal>
 
       <Modal
         open={editing !== null}

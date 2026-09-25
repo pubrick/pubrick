@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { topicDtoSchema, topicSuggestionHistoryPageSchema } from "@pubrick/shared";
+import {
+  topicDtoSchema,
+  topicSuggestionHistoryPageSchema,
+  topicSuggestionScanDecisionsSchema,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -325,6 +329,55 @@ describe.skipIf(!url)("topic bank e2e", () => {
     expect(second.rows[0]).toMatchObject({ origin: "automatic", suggestionCount: 2 });
     expect(second.rows[1]).toMatchObject({ errorCode: "model_failed" });
     expect(second.nextCursor).toBeNull();
+  });
+
+  it("lists only the brand's recent skipped daily scans, excluding queued requests", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Daily ideas" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Sibling" }).expect(201);
+    await db.insert(schema.topicSuggestionScanDecisions).values(
+      Array.from({ length: 22 }, (_, index) => ({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        localDate: `2026-09-${String(index + 1).padStart(2, "0")}`,
+        decision: index % 2 ? ("ideas_pending" as const) : ("no_ai_key" as const),
+      })),
+    );
+    await db.insert(schema.topicSuggestionScanDecisions).values({
+      orgId: owner.orgId,
+      brandId: sibling.body.id,
+      localDate: "2026-09-23",
+      decision: "no_ai_key",
+    });
+    const [request] = await db
+      .insert(schema.topicSuggestionRequests)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        origin: "automatic",
+        localDate: "2026-09-23",
+      })
+      .returning({ id: schema.topicSuggestionRequests.id });
+    await db.insert(schema.topicSuggestionScanDecisions).values({
+      orgId: owner.orgId,
+      brandId: brand.body.id,
+      localDate: "2026-09-23",
+      decision: "queued",
+      requestId: request?.id,
+    });
+    const endpoint = `/api/topics/suggestions/scan-decisions?brandId=${brand.body.id}`;
+    await other.agent.get(endpoint).expect(404);
+    await owner.agent.get("/api/topics/suggestions/scan-decisions?brandId=invalid").expect(400);
+    const rows = topicSuggestionScanDecisionsSchema.parse(
+      (await owner.agent.get(endpoint).expect(200)).body,
+    );
+    expect(rows).toHaveLength(20);
+    expect(rows[0]).toMatchObject({ localDate: "2026-09-22", decision: "ideas_pending" });
+    expect(rows.at(-1)?.localDate).toBe("2026-09-03");
+    expect(rows.every((row) => row.brandId === brand.body.id && row.decision !== "queued")).toBe(
+      true,
+    );
   });
 
   it("blocks an exact title as a durable tombstone until explicitly unblocked", async () => {
