@@ -13,9 +13,11 @@ import {
 } from "@nestjs/common";
 import {
   type NewsItemListQuery,
+  type NewsRerankRequest,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsItemListQuerySchema,
+  newsRerankRequestSchema,
   newsSourceCreateSchema,
   newsSourceUpdateSchema,
   type PrivateTelegramSourceCreate,
@@ -156,6 +158,15 @@ export class SourcesController {
     @Query(new ZodValidationPipe(newsItemListQuerySchema)) query: NewsItemListQuery,
   ) {
     return this.sources.items(orgId, query);
+  }
+
+  @Post("items/rerank")
+  rerank(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Body(new ZodValidationPipe(newsRerankRequestSchema)) body: NewsRerankRequest,
+  ) {
+    return this.sources.rerank(orgId, brandId, body);
   }
 
   @Post("items/:id/score")

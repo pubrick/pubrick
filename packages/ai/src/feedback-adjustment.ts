@@ -1,4 +1,4 @@
-import { KNOWLEDGE_EMBEDDING_DIMENSIONS } from "@pubrick/ai";
+import { KNOWLEDGE_EMBEDDING_DIMENSIONS } from "./knowledge-embedding.js";
 
 export type FeedbackArticle = {
   title: string;

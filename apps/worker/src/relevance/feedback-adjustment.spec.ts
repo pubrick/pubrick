@@ -1,5 +1,5 @@
+import { feedbackAdjustment, headlineSimilarity, semanticSimilarity } from "@pubrick/ai";
 import { describe, expect, it } from "vitest";
-import { feedbackAdjustment, headlineSimilarity, semanticSimilarity } from "./feedback-adjustment";
 
 const candidate = {
   title: "Battery recycling rules for European manufacturers",

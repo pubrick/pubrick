@@ -4,20 +4,22 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { AiCredential } from "@pubrick/ai";
+import { type AiCredential, type FeedbackArticle, feedbackAdjustment } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
 import {
   commentAnalysisResultSchema,
   decryptJson,
   encryptJson,
   type NewsItemListQuery,
+  type NewsRerankRequest,
+  type NewsRerankResponse,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsSourceCreateSchema,
   type PrivateTelegramSourceCreate,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, forbidden, notFound } from "../api-error";
@@ -316,6 +318,115 @@ export class SourcesRepository {
         desc(schema.newsItems.id),
       )
       .limit(100);
+  }
+
+  /** Recalculate at most one page from local feedback, without invoking a provider. */
+  async rerank(
+    orgId: string,
+    brandId: string,
+    request: NewsRerankRequest,
+  ): Promise<NewsRerankResponse> {
+    const cutoff = new Date(Date.now() - request.days * 24 * 60 * 60_000);
+    return db.transaction(async (tx) => {
+      // Serializes page requests for this brand, including repeated cursors.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("update")
+        .limit(1);
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+
+      const feedbackColumns = {
+        id: schema.newsItems.id,
+        title: schema.newsItems.title,
+        summary: schema.newsItems.summary,
+        embedding: schema.newsItems.embedding,
+        embeddingModel: schema.newsItems.embeddingModel,
+        embeddingDimensions: schema.newsItems.embeddingDimensions,
+      };
+      const fetchFeedback = (signal: "relevant" | "irrelevant") =>
+        tx
+          .select(feedbackColumns)
+          .from(schema.newsItems)
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.editorSignal, signal),
+            ),
+          )
+          .orderBy(desc(schema.newsItems.createdAt), desc(schema.newsItems.id))
+          .limit(51);
+      const [relevant, irrelevant] = await Promise.all([
+        fetchFeedback("relevant"),
+        fetchFeedback("irrelevant"),
+      ]);
+      const candidates = await tx
+        .select({
+          id: schema.newsItems.id,
+          title: schema.newsItems.title,
+          summary: schema.newsItems.summary,
+          embedding: schema.newsItems.embedding,
+          embeddingModel: schema.newsItems.embeddingModel,
+          embeddingDimensions: schema.newsItems.embeddingDimensions,
+          createdAt: schema.newsItems.createdAt,
+          feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.relevanceStatus, "scored"),
+            gte(schema.newsItems.createdAt, cutoff),
+            ...(request.cursor
+              ? [
+                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${new Date(request.cursor.createdAt)}, ${request.cursor.id}::uuid)`,
+                ]
+              : []),
+          ),
+        )
+        .orderBy(desc(schema.newsItems.createdAt), desc(schema.newsItems.id))
+        .limit(51);
+
+      const page = candidates.slice(0, 50);
+      let changed = 0;
+      for (const item of page) {
+        // The extra row lets a marked candidate exclude itself and still compare
+        // against 50 other examples in that polarity.
+        const examples = (rows: typeof relevant): FeedbackArticle[] =>
+          rows.filter((row) => row.id !== item.id).slice(0, 50);
+        const delta = feedbackAdjustment(item, {
+          relevant: examples(relevant),
+          irrelevant: examples(irrelevant),
+        });
+        if (delta === item.feedbackDelta) continue;
+        const updated = await tx
+          .update(schema.newsItems)
+          .set({ relevanceFeedbackDelta: delta })
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.id, item.id),
+              eq(schema.newsItems.relevanceStatus, "scored"),
+              eq(schema.newsItems.relevanceFeedbackDelta, item.feedbackDelta),
+            ),
+          )
+          .returning({ id: schema.newsItems.id });
+        changed += updated.length;
+      }
+      const last = page.at(-1);
+      return {
+        processed: page.length,
+        changed,
+        nextCursor:
+          candidates.length > 50 && last
+            ? { createdAt: last.createdAt.toISOString(), id: last.id }
+            : null,
+      };
+    });
   }
 
   async score(orgId: string, brandId: string, id: string) {

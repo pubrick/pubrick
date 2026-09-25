@@ -535,6 +535,155 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(201);
   });
 
+  it("reranks scored news in bounded pages from local feedback without model usage", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Rerank" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other brand" }).expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Rerank feed", url: "https://example.com/rerank.xml" })
+      .expect(201);
+    const { db } = await import("../db");
+    const now = Date.now();
+    const score = {
+      relevanceStatus: "scored" as const,
+      relevanceScore: 0.7,
+      relevanceReason: "Original model verdict",
+      relevanceUrgency: "timely" as const,
+      relevanceScoredAt: new Date(now - 60_000),
+      relevanceAttempts: 2,
+    };
+    const rows = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Battery recycling rules for European manufacturers",
+          summary: "Factories collect batteries under new recycling rules.",
+          url: "https://example.com/rerank-signal",
+          editorSignal: "relevant" as const,
+          relevanceFeedbackDelta: 0.2,
+          createdAt: new Date(now - 1_000),
+        },
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "European manufacturers face battery recycling rules",
+          summary: "Factories collect batteries under new recycling rules.",
+          url: "https://example.com/rerank-nearby",
+          createdAt: new Date(now - 2_000),
+        },
+        ...Array.from({ length: 51 }, (_, index) => ({
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: `Coffee price report ${index}`,
+          summary: "A separate story about cafe equipment.",
+          url: `https://example.com/rerank-unrelated-${index}`,
+          createdAt: new Date(now - 3_000 - index * 1_000),
+        })),
+      ])
+      .returning({ id: schema.newsItems.id, title: schema.newsItems.title });
+    const signal = rows[0];
+    const nearby = rows[1];
+    if (!signal || !nearby) throw new Error("Rerank seed failed");
+    const [old, pending] = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Old scored article",
+          url: "https://example.com/rerank-old",
+          relevanceFeedbackDelta: -0.2,
+          createdAt: new Date(now - 31 * 24 * 60 * 60_000),
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Pending article",
+          url: "https://example.com/rerank-pending",
+          relevanceFeedbackDelta: 0.2,
+        },
+      ])
+      .returning({ id: schema.newsItems.id });
+    if (!old || !pending) throw new Error("Rerank exclusion seed failed");
+    const route = `/api/sources/items/rerank?brandId=${brand.body.id}`;
+    await owner.post(route).send({ days: 31 }).expect(400);
+    await owner.post(route).send({ days: 30, extra: true }).expect(400);
+    await owner
+      .post(route)
+      .send({ cursor: { createdAt: "invalid", id: signal.id } })
+      .expect(400);
+    await other.post(route).send({}).expect(404);
+    await owner
+      .post(`/api/sources/items/rerank?brandId=${otherBrand.body.id}`)
+      .send({})
+      .expect(201);
+
+    const usageBefore = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId));
+    const first = await owner.post(route).send({ days: 30 }).expect(201);
+    expect(first.body).toMatchObject({ processed: 50, changed: 2 });
+    expect(first.body.nextCursor).toEqual({
+      createdAt: expect.any(String),
+      id: expect.any(String),
+    });
+    const second = await owner
+      .post(route)
+      .send({ days: 30, cursor: first.body.nextCursor })
+      .expect(201);
+    expect(second.body).toEqual({ processed: 3, changed: 0, nextCursor: null });
+    const repeat = await owner.post(route).send({ days: 30 }).expect(201);
+    expect(repeat.body).toMatchObject({ processed: 50, changed: 0 });
+
+    const saved = await db
+      .select({
+        id: schema.newsItems.id,
+        feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
+        relevanceScore: schema.newsItems.relevanceScore,
+        relevanceReason: schema.newsItems.relevanceReason,
+        relevanceAttempts: schema.newsItems.relevanceAttempts,
+        editorSignal: schema.newsItems.editorSignal,
+      })
+      .from(schema.newsItems)
+      .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.brandId, brand.body.id)));
+    expect(saved.find((item) => item.id === signal.id)).toMatchObject({
+      feedbackDelta: 0,
+      editorSignal: "relevant",
+    });
+    expect(saved.find((item) => item.id === nearby.id)).toMatchObject({
+      feedbackDelta: expect.any(Number),
+      relevanceScore: 0.7,
+      relevanceReason: "Original model verdict",
+      relevanceAttempts: 2,
+    });
+    expect(saved.find((item) => item.id === nearby.id)?.feedbackDelta).toBeGreaterThan(0);
+    expect(
+      saved.filter((item) => rows.some((row) => row.id === item.id) && item.feedbackDelta !== 0),
+    ).toHaveLength(1);
+    expect(saved.find((item) => item.id === old.id)?.feedbackDelta).toBe(-0.2);
+    expect(saved.find((item) => item.id === pending.id)?.feedbackDelta).toBe(0.2);
+    const usageAfter = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId));
+    expect(usageAfter).toEqual(usageBefore);
+    expect(analysisRun).not.toHaveBeenCalled();
+  });
+
   it("analyzes an organization-scoped saved sample, records spend, and marks later samples stale", async () => {
     const { agent, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();

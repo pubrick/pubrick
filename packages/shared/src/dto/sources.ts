@@ -174,6 +174,26 @@ export const newsItemListQuerySchema = z.object({
 });
 export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;
 
+export const newsRerankCursorSchema = z.strictObject({
+  createdAt: z.iso.datetime({ offset: true }),
+  id: z.string().uuid(),
+});
+export type NewsRerankCursor = z.infer<typeof newsRerankCursorSchema>;
+
+/** A small, resumable recalculation of local editor feedback, without model calls. */
+export const newsRerankRequestSchema = z.strictObject({
+  days: z.number().int().min(1).max(30).default(30),
+  cursor: newsRerankCursorSchema.optional(),
+});
+export type NewsRerankRequest = z.infer<typeof newsRerankRequestSchema>;
+
+export const newsRerankResponseSchema = z.strictObject({
+  processed: z.number().int().min(0).max(50),
+  changed: z.number().int().min(0).max(50),
+  nextCursor: newsRerankCursorSchema.nullable(),
+});
+export type NewsRerankResponse = z.infer<typeof newsRerankResponseSchema>;
+
 export const newsCommentDtoSchema = z.object({
   id: z.string().uuid(),
   body: z.string(),
