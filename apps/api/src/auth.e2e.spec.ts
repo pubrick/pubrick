@@ -1,7 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // From auth-policy, not from the gate: the gate imports ./db, whose env parsing runs
@@ -147,6 +147,14 @@ describe.skipIf(!url)("auth e2e", () => {
         .post("/api/auth/organization/accept-invitation")
         .send({ invitationId: invitation.body.id })
         .expect(200);
+      member = request.agent(app.getHttpServer());
+      await member
+        .post("/api/auth/sign-in/email")
+        .send({ email: memberEmail, password: "password1234" })
+        .expect(200);
+      expect(
+        (await member.get("/api/auth/get-session").expect(200)).body.session.activeOrganizationId,
+      ).toBe(orgId);
     });
 
     it("rejects a member's elevated role requests through the raw auth route", async () => {
@@ -161,6 +169,17 @@ describe.skipIf(!url)("auth e2e", () => {
         await member
           .post("/api/auth/organization/invite-member")
           .send({ email, role, organizationId: orgId })
+          .expect(403);
+        const { db } = await import("./db");
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      }
+      for (const organizationId of [undefined, ""]) {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId })
           .expect(403);
         const { db } = await import("./db");
         expect(
@@ -188,7 +207,7 @@ describe.skipIf(!url)("auth e2e", () => {
         .where(eq(schema.invitation.email, email));
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ id: original.body.id, role: "member", status: "pending" });
-      expect(rows[0].expiresAt.toISOString()).toBe(original.body.expiresAt);
+      expect(rows[0]?.expiresAt.toISOString()).toBe(original.body.expiresAt);
     });
 
     it("does not let a member extend an existing admin invitation by resending it as member", async () => {
@@ -208,15 +227,54 @@ describe.skipIf(!url)("auth e2e", () => {
         .where(eq(schema.invitation.email, email));
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ id: original.body.id, role: "admin", status: "pending" });
-      expect(rows[0].expiresAt.toISOString()).toBe(original.body.expiresAt);
+      expect(rows[0]?.expiresAt.toISOString()).toBe(original.body.expiresAt);
+    });
+
+    it("does not mistake a whitespace-prefixed stored role for an effective admin permission", async () => {
+      const { db } = await import("./db");
+      const userId = (await member.get("/api/auth/get-session").expect(200)).body.user.id as string;
+      const membership = and(
+        eq(schema.member.organizationId, orgId),
+        eq(schema.member.userId, userId),
+      );
+      await db.update(schema.member).set({ role: "member, admin" }).where(membership);
+      try {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId: orgId })
+          .expect(403);
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      } finally {
+        await db.update(schema.member).set({ role: "member" }).where(membership);
+      }
     });
 
     it("still lets a member invite an ordinary member and an owner invite an admin", async () => {
+      const memberEmail = fresh();
       const ordinary = await member
         .post("/api/auth/organization/invite-member")
-        .send({ email: fresh(), role: "member", organizationId: orgId })
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
         .expect(200);
       expect(ordinary.body.role).toBe("member");
+      const reissued = await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+      expect(reissued.body.id).not.toBe(ordinary.body.id);
+      const { db } = await import("./db");
+      const memberInvites = await db
+        .select({ id: schema.invitation.id, status: schema.invitation.status })
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, memberEmail));
+      expect(memberInvites).toEqual(
+        expect.arrayContaining([
+          { id: ordinary.body.id, status: "canceled" },
+          { id: reissued.body.id, status: "pending" },
+        ]),
+      );
       const elevated = await owner
         .post("/api/auth/organization/invite-member")
         .send({ email: fresh(), role: "admin", organizationId: orgId })
