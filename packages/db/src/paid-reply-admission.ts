@@ -211,18 +211,20 @@ export async function admitPaidReplyAttempt(
         SELECT (now() AT TIME ZONE ${orgSettings.timezone})::date AS day
       )
       SELECT day::text AS local_date,
-        (day::timestamp AT TIME ZONE ${orgSettings.timezone}) AS day_start,
-        ((day + 1)::timestamp AT TIME ZONE ${orgSettings.timezone}) AS day_end
+        (extract(epoch from (day::timestamp AT TIME ZONE ${orgSettings.timezone})) * 1000)::bigint::text AS day_start_ms,
+        (extract(epoch from ((day + 1)::timestamp AT TIME ZONE ${orgSettings.timezone})) * 1000)::bigint::text AS day_end_ms
       FROM local_day
     `);
     const day = bounds.rows[0] as
-      | { local_date: string; day_start: Date; day_end: Date }
+      | { local_date: string; day_start_ms: string; day_end_ms: string }
       | undefined;
+    const dayStart = new Date(Number(day?.day_start_ms));
+    const dayEnd = new Date(Number(day?.day_end_ms));
     if (
       !day ||
-      !(day.day_start instanceof Date) ||
-      !(day.day_end instanceof Date) ||
-      day.day_start >= day.day_end
+      !Number.isFinite(dayStart.getTime()) ||
+      !Number.isFinite(dayEnd.getTime()) ||
+      dayStart >= dayEnd
     )
       return { status: "blocked", reason: "unknown_spend" };
     const spend = await tx.execute(sql`
@@ -233,25 +235,25 @@ export async function admitPaidReplyAttempt(
           coalesce(bool_or(outcome = 'unknown' OR (cost_usd IS NULL AND outcome IS DISTINCT FROM 'refused') OR (cost_source = 'unknown' AND outcome IS DISTINCT FROM 'refused')), false) AS unknown
         FROM usage_ledger
         WHERE org_id = ${input.orgId}
-          AND created_at AT TIME ZONE 'UTC' >= ${day.day_start}
-          AND created_at AT TIME ZONE 'UTC' < ${day.day_end}
+          AND created_at AT TIME ZONE 'UTC' >= ${dayStart}
+          AND created_at AT TIME ZONE 'UTC' < ${dayEnd}
       ), reservations AS (
         SELECT coalesce(sum(reserved_max_usd), 0)::text AS org_cost,
           coalesce(sum(CASE WHEN brand_id = ${input.brandId}::uuid THEN reserved_max_usd ELSE 0 END), 0)::text AS brand_cost,
           coalesce(bool_or(status = 'unknown'), false) AS unknown
         FROM paid_reply_analysis_attempts
-        WHERE org_id = ${input.orgId} AND day_start_utc = ${day.day_start} AND day_end_utc = ${day.day_end}
+        WHERE org_id = ${input.orgId} AND day_start_utc = ${dayStart} AND day_end_utc = ${dayEnd}
           AND status IN ('queued', 'dispatching', 'unknown')
       ), markers AS (
         SELECT EXISTS (
           SELECT 1 FROM analysis_admissions
           WHERE org_id = ${input.orgId} AND unrecorded_calls > 0
-            AND requested_at >= ${day.day_start} AND requested_at < ${day.day_end}
+            AND requested_at >= ${dayStart} AND requested_at < ${dayEnd}
         ) OR EXISTS (
           SELECT 1 FROM pipeline_runs
           WHERE org_id = ${input.orgId} AND unrecorded_calls > 0
-            AND created_at AT TIME ZONE 'UTC' >= ${day.day_start}
-            AND created_at AT TIME ZONE 'UTC' < ${day.day_end}
+            AND created_at AT TIME ZONE 'UTC' >= ${dayStart}
+            AND created_at AT TIME ZONE 'UTC' < ${dayEnd}
         ) AS unknown
       )
       SELECT ledger.org_cost AS ledger_org, ledger.brand_cost AS ledger_brand,
@@ -309,8 +311,8 @@ export async function admitPaidReplyAttempt(
         brandThresholdRevision: brandSettings.thresholdRevision,
         admissionLocalDate: day.local_date,
         admissionTimezone: orgSettings.timezone,
-        dayStartUtc: day.day_start,
-        dayEndUtc: day.day_end,
+        dayStartUtc: dayStart,
+        dayEndUtc: dayEnd,
         reservedMaxUsd: input.reservedMaxUsd,
       })
       .returning({ id: schema.paidReplyAnalysisAttempts.id });
