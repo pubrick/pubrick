@@ -65,9 +65,10 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
     loadGeneration.current += 1;
     try {
       const body = claimReviewStartSchema.parse({ expectedBody: savedBody });
-      setReview(
-        await api<ClaimReviewDto>(endpoint, { method: "POST", body: JSON.stringify(body) }),
-      );
+      await api<ClaimReviewDto>(endpoint, { method: "POST", body: JSON.stringify(body) });
+      // A saved edit may have completed while POST was in flight. Re-read the
+      // current article's review instead of trusting the old POST snapshot.
+      await load();
     } catch (err) {
       if (err instanceof ApiError && err.code === "claim_review_no_search_key") {
         setError(t("missingSearchKey"));
@@ -83,8 +84,8 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
     }
   }
 
-  const active = review?.status === "queued" || review?.status === "running";
   const stale = review?.stale || hasUnsavedText;
+  const active = !stale && (review?.status === "queued" || review?.status === "running");
 
   return (
     <Card className="mb-6">

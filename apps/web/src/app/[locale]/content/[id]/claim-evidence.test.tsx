@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "@/lib/api";
 import { signedInSession } from "@/test/auth-client.stub";
-import { renderAsync, screen, waitFor } from "@/test/render";
+import { act, renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import { ClaimEvidence } from "./claim-evidence";
 
@@ -51,9 +51,11 @@ describe("claim evidence", () => {
   });
 
   it("starts from the exact saved draft and displays advisory source results", async () => {
-    request.mockImplementation(async (_path, options) =>
-      options?.method === "POST" ? review() : null,
-    );
+    let started = false;
+    request.mockImplementation(async (_path, options) => {
+      if (options?.method === "POST") started = true;
+      return started ? review() : null;
+    });
     await renderAsync(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.ClaimEvidence.start }));
@@ -96,6 +98,43 @@ describe("claim evidence", () => {
     );
     expect(await screen.findByText(en.ClaimEvidence.stale)).toBeVisible();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps old evidence stale when a save completes before the POST reply", async () => {
+    let reply!: (result: ReturnType<typeof review>) => void;
+    let started = false;
+    request.mockImplementation(async (_path, options) => {
+      if (options?.method === "POST") {
+        started = true;
+        return new Promise((resolve) => {
+          reply = resolve;
+        });
+      }
+      return started ? review({ stale: true }) : null;
+    });
+    const { rerender } = await renderAsync(
+      <ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.ClaimEvidence.start }));
+    rerender(
+      <ClaimEvidence
+        itemId={itemId}
+        savedBody={`${body} Saved.`}
+        draftBody={`${body} Saved.`}
+        editable
+      />,
+    );
+    expect(await screen.findByText(en.ClaimEvidence.stale)).toBeVisible();
+    await act(async () => reply(review({ stale: false })));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(screen.getByText(en.ClaimEvidence.stale)).toBeVisible();
+  });
+
+  it("allows a fresh run while the previous body's job is still queued", async () => {
+    request.mockResolvedValue(review({ status: "queued", stale: true }));
+    await renderAsync(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
+    expect(await screen.findByRole("button", { name: en.ClaimEvidence.runAgain })).toBeEnabled();
   });
 
   it("links to search setup when a key is missing", async () => {
