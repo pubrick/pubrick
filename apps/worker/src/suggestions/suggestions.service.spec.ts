@@ -323,6 +323,38 @@ describe("SuggestionsService", () => {
     );
   });
 
+  it.each([1e-200, 1e200])(
+    "compares identical and distinct finite vectors at magnitude %s",
+    async (magnitude) => {
+      const suggestions = [
+        { title: "Same blocked angle", description: "Near", newsItemId: null },
+        { title: "Different angle", description: "Far", newsItemId: null },
+      ];
+      const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions }));
+      repo.recentBlocked.mockResolvedValue({ titles: ["Blocked angle"], state: "state" });
+      const near = Array(768).fill(magnitude);
+      const far = Array(768)
+        .fill(0)
+        .map((_, index) => (index === 0 ? magnitude : 0));
+      embedBatch.mockResolvedValue({
+        embeddings: [near, far, near],
+        tokens: 12,
+        tokensKnown: true,
+      });
+      await service.handle(job);
+      expect(repo.recordEmbeddingUsage).toHaveBeenCalledOnce();
+      expect(repo.complete).toHaveBeenCalledWith(
+        job.orgId,
+        job.brandId,
+        job.requestId,
+        [suggestions[1]],
+        [{ id: newsId, url: "https://example.com/rule" }],
+        1,
+        { titles: ["Blocked angle"], state: "state" },
+      );
+    },
+  );
+
   it.each(["candidate", "blocker"] as const)(
     "fails safely after metering an all-zero %s embedding",
     async (zeroSide) => {
