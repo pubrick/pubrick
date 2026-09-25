@@ -2977,4 +2977,50 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("adds the topic block check without scanning existing topics at startup", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0083_purple_patriot");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_block_old', 'Topic block old', 'topic-block-old')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_block_old', 'Legacy brand') RETURNING id",
+        );
+        const topic = await pool.query<{ id: string }>(
+          "INSERT INTO topics (org_id, brand_id, title, status) VALUES ('topic_block_old', $1, 'Legacy approved', 'approved') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        topicId = topic.rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const topic = await after.query(
+          "SELECT status, blocked_at, block_reason FROM topics WHERE id = $1",
+          [topicId],
+        );
+        expect(topic.rows[0]).toEqual({ status: "approved", blocked_at: null, block_reason: null });
+        const constraint = await after.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname = 'topics_block_state_check'",
+        );
+        expect(constraint.rows).toEqual([{ convalidated: false }]);
+        expect(
+          await refusal(after, "UPDATE topics SET blocked_at = now() WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
 });

@@ -352,6 +352,15 @@ ALTER TABLE topics VALIDATE CONSTRAINT topics_content_type_check;
 ALTER TABLE topics VALIDATE CONSTRAINT topics_seo_keywords_check;
 ```
 
+Topic blocking (migration 0083) also adds `topics_block_state_check` as
+`NOT VALID`. New writes are checked immediately, while existing rows avoid a
+full table scan under the startup migration lock. Validate it separately
+during a quieter period:
+
+```sql
+ALTER TABLE topics VALIDATE CONSTRAINT topics_block_state_check;
+```
+
 ### Variables added since August 2026
 
 `docker compose up` refuses to start when a **required** variable is missing,
