@@ -870,6 +870,7 @@
     "saveFirst": "Guarde o texto do rascunho antes de consultar as afirmações.",
     "empty": "Ainda não existe uma revisão de afirmações.",
     "emptyHint": "Guarde o rascunho e escolha Consultar.",
+    "lockedHint": "A revisão de afirmações está disponível enquanto a publicação pode ser editada.",
     "stale": "Este resultado pertence a um rascunho anterior. Atualize-o para o texto atual.",
     "noClaims": "Não foram encontradas afirmações factuais atuais. Leia o rascunho antes de publicar.",
     "failed": "A revisão de afirmações não terminou. Tente novamente.",

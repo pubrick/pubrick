@@ -870,6 +870,7 @@
     "saveFirst": "Save the draft text before checking its claims.",
     "empty": "No claim review yet.",
     "emptyHint": "Save the draft, then choose Check.",
+    "lockedHint": "Claim review is available while a post is editable.",
     "stale": "This result belongs to an older draft. Refresh it for the current text.",
     "noClaims": "No time-sensitive factual claims were found. Read the draft yourself before publishing.",
     "failed": "The claim review did not finish. Try again.",

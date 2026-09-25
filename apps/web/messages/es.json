@@ -870,6 +870,7 @@
     "saveFirst": "Guarda el texto del borrador antes de consultar sus afirmaciones.",
     "empty": "Aún no hay una revisión de afirmaciones.",
     "emptyHint": "Guarda el borrador y elige Consultar.",
+    "lockedHint": "La revisión de afirmaciones está disponible mientras el artículo se puede editar.",
     "stale": "Este resultado corresponde a un borrador anterior. Actualízalo para el texto actual.",
     "noClaims": "No se encontraron afirmaciones factuales actuales. Lee el borrador antes de publicarlo.",
     "failed": "La revisión de afirmaciones no terminó. Inténtalo de nuevo.",

@@ -131,7 +131,11 @@ export function ClaimEvidence({ itemId, savedBody, draftBody, editable }: Props)
       ) : review === null ? (
         <EmptyState
           title={t("empty")}
-          action={<span className="text-sm text-fg-secondary">{t("emptyHint")}</span>}
+          action={
+            <span className="text-sm text-fg-secondary">
+              {t(editable ? "emptyHint" : "lockedHint")}
+            </span>
+          }
           className="mt-4"
         />
       ) : (

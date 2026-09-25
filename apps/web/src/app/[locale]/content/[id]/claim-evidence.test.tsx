@@ -82,6 +82,16 @@ describe("claim evidence", () => {
     expect(request.mock.calls).toHaveLength(1);
   });
 
+  it("does not suggest an unavailable check for a locked post", async () => {
+    request.mockResolvedValue(null);
+    await renderAsync(
+      <ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable={false} />,
+    );
+    expect(await screen.findByText(en.ClaimEvidence.lockedHint)).toBeVisible();
+    expect(screen.queryByText(en.ClaimEvidence.emptyHint)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.ClaimEvidence.start })).not.toBeInTheDocument();
+  });
+
   it("refreshes the saved-body review after an edit is saved", async () => {
     request.mockResolvedValueOnce(review()).mockResolvedValueOnce(review({ stale: true }));
     const { rerender } = await renderAsync(
