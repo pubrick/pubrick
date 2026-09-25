@@ -22,10 +22,14 @@ import {
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
   type PublishJob,
+  RELEVANCE_BATCH_DLQ,
+  RELEVANCE_BATCH_QUEUE,
+  RELEVANCE_BATCH_QUEUE_OPTIONS,
   RELEVANCE_DLQ,
   RELEVANCE_QUEUE,
   RELEVANCE_QUEUE_OPTIONS,
   RELEVANCE_SCAN_QUEUE,
+  type RelevanceBatchJob,
   type RelevanceJob,
   RSS_POLL_OPTIONS,
   RSS_POLL_QUEUE,
@@ -255,6 +259,25 @@ export class QueueService {
     }
 
     if (this.relevance && names === DEFAULT_QUEUE_NAMES) {
+      const reconcileQueue = "news-relevance-batch-reconcile";
+      await boss.createQueue(reconcileQueue);
+      await boss.schedule(reconcileQueue, "*/5 * * * *");
+      await boss.work(reconcileQueue, { batchSize: 1 }, async () =>
+        this.relevance?.reconcileBatches(),
+      );
+      await boss.createQueue(RELEVANCE_BATCH_DLQ);
+      await boss.createQueue(RELEVANCE_BATCH_QUEUE, { ...RELEVANCE_BATCH_QUEUE_OPTIONS });
+      await boss.updateQueue(RELEVANCE_BATCH_QUEUE, { ...RELEVANCE_BATCH_QUEUE_OPTIONS });
+      await boss.work<RelevanceBatchJob>(
+        RELEVANCE_BATCH_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.relevance?.handleBatch(job.data);
+        },
+      );
+      await boss.work<RelevanceBatchJob>(RELEVANCE_BATCH_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.relevance?.exhaustedBatch(job.data);
+      });
       await boss.createQueue(RELEVANCE_DLQ);
       await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
       await boss.updateQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });

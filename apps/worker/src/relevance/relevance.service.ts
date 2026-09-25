@@ -16,6 +16,7 @@ import {
   isUnreadableCiphertext,
   PermanentError,
   RELEVANCE_QUEUE,
+  type RelevanceBatchJob,
   type RelevanceJob,
   TransientError,
 } from "@pubrick/shared";
@@ -44,9 +45,59 @@ export class RelevanceService {
   ) {}
 
   async handle(job: RelevanceJob): Promise<void> {
-    const input = await this.repo.claim(job.orgId, job.brandId, job.itemId);
+    return this.score(job);
+  }
+
+  async handleBatch(job: RelevanceBatchJob): Promise<void> {
+    return this.score(job, job.batchId);
+  }
+
+  async exhaustedBatch(job: RelevanceBatchJob): Promise<void> {
+    await this.repo.finishBatch(job.orgId, job.brandId, job.batchId, job.itemId, {
+      kind: "failed",
+      code: "model_failed",
+    });
+  }
+
+  async reconcileBatches(): Promise<void> {
+    for (const item of await this.repo.orphanedBatchJobs()) {
+      await this.repo.finishBatch(item.orgId, item.brandId, item.batchId, item.itemId, {
+        kind: "failed",
+        code: "model_failed",
+      });
+    }
+  }
+
+  private async score(job: RelevanceJob, batchId?: string): Promise<void> {
+    let usageLossRecordFailed = false;
+    const accountUsageLoss = async (
+      error: unknown,
+      provider: string,
+      modelId: string,
+      key?: string,
+    ) => {
+      this.logger.error(
+        `Relevance usage ledger failed for org ${job.orgId}, item ${job.itemId}, ${provider}/${modelId}: ${redactSecrets(String(error), key)}`,
+      );
+      if (!batchId) return;
+      try {
+        await this.repo.recordBatchUsageLoss(job.orgId, job.brandId, batchId);
+      } catch {
+        usageLossRecordFailed = true;
+      }
+    };
+    const input = batchId
+      ? await this.repo.claimBatch(job.orgId, job.brandId, batchId, job.itemId)
+      : await this.repo.claim(job.orgId, job.brandId, job.itemId);
     if (!input) {
-      await this.repo.markAttemptLimit(job.orgId, job.brandId, job.itemId);
+      if (!batchId) await this.repo.markAttemptLimit(job.orgId, job.brandId, job.itemId);
+      return;
+    }
+    if ("missing" in input) {
+      if (batchId)
+        await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+          kind: "skipped",
+        });
       return;
     }
     let credential: AiCredential | undefined;
@@ -54,11 +105,23 @@ export class RelevanceService {
       credential = await this.credentials.credential(job.orgId);
     } catch (error) {
       if (!(error instanceof PermanentError)) throw error;
-      await this.repo.failed(job.orgId, job.brandId, job.itemId, "unreadable_key");
+      if (batchId)
+        await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+          kind: "failed",
+          code: "unreadable_key",
+          halt: true,
+        });
+      else await this.repo.failed(job.orgId, job.brandId, job.itemId, "unreadable_key");
       return;
     }
     if (!credential) {
-      await this.repo.failed(job.orgId, job.brandId, job.itemId, "no_api_key");
+      if (batchId)
+        await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+          kind: "failed",
+          code: "no_api_key",
+          halt: true,
+        });
+      else await this.repo.failed(job.orgId, job.brandId, job.itemId, "no_api_key");
       return;
     }
     // Read feedback before the paid call: an unavailable database must not
@@ -84,23 +147,45 @@ export class RelevanceService {
           `<article>${input.title.slice(0, 500)}\n${input.summary.slice(0, 4000)}</article>`,
         ].join("\n"),
         maxRetries: 0,
+        repairSchemaErrors: batchId ? false : undefined,
         timeoutMs: 60_000,
         onUsage: (record) => this.repo.recordUsage(job.orgId, record),
         onUsageError: (error, record) =>
-          this.logger.error(
-            `Relevance usage ledger failed for org ${job.orgId}, item ${job.itemId}, ${record.provider}/${record.modelId}: ${redactSecrets(String(error), credential.apiKey)}`,
-          ),
+          accountUsageLoss(error, record.provider, record.modelId, credential.apiKey),
       });
     } catch (error) {
+      if (usageLossRecordFailed) throw error;
       this.logger.warn(
         `Relevance scoring failed for item ${job.itemId}: ${runFailureOf(error) ?? "model_failed"}`,
       );
-      await this.repo.failed(job.orgId, job.brandId, job.itemId, "model_failed");
-      if (error instanceof TransientError) throw error;
+      if (batchId) {
+        const classified = runFailureOf(error);
+        const terminal =
+          classified === "no_api_key" ||
+          classified === "invalid_key" ||
+          classified === "model_not_found";
+        const code =
+          classified === "no_api_key" ||
+          classified === "invalid_key" ||
+          classified === "model_not_found" ||
+          classified === "provider_refused"
+            ? classified
+            : "model_failed";
+        await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+          kind: "failed",
+          code,
+          halt: terminal,
+        });
+      } else {
+        await this.repo.failed(job.orgId, job.brandId, job.itemId, "model_failed");
+        if (error instanceof TransientError) throw error;
+      }
       return;
     }
+    if (usageLossRecordFailed) throw new Error("Relevance usage outcome was not persisted");
     // A database error after a paid call is infrastructure failure, not a bad
-    // model verdict. Let pg-boss retry rather than marking the article failed.
+    // model verdict. The single-item queue may retry; the paid batch queue
+    // records a terminal item failure without repeating the provider call.
     let embedding: number[] | undefined;
     let googleKey: string | undefined;
     try {
@@ -121,25 +206,37 @@ export class RelevanceService {
           "RETRIEVAL_DOCUMENT",
         );
       } catch (error) {
-        await this.repo.recordEmbeddingUsage(
-          job.orgId,
-          0,
-          Date.now() - started,
-          "errored",
-          callOutcomeOf(error),
-        );
+        try {
+          await this.repo.recordEmbeddingUsage(
+            job.orgId,
+            0,
+            Date.now() - started,
+            "errored",
+            callOutcomeOf(error),
+          );
+        } catch (ledgerError) {
+          if (!batchId) throw ledgerError;
+          await accountUsageLoss(ledgerError, "google", KNOWLEDGE_EMBEDDING_MODEL, googleKey);
+          if (usageLossRecordFailed) throw ledgerError;
+        }
         this.logger.warn(
           `News feedback embedding unavailable for item ${job.itemId}; using headline matching`,
         );
       }
       if (result) {
-        await this.repo.recordEmbeddingUsage(
-          job.orgId,
-          result.tokens,
-          Date.now() - started,
-          "ok",
-          "completed",
-        );
+        try {
+          await this.repo.recordEmbeddingUsage(
+            job.orgId,
+            result.tokens,
+            Date.now() - started,
+            "ok",
+            "completed",
+          );
+        } catch (error) {
+          if (!batchId) throw error;
+          await accountUsageLoss(error, "google", KNOWLEDGE_EMBEDDING_MODEL, googleKey);
+          if (usageLossRecordFailed) throw error;
+        }
         if (
           result.embedding.length === KNOWLEDGE_EMBEDDING_DIMENSIONS &&
           result.embedding.every(Number.isFinite)
@@ -152,7 +249,7 @@ export class RelevanceService {
         }
       }
     }
-    await this.repo.scored(job.orgId, job.brandId, job.itemId, {
+    const result = {
       ...verdict,
       feedbackDelta: feedbackAdjustment(
         {
@@ -164,7 +261,13 @@ export class RelevanceService {
         feedback,
       ),
       embedding,
-    });
+    };
+    if (batchId)
+      await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+        kind: "scored",
+        ...result,
+      });
+    else await this.repo.scored(job.orgId, job.brandId, job.itemId, result);
   }
 
   async scan(boss: PgBoss): Promise<void> {

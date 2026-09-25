@@ -202,6 +202,54 @@ export const newsRerankResponseSchema = z.strictObject({
 });
 export type NewsRerankResponse = z.infer<typeof newsRerankResponseSchema>;
 
+/** Paid model recheck is separate from the free local feedback rerank. */
+export const newsRecheckRequestSchema = z.strictObject({
+  days: z.number().int().min(1).max(30).default(7),
+  /** Explicit approval ceiling from the preview; new stories cannot raise it. */
+  maxItems: z.number().int().min(1).max(500),
+});
+export type NewsRecheckRequest = z.infer<typeof newsRecheckRequestSchema>;
+export const newsRecheckPreviewQuerySchema = z.object({
+  brandId: z.string().uuid(),
+  days: z.coerce.number().int().min(1).max(30).default(7),
+});
+export const newsRecheckPreviewSchema = z.strictObject({
+  days: z.number().int(),
+  eligible: z.number().int(),
+  capped: z.boolean(),
+  maxModelCalls: z.number().int(),
+  maxEmbeddingCalls: z.number().int(),
+  /** No price is promised for an unknown or custom model. */
+  model: z.string().nullable(),
+  estimatedCostUsd: z.number().nullable(),
+});
+export type NewsRecheckPreview = z.infer<typeof newsRecheckPreviewSchema>;
+export const newsRecheckBatchSchema = z.strictObject({
+  id: z.string().uuid(),
+  status: z.enum(["queued", "running", "completed", "partial", "halted"]),
+  days: z.number().int(),
+  selectedCount: z.number().int(),
+  processedCount: z.number().int(),
+  updatedCount: z.number().int(),
+  failedCount: z.number().int(),
+  skippedCount: z.number().int(),
+  unrecordedCalls: z.number().int(),
+  errorCode: z
+    .enum([
+      "no_api_key",
+      "unreadable_key",
+      "invalid_key",
+      "model_not_found",
+      "provider_refused",
+      "model_failed",
+    ])
+    .nullable(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+});
+export type NewsRecheckBatch = z.infer<typeof newsRecheckBatchSchema>;
+
 export const newsCommentDtoSchema = z.object({
   id: z.string().uuid(),
   body: z.string(),

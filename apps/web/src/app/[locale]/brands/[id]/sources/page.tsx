@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutoComments } from "./auto-comments";
+import { RecheckPanel } from "./recheck-panel";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
@@ -578,6 +579,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         </Button>
       </div>
       <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
+      <RecheckPanel brandId={id} onFinished={load} />
       <Card padded={false}>
         {items === null ? (
           <div className="p-4">

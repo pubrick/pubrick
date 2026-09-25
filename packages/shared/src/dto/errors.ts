@@ -82,6 +82,9 @@ export const API_ERROR_CODES = [
   "telegram_login_invalid",
   "telegram_login_busy",
   "telegram_login_unavailable",
+  "recheck_busy",
+  "recheck_empty",
+  "recheck_preview_stale",
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
