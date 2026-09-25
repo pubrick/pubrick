@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTENT_TYPES } from "./runs.js";
 
 export const analyticsDaysSchema = z.coerce
   .number()
@@ -134,3 +135,27 @@ export const brandSpendHistoryDtoSchema = z.object({
     .max(50),
 });
 export type BrandSpendHistoryDto = z.infer<typeof brandSpendHistoryDtoSchema>;
+
+/** Generation runs started in the selected window; their recorded calls follow the run. */
+export const brandFormatSpendDtoSchema = z.object({
+  days: analyticsDaysSchema,
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+  formats: z.array(
+    z.object({
+      contentType: z.enum([...CONTENT_TYPES, "unknown"]),
+      runCount: z.number().int().nonnegative(),
+      knownUsd: z.number().nonnegative(),
+      meanKnownUsdPerRun: z.number().nonnegative(),
+      pricedCalls: z.number().int().nonnegative(),
+      estimatedCalls: z.number().int().nonnegative(),
+      /** Unknown-cost calls with tokens or an ambiguous provider outcome, not known-free refusals. */
+      unknownCostCalls: z.number().int().nonnegative(),
+      /** Calls attempted by a run but not durably written to the usage ledger. */
+      unrecordedCalls: z.number().int().nonnegative(),
+      /** Runs created before the unrecorded-call counter existed. */
+      legacyRuns: z.number().int().nonnegative(),
+    }),
+  ),
+});
+export type BrandFormatSpendDto = z.infer<typeof brandFormatSpendDtoSchema>;

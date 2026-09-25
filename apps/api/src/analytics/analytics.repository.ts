@@ -4,8 +4,11 @@ import { schema } from "@pubrick/db";
 import { readVkPostMetrics } from "@pubrick/integrations";
 import {
   type AnalyticsDto,
+  type BrandFormatSpendDto,
   type BrandOverviewDto,
   type BrandSpendHistoryDto,
+  CONTENT_TYPES,
+  type ContentType,
   commentAnalysisResultSchema,
   isPublicTelegramPostUrl,
   type PublicationCommentsDto,
@@ -299,6 +302,85 @@ export class AnalyticsRepository {
           contentItemId: row.contentBrandId === brandId ? row.contentItemId : null,
         };
       }),
+    };
+  }
+
+  /** Run-created window: all recorded calls belonging to each selected run. */
+  async formatSpend(
+    orgId: string,
+    brandId: string,
+    days: 7 | 30 | 90,
+  ): Promise<BrandFormatSpendDto> {
+    await this.requireBrand(orgId, brandId);
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    const r = schema.pipelineRuns;
+    const l = schema.usageLedger;
+    // Older runs predate contentType and used social_post. The run is the
+    // authoritative brand/format link even if its produced draft was deleted.
+    const supportedFormats = sql.join(
+      CONTENT_TYPES.map((contentType) => sql`${contentType}`),
+      sql`, `,
+    );
+    const format = sql<ContentType | "unknown">`case
+      when ${r.input}->>'contentType' is null then 'social_post'
+      when ${r.input}->>'contentType' in (${supportedFormats}) then ${r.input}->>'contentType'
+      else 'unknown'
+    end`;
+    const scope = and(
+      eq(r.orgId, orgId),
+      eq(r.brandId, brandId),
+      gte(r.createdAt, from),
+      lt(r.createdAt, to),
+    );
+    const runs = await db
+      .select({
+        contentType: format,
+        runCount: sql<string>`count(*)`,
+        unrecordedCalls: sql<string>`coalesce(sum(${r.unrecordedCalls}), 0)`,
+        legacyRuns: sql<string>`count(*) filter (where ${r.unrecordedCalls} is null)`,
+      })
+      .from(r)
+      .where(scope)
+      // The expression contains bind parameters; group by its selected column
+      // so PostgreSQL sees the same values rather than a second bind set.
+      .groupBy(sql`1`);
+    const priced = sql`${l.costUsd} is not null and ${l.costSource} <> 'unknown'`;
+    const calls = await db
+      .select({
+        contentType: format,
+        knownUsd: sql<string>`coalesce(sum(${l.costUsd}) filter (where ${priced}), 0)`,
+        pricedCalls: sql<string>`count(*) filter (where ${priced})`,
+        estimatedCalls: sql<string>`count(*) filter (where ${priced} and ${l.costSource} = 'price_table')`,
+        unknownCostCalls: sql<string>`count(*) filter (where not (${priced}) and (${l.inputTokens} + ${l.outputTokens} > 0 or ${l.outcome} is not distinct from 'unknown'))`,
+      })
+      .from(r)
+      .innerJoin(l, and(eq(l.runId, r.id), eq(l.orgId, orgId)))
+      .where(scope)
+      .groupBy(sql`1`);
+    const byFormat = new Map(calls.map((row) => [row.contentType, row]));
+    return {
+      days,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      formats: runs
+        .map((row) => {
+          const call = byFormat.get(row.contentType);
+          const runCount = count(row.runCount);
+          const knownUsd = Number(call?.knownUsd ?? 0);
+          return {
+            contentType: row.contentType,
+            runCount,
+            knownUsd,
+            meanKnownUsdPerRun: knownUsd / runCount,
+            pricedCalls: count(call?.pricedCalls),
+            estimatedCalls: count(call?.estimatedCalls),
+            unknownCostCalls: count(call?.unknownCostCalls),
+            unrecordedCalls: count(row.unrecordedCalls),
+            legacyRuns: count(row.legacyRuns),
+          };
+        })
+        .sort((a, b) => b.runCount - a.runCount || a.contentType.localeCompare(b.contentType)),
     };
   }
 

@@ -6,13 +6,14 @@ import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   analyticsDtoSchema,
+  brandFormatSpendDtoSchema,
   brandOverviewDtoSchema,
   brandSpendHistoryDtoSchema,
   commentAnalysisDtoSchema,
   publicationCommentsDtoSchema,
   publicationMetricsDtoSchema,
 } from "@pubrick/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
@@ -99,6 +100,236 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("groups run spend by requested format without duplicating calls or leaking sibling links", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Format spend" }).expect(201);
+    const sibling = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Other format" })
+      .expect(201);
+    const now = Date.now();
+    const ago = (days: number) => new Date(now - days * 86_400_000);
+    const [draft, siblingDraft] = await db
+      .insert(schema.contentItems)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Delete after generation" },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Other brand" },
+      ])
+      .returning({ id: schema.contentItems.id });
+    const [siblingChannel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: sibling.body.id, platform: "vc_ru", name: "Other" })
+      .returning({ id: schema.channels.id });
+    if (!draft || !siblingDraft || !siblingChannel) throw new Error("Missing format fixtures");
+    const [current, legacy, expert, old, siblingRun] = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          contentItemId: draft.id,
+          input: { kind: "brief", text: "Social", channelIds: [], contentType: "social_post" },
+          status: "succeeded",
+          unrecordedCalls: 2,
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Earlier", channelIds: [] },
+          status: "failed",
+          unrecordedCalls: null,
+          createdAt: ago(12),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Expert", channelIds: [], contentType: "expert_article" },
+          status: "failed",
+          unrecordedCalls: 0,
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Out of window", channelIds: [] },
+          status: "succeeded",
+          unrecordedCalls: 0,
+          createdAt: ago(95),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          input: { kind: "brief", text: "Sibling", channelIds: [] },
+          status: "succeeded",
+          createdAt: ago(2),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    if (!current || !legacy || !expert || !old || !siblingRun)
+      throw new Error("Missing format runs");
+    const [malformed] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        input: { kind: "brief", text: "Malformed legacy JSON", channelIds: [] },
+        status: "failed",
+        unrecordedCalls: 0,
+        createdAt: ago(2),
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!malformed) throw new Error("Missing malformed run");
+    await db.execute(
+      sql`update pipeline_runs set input = jsonb_set(input, '{contentType}', '"other"') where id = ${malformed.id}`,
+    );
+    await db.insert(schema.usageLedger).values([
+      {
+        orgId: owner.orgId,
+        runId: current.id,
+        contentItemId: draft.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.120000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: current.id,
+        step: "editor",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.080000",
+        costSource: "price_table",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: legacy.id,
+        step: "timeout",
+        provider: "google",
+        modelId: "test",
+        inputTokens: 10,
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+      },
+      {
+        orgId: owner.orgId,
+        runId: legacy.id,
+        step: "refused-before-use",
+        provider: "google",
+        modelId: "test",
+        costSource: "unknown",
+        status: "errored",
+        outcome: "refused",
+      },
+      {
+        orgId: owner.orgId,
+        runId: expert.id,
+        contentItemId: siblingDraft.id,
+        channelId: siblingChannel.id,
+        step: "research",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.300000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: old.id,
+        step: "old",
+        provider: "google",
+        modelId: "test",
+        costUsd: "5.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: siblingRun.id,
+        step: "sibling",
+        provider: "google",
+        modelId: "test",
+        costUsd: "9.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: outsider.orgId,
+        runId: current.id,
+        step: "foreign-ledger",
+        provider: "google",
+        modelId: "test",
+        costUsd: "99.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+    ]);
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, draft.id));
+    const path = `/api/analytics/brands/${brand.body.id}/format-spend`;
+    await outsider.agent.get(`${path}?days=30`).expect(404);
+    await owner.agent.get(`${path}?days=31`).expect(400);
+    const month = brandFormatSpendDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=30`).expect(200)).body,
+    );
+    expect(month.formats).toEqual([
+      {
+        contentType: "social_post",
+        runCount: 2,
+        knownUsd: 0.2,
+        meanKnownUsdPerRun: 0.1,
+        pricedCalls: 2,
+        estimatedCalls: 1,
+        unknownCostCalls: 1,
+        unrecordedCalls: 2,
+        legacyRuns: 1,
+      },
+      {
+        contentType: "expert_article",
+        runCount: 1,
+        knownUsd: 0.3,
+        meanKnownUsdPerRun: 0.3,
+        pricedCalls: 1,
+        estimatedCalls: 0,
+        unknownCostCalls: 0,
+        unrecordedCalls: 0,
+        legacyRuns: 0,
+      },
+      {
+        contentType: "unknown",
+        runCount: 1,
+        knownUsd: 0,
+        meanKnownUsdPerRun: 0,
+        pricedCalls: 0,
+        estimatedCalls: 0,
+        unknownCostCalls: 0,
+        unrecordedCalls: 0,
+        legacyRuns: 0,
+      },
+    ]);
+    const week = brandFormatSpendDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=7`).expect(200)).body,
+    );
+    expect(week.formats.find((row) => row.contentType === "social_post")).toMatchObject({
+      runCount: 1,
+      knownUsd: 0.2,
+      meanKnownUsdPerRun: 0.2,
+      unknownCostCalls: 0,
+      legacyRuns: 0,
+    });
+  });
 
   it("counts brand activity by event window without multiplying linked costs or leaking tenants", async () => {
     const owner = await orgAgent();

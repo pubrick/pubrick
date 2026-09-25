@@ -37,6 +37,15 @@ export class AnalyticsController {
     return this.analytics.spendHistory(orgId, brandId);
   }
 
+  @Get("brands/:brandId/format-spend")
+  formatSpend(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+  ) {
+    return this.analytics.formatSpend(orgId, brandId, days);
+  }
+
   @Get("brands/:brandId/comment-collection")
   commentCollection(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.analytics.publicationCommentCollection(orgId, brandId);
