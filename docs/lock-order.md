@@ -3,7 +3,7 @@
 **One order, for the whole product:**
 
 ```
-brands  →  pipeline_runs  →  adaptations  →  channels  →  content_items  →
+brands  →  topics  →  pipeline_runs  →  adaptations  →  channels  →  content_items  →
 refine_proposals / adaptation_proposals
 ```
 
@@ -20,6 +20,14 @@ This makes the daily cap and linked-topic check atomic across worker replicas
 and manual placement. Removing a linked slot holds the brand lock while
 clearing the topic's target date, so the next scan does not undo the editor's
 removal.
+
+The draft topic veto follows `brands → topics → pipeline_runs → adaptations →
+content_items`. It first discovers the run link without a row lock, then locks
+the brand, linked topic, run, and draft in that order and rechecks the link and
+draft status. The `pipeline_runs.topic_id` foreign key uses `ON DELETE SET NULL`;
+deleting a topic can acquire a run lock after the topic lock, so a veto must not
+lock the run first. Topic blocking and draft archiving commit together, and
+the action refuses any draft whose delivery has started.
 
 Content archive and restore lock all of an item's adaptations by ID before
 locking `content_items`, then change only the parent status. Archive refuses
