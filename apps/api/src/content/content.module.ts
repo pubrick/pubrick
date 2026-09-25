@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
 import { MediaModule } from "../media/media.module";
+import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
 import { ContentImagesRepository } from "./content-images.repository";
@@ -30,6 +31,7 @@ import { RefineCaller } from "./refine.caller";
     RefineCaller,
     ReadaptCaller,
     DraftRevisionCaller,
+    ClaimCorrectionCaller,
   ],
 })
 export class ContentModule {}

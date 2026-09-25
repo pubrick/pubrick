@@ -18,6 +18,8 @@ import {
   type AdaptationUpdate,
   adaptationRescheduleSchema,
   adaptationUpdateSchema,
+  type ClaimCorrectionProposalDto,
+  type ClaimCorrectionRequest,
   type ContentApprove,
   type ContentCreate,
   type ContentImageCrop,
@@ -26,6 +28,7 @@ import {
   type ContentUpdate,
   type ContentVersionListQuery,
   type ContentVersionRestore,
+  claimCorrectionRequestSchema,
   contentApproveSchema,
   contentCreateSchema,
   contentImageCropSchema,
@@ -67,6 +70,44 @@ export class ContentController {
     private readonly contentImages: ContentImagesRepository,
     private readonly editorialNotes: EditorialNotesRepository,
   ) {}
+
+  @Get(":id/claim-correction")
+  async claimCorrection(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Res() response: { json: (value: ClaimCorrectionProposalDto | null) => void },
+  ): Promise<void> {
+    response.json(await this.content.claimCorrection(orgId, id));
+  }
+
+  @Post(":id/claim-correction")
+  proposeClaimCorrection(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(claimCorrectionRequestSchema)) body: ClaimCorrectionRequest,
+  ) {
+    return this.content.proposeClaimCorrection(orgId, id, body);
+  }
+
+  @Post(":id/claim-correction/:proposalId/accept")
+  @HttpCode(200)
+  acceptClaimCorrection(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ) {
+    return this.content.acceptClaimCorrection(orgId, id, proposalId);
+  }
+
+  @Delete(":id/claim-correction/:proposalId")
+  @HttpCode(204)
+  async discardClaimCorrection(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("proposalId", ParseUUIDPipe) proposalId: string,
+  ): Promise<void> {
+    await this.content.discardClaimCorrection(orgId, id, proposalId);
+  }
 
   /**
    * ONE PAGE OF THE QUEUE. `?status=` filters it, `?limit=` sizes it (50 by
