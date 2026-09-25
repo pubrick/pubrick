@@ -41,10 +41,14 @@ brief or schedule a draft in the [brand calendar](docs/calendar.md). Five roles 
 researcher, writer, editor, a fact-checker that lists claims to verify rather
 than checking them, and one adapter per channel — produce a draft with
 per-channel copy and an origin badge, while Settings shows what your key has
-spent. Nothing publishes that no human has opened or edited, and every model
-call is recorded, including the retries and the ones that failed after the
-provider had counted tokens. RSS, Atom, RDF, and JSON feeds can be watched per
+spent. Nothing publishes that no human has opened or edited. Model calls are
+metered, including retries and failures after the provider counted tokens;
+calls whose ledger write fails are counted as unpriced rather than shown as
+zero spend. RSS, Atom, RDF, and JSON feeds can be watched per
 brand; an article's title and summary can start a draft. You can also
+[request an advisory claim review](docs/claim-review.md) for a saved draft:
+Pubrick searches public results on your organization key, shows linked snippets,
+and leaves the text and final judgment with the editor. You can
 [fetch a public article into an editable preview](docs/source-extraction.md) and
 generate [social posts, news digests, product updates, expert articles, how-to guides, source-based retellings, comparisons, or case studies](docs/content-types.md)
 for selected channels. See [watched sources](docs/watched-sources.md)
