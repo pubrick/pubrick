@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { ConflictException, Injectable, Logger } from "@nestjs/common";
+import { ConflictException, HttpException, Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
   type StepBrand,
@@ -2577,24 +2577,6 @@ export class ContentRepository {
     }
     const proposal = outcome ? normalizeNewlines(outcome.text) : sourceBody;
     const proposedTitle = outcome ? outcome.title : sourceTitle;
-    const paragraphs = proposal.split(/\n\s*\n/).filter((part) => part.trim());
-    const placedSlots = imageSource
-      ? await db
-          .select({ afterParagraph: schema.contentImageSlots.afterParagraph })
-          .from(schema.contentImageSlots)
-          .where(
-            and(
-              eq(schema.contentImageSlots.orgId, orgId),
-              eq(schema.contentImageSlots.contentItemId, id),
-            ),
-          )
-      : [];
-    if (placedSlots.some((slot) => !paragraphs[slot.afterParagraph])) {
-      throw conflict(
-        "content_image_body_conflict",
-        "The suggested text no longer has a paragraph for an attached image",
-      );
-    }
     const imagePlan: DraftRevisionImagePlan | null =
       imageSource && selections
         ? {
@@ -2799,10 +2781,12 @@ export class ContentRepository {
         }
         const index = plan.selections.findIndex((selection) => !selection.generatedMediaId);
         if (index < 0) return { done: true as const, proposal: { ...row, imagePlan: plan } };
-        if (plan.inFlight && Date.now() - Date.parse(plan.inFlight.startedAt) < 5 * 60_000) {
+        if (plan.inFlight) {
           throw conflict(
-            "media_generation_busy",
-            "Image generation is already in progress for this suggestion",
+            Date.now() - Date.parse(plan.inFlight.startedAt) < 5 * 60_000
+              ? "media_generation_busy"
+              : "draft_revision_incomplete",
+            "The image call may already have been billed; inspect the media library before discarding this suggestion",
           );
         }
         const selection = plan.selections[index];
@@ -2843,10 +2827,11 @@ export class ContentRepository {
       });
       if (claim.done) return claim.proposal as DraftRevisionProposal;
       const { selection, proposal, token } = claim;
+      const suggestedParagraphs = proposal.proposal.split(/\n\s*\n/).filter((part) => part.trim());
       const passage =
         selection.kind === "inline"
-          ? proposal.proposal.split(/\n\s*\n/).filter((part) => part.trim())[
-              selection.afterParagraph ?? 0
+          ? suggestedParagraphs[
+              Math.min(selection.afterParagraph ?? 0, suggestedParagraphs.length - 1)
             ]
           : null;
       const prompt =
@@ -2863,9 +2848,17 @@ export class ContentRepository {
           throw conflict("media_generation_failed", "The selected image could not be saved");
         await this.finishDraftRevisionImage(orgId, id, proposalId, token, asset.id);
       } catch (error) {
-        await this.finishDraftRevisionImage(orgId, id, proposalId, token, null).catch(
-          () => undefined,
-        );
+        // Only these two refusals are raised before the provider call. Every
+        // other failure may have consumed a paid call, so retain the lease and
+        // never silently regenerate the same selection on retry.
+        const response = error instanceof HttpException ? error.getResponse() : null;
+        const code =
+          response && typeof response === "object" && "code" in response ? response.code : null;
+        if (code === "media_generation_busy" || code === "media_generation_limit") {
+          await this.finishDraftRevisionImage(orgId, id, proposalId, token, null).catch(
+            () => undefined,
+          );
+        }
         throw error;
       }
     }
@@ -3057,7 +3050,26 @@ export class ContentRepository {
         throw conflict(refusal.code, refusal.message);
       }
       if (!("unchanged" in plan)) {
-        await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
+        const paragraphCount = plan.mergedBody
+          .split(/\n\s*\n/)
+          .filter((part) => part.trim()).length;
+        const moved = await tx
+          .update(schema.contentImageSlots)
+          .set({ afterParagraph: paragraphCount - 1, needsReview: true })
+          .where(
+            and(
+              eq(schema.contentImageSlots.orgId, orgId),
+              eq(schema.contentImageSlots.contentItemId, id),
+              sql`${schema.contentImageSlots.afterParagraph} >= ${paragraphCount}`,
+            ),
+          )
+          .returning({ id: schema.contentImageSlots.id });
+        if (moved.length && !imagePlan?.selections.length) {
+          await tx
+            .update(schema.contentItems)
+            .set({ imagesRevision: sql`coalesce(${schema.contentItems.imagesRevision}, 0) + 1` })
+            .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+        }
         await tx
           .update(schema.contentItems)
           .set({

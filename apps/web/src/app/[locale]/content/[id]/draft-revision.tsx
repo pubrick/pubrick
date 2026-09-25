@@ -59,6 +59,11 @@ export function DraftRevision({
   const hasInstruction = mode === "instruction" ? Boolean(instruction.trim()) : Boolean(noteId);
   const pendingImages =
     proposal?.imagePlan?.selections.some((selection) => !selection.generatedMediaId) ?? false;
+  const uncertainImage = Boolean(proposal?.imagePlan?.inFlight);
+  const suggestedParagraphCount =
+    proposal?.proposal.split(/\n\s*\n/).filter((part) => part.trim()).length ?? 0;
+  const imageMoveCount =
+    imageState?.images.filter((slot) => slot.afterParagraph >= suggestedParagraphCount).length ?? 0;
 
   useEffect(() => setProposal(staged ?? null), [staged]);
   useEffect(() => {
@@ -153,7 +158,11 @@ export function DraftRevision({
             )
           ) {
             setProposal(latest.draftRevisionProposal);
-            setNotice(t("partialReady"));
+            setNotice(
+              latest.draftRevisionProposal.imagePlan?.inFlight
+                ? t("uncertainImage")
+                : t("partialReady"),
+            );
           }
         } catch {
           /* The original generation error remains visible. */
@@ -407,6 +416,9 @@ export function DraftRevision({
             </div>
           </div>
           <p className="mt-3 text-sm text-fg-secondary">{proposal.reason}</p>
+          {imageMoveCount > 0 && (
+            <p className="mt-3 text-sm text-fg-secondary">{t("imagesMoveToLastParagraph")}</p>
+          )}
           {proposal.imagePlan && proposal.imagePlan.selections.length > 0 && (
             <div className="mt-4">
               <h4 className="text-sm font-medium text-fg">{t("generatedImages")}</h4>
@@ -444,9 +456,13 @@ export function DraftRevision({
             </div>
           )}
           {moved && <p className="mt-2 text-sm text-danger">{t("stale")}</p>}
-          {pendingImages && <p className="mt-2 text-sm text-fg-secondary">{t("partialReady")}</p>}
+          {uncertainImage ? (
+            <p className="mt-2 text-sm text-danger">{t("uncertainImage")}</p>
+          ) : pendingImages ? (
+            <p className="mt-2 text-sm text-fg-secondary">{t("partialReady")}</p>
+          ) : null}
           <div className="mt-3 flex gap-2">
-            {pendingImages && (
+            {pendingImages && !uncertainImage && (
               <Button
                 variant="secondary"
                 size="sm"

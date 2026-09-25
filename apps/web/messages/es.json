@@ -453,6 +453,8 @@
     "pendingImage": "Pendiente de generación",
     "partialReady": "Algunas imágenes no se completaron. Las imágenes ya generadas están guardadas; reanuda solo las pendientes.",
     "resumeImages": "Reanudar imágenes pendientes",
+    "uncertainImage": "La última generación de imagen puede haberse cobrado. El reintento automático está en pausa. Revisa la biblioteca de medios antes de descartar esta sugerencia.",
+    "imagesMoveToLastParagraph": "Esta reescritura acorta el texto. Las ilustraciones que queden fuera se moverán al último párrafo y requerirán revisión antes de publicar.",
     "title": "Revisar borrador con IA",
     "hint": "Pide una reescritura del título y el texto guardados. Cada solicitud usa tu clave del proveedor. Compara las versiones antes de aceptar; nada cambia automáticamente.",
     "writeInstruction": "Escribir instrucción",

@@ -453,6 +453,8 @@
     "pendingImage": "Awaiting generation",
     "partialReady": "Some selected images did not finish. Completed paid images are saved; resume to generate only the missing ones.",
     "resumeImages": "Resume missing images",
+    "uncertainImage": "The last image call may already have been billed. Automatic retry is paused. Check the media library before discarding this suggestion.",
+    "imagesMoveToLastParagraph": "This rewrite shortens the post. Attached illustrations beyond its last paragraph will move there and require review before publishing.",
     "title": "Revise draft with AI",
     "hint": "Ask for a rewrite of the saved title and master text. Each request uses your provider key. Read both versions before accepting; nothing changes automatically.",
     "writeInstruction": "Write instruction",

@@ -57,13 +57,18 @@ fragment with the new title. The original AI full anchor and human publication
 gate remain in place. The editor can optionally select the saved cover and
 individual illustration slots in the same request. Only selected images get
 new Gemini variations; each call is metered separately through the image
-allowance. An image-only request skips the text-model call. Unselected media,
-positions and alignment stay intact. Generated files remain in the brand media
+allowance. An image-only request skips the text-model call. Unselected media
+and alignment stay intact. If the suggested text has fewer paragraphs, images
+beyond its end are shown as needing a move and Accept places them after the
+last paragraph with image review required. Generated files remain in the brand media
 library even if the proposal is discarded or becomes stale.
 Pubrick saves the text suggestion and each successful selected image before
 requesting the next image. If a later image call fails, the proposal stays
-pending; **Resume missing images** uses the saved text and paid assets, and
-calls the provider only for missing selections. Accept waits until every
+pending. **Resume missing images** uses the saved text and paid assets after a
+known pre-call refusal, and calls the provider only for missing selections.
+When a call may have been billed but its result cannot be linked, Pubrick
+pauses automatic retry; inspect the media library before discarding the
+proposal. Accept waits until every
 selected image is ready. A request with different instructions or selections
 must first discard that pending proposal.
 

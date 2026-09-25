@@ -201,7 +201,7 @@ describe("whole-draft revision", () => {
         inFlight: null,
         selections: [
           {
-            kind: "inline",
+            kind: "inline" as const,
             slotId,
             sourceMediaId: originalInlineId,
             afterParagraph: 0,
@@ -373,5 +373,83 @@ describe("whole-draft revision", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Attached images could not be loaded",
     );
+  });
+
+  it("blocks automatic retry when an image result may already be billed", async () => {
+    const uncertain = {
+      ...proposal,
+      imagePlan: {
+        sourceImagesRevision: 1,
+        sourceCoverMediaId: null,
+        textModelUsed: true,
+        inFlight: {
+          token: "7fdd56c0-ea72-47e0-927a-1c52b71f4ffb",
+          startedAt: "2020-01-01T00:00:00.000Z",
+          selection: 0,
+        },
+        selections: [
+          {
+            kind: "inline" as const,
+            slotId: "d29ed5ad-fce8-475e-b48f-aa0532d6c462",
+            sourceMediaId: "3c45f226-5b4f-4834-b12e-291531a82c55",
+            afterParagraph: 0,
+            generatedMediaId: null,
+          },
+        ],
+      },
+    };
+    render(
+      <DraftRevision
+        itemId="item-1"
+        currentTitle={proposal.sourceTitle}
+        currentBody={proposal.sourceBody}
+        coverMediaId={null}
+        draftBody={proposal.sourceBody}
+        eligible
+        staged={uncertain}
+        onAccepted={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/last image call may already have been billed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume missing images" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
+  });
+
+  it("warns before accepting a shorter rewrite that moves an attached illustration", async () => {
+    mockApi.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/images")
+          ? {
+              revision: 1,
+              images: [
+                {
+                  id: "d29ed5ad-fce8-475e-b48f-aa0532d6c462",
+                  mediaId: "3c45f226-5b4f-4834-b12e-291531a82c55",
+                  afterParagraph: 1,
+                  alt: "Second paragraph illustration",
+                  caption: null,
+                  alignment: "center",
+                  needsReview: false,
+                },
+              ],
+            }
+          : proposal,
+      ),
+    );
+    render(
+      <DraftRevision
+        itemId="item-1"
+        currentTitle={proposal.sourceTitle}
+        currentBody={proposal.sourceBody}
+        coverMediaId={null}
+        draftBody={proposal.sourceBody}
+        eligible
+        staged={proposal}
+        onAccepted={vi.fn()}
+      />,
+    );
+    expect(
+      await screen.findByText(/Attached illustrations beyond its last paragraph will move there/),
+    ).toBeInTheDocument();
   });
 });

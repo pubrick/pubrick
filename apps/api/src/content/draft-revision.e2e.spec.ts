@@ -25,6 +25,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
   const calls: { title: string | null; body: string; instruction: string }[] = [];
   const imageCalls: { sourceMediaId?: string; prompt: string }[] = [];
   let failImageCallAt: number | null = null;
+  let ambiguousImageCallAt: number | null = null;
   let outcome: DraftRevisionOutcome;
   const source = "First fact. Second fact.";
   const replacement = "First fact, then the second fact.";
@@ -52,7 +53,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
         ) => {
           imageCalls.push(args);
           if (imageCalls.length === failImageCallAt) {
-            throw conflict("media_generation_failed", "The selected image could not be generated");
+            throw conflict("media_generation_busy", "No provider call was made");
           }
           const id = randomUUID();
           await db.insert(schema.mediaAssets).values({
@@ -65,6 +66,9 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
             height: 1024,
             byteSize: 12345,
           });
+          if (imageCalls.length === ambiguousImageCallAt) {
+            throw conflict("media_generation_failed", "The billed result was not linked");
+          }
           return { id };
         },
       })
@@ -84,6 +88,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     calls.length = 0;
     imageCalls.length = 0;
     failImageCallAt = null;
+    ambiguousImageCallAt = null;
     outcome = {
       ok: true,
       title: revisedTitle,
@@ -594,7 +599,7 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     failImageCallAt = 2;
     expect(
       (await visitor.post(`/api/content/${id}/draft-revision`).send(body).expect(409)).body.code,
-    ).toBe("media_generation_failed");
+    ).toBe("media_generation_busy");
     expect(calls).toHaveLength(1);
     expect(imageCalls).toHaveLength(2);
     const pending = (await visitor.get(`/api/content/${id}`).expect(200)).body
@@ -620,6 +625,121 @@ describe.skipIf(!url)("whole-draft AI revision", () => {
     expect(calls).toHaveLength(1);
     expect(imageCalls).toHaveLength(3);
     await visitor.post(`/api/content/${id}/draft-revision/${pending.id}/accept`).expect(200);
+  });
+
+  it("does not repeat an image call whose billed result could not be linked", async () => {
+    const { visitor, orgId } = await agent();
+    const id = await draft(visitor, orgId);
+    const [item] = await db
+      .select({ brandId: schema.contentItems.brandId })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, id));
+    const sourceMediaId = randomUUID();
+    await db.insert(schema.mediaAssets).values({
+      id: sourceMediaId,
+      orgId,
+      brandId: item?.brandId as string,
+      name: "Original",
+      kind: "image",
+      width: 1024,
+      height: 1024,
+      byteSize: 12345,
+    });
+    const savedImages = await visitor
+      .put(`/api/content/${id}/images`)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId: sourceMediaId, afterParagraph: 0, alt: "Original" }],
+      })
+      .expect(200);
+    const body = {
+      expectedTitle: "Example",
+      expectedBody: source,
+      expectedCoverMediaId: null,
+      expectedImagesRevision: savedImages.body.revision,
+      regenerateImages: { cover: false, inlineSlotIds: [savedImages.body.images[0].id] },
+    };
+    ambiguousImageCallAt = 1;
+    expect(
+      (await visitor.post(`/api/content/${id}/draft-revision`).send(body).expect(409)).body.code,
+    ).toBe("media_generation_failed");
+    const pending = (await visitor.get(`/api/content/${id}`).expect(200)).body
+      .draftRevisionProposal;
+    expect(pending.imagePlan.inFlight).toMatchObject({ selection: 0 });
+    expect(pending.imagePlan.selections[0].generatedMediaId).toBeNull();
+    expect(imageCalls).toHaveLength(1);
+    ambiguousImageCallAt = null;
+    expect(
+      (await visitor.post(`/api/content/${id}/draft-revision`).send(body).expect(409)).body.code,
+    ).toBe("media_generation_busy");
+    expect(imageCalls).toHaveLength(1);
+    await db
+      .update(schema.draftRevisionProposals)
+      .set({
+        imagePlan: {
+          ...pending.imagePlan,
+          inFlight: { ...pending.imagePlan.inFlight, startedAt: "2020-01-01T00:00:00.000Z" },
+        },
+      })
+      .where(eq(schema.draftRevisionProposals.id, pending.id));
+    expect(
+      (await visitor.post(`/api/content/${id}/draft-revision`).send(body).expect(409)).body.code,
+    ).toBe("draft_revision_incomplete");
+    expect(imageCalls).toHaveLength(1);
+  });
+
+  it("keeps a paid shorter rewrite and moves stranded illustrations for explicit review", async () => {
+    const { visitor, orgId } = await agent();
+    const id = await draft(visitor, orgId);
+    const twoParagraphs = "First fact.\n\nSecond fact.";
+    await visitor.patch(`/api/content/${id}`).send({ body: twoParagraphs }).expect(200);
+    const [item] = await db
+      .select({ brandId: schema.contentItems.brandId })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, id));
+    const mediaId = randomUUID();
+    await db.insert(schema.mediaAssets).values({
+      id: mediaId,
+      orgId,
+      brandId: item?.brandId as string,
+      name: "Original",
+      kind: "image",
+      width: 1024,
+      height: 1024,
+      byteSize: 12345,
+    });
+    const savedImages = await visitor
+      .put(`/api/content/${id}/images`)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId, afterParagraph: 1, alt: "Second fact illustration" }],
+      })
+      .expect(200);
+    const staged = await visitor
+      .post(`/api/content/${id}/draft-revision`)
+      .send({
+        expectedTitle: "Example",
+        expectedBody: twoParagraphs,
+        instruction: "Shorten to one paragraph",
+      })
+      .expect(201);
+    expect(staged.body.proposal).toBe(replacement);
+    expect(calls).toHaveLength(1);
+    const accepted = await visitor
+      .post(`/api/content/${id}/draft-revision/${staged.body.id}/accept`)
+      .expect(200);
+    expect(accepted.body.body).toBe(replacement);
+    const images = (await visitor.get(`/api/content/${id}/images`).expect(200)).body;
+    expect(images.images[0]).toMatchObject({
+      id: savedImages.body.images[0].id,
+      mediaId,
+      afterParagraph: 0,
+      needsReview: true,
+    });
+    expect(images.revision).toBe(savedImages.body.revision + 1);
+    expect((await visitor.post(`/api/content/${id}/approve`).send({}).expect(409)).body.code).toBe(
+      "content_images_need_review",
+    );
   });
 
   it("stages an image-only revision without a text-model call and keeps paid assets on a stale slot", async () => {
