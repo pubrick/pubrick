@@ -24,6 +24,7 @@ type Props = {
   savedBody: string;
   draftBody: string;
   editable: boolean;
+  canDecide?: boolean;
   aiDraftEligible?: boolean;
   hasRichFormatting?: boolean;
   unsavedFormatting?: boolean;
@@ -35,6 +36,7 @@ export function ClaimEvidence({
   savedBody,
   draftBody,
   editable,
+  canDecide = true,
   aiDraftEligible = true,
   hasRichFormatting = false,
   unsavedFormatting = false,
@@ -162,7 +164,7 @@ export function ClaimEvidence({
   }, [review?.status, load]);
 
   async function start() {
-    if (busy || hasUnsavedText || !editable) return;
+    if (busy || hasUnsavedText || !editable || !canDecide) return;
     setBusy(true);
     setError(null);
     setMissingKey(null);
@@ -238,6 +240,7 @@ export function ClaimEvidence({
     if (
       !proposal ||
       correctionBusy ||
+      !canDecide ||
       !editable ||
       !aiDraftEligible ||
       hasUnsavedText ||
@@ -269,7 +272,7 @@ export function ClaimEvidence({
   }
 
   async function discard() {
-    if (!proposal || correctionBusy) return;
+    if (!proposal || correctionBusy || !canDecide) return;
     setCorrectionBusy("discard");
     setProposalError(null);
     setNotice(null);
@@ -363,16 +366,18 @@ export function ClaimEvidence({
         {proposalStale && <p className="mt-3 text-sm text-danger">{t("proposalStale")}</p>}
         {hasUnsavedText && <p className="mt-3 text-sm text-fg-secondary">{t("saveFirst")}</p>}
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={
-              !!correctionBusy || !editable || !aiDraftEligible || hasUnsavedText || proposalStale
-            }
-            onClick={() => void accept()}
-          >
-            {t("accept")}
-          </Button>
+          {canDecide && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={
+                !!correctionBusy || !editable || !aiDraftEligible || hasUnsavedText || proposalStale
+              }
+              onClick={() => void accept()}
+            >
+              {t("accept")}
+            </Button>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -383,14 +388,16 @@ export function ClaimEvidence({
           >
             {correctionBusy === "propose" ? t("proposing") : t("tryAgain")}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!!correctionBusy}
-            onClick={() => void discard()}
-          >
-            {t("discard")}
-          </Button>
+          {canDecide && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!!correctionBusy}
+              onClick={() => void discard()}
+            >
+              {t("discard")}
+            </Button>
+          )}
         </div>
         <p className="mt-2 text-sm text-fg-tertiary">{t("proposalCostHint")}</p>
       </section>
@@ -404,7 +411,7 @@ export function ClaimEvidence({
           <h2 className="text-base font-semibold text-fg">{t("title")}</h2>
           <p className="mt-1 text-sm text-fg-secondary">{t("hint")}</p>
         </div>
-        {editable && (
+        {editable && canDecide && (
           <Button
             variant="secondary"
             size="sm"

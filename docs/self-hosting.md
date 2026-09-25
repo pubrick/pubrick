@@ -201,7 +201,10 @@ somebody lost — and which stops the old link working.
 The invitee opens the link, creates an account **with exactly the address you
 invited**, and lands on a screen offering the organization by name; one click
 joins it. Every member sees the pending invitations on the same Workspace card
-and can **Remove** any of them.
+but only owners, admins, and ordinary members can **Remove** one. Authors and
+editors can read the invitation list without changing it. Changing a person's
+role clears their explicit brand assignments; an owner or admin can assign
+brands again from each brand's **Team access** page.
 
 **What the link is, and is not.** It is not a password. Anyone who obtains it
 learns only that this instance exists: joining still requires a session whose

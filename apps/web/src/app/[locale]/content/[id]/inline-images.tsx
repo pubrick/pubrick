@@ -143,8 +143,8 @@ export function InlineImages({
 
   useEffect(() => {
     if (!editable) return;
-    void api<{ provider: string }[]>("/api/ai-credentials")
-      .then((keys) => setHasGoogleKey(keys.some((key) => key.provider === "google")))
+    void api<{ googleConfigured: boolean }>("/api/ai-credentials/availability")
+      .then((availability) => setHasGoogleKey(availability.googleConfigured))
       .catch(() => setHasGoogleKey(false))
       .finally(() => setCredentialsLoaded(true));
   }, [editable]);

@@ -33,8 +33,8 @@ export function CoverRegenerate({
   const [result, setResult] = useState<MediaCoverRegenerateResult | null>(null);
 
   useEffect(() => {
-    void api<{ provider: string }[]>("/api/ai-credentials")
-      .then((keys) => setHasKey(keys.some((key) => key.provider === "google")))
+    void api<{ googleConfigured: boolean }>("/api/ai-credentials/availability")
+      .then((availability) => setHasKey(availability.googleConfigured))
       .catch(() => setHasKey(false));
   }, []);
 

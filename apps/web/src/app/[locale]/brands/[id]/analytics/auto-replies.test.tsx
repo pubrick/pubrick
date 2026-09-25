@@ -63,6 +63,21 @@ describe("automatic publication reply setting", () => {
     });
   });
 
+  it("shows the current setting without mutation controls in read-only mode", async () => {
+    const fetcher = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith("/telegram-connection")
+        ? response(200, { connected: true })
+        : response(200, { enabled: true, updatedAt: "2026-09-25T00:00:00.000Z" }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<AutoReplies brandId={brandId} readOnly />);
+    expect(await screen.findByText(en.Analytics.autoRepliesOn)).toBeVisible();
+    expect(screen.queryByRole("button", { name: en.Analytics.autoRepliesDisable })).toBeNull();
+    expect(screen.queryByRole("button", { name: en.Analytics.autoRepliesEnable })).toBeNull();
+    expect(fetcher.mock.calls.every(([, init]) => init?.method !== "PUT")).toBe(true);
+  });
+
   it("explains why enabled collection is waiting without a connected Telegram account", async () => {
     vi.stubGlobal(
       "fetch",

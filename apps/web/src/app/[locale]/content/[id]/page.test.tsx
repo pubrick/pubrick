@@ -40,6 +40,7 @@ vi.mock("./claim-evidence", () => ({ ClaimEvidence: () => null }));
 
 // Imported after the mock so this binding is the mocked export.
 import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 
 const mockApi = vi.mocked(api);
 const mockApiPage = vi.mocked(apiPage);
@@ -264,6 +265,119 @@ beforeEach(() => {
   // block; the aliased auth-client stub defaults to signed-out, so a page
   // whose own tests don't care about that content still opts in explicitly.
   signedInSession();
+  vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+    data: {
+      id: "org-1",
+      name: "Workspace",
+      members: [{ role: "owner", user: { id: "test-user" } }],
+    },
+    isPending: false,
+  } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+});
+
+describe("editorial roles on content detail", () => {
+  afterEach(() => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: null,
+      isPending: false,
+    } as ReturnType<typeof authClient.useActiveOrganization>);
+  });
+  function roleAs(role: "author" | "editor") {
+    vi.spyOn(authClient, "useActiveOrganization").mockReturnValue({
+      data: { id: "org-1", name: "Workspace", members: [{ role, user: { id: "test-user" } }] },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+  }
+
+  it("lets an author edit a draft without offering delivery decisions", async () => {
+    roleAs("author");
+    installBaseHandlers({ current: makeItem({ adaptations: [makeAdaptation()] }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText("Launch post")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Publish.reject })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(en.Publish.scheduleLabel)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.archive })).toBeEnabled();
+  });
+
+  it("lets an author restore and delete an archived draft", async () => {
+    roleAs("author");
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "archived",
+          archivedFromStatus: "draft",
+          adaptations: [makeAdaptation()],
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.restore })).toBeEnabled();
+    expect(screen.getByRole("button", { name: en.Publish.delete })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+  });
+
+  it("still offers an editor the delivery decision", async () => {
+    roleAs("editor");
+    installBaseHandlers({ current: makeItem({ adaptations: [makeAdaptation()] }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.approveNow })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Publish.reject })).toBeInTheDocument();
+  });
+
+  it("does not offer manager-only feed controls to an editor", async () => {
+    roleAs("editor");
+    installBaseHandlers({ current: makeItem({ status: "published" }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.alreadyPublished)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: en.Feed.title })).not.toBeInTheDocument();
+  });
+
+  it("keeps uncertain and scheduled delivery details readable without author resolution actions", async () => {
+    roleAs("author");
+    const manual: Channel = { id: "ch2", platform: "vc_ru", name: "Manual channel" };
+    const scheduled: Channel = { id: "ch3", platform: "telegram", name: "Later channel" };
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "approved",
+          adaptations: [
+            makeAdaptation({ status: "failed", deliveryOutcome: "unknown" }),
+            makeAdaptation({
+              id: "a2",
+              channelId: manual.id,
+              status: "manual_ready",
+              deliveryOutcome: "manual_ready",
+            }),
+            makeAdaptation({
+              id: "a3",
+              channelId: scheduled.id,
+              status: "scheduled",
+              deliveryOutcome: "scheduled",
+              scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+            }),
+          ],
+        }),
+      },
+      [],
+      undefined,
+      [channel, manual, scheduled],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.resultsTitle)).toBeInTheDocument();
+    expect(screen.getByText(en.Publish.vcManualInstructions)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.Publish.markDelivered }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.Publish.rescheduleChannel }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.Publish.recordManualPublication }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("rich master integration", () => {

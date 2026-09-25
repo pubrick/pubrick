@@ -8,7 +8,13 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { api, errorMessage } from "@/lib/api";
 
-export function AutoReplies({ brandId }: { brandId: string }) {
+export function AutoReplies({
+  brandId,
+  readOnly = false,
+}: {
+  brandId: string;
+  readOnly?: boolean;
+}) {
   const t = useTranslations("Analytics");
   const te = useTranslations("Errors");
   const [config, setConfig] = useState<PublicationCommentCollectionDto | null>(null);
@@ -93,7 +99,7 @@ export function AutoReplies({ brandId }: { brandId: string }) {
               <p className="mt-2 text-sm text-fg-secondary">{t("autoRepliesConnectionUnknown")}</p>
             )}
           </div>
-          {config && (
+          {config && !readOnly && (
             <Button
               variant="secondary"
               disabled={busy}
@@ -122,7 +128,7 @@ export function AutoReplies({ brandId }: { brandId: string }) {
         )}
       </Card>
       <Modal
-        open={confirm}
+        open={!readOnly && confirm}
         onClose={() => setConfirm(false)}
         title={t("autoRepliesConfirmTitle")}
         footer={

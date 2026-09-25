@@ -30,7 +30,14 @@ type SessionState = {
   isPending: boolean;
   refetch: () => Promise<void>;
 };
-type OrgState = { data: { id: string; name: string } | null; isPending: boolean };
+type OrgState = {
+  data: {
+    id: string;
+    name: string;
+    members?: { userId: string; role: string }[];
+  } | null;
+  isPending: boolean;
+};
 
 /**
  * The real `useSession()` hands back a `refetch` that re-asks the server and
@@ -113,8 +120,15 @@ export function pendingSession(): SessionState {
 }
 
 /** Opt-in: `authClient.useActiveOrganization()` reports an org until reset. */
-export function signedInOrganization(name = "Test Org"): OrgState {
-  orgState = { data: { id: "test-org", name }, isPending: false };
+export function signedInOrganization(name = "Test Org", role?: string): OrgState {
+  orgState = {
+    data: {
+      id: "test-org",
+      name,
+      ...(role ? { members: [{ userId: "test-user", role }] } : {}),
+    },
+    isPending: false,
+  };
   return orgState;
 }
 

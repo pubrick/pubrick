@@ -51,6 +51,7 @@ import {
   isScheduleOverdue,
 } from "@/lib/adaptations";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { isLinkableUrl } from "@/lib/external-url";
 import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
@@ -272,6 +273,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const role: string | undefined = organization?.members?.find(
+    (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+  )?.role;
+  const canDecideDelivery = ["owner", "admin", "member", "editor"].includes(role ?? "");
+  const canManageDraft = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
+  const canManageFeed = ["owner", "admin", "member"].includes(role ?? "");
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [showMedia, setShowMedia] = useState(false);
@@ -939,6 +948,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function approve(withSchedule: boolean, delayMinutes?: 30) {
+    if (!canDecideDelivery) return;
     setActionError(null);
     const chosen =
       withSchedule && delayMinutes === undefined && scheduledAt ? new Date(scheduledAt) : null;
@@ -981,7 +991,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function rescheduleChannel() {
-    if (!channelSchedule || channelScheduleBusy) return;
+    if (!canDecideDelivery || !channelSchedule || channelScheduleBusy) return;
     const chosen = new Date(channelSchedule.value);
     if (
       !channelSchedule.value ||
@@ -1016,6 +1026,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function reject() {
+    if (!canDecideDelivery) return;
     setActionError(null);
     try {
       await api(`/api/content/${id}/reject`, { method: "POST", body: JSON.stringify({}) });
@@ -1042,7 +1053,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function retractApproval() {
-    if (retractBusy) return;
+    if (!canDecideDelivery || retractBusy) return;
     setRetractBusy(true);
     setActionError(null);
     try {
@@ -1057,6 +1068,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function changeArchiveState(action: "archive" | "restore") {
+    if (!canManageDraft) return;
     setArchiveBusy(true);
     setActionError(null);
     try {
@@ -1071,6 +1083,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function deleteArchivedPost() {
+    if (!canManageDraft) return;
     setDeleteBusy(true);
     setActionError(null);
     try {
@@ -1674,14 +1687,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        */
       primaryAction={
         isArchived ? (
-          <Button
-            variant="primary"
-            onClick={() => changeArchiveState("restore")}
-            disabled={archiveBusy}
-          >
-            {t("restore")}
-          </Button>
-        ) : (
+          canManageDraft ? (
+            <Button
+              variant="primary"
+              onClick={() => changeArchiveState("restore")}
+              disabled={archiveBusy}
+            >
+              {t("restore")}
+            </Button>
+          ) : undefined
+        ) : canDecideDelivery ? (
           <Button
             variant="primary"
             onClick={() => approve(false)}
@@ -1706,7 +1721,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   ? t("approveNowPartial", { count: partialSendCount })
                   : t("approveNow")}
           </Button>
-        )
+        ) : undefined
       }
     >
       <p className="mb-3">
@@ -1994,6 +2009,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         savedBody={item.body}
         draftBody={bodyDraft}
         editable={["draft", "rejected", "failed"].includes(item.status)}
+        canDecide={canDecideDelivery}
         aiDraftEligible={item.origin === "ai"}
         hasRichFormatting={item.richBody !== null}
         unsavedFormatting={richDirty}
@@ -2401,93 +2417,113 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
-      {isArchived ? (
-        <Card className="mb-6">
-          <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
-          {canDeleteArchived ? (
-            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-              {t("delete")}
-            </Button>
-          ) : (
-            <p className="text-sm text-fg-tertiary">{t("deleteUnavailableHint")}</p>
-          )}
-        </Card>
-      ) : (
-        <Card className="mb-6">
-          {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
-          {partlyLive && !hasOutstanding && (
-            <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
-          )}
-          <div className="flex flex-wrap items-end gap-3">
-            <Input
-              id="scheduledAt"
-              type="datetime-local"
-              label={t("scheduleLabel")}
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-              disabled={isPublished}
-              min={nowLocal}
-            />
-            <Button
-              variant="secondary"
-              onClick={() => approve(true)}
-              disabled={
-                isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
-              }
-            >
-              {t("approveScheduled")}
-            </Button>
-            {canApproveAfterThirtyMinutes && (
-              <Button variant="secondary" onClick={() => approve(true, 30)}>
-                {t("approveAfterThirtyMinutes")}
+      {canManageDraft &&
+        (isArchived ? (
+          <Card className="mb-6">
+            <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
+            {canDeleteArchived ? (
+              <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+                {t("delete")}
               </Button>
+            ) : (
+              <p className="text-sm text-fg-tertiary">{t("deleteUnavailableHint")}</p>
             )}
-            {manualAdaptations.length > 0 && (
-              <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+          </Card>
+        ) : canDecideDelivery ? (
+          <Card className="mb-6">
+            {isPublished && (
+              <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>
             )}
-            <Button
-              variant="danger"
-              onClick={reject}
-              disabled={isPublished || (partlyLive && !hasOutstanding) || archiveBusy}
-            >
-              {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
-            </Button>
-            {canRetractApproval && (
-              <Button variant="secondary" onClick={retractApproval} disabled={retractBusy}>
-                {t("retractApproval")}
+            {partlyLive && !hasOutstanding && (
+              <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
+            )}
+            <div className="flex flex-wrap items-end gap-3">
+              <Input
+                id="scheduledAt"
+                type="datetime-local"
+                label={t("scheduleLabel")}
+                value={scheduledAt}
+                onChange={(e) => setScheduledAt(e.target.value)}
+                disabled={isPublished}
+                min={nowLocal}
+              />
+              <Button
+                variant="secondary"
+                onClick={() => approve(true)}
+                disabled={
+                  isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+                }
+              >
+                {t("approveScheduled")}
               </Button>
+              {canApproveAfterThirtyMinutes && (
+                <Button variant="secondary" onClick={() => approve(true, 30)}>
+                  {t("approveAfterThirtyMinutes")}
+                </Button>
+              )}
+              {manualAdaptations.length > 0 && (
+                <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+              )}
+              <Button
+                variant="danger"
+                onClick={reject}
+                disabled={isPublished || (partlyLive && !hasOutstanding) || archiveBusy}
+              >
+                {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
+              </Button>
+              {canRetractApproval && (
+                <Button variant="secondary" onClick={retractApproval} disabled={retractBusy}>
+                  {t("retractApproval")}
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                onClick={() => changeArchiveState("archive")}
+                disabled={hasOutstanding || archiveBusy}
+              >
+                {t("archive")}
+              </Button>
+            </div>
+            {hasOutstanding && (
+              <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
             )}
-            <Button
-              variant="secondary"
-              onClick={() => changeArchiveState("archive")}
-              disabled={hasOutstanding || archiveBusy}
-            >
-              {t("archive")}
-            </Button>
-          </div>
+          </Card>
+        ) : null)}
+
+      {canManageDraft && !canDecideDelivery && !isArchived && (
+        <Card className="mb-6">
+          <Button
+            variant="secondary"
+            onClick={() => changeArchiveState("archive")}
+            disabled={hasOutstanding || archiveBusy}
+          >
+            {t("archive")}
+          </Button>
           {hasOutstanding && (
             <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
           )}
         </Card>
       )}
 
-      <Modal
-        open={deleteOpen}
-        onClose={closeDelete}
-        title={t("deleteTitle")}
-        footer={
-          <>
-            <Button variant="secondary" onClick={closeDelete} disabled={deleteBusy}>
-              {t("deleteCancel")}
-            </Button>
-            <Button variant="danger" onClick={deleteArchivedPost} disabled={deleteBusy}>
-              {t("delete")}
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
-      </Modal>
+      {canManageDraft && (
+        <Modal
+          open={deleteOpen}
+          onClose={closeDelete}
+          title={t("deleteTitle")}
+          footer={
+            <>
+              <Button variant="secondary" onClick={closeDelete} disabled={deleteBusy}>
+                {t("deleteCancel")}
+              </Button>
+              <Button variant="danger" onClick={deleteArchivedPost} disabled={deleteBusy}>
+                {t("delete")}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
+        </Modal>
+      )}
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>
@@ -2544,27 +2580,35 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       {t("vcPackageReady")}
                     </p>
                   )}
-                  <Input
-                    type="url"
-                    label={t("vcUrlLabel")}
-                    placeholder="https://vc.ru/..."
-                    value={manualUrlDrafts[a.id] ?? ""}
-                    disabled={isArchived}
-                    onChange={(event) =>
-                      setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
-                    }
-                  />
-                  <div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
-                      onClick={() => confirmManualPublication(a.id)}
-                    >
-                      {t("recordManualPublication")}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-fg-tertiary">{t("manualAssertionHint")}</p>
+                  {canDecideDelivery && (
+                    <Input
+                      type="url"
+                      label={t("vcUrlLabel")}
+                      placeholder="https://vc.ru/..."
+                      value={manualUrlDrafts[a.id] ?? ""}
+                      disabled={isArchived}
+                      onChange={(event) =>
+                        setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
+                      }
+                    />
+                  )}
+                  {canDecideDelivery && (
+                    <div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={
+                          isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id
+                        }
+                        onClick={() => confirmManualPublication(a.id)}
+                      >
+                        {t("recordManualPublication")}
+                      </Button>
+                    </div>
+                  )}
+                  {canDecideDelivery && (
+                    <p className="text-xs text-fg-tertiary">{t("manualAssertionHint")}</p>
+                  )}
                 </div>
               )}
             {a.status === "published" &&
@@ -2743,35 +2787,41 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   and look — and a button that files somebody's word as evidence
                   should say so before it is pressed, not after.
                 */}
-                <p className="text-sm text-fg-tertiary">
-                  {a.partialTelegram
-                    ? t(
-                        a.partialTelegram.primaryKind === "message"
-                          ? "partialTelegramRecoveryHintText"
-                          : "partialTelegramRecoveryHint",
-                      )
-                    : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() =>
-                      assertDelivery(a.id, true, a.partialTelegram ? "completed" : undefined)
-                    }
-                    disabled={isArchived || deliveryBusy === a.id}
-                  >
-                    {a.partialTelegram ? t("partialTelegramConfirmComplete") : t("markDelivered")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() =>
-                      assertDelivery(a.id, false, a.partialTelegram ? "removed" : undefined)
-                    }
-                    disabled={isArchived || deliveryBusy === a.id}
-                  >
-                    {a.partialTelegram ? t("partialTelegramConfirmRemoved") : t("markNotDelivered")}
-                  </Button>
-                </div>
+                {canDecideDelivery && (
+                  <p className="text-sm text-fg-tertiary">
+                    {a.partialTelegram
+                      ? t(
+                          a.partialTelegram.primaryKind === "message"
+                            ? "partialTelegramRecoveryHintText"
+                            : "partialTelegramRecoveryHint",
+                        )
+                      : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
+                  </p>
+                )}
+                {canDecideDelivery && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        assertDelivery(a.id, true, a.partialTelegram ? "completed" : undefined)
+                      }
+                      disabled={isArchived || deliveryBusy === a.id}
+                    >
+                      {a.partialTelegram ? t("partialTelegramConfirmComplete") : t("markDelivered")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        assertDelivery(a.id, false, a.partialTelegram ? "removed" : undefined)
+                      }
+                      disabled={isArchived || deliveryBusy === a.id}
+                    >
+                      {a.partialTelegram
+                        ? t("partialTelegramConfirmRemoved")
+                        : t("markNotDelivered")}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
             {/*
@@ -2840,7 +2890,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   {t("scheduledFor")} {new Date(a.scheduledAt).toLocaleString(locale)}
                 </span>
               ))}
-            {a.status === "scheduled" &&
+            {canDecideDelivery &&
+              a.status === "scheduled" &&
               a.scheduledAt &&
               (item.status === "approved" || item.status === "partially_published") &&
               !isManualPlatform(
@@ -2933,7 +2984,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           onChange={() => void reload()}
         />
       )}
-      <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
+      {canManageFeed && (
+        <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
+      )}
     </AppShell>
   );
 }

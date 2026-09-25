@@ -29,6 +29,7 @@ import type { Response } from "express";
 import { z } from "zod";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { MEDIA_MAX_UPLOAD_BYTES, MediaRepository } from "./media.repository";
@@ -55,6 +56,7 @@ export class MediaController {
   }
 
   @Post()
+  @EditorialCapability("author")
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } }),
   )
@@ -67,6 +69,7 @@ export class MediaController {
   }
 
   @Post("generate")
+  @EditorialCapability("author")
   @BrandScope({ kind: "brand", source: "body" })
   generate(
     @OrgId() orgId: string,
@@ -102,6 +105,7 @@ export class MediaController {
   }
 
   @Delete(":id")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "media" })
   @HttpCode(204)
   async delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
@@ -109,6 +113,7 @@ export class MediaController {
   }
 
   @Patch("posts/:id/cover")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "content" })
   attach(
     @OrgId() orgId: string,
@@ -119,6 +124,7 @@ export class MediaController {
   }
 
   @Post("posts/:id/cover/regenerate")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "content" })
   regenerateCover(
     @OrgId() orgId: string,
@@ -129,6 +135,7 @@ export class MediaController {
   }
 
   @Patch("posts/:id/video")
+  @EditorialCapability("author")
   @BrandScope({ kind: "resource", resource: "content" })
   attachVideo(
     @OrgId() orgId: string,

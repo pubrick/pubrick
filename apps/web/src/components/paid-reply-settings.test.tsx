@@ -33,7 +33,7 @@ const org = {
   blockedReason: null,
 };
 
-function membership(role: "owner" | "admin" | "member") {
+function membership(role: "owner" | "admin" | "member" | "author" | "editor") {
   signedInSession();
   vi.mocked(authClient.useActiveOrganization).mockReturnValue({
     data: {
@@ -54,8 +54,8 @@ function installApi(withKey = true) {
     if (path === "/api/paid-replies/organization") {
       return (method === "PUT" ? { ...org, ...body, revision: 1 } : org) as never;
     }
-    if (path === "/api/ai-credentials") {
-      return (withKey ? [{ provider: "google", defaultModel: "gemini-3.7-flash" }] : []) as never;
+    if (path === "/api/ai-credentials/availability") {
+      return { configured: withKey, googleConfigured: withKey } as never;
     }
     if (path.startsWith("/api/paid-replies/brands/")) {
       if (method === "GET") return brand as never;
@@ -149,6 +149,22 @@ describe("paid reply brand settings", () => {
     expect(screen.queryByRole("button", { name: es.PaidReplies.enable })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(es.PaidReplies.brandThresholdLabel)).not.toBeInTheDocument();
     expect(calls.filter((call) => call.method !== "GET")).toEqual([]);
+  });
+
+  it("reads key availability without a privileged credential request for an author", async () => {
+    membership("author");
+    const calls = installApi();
+    render(<PaidReplyBrandSettings brandId="brand-1" kind="source" />);
+    expect(await screen.findByText(en.PaidReplies.off)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: "/api/ai-credentials/availability",
+        method: "GET",
+        body: undefined,
+      }),
+    );
+    expect(calls.some((call) => call.path === "/api/ai-credentials")).toBe(false);
+    expect(screen.queryByRole("button", { name: en.PaidReplies.enable })).not.toBeInTheDocument();
   });
 });
 

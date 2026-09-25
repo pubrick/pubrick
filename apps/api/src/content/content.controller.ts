@@ -55,6 +55,7 @@ import {
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
@@ -93,6 +94,7 @@ export class ContentController {
   }
 
   @Post(":id/claim-correction")
+  @EditorialCapability("author")
   proposeClaimCorrection(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,
@@ -102,6 +104,7 @@ export class ContentController {
   }
 
   @Post(":id/claim-correction/:proposalId/accept")
+  @EditorialCapability("editor")
   @HttpCode(200)
   acceptClaimCorrection(
     @OrgId() orgId: string,
@@ -112,6 +115,7 @@ export class ContentController {
   }
 
   @Delete(":id/claim-correction/:proposalId")
+  @EditorialCapability("editor")
   @HttpCode(204)
   async discardClaimCorrection(
     @OrgId() orgId: string,
@@ -159,6 +163,7 @@ export class ContentController {
   }
 
   @Post()
+  @EditorialCapability("author")
   @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
@@ -178,6 +183,7 @@ export class ContentController {
   }
 
   @Put(":id/images")
+  @EditorialCapability("author")
   replaceImages(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,
@@ -187,6 +193,7 @@ export class ContentController {
   }
 
   @Post(":id/images/:slotId/regenerate")
+  @EditorialCapability("author")
   @HttpCode(200)
   regenerateImage(
     @OrgId() orgId: string,
@@ -198,6 +205,7 @@ export class ContentController {
   }
 
   @Post(":id/images/:slotId/crop")
+  @EditorialCapability("author")
   @HttpCode(200)
   cropImage(
     @OrgId() orgId: string,
@@ -233,6 +241,7 @@ export class ContentController {
   }
 
   @Post(":id/editorial-notes")
+  @EditorialCapability("author")
   addNote(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -243,6 +252,7 @@ export class ContentController {
   }
 
   @Post(":id/draft-revision")
+  @EditorialCapability("author")
   reviseDraft(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -253,6 +263,7 @@ export class ContentController {
   }
 
   @Post(":id/draft-revision/:proposalId/accept")
+  @EditorialCapability("author")
   @HttpCode(200)
   acceptDraftRevision(
     @OrgId() orgId: string,
@@ -263,6 +274,7 @@ export class ContentController {
   }
 
   @Delete(":id/draft-revision/:proposalId")
+  @EditorialCapability("author")
   @HttpCode(204)
   async discardDraftRevision(
     @OrgId() orgId: string,
@@ -273,6 +285,7 @@ export class ContentController {
   }
 
   @Post(":id/versions/:versionId/restore")
+  @EditorialCapability("author")
   @HttpCode(200)
   restoreVersion(
     @OrgId() orgId: string,
@@ -290,6 +303,7 @@ export class ContentController {
    * lists and restores from.
    */
   @Patch(":id")
+  @EditorialCapability("author")
   update(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -300,6 +314,7 @@ export class ContentController {
   }
 
   @Patch(":id/adaptations/:adaptationId")
+  @EditorialCapability("author")
   updateAdaptation(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -311,6 +326,7 @@ export class ContentController {
   }
 
   @Post(":id/adaptations/:adaptationId/readapt")
+  @EditorialCapability("author")
   readapt(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -321,6 +337,7 @@ export class ContentController {
   }
 
   @Post(":id/adaptations/:adaptationId/readapt/:proposalId/accept")
+  @EditorialCapability("author")
   @HttpCode(200)
   acceptReadapt(
     @OrgId() orgId: string,
@@ -332,6 +349,7 @@ export class ContentController {
   }
 
   @Delete(":id/adaptations/:adaptationId/readapt/:proposalId")
+  @EditorialCapability("author")
   @HttpCode(204)
   async discardReadapt(
     @OrgId() orgId: string,
@@ -349,6 +367,7 @@ export class ContentController {
    * to say back, and nothing for a client to have to parse.
    */
   @Post(":id/opened")
+  @EditorialCapability("author")
   @HttpCode(204)
   async opened(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
     await this.content.markOpened(orgId, id);
@@ -371,6 +390,7 @@ export class ContentController {
    * body had moved can see that it had.
    */
   @Post(":id/refine")
+  @EditorialCapability("author")
   refine(
     @OrgId() orgId: string,
     @UserId() userId: string,
@@ -398,6 +418,7 @@ export class ContentController {
    * fragment.
    */
   @Post(":id/refine/:proposalId/accept")
+  @EditorialCapability("author")
   @HttpCode(200)
   acceptRefine(
     @OrgId() orgId: string,
@@ -417,6 +438,7 @@ export class ContentController {
    * clear a card they cannot accept.
    */
   @Delete(":id/refine/:proposalId")
+  @EditorialCapability("author")
   @HttpCode(204)
   async discardRefine(
     @OrgId() orgId: string,
@@ -451,6 +473,7 @@ export class ContentController {
    * platform accepted a post.
    */
   @Post(":id/adaptations/:adaptationId/delivery")
+  @EditorialCapability("editor")
   @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
   @HttpCode(200)
   assertDelivery(
@@ -471,6 +494,7 @@ export class ContentController {
   }
 
   @Post(":id/adaptations/:adaptationId/manual-publication")
+  @EditorialCapability("editor")
   @HttpCode(200)
   confirmManualPublication(
     @OrgId() orgId: string,
@@ -483,6 +507,7 @@ export class ContentController {
   }
 
   @Post(":id/approve")
+  @EditorialCapability("editor")
   @HttpCode(200)
   approve(
     @OrgId() orgId: string,
@@ -498,6 +523,7 @@ export class ContentController {
   }
 
   @Post(":id/adaptations/:adaptationId/reschedule")
+  @EditorialCapability("editor")
   @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
   @HttpCode(200)
   rescheduleAdaptation(
@@ -516,18 +542,21 @@ export class ContentController {
   }
 
   @Post(":id/retract-approval")
+  @EditorialCapability("editor")
   @HttpCode(200)
   retractApproval(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.retractApproval(orgId, id);
   }
 
   @Post(":id/archive")
+  @EditorialCapability("author")
   @HttpCode(200)
   archive(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.archive(orgId, id);
   }
 
   @Post(":id/restore")
+  @EditorialCapability("author")
   @HttpCode(200)
   restore(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.restore(orgId, id);
@@ -535,12 +564,14 @@ export class ContentController {
 
   /** Permanently remove an archived draft with no delivery history. */
   @Delete(":id")
+  @EditorialCapability("author")
   @HttpCode(204)
   async delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
     await this.content.delete(orgId, id);
   }
 
   @Post(":id/reject")
+  @EditorialCapability("editor")
   @HttpCode(200)
   reject(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.reject(orgId, id);

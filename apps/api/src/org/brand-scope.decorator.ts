@@ -36,7 +36,12 @@ export type BrandScopeMetadata =
   /** The repository must restrict every returned row to visible brands. */
   | { kind: "org-list" }
   /** A genuinely organization-wide operation; manager means owner or admin. */
-  | { kind: "org"; roles: "member" | "manager" };
+  | {
+      kind: "org";
+      roles: "member" | "manager";
+      /** Optional brand grant for an editorial POST that has no tenant write. */
+      editorialBrand?: { source: "body"; key: "brandId" };
+    };
 
 /** Every ActiveOrgGuard route declares how its brand access is determined. */
 export const BrandScope = (scope: BrandScopeMetadata) => SetMetadata(BRAND_SCOPE_KEY, scope);

@@ -84,7 +84,12 @@ function installHandlers(
       if (result !== undefined) return result;
     }
 
-    if (method === "GET" && path === "/api/ai-credentials") return credentials;
+    if (method === "GET" && path === "/api/ai-credentials/availability") {
+      return {
+        configured: credentials.length > 0,
+        googleConfigured: credentials.some((credential) => credential.provider === "google"),
+      };
+    }
     if (method === "GET" && path === "/api/brands") return brands;
     if (method === "GET" && path === `/api/channels?brandId=${B1}`) return acmeChannels;
     if (method === "GET" && path === `/api/channels?brandId=${B2}`) return widgetsChannels;
@@ -798,6 +803,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(
       screen.getByLabelText(en.ContentNew.sourceUrlLabel),
@@ -809,6 +815,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
     expect(parsedBody(calls.find((c) => c.path === "/api/source-extraction"))).toEqual({
       url: "https://example.com/guide",
+      brandId: B1,
     });
     await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
@@ -938,6 +945,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(screen.getByLabelText(en.ContentNew.materialLabel), "Existing text.");
     await user.upload(
@@ -968,6 +976,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     fireEvent.change(screen.getByLabelText(en.ContentNew.sourceUrlLabel), {
       target: { value: "https://example.com/first" },
@@ -1003,6 +1012,7 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
     await open(user);
     await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), "https://example.com/old");
     await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
@@ -1563,7 +1573,7 @@ describe("'Create post' while the Source section holds something (Task 5 Step 3)
     // the Generate button is not rendered at all — `aiNotConfigured` and a
     // link to Settings take its place — so "use Generate" would point at a
     // control that is not on this screen. The Source section itself stays: it
-    // holds a person's typed text, and `credentials` reads `[]` for a FAILED
+    // holds a person's typed text, and availability reads false for a FAILED
     // request too, so hiding the section would delete a field over a GET that
     // did not answer.
     const calls: Call[] = [];

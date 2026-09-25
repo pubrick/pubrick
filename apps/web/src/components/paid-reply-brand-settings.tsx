@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  type AiCredentialPublic,
   type BrandPaidReplySettingsDto,
   formatUsd,
   type OrganizationPaidReplySettingsDto,
@@ -81,9 +80,9 @@ export function PaidReplyBrandSettings({ brandId, kind }: { brandId: string; kin
         if (active) setOrgSettings(value);
       })
       .catch(() => {});
-    void api<AiCredentialPublic[]>("/api/ai-credentials")
-      .then((keys) => {
-        if (active) setHasGoogleKey(keys.some((key) => key.provider === "google"));
+    void api<{ googleConfigured: boolean }>("/api/ai-credentials/availability")
+      .then((availability) => {
+        if (active) setHasGoogleKey(availability.googleConfigured);
       })
       .catch(() => {
         if (active) setHasGoogleKey(null);

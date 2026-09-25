@@ -19,7 +19,7 @@ vi.mock("@/lib/auth-client", () => ({
     useSession: vi.fn(),
     useActiveOrganization: vi.fn(),
     signOut: vi.fn(),
-    organization: { inviteMember: vi.fn(), cancelInvitation: vi.fn() },
+    organization: { inviteMember: vi.fn(), cancelInvitation: vi.fn(), updateMemberRole: vi.fn() },
   },
 }));
 
@@ -40,6 +40,7 @@ type MockAuthClient = {
   organization: {
     inviteMember: ReturnType<typeof vi.fn>;
     cancelInvitation: ReturnType<typeof vi.fn>;
+    updateMemberRole: ReturnType<typeof vi.fn>;
   };
 };
 const mockAuthClient = authClient as unknown as MockAuthClient;
@@ -114,8 +115,10 @@ function spendLine(amount: string): string {
  */
 async function renderSettings(): Promise<void> {
   render(<SettingsPage />);
-  await waitFor(() => expect(mockApi).toHaveBeenCalledWith("/api/ai-credentials/spend"));
-  await screen.findByRole("heading", { name: en.SettingsPage.aiTitle });
+  if (screen.queryByRole("heading", { name: en.SettingsPage.aiTitle })) {
+    await waitFor(() => expect(mockApi).toHaveBeenCalledWith("/api/ai-credentials/spend"));
+  }
+  await screen.findByRole("heading", { name: en.SettingsPage.workspaceTitle });
 }
 
 beforeEach(() => {
@@ -128,6 +131,7 @@ beforeEach(() => {
   mockAuthClient.signOut.mockReset();
   mockAuthClient.organization.inviteMember.mockReset();
   mockAuthClient.organization.cancelInvitation.mockReset();
+  mockAuthClient.organization.updateMemberRole.mockReset();
   refetchOrganization.mockReset();
 
   mockAuthClient.useSession.mockReturnValue({
@@ -888,6 +892,118 @@ describe("Settings — People", () => {
       await screen.findByText(`${window.location.origin}/en/onboarding?invitation=inv-9`),
     ).toBeInTheDocument();
     expect(refetchOrganization).toHaveBeenCalled();
+  });
+
+  it("lets a manager invite an editor and explains brand assignment", async () => {
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: { id: "inv-editor", email: "ed@example.com", expiresAt: "2026-10-06T10:00:00.000Z" },
+      error: null,
+    });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(en.SettingsPage.peopleBrandAccessHint);
+    await user.type(
+      within(dialog).getByLabelText(en.SettingsPage.peopleEmailLabel),
+      "ed@example.com",
+    );
+    await user.selectOptions(
+      within(dialog).getByLabelText(en.SettingsPage.peopleRoleLabel),
+      "editor",
+    );
+    await user.click(within(dialog).getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await waitFor(() =>
+      expect(mockAuthClient.organization.inviteMember).toHaveBeenCalledWith({
+        email: "ed@example.com",
+        role: "editor",
+      }),
+    );
+  });
+
+  it("keeps the legacy member invitation limited to another member", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "member", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+      ],
+    });
+    mockAuthClient.organization.inviteMember.mockResolvedValue({
+      data: { id: "inv-member", email: "bob@example.com", expiresAt: "2026-10-06T10:00:00.000Z" },
+      error: null,
+    });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).queryByLabelText(en.SettingsPage.peopleRoleLabel),
+    ).not.toBeInTheDocument();
+    await user.type(
+      within(dialog).getByLabelText(en.SettingsPage.peopleEmailLabel),
+      "bob@example.com",
+    );
+    await user.click(within(dialog).getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    await waitFor(() =>
+      expect(mockAuthClient.organization.inviteMember).toHaveBeenCalledWith({
+        email: "bob@example.com",
+        role: "member",
+      }),
+    );
+  });
+
+  it("requires confirmation before changing a teammate's role and explains revoked grants", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "owner", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+        { id: "m2", role: "author", user: { id: "u2", email: "bob@example.com", name: "Bob" } },
+      ],
+    });
+    mockAuthClient.organization.updateMemberRole.mockResolvedValue({ data: {}, error: null });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleChangeRole }));
+    expect(mockAuthClient.organization.updateMemberRole).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(en.SettingsPage.peopleRoleResetHint);
+    await user.selectOptions(
+      within(dialog).getByLabelText(en.SettingsPage.peopleRoleLabel),
+      "editor",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: en.SettingsPage.peopleChangeRole }),
+    );
+    await waitFor(() =>
+      expect(mockAuthClient.organization.updateMemberRole).toHaveBeenCalledWith({
+        memberId: "m2",
+        role: "editor",
+      }),
+    );
+    expect(refetchOrganization).toHaveBeenCalled();
+  });
+
+  it("shows invitation controls only to roles allowed to invite", async () => {
+    organizationIs({
+      members: [
+        { id: "m1", role: "author", user: { id: "u1", email: "ann@example.com", name: "Ann" } },
+      ],
+      invitations: [liveInvitation("bob@example.com")],
+    });
+    await renderSettings();
+    expect(
+      screen.queryByRole("button", { name: en.SettingsPage.peopleInvite }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.SettingsPage.remove })).not.toBeInTheDocument();
+    expect(screen.getByText("bob@example.com")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: en.SettingsPage.aiTitle }),
+    ).not.toBeInTheDocument();
+    expect(mockApi).not.toHaveBeenCalledWith("/api/ai-credentials");
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.promptsOpen }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.notificationsOpen }),
+    ).not.toBeInTheDocument();
   });
 
   it("copies the link to the clipboard", async () => {

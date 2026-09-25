@@ -16,6 +16,7 @@ import {
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
+import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ClaimReviewRepository } from "./claim-review.repository";
@@ -37,6 +38,7 @@ export class ClaimReviewController {
   }
 
   @Post()
+  @EditorialCapability("editor")
   @HttpCode(202)
   start(
     @OrgId() orgId: string,

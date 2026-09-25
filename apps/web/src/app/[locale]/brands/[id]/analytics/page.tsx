@@ -19,6 +19,7 @@ import { Modal } from "@/components/ui/modal";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { AutoReplies } from "./auto-replies";
 import { BrandOverview } from "./brand-overview";
 
@@ -33,6 +34,12 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const role: string | undefined = organization?.members?.find(
+    (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+  )?.role;
+  const canManageAnalytics = role === "owner" || role === "admin" || role === "member";
   const [brand, setBrand] = useState<{ id: string; name: string } | null>(null);
   const [days, setDays] = useState<Period>(30);
   const [data, setData] = useState<AnalyticsDto | null>(null);
@@ -283,7 +290,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
     >
       <div className="space-y-6">
         <p className="text-sm text-fg-secondary">{t("intro")}</p>
-        <AutoReplies brandId={id} />
+        <AutoReplies brandId={id} readOnly={!canManageAnalytics} />
         <PaidReplyBrandSettings brandId={id} kind="publication" />
         <Segmented
           options={PERIODS.map((value) => ({
@@ -394,7 +401,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                       {post.metrics.checkedAt && (
                         <span>{t("checked", { date: date(post.metrics.checkedAt) })}</span>
                       )}
-                      {post.canRefresh && (
+                      {canManageAnalytics && post.canRefresh && (
                         <Button
                           variant="secondary"
                           className="min-h-11"
@@ -504,7 +511,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
                 >
                   {t("checkReplyResult")}
                 </Button>
-              ) : commentState.canCollect ? (
+              ) : canManageAnalytics && commentState.canCollect ? (
                 <Button
                   variant="secondary"
                   className="min-h-11"
@@ -537,7 +544,8 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
             <section aria-label={t("analysisTitle")} className="border-t border-border-soft pt-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
-                {analysisState &&
+                {canManageAnalytics &&
+                  analysisState &&
                   ["not_analyzed", "stale"].includes(
                     analysisState.current?.status ?? analysisState.status,
                   ) && (

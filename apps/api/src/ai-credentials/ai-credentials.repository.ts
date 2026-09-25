@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  AI_PROVIDERS,
   type AiCredentialTestResult,
   type AiCredentialUpsert,
   type AiProviderId,
@@ -19,7 +20,7 @@ import {
   toLedgerCostUsd,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
@@ -64,6 +65,23 @@ export class AiCredentialsRepository {
       .select(PUBLIC_COLUMNS)
       .from(schema.aiCredentials)
       .where(eq(schema.aiCredentials.orgId, orgId));
+  }
+
+  /** Non-secret generation availability for members who cannot manage keys. */
+  async availability(orgId: string): Promise<{ configured: boolean; googleConfigured: boolean }> {
+    const rows = await db
+      .select({ provider: schema.aiCredentials.provider })
+      .from(schema.aiCredentials)
+      .where(
+        and(
+          eq(schema.aiCredentials.orgId, orgId),
+          inArray(schema.aiCredentials.provider, [...AI_PROVIDERS]),
+        ),
+      );
+    return {
+      configured: rows.length > 0,
+      googleConfigured: rows.some((row) => row.provider === "google"),
+    };
   }
 
   async upsert(orgId: string, data: AiCredentialUpsert) {

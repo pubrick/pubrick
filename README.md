@@ -61,7 +61,9 @@ Editors can also place [images inside articles](docs/article-images.md), with
 escaped previews and immutable image snapshots in the opt-in public RSS feed.
 Organization owners and admins can issue one-time
 [public read API](docs/public-api.md) keys for tenant-scoped content reads and
-[assign per-brand access](docs/brand-access.md) to regular members. The
+[assign per-brand access](docs/brand-access.md) to authors, editors and regular
+members. Authors can prepare drafts; editors can approve and publish for their
+assigned brands. The
 [OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
 [optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
 platforms remain unavailable until their publishers are implemented.

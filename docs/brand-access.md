@@ -1,11 +1,13 @@
 # Brand access
 
 An organization owner or admin can open **Brand access** from a brand's page
-and choose which regular members may work with that brand. Owners and admins
-always have access. New regular members have no brand access until assigned.
+and choose which authors, editors, and regular members may work with that
+brand. Owners and admins always have access. New teammates have no brand access
+until assigned.
 Brand-scoped lists and direct resource URLs enforce the same grants; a hidden
-brand or resource returns 404. Organization-wide settings and credentials
-remain owner/admin operations.
+brand or resource returns 404. Authors can prepare drafts and generation runs;
+editors can also approve, schedule, and publish. Organization-wide settings and
+credentials remain owner/admin operations.
 
 ## Upgrading an existing installation
 

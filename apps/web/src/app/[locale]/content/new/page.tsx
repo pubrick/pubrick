@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  type AiCredentialPublic,
   CONTENT_TYPES,
   COVER_SUPPORTED_PLATFORMS,
   type ContentType,
@@ -41,6 +40,7 @@ type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
 type SourcePreview = SourceExtractionResponse & { origin: "article" | "transcript" };
+type AiAvailability = { configured: boolean; googleConfigured: boolean };
 
 const FORM_ID = "new-content-form";
 const SOURCE_HELP_ID = "source-help";
@@ -76,7 +76,7 @@ export default function NewContentPage() {
   const transcriptRequestId = useRef(0);
   // `null` until the first answer: neither Generate nor the "add a key" hint
   // should flash while we still do not know which of the two is true.
-  const [credentials, setCredentials] = useState<AiCredentialPublic[] | null>(null);
+  const [aiAvailability, setAiAvailability] = useState<AiAvailability | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   /**
    * Whether the Source disclosure is open — held HERE because the screen's
@@ -124,11 +124,11 @@ export default function NewContentPage() {
    * credential the button is not rendered at all (`aiNotConfigured` and a link
    * to Settings take its place), so the sentence has to point at Settings
    * instead. One expression for both, or the copy starts describing a screen
-   * that is not there — which is what it did while `credentials` was read only
+   * that is not there — which is what it did while availability was read only
    * at the render site.
    */
-  const canGenerate = credentials !== null && credentials.length > 0;
-  const hasGoogleKey = credentials?.some((credential) => credential.provider === "google") ?? false;
+  const canGenerate = aiAvailability?.configured === true;
+  const hasGoogleKey = aiAvailability?.googleConfigured === true;
   const inlineImageTypeSupported = supportsInlineImages(contentType);
   const coverChannelsSupported = [...channelIds].every((id) =>
     (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(
@@ -156,9 +156,9 @@ export default function NewContentPage() {
   // a Generate button that starts a run the API will refuse — and it is the
   // same thing the user has to do if the failure was real.
   useEffect(() => {
-    api<AiCredentialPublic[]>("/api/ai-credentials")
-      .then(setCredentials)
-      .catch(() => setCredentials([]));
+    api<AiAvailability>("/api/ai-credentials/availability")
+      .then(setAiAvailability)
+      .catch(() => setAiAvailability({ configured: false, googleConfigured: false }));
   }, []);
 
   useEffect(() => {
@@ -195,6 +195,10 @@ export default function NewContentPage() {
 
   async function fetchSource() {
     setSourceError(null);
+    if (!brandId) {
+      setSourceError(t("noBrandSelected"));
+      return;
+    }
     const parsed = sourceExtractionRequestSchema.safeParse({ url: sourceUrl });
     if (!parsed.success) {
       setSourceError(t("sourceUrlNotHttp"));
@@ -208,7 +212,7 @@ export default function NewContentPage() {
     try {
       const preview = await api<SourceExtractionResponse>("/api/source-extraction", {
         method: "POST",
-        body: JSON.stringify(parsed.data),
+        body: JSON.stringify({ ...parsed.data, brandId }),
       });
       if (requestId === sourceRequestId.current) {
         setSourcePreview({ ...preview, origin: "article" });
@@ -622,7 +626,7 @@ export default function NewContentPage() {
                 )}
               </div>
             )}
-            {credentials !== null &&
+            {aiAvailability !== null &&
               (canGenerate ? (
                 <div>
                   <Button variant="secondary" onClick={onGenerate} disabled={generating}>

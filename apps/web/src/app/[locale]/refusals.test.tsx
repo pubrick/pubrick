@@ -1,7 +1,7 @@
 import { MAX_REFINE_CALLS_PER_HOUR, refusalBody } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { signedInSession } from "@/test/auth-client.stub";
+import { signedInOrganization, signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { fireEvent, render, renderAsync, screen, waitFor, within } from "@/test/render";
 import es from "../../../messages/es.json";
@@ -138,6 +138,7 @@ function serve(refuse: (url: string, method: string) => Response | undefined) {
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   signedInSession();
+  signedInOrganization("Test Org", "owner");
 });
 
 /** Both sentences, so neither assertion can stand in for the other. */
@@ -432,9 +433,7 @@ describe("the run receipt", () => {
  * came back over the wire.
  */
 describe("the compose screen", () => {
-  const GOOGLE_KEY = [
-    { provider: "google", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
-  ];
+  const GOOGLE_KEY = { configured: true, googleConfigured: true };
 
   it("says in Russian that a run was refused, without naming a wire field", async () => {
     // `ValidationPipe`'s shape for a body `runCreateSchema` rejects: one code
@@ -446,7 +445,7 @@ describe("the compose screen", () => {
     // the server's English.
     const issues = ["material: Too big: expected string to have <=8000 characters"];
     serve((url, method) => {
-      if (url === "/api/ai-credentials") return jsonResponse(200, GOOGLE_KEY);
+      if (url === "/api/ai-credentials/availability") return jsonResponse(200, GOOGLE_KEY);
       if (url === "/api/brands") return jsonResponse(200, [{ id: BRAND_ID, name: "Acme" }]);
       if (method === "POST" && url === "/api/runs") {
         return jsonResponse(400, refusalBody(400, "invalid_request", issues));

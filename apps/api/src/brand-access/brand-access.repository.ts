@@ -93,11 +93,11 @@ export class BrandAccessRepository {
           .for("key share");
         if (
           members.length !== memberIds.length ||
-          members.some((member) => member.role !== "member")
+          members.some((member) => !["member", "author", "editor"].includes(member.role))
         ) {
           throw badRequest(
             "invalid_request",
-            "Every selected member must be a regular member of this organization",
+            "Every selected member must be a non-manager member of this organization",
           );
         }
       }
