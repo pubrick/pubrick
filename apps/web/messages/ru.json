@@ -1667,6 +1667,8 @@
     "historyRefresh": "Обновить",
     "historyMore": "Показать ещё",
     "historyEmpty": "Уведомлений пока нет.",
+    "historyQueued": "В очереди с:",
+    "historyUpdated": "Последнее изменение:",
     "historyEvent_draft_ready": "Черновик готов",
     "historyEvent_delivery_failed": "Ошибка публикации",
     "historyEvent_delivery_unknown": "Результат публикации неизвестен",

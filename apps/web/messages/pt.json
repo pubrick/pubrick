@@ -1667,6 +1667,8 @@
     "historyRefresh": "Atualizar",
     "historyMore": "Carregar mais",
     "historyEmpty": "Ainda não existem notificações.",
+    "historyQueued": "Na fila desde:",
+    "historyUpdated": "Última atividade:",
     "historyEvent_draft_ready": "Rascunho pronto",
     "historyEvent_delivery_failed": "Falha na publicação",
     "historyEvent_delivery_unknown": "Resultado da publicação desconhecido",

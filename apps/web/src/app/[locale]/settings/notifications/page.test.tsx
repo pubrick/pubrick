@@ -197,6 +197,7 @@ describe("notifications settings", () => {
     render(<NotificationsPage />);
     expect(await screen.findByText("Delivery unconfirmed")).toBeInTheDocument();
     expect(screen.getByText("Publication outcome unknown")).toBeInTheDocument();
+    expect(screen.getByText(/Last activity:/)).toBeInTheDocument();
     expect(request).not.toHaveBeenCalledWith(`/api/notifications/events?cursor=${firstId}`);
     await user.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("Draft ready")).toBeInTheDocument();

@@ -328,12 +328,28 @@ export default function NotificationsPage() {
                 >
                   <span className="font-medium text-fg">{t(`historyEvent_${event.event}`)}</span>
                   <span className="text-fg-secondary">{t(`historyStatus_${event.status}`)}</span>
-                  <time dateTime={event.createdAt} className="w-full text-xs text-fg-tertiary">
-                    {new Intl.DateTimeFormat(locale, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    }).format(new Date(event.createdAt))}
-                  </time>
+                  <div className="flex w-full flex-wrap gap-x-4 gap-y-1 text-xs text-fg-tertiary">
+                    <span>
+                      {t("historyQueued")}{" "}
+                      <time dateTime={event.createdAt}>
+                        {new Intl.DateTimeFormat(locale, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(event.createdAt))}
+                      </time>
+                    </span>
+                    {event.updatedAt !== event.createdAt ? (
+                      <span>
+                        {t("historyUpdated")}{" "}
+                        <time dateTime={event.updatedAt}>
+                          {new Intl.DateTimeFormat(locale, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(event.updatedAt))}
+                        </time>
+                      </span>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ol>

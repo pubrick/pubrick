@@ -1667,6 +1667,8 @@
     "historyRefresh": "Refresh",
     "historyMore": "Load more",
     "historyEmpty": "No notification events yet.",
+    "historyQueued": "Queued:",
+    "historyUpdated": "Last activity:",
     "historyEvent_draft_ready": "Draft ready",
     "historyEvent_delivery_failed": "Publication failed",
     "historyEvent_delivery_unknown": "Publication outcome unknown",
