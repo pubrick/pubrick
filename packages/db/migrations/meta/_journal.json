@@ -729,6 +729,13 @@
       "when": 1790368621127,
       "tag": "0104_heavy_dexter_bennett",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1790369625317,
+      "tag": "0105_oval_mister_fear",
+      "breakpoints": true
     }
   ]
 }

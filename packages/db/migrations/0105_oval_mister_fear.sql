@@ -1,0 +1,1 @@
+ALTER TABLE "draft_revision_proposals" ADD COLUMN "image_plan" jsonb;

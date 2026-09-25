@@ -23,6 +23,7 @@ type ReviewSnapshot = {
   body: string;
   coverMediaId: string | null;
   videoMediaId: string | null;
+  imagesRevision: number;
   status: string;
   channels: Array<{
     adaptationId: string;
@@ -58,6 +59,9 @@ function snapshotHash(snapshot: ReviewSnapshot): string {
       title: snapshot.title,
       body: snapshot.body,
       coverMediaId: snapshot.coverMediaId,
+      // A changed inline illustration needs a new verdict even when the master
+      // text and cover are identical. Older links without slots keep their hash.
+      ...(snapshot.imagesRevision > 0 ? { imagesRevision: snapshot.imagesRevision } : {}),
       // Preserve hashes for existing image/text links issued before video support.
       ...(snapshot.videoMediaId ? { videoMediaId: snapshot.videoMediaId } : {}),
       channels: snapshot.channels.map(({ adaptationId, channelId, name, platform, body }) => ({
@@ -84,6 +88,7 @@ async function snapshotFor(
       body: schema.contentItems.body,
       coverMediaId: schema.contentItems.coverMediaId,
       videoMediaId: schema.contentItems.videoMediaId,
+      imagesRevision: schema.contentItems.imagesRevision,
       status: schema.contentItems.status,
     })
     .from(schema.contentItems)
@@ -113,6 +118,7 @@ async function snapshotFor(
     body: item.body,
     coverMediaId: item.coverMediaId,
     videoMediaId: item.videoMediaId,
+    imagesRevision: item.imagesRevision ?? 0,
     status: item.status,
     channels: channels.map((row) => ({ ...row, body: row.body ?? item.body })),
   };

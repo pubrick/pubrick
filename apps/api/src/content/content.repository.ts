@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
@@ -31,16 +31,20 @@ import {
   type ContentUpdate,
   type ContentVersionRestore,
   type DeliveryOutcome,
+  type DraftRevisionImagePlan,
   type DraftRevisionProposal,
   type DraftRevisionRequest,
   decodeContentCursor,
+  draftRevisionImagePlanSchema,
   encodeContentCursor,
+  IMAGE_CALL_STEPS,
   isMalformedStoredAiCredential,
   isManualPlatform,
   isSameText,
   isUnreadableCiphertext,
   MAX_BODY_LENGTH,
   MAX_CONTENT_PAGE_SIZE,
+  MAX_IMAGE_CALLS_PER_HOUR,
   MAX_REFINE_CALLS_PER_HOUR,
   MIN_RESCHEDULE_LEAD_MS,
   nextItemStatus,
@@ -74,6 +78,8 @@ import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.reposi
 import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
+import { MediaRepository } from "../media/media.repository";
+import { MediaImageService } from "../media/media-image.service";
 import { QueueService } from "../queue/queue.service";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
@@ -412,6 +418,7 @@ const DRAFT_REVISION_COLUMNS = {
   proposal: schema.draftRevisionProposals.proposal,
   proposedTitle: schema.draftRevisionProposals.proposedTitle,
   reason: schema.draftRevisionProposals.reason,
+  imagePlan: schema.draftRevisionProposals.imagePlan,
 };
 
 const CLAIM_CORRECTION_COLUMNS = {
@@ -1196,6 +1203,8 @@ export class ContentRepository {
     private readonly refiner: RefineCaller,
     private readonly readapter: ReadaptCaller,
     private readonly draftReviser: DraftRevisionCaller,
+    private readonly mediaImages: MediaImageService,
+    private readonly media: MediaRepository,
     private readonly claimCorrector: ClaimCorrectionCaller,
   ) {}
 
@@ -1996,7 +2005,14 @@ export class ContentRepository {
         ),
       )
       .limit(1);
-    return proposal ?? null;
+    return proposal
+      ? {
+          ...proposal,
+          imagePlan: proposal.imagePlan
+            ? draftRevisionImagePlanSchema.parse(proposal.imagePlan)
+            : null,
+        }
+      : null;
   }
 
   private async stagedAdaptationProposals(
@@ -2415,6 +2431,72 @@ export class ContentRepository {
       throw conflict("draft_revision_stale", "This draft changed; reload before revising it");
     }
     await this.requireAiDraft(orgId, id, "draft_revision");
+    const selections = request.regenerateImages;
+    const requestedSlots = selections?.inlineSlotIds ?? [];
+    if (new Set(requestedSlots).size !== requestedSlots.length) {
+      throw badRequest("invalid_request", "Select each image once");
+    }
+    let imageSource: {
+      revision: number;
+      coverMediaId: string | null;
+      slots: { id: string; mediaId: string; afterParagraph: number }[];
+    } | null = null;
+    if (selections) {
+      // The lock is released before any network call. Accept repeats these
+      // checks against the exact saved snapshot after the paid work completes.
+      await db.transaction(async (tx) => {
+        const current = await this.requireEditableItem(tx, orgId, id);
+        if (current.title !== sourceTitle || normalizeNewlines(current.body) !== sourceBody) {
+          throw conflict("draft_revision_stale", "This draft changed; reload before revising it");
+        }
+      });
+      const [snapshot] = await db
+        .select({
+          revision: schema.contentItems.imagesRevision,
+          coverMediaId: schema.contentItems.coverMediaId,
+          videoMediaId: schema.contentItems.videoMediaId,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1);
+      if (
+        !snapshot ||
+        (snapshot.revision ?? 0) !== request.expectedImagesRevision ||
+        snapshot.coverMediaId !== request.expectedCoverMediaId
+      ) {
+        throw conflict("draft_revision_stale", "Images changed; reload before revising this draft");
+      }
+      if (selections.cover && (!snapshot.coverMediaId || snapshot.videoMediaId)) {
+        throw badRequest("invalid_request", "Select a saved image cover to regenerate");
+      }
+      if (selections.cover) {
+        await this.media.coverForRegeneration(orgId, id, snapshot.coverMediaId);
+      }
+      const slots = requestedSlots.length
+        ? await db
+            .select({
+              id: schema.contentImageSlots.id,
+              mediaId: schema.contentImageSlots.mediaId,
+              afterParagraph: schema.contentImageSlots.afterParagraph,
+            })
+            .from(schema.contentImageSlots)
+            .where(
+              and(
+                eq(schema.contentImageSlots.orgId, orgId),
+                eq(schema.contentImageSlots.contentItemId, id),
+                inArray(schema.contentImageSlots.id, requestedSlots),
+              ),
+            )
+        : [];
+      if (slots.length !== requestedSlots.length) {
+        throw badRequest("invalid_request", "An image slot is no longer in this draft");
+      }
+      imageSource = {
+        revision: snapshot.revision ?? 0,
+        coverMediaId: snapshot.coverMediaId,
+        slots,
+      };
+    }
     let instruction = request.instruction;
     if (request.noteId) {
       const [note] = await db
@@ -2434,30 +2516,115 @@ export class ContentRepository {
       }
       instruction = note.note;
     }
-    if (!instruction) throw new Error("Draft revision instruction was not resolved");
-    if (await this.overEditorAiBudget(orgId)) {
+    const pending = await this.stagedDraftRevision(orgId, id);
+    if (pending?.imagePlan?.selections.some((selection) => !selection.generatedMediaId)) {
+      const plan = pending.imagePlan;
+      const matching =
+        pending.sourceBody === sourceBody &&
+        pending.sourceTitle === sourceTitle &&
+        pending.instruction === (instruction ?? "Regenerate selected images") &&
+        plan.textModelUsed === Boolean(instruction) &&
+        plan.sourceImagesRevision === imageSource?.revision &&
+        plan.sourceCoverMediaId === imageSource.coverMediaId &&
+        plan.selections.length === imageSource.slots.length + Number(selections?.cover) &&
+        plan.selections.filter((selection) => selection.kind === "cover").length ===
+          Number(selections?.cover) &&
+        imageSource.slots.every((slot) =>
+          plan.selections.some(
+            (selection) =>
+              selection.kind === "inline" &&
+              selection.slotId === slot.id &&
+              selection.sourceMediaId === slot.mediaId &&
+              selection.afterParagraph === slot.afterParagraph,
+          ),
+        );
+      if (!matching) {
+        throw conflict(
+          "draft_revision_stale",
+          "Finish or discard the pending paid image suggestion before starting another revision",
+        );
+      }
+      await this.requireImageAllowance(
+        orgId,
+        plan.selections.filter((selection) => !selection.generatedMediaId).length,
+      );
+      return this.continueDraftRevisionImages(orgId, id, pending.id, item.brandId);
+    }
+    if (imageSource && selections) {
+      await this.requireImageAllowance(orgId, imageSource.slots.length + Number(selections.cover));
+    }
+    if (instruction && (await this.overEditorAiBudget(orgId))) {
       throw conflict(
         "draft_revision_limit_reached",
         "This organization's editor AI allowance is spent",
       );
     }
-    const credential = await this.refineCredential(orgId, "draft_revision");
-    const outcome = await this.draftReviser.run({
-      credential,
-      brand: await this.brandFor(orgId, item.brandId),
-      title: sourceTitle,
-      body: sourceBody,
-      instruction,
-    });
-    await this.recordEditorUsage(orgId, id, outcome.usage);
-    if (!outcome.ok) {
+    const outcome = instruction
+      ? await this.draftReviser.run({
+          credential: await this.refineCredential(orgId, "draft_revision"),
+          brand: await this.brandFor(orgId, item.brandId),
+          title: sourceTitle,
+          body: sourceBody,
+          instruction,
+        })
+      : null;
+    if (outcome) await this.recordEditorUsage(orgId, id, outcome.usage);
+    if (outcome && !outcome.ok) {
       throw conflict(
         outcome.failure === "timed_out" ? "draft_revision_timed_out" : "draft_revision_failed",
         "The model could not revise this draft; nothing was changed",
       );
     }
-    const proposal = normalizeNewlines(outcome.text);
-    return db.transaction(async (tx) => {
+    const proposal = outcome ? normalizeNewlines(outcome.text) : sourceBody;
+    const proposedTitle = outcome ? outcome.title : sourceTitle;
+    const paragraphs = proposal.split(/\n\s*\n/).filter((part) => part.trim());
+    const placedSlots = imageSource
+      ? await db
+          .select({ afterParagraph: schema.contentImageSlots.afterParagraph })
+          .from(schema.contentImageSlots)
+          .where(
+            and(
+              eq(schema.contentImageSlots.orgId, orgId),
+              eq(schema.contentImageSlots.contentItemId, id),
+            ),
+          )
+      : [];
+    if (placedSlots.some((slot) => !paragraphs[slot.afterParagraph])) {
+      throw conflict(
+        "content_image_body_conflict",
+        "The suggested text no longer has a paragraph for an attached image",
+      );
+    }
+    const imagePlan: DraftRevisionImagePlan | null =
+      imageSource && selections
+        ? {
+            sourceImagesRevision: imageSource.revision,
+            sourceCoverMediaId: imageSource.coverMediaId,
+            textModelUsed: Boolean(instruction),
+            inFlight: null,
+            selections: [
+              ...(selections.cover && imageSource.coverMediaId
+                ? [
+                    {
+                      kind: "cover" as const,
+                      slotId: null,
+                      sourceMediaId: imageSource.coverMediaId,
+                      afterParagraph: null,
+                      generatedMediaId: null,
+                    },
+                  ]
+                : []),
+              ...imageSource.slots.map((slot) => ({
+                kind: "inline" as const,
+                slotId: slot.id,
+                sourceMediaId: slot.mediaId,
+                afterParagraph: slot.afterParagraph,
+                generatedMediaId: null,
+              })),
+            ],
+          }
+        : null;
+    const staged = await db.transaction(async (tx) => {
       const [existing] = await tx
         .select({ id: schema.contentItems.id, status: schema.contentItems.status })
         .from(schema.contentItems)
@@ -2467,6 +2634,31 @@ export class ContentRepository {
       if (!existing) throw notFound("content_not_found", "Content item not found");
       if (existing.status === "archived") {
         throw conflict("content_archived", "Restore this archived content before changing it");
+      }
+      const [prior] = await tx
+        .select({
+          id: schema.draftRevisionProposals.id,
+          imagePlan: schema.draftRevisionProposals.imagePlan,
+        })
+        .from(schema.draftRevisionProposals)
+        .where(
+          and(
+            eq(schema.draftRevisionProposals.orgId, orgId),
+            eq(schema.draftRevisionProposals.contentItemId, id),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (
+        prior?.imagePlan &&
+        draftRevisionImagePlanSchema
+          .parse(prior.imagePlan)
+          .selections.some((selection) => !selection.generatedMediaId)
+      ) {
+        throw conflict(
+          "draft_revision_stale",
+          "Finish or discard the pending paid image suggestion before starting another revision",
+        );
       }
       await tx
         .delete(schema.draftRevisionProposals)
@@ -2478,16 +2670,205 @@ export class ContentRepository {
           contentItemId: id,
           sourceBody,
           sourceTitle,
-          instruction,
+          instruction: instruction ?? "Regenerate selected images",
           proposal,
-          proposedTitle: outcome.title,
-          reason: outcome.reason,
+          proposedTitle,
+          reason: outcome?.reason ?? "Only the selected images were regenerated.",
+          imagePlan,
           createdBy: userId,
         })
         .returning(DRAFT_REVISION_COLUMNS);
       if (!staged) throw new Error("Draft revision proposal was not staged");
-      return staged;
+      return { ...staged, imagePlan };
     });
+    return imagePlan?.selections.length
+      ? this.continueDraftRevisionImages(orgId, id, staged.id, item.brandId)
+      : staged;
+  }
+
+  private async requireImageAllowance(orgId: string, selectedCount: number): Promise<void> {
+    if (!selectedCount) return;
+    await this.credentials.getDecrypted(orgId, "google");
+    const [usage] = await db
+      .select({ calls: sql<string>`count(*)` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          inArray(schema.usageLedger.step, [...IMAGE_CALL_STEPS]),
+          sql`${schema.usageLedger.createdAt} > now() - interval '1 hour'`,
+        ),
+      );
+    if (Number(usage?.calls ?? 0) + selectedCount > MAX_IMAGE_CALLS_PER_HOUR) {
+      throw conflict(
+        "media_generation_limit",
+        "Not enough image calls remain this hour for the selected images",
+      );
+    }
+  }
+
+  private async finishDraftRevisionImage(
+    orgId: string,
+    id: string,
+    proposalId: string,
+    token: string,
+    assetId: string | null,
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ imagePlan: schema.draftRevisionProposals.imagePlan })
+        .from(schema.draftRevisionProposals)
+        .where(
+          and(
+            eq(schema.draftRevisionProposals.orgId, orgId),
+            eq(schema.draftRevisionProposals.contentItemId, id),
+            eq(schema.draftRevisionProposals.id, proposalId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!row?.imagePlan)
+        throw conflict(
+          "draft_revision_stale",
+          "The paid image remains in the media library; its proposal was removed",
+        );
+      const plan = draftRevisionImagePlanSchema.parse(row.imagePlan);
+      if (plan.inFlight?.token !== token)
+        throw conflict(
+          "draft_revision_stale",
+          "The paid image remains in the media library; its proposal changed",
+        );
+      const selected = plan.selections[plan.inFlight.selection];
+      if (!selected)
+        throw conflict(
+          "draft_revision_stale",
+          "The paid image remains in the media library; its selection changed",
+        );
+      if (assetId) selected.generatedMediaId = assetId;
+      plan.inFlight = null;
+      await tx
+        .update(schema.draftRevisionProposals)
+        .set({ imagePlan: plan })
+        .where(eq(schema.draftRevisionProposals.id, proposalId));
+    });
+  }
+
+  private async continueDraftRevisionImages(
+    orgId: string,
+    id: string,
+    proposalId: string,
+    brandId: string,
+  ): Promise<DraftRevisionProposal> {
+    for (;;) {
+      const claim = await db.transaction(async (tx) => {
+        const item = await this.requireEditableItem(tx, orgId, id);
+        const [imageItem] = await tx
+          .select({ imagesRevision: schema.contentItems.imagesRevision })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+          .limit(1);
+        const [row] = await tx
+          .select(DRAFT_REVISION_COLUMNS)
+          .from(schema.draftRevisionProposals)
+          .where(
+            and(
+              eq(schema.draftRevisionProposals.orgId, orgId),
+              eq(schema.draftRevisionProposals.contentItemId, id),
+              eq(schema.draftRevisionProposals.id, proposalId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!row?.imagePlan)
+          throw notFound(
+            "draft_revision_proposal_not_found",
+            "That image suggestion is no longer staged",
+          );
+        const plan = draftRevisionImagePlanSchema.parse(row.imagePlan);
+        if (
+          item.title !== row.sourceTitle ||
+          normalizeNewlines(item.body) !== row.sourceBody ||
+          item.coverMediaId !== plan.sourceCoverMediaId ||
+          (imageItem?.imagesRevision ?? 0) !== plan.sourceImagesRevision ||
+          (plan.selections.some((selection) => selection.kind === "cover") && item.videoMediaId)
+        ) {
+          throw conflict(
+            "draft_revision_stale",
+            "The draft or its images changed; paid images remain in the media library",
+          );
+        }
+        const index = plan.selections.findIndex((selection) => !selection.generatedMediaId);
+        if (index < 0) return { done: true as const, proposal: { ...row, imagePlan: plan } };
+        if (plan.inFlight && Date.now() - Date.parse(plan.inFlight.startedAt) < 5 * 60_000) {
+          throw conflict(
+            "media_generation_busy",
+            "Image generation is already in progress for this suggestion",
+          );
+        }
+        const selection = plan.selections[index];
+        if (!selection) throw new Error("Missing pending image selection");
+        if (selection.kind === "inline") {
+          const [slot] = await tx
+            .select({
+              mediaId: schema.contentImageSlots.mediaId,
+              afterParagraph: schema.contentImageSlots.afterParagraph,
+            })
+            .from(schema.contentImageSlots)
+            .where(
+              and(
+                eq(schema.contentImageSlots.orgId, orgId),
+                eq(schema.contentImageSlots.contentItemId, id),
+                eq(schema.contentImageSlots.id, selection.slotId as string),
+              ),
+            )
+            .limit(1);
+          if (
+            !slot ||
+            slot.mediaId !== selection.sourceMediaId ||
+            slot.afterParagraph !== selection.afterParagraph
+          ) {
+            throw conflict(
+              "draft_revision_stale",
+              "An image slot changed; paid images remain in the media library",
+            );
+          }
+        }
+        const token = randomUUID();
+        plan.inFlight = { token, startedAt: new Date().toISOString(), selection: index };
+        await tx
+          .update(schema.draftRevisionProposals)
+          .set({ imagePlan: plan })
+          .where(eq(schema.draftRevisionProposals.id, proposalId));
+        return { done: false as const, token, selection, proposal: row };
+      });
+      if (claim.done) return claim.proposal as DraftRevisionProposal;
+      const { selection, proposal, token } = claim;
+      const passage =
+        selection.kind === "inline"
+          ? proposal.proposal.split(/\n\s*\n/).filter((part) => part.trim())[
+              selection.afterParagraph ?? 0
+            ]
+          : null;
+      const prompt =
+        selection.kind === "cover"
+          ? `Create a 1K editorial cover variation for this revised post. No text, lettering, logos, or watermarks.\n<title>\n${(proposal.proposedTitle ?? "").slice(0, 200)}\n</title>\n<draft>\n${proposal.proposal.slice(0, 800)}\n</draft>\n<editorial-instruction>\n${proposal.instruction.slice(0, 400)}\n</editorial-instruction>`
+          : `Create a 1K editorial illustration by varying the provided image. Keep a visual connection to its source. No text, lettering, logos, or watermarks.\n<draft>\n${proposal.proposal.slice(0, 800)}\n</draft>\n<passage>\n${(passage ?? "").slice(0, 800)}\n</passage>`;
+      try {
+        const asset = await this.mediaImages.generate(orgId, {
+          brandId,
+          sourceMediaId: selection.sourceMediaId,
+          prompt,
+        });
+        if (!asset)
+          throw conflict("media_generation_failed", "The selected image could not be saved");
+        await this.finishDraftRevisionImage(orgId, id, proposalId, token, asset.id);
+      } catch (error) {
+        await this.finishDraftRevisionImage(orgId, id, proposalId, token, null).catch(
+          () => undefined,
+        );
+        throw error;
+      }
+    }
   }
 
   async acceptDraftRevision(orgId: string, id: string, proposalId: string) {
@@ -2521,6 +2902,137 @@ export class ContentRepository {
           "draft_revision_stale",
           "The saved draft changed; discard this rewrite and try again",
         );
+      }
+      const imagePlan = proposal.imagePlan
+        ? draftRevisionImagePlanSchema.parse(proposal.imagePlan)
+        : null;
+      if (
+        imagePlan &&
+        (imagePlan.inFlight ||
+          imagePlan.selections.some((selection) => !selection.generatedMediaId))
+      ) {
+        throw conflict(
+          "draft_revision_incomplete",
+          "Finish generating selected images before accepting this suggestion",
+        );
+      }
+      if (imagePlan?.selections.length) {
+        const [imageItem] = await tx
+          .select({
+            brandId: schema.contentItems.brandId,
+            imagesRevision: schema.contentItems.imagesRevision,
+            coverMediaId: schema.contentItems.coverMediaId,
+            videoMediaId: schema.contentItems.videoMediaId,
+          })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+          .limit(1);
+        if (
+          !imageItem ||
+          (imageItem.imagesRevision ?? 0) !== imagePlan.sourceImagesRevision ||
+          imageItem.coverMediaId !== imagePlan.sourceCoverMediaId ||
+          (imagePlan.selections.some((selection) => selection.kind === "cover") &&
+            imageItem.videoMediaId)
+        ) {
+          throw conflict(
+            "draft_revision_stale",
+            "Images changed; discard this suggestion and ask again",
+          );
+        }
+        const selectedSlots = imagePlan.selections.filter(
+          (selection) => selection.kind === "inline",
+        );
+        if (selectedSlots.length) {
+          const slots = await tx
+            .select({
+              id: schema.contentImageSlots.id,
+              mediaId: schema.contentImageSlots.mediaId,
+              afterParagraph: schema.contentImageSlots.afterParagraph,
+            })
+            .from(schema.contentImageSlots)
+            .where(
+              and(
+                eq(schema.contentImageSlots.orgId, orgId),
+                eq(schema.contentImageSlots.contentItemId, id),
+                inArray(
+                  schema.contentImageSlots.id,
+                  selectedSlots.map((selection) => selection.slotId as string),
+                ),
+              ),
+            );
+          if (
+            slots.length !== selectedSlots.length ||
+            selectedSlots.some(
+              (selection) =>
+                !slots.some(
+                  (slot) =>
+                    slot.id === selection.slotId &&
+                    slot.mediaId === selection.sourceMediaId &&
+                    slot.afterParagraph === selection.afterParagraph,
+                ),
+            )
+          ) {
+            throw conflict(
+              "draft_revision_stale",
+              "An image slot changed; discard this suggestion and ask again",
+            );
+          }
+        }
+        const mediaIds = imagePlan.selections
+          .map((selection) => selection.generatedMediaId)
+          .filter((id): id is string => id !== null);
+        const assets = await tx
+          .select({ id: schema.mediaAssets.id, byteSize: schema.mediaAssets.byteSize })
+          .from(schema.mediaAssets)
+          .where(
+            and(
+              eq(schema.mediaAssets.orgId, orgId),
+              eq(schema.mediaAssets.brandId, imageItem.brandId),
+              eq(schema.mediaAssets.kind, "image"),
+              inArray(schema.mediaAssets.id, mediaIds),
+            ),
+          )
+          .for("key share");
+        if (assets.length !== mediaIds.length) {
+          throw conflict(
+            "draft_revision_stale",
+            "A generated image was removed from the media library",
+          );
+        }
+        if (imagePlan.selections.some((selection) => selection.kind === "cover")) {
+          const targets = await tx
+            .select({ platform: schema.channels.platform })
+            .from(schema.adaptations)
+            .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
+            .where(
+              and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)),
+            );
+          if (
+            targets.some(
+              (target) => !["telegram", "vk", "max", "bluesky"].includes(target.platform),
+            )
+          ) {
+            throw conflict(
+              "content_media_unsupported",
+              "A channel in this post does not support image covers",
+            );
+          }
+          if (
+            targets.some((target) => target.platform === "bluesky") &&
+            assets.some(
+              (asset) =>
+                imagePlan.selections.some(
+                  (selection) =>
+                    selection.kind === "cover" && selection.generatedMediaId === asset.id,
+                ) && asset.byteSize > 2_000_000,
+            )
+          ) {
+            throw conflict(
+              "content_media_too_large_for_bluesky",
+              "Bluesky covers must be 2 MB or smaller",
+            );
+          }
+        }
       }
       const aiRows = await tx
         .select({ body: schema.contentVersions.body })
@@ -2585,6 +3097,42 @@ export class ContentRepository {
           unitDelta: 0,
           createdBy: null,
         });
+      }
+      if (imagePlan?.selections.length) {
+        for (const selection of imagePlan.selections) {
+          const generatedId = selection.generatedMediaId;
+          if (!generatedId)
+            throw conflict(
+              "draft_revision_incomplete",
+              "Finish generating selected images before accepting",
+            );
+          if (selection.kind === "cover") {
+            await tx
+              .update(schema.contentItems)
+              .set({ coverMediaId: generatedId, status: "draft" })
+              .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+          } else if (selection.slotId) {
+            await tx
+              .update(schema.contentImageSlots)
+              .set({
+                mediaId: generatedId,
+                needsReview: true,
+                alt: `Generated illustration for paragraph ${(selection.afterParagraph ?? 0) + 1}; review before publishing`,
+                caption: null,
+              })
+              .where(
+                and(
+                  eq(schema.contentImageSlots.orgId, orgId),
+                  eq(schema.contentImageSlots.contentItemId, id),
+                  eq(schema.contentImageSlots.id, selection.slotId),
+                ),
+              );
+          }
+        }
+        await tx
+          .update(schema.contentItems)
+          .set({ imagesRevision: imagePlan.sourceImagesRevision + 1, status: "draft" })
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
       }
       await tx
         .delete(schema.draftRevisionProposals)
