@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { fireEvent, render, screen, waitFor } from "@/test/render";
+import { act, fireEvent, render, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import NewContentPage from "./page";
 
@@ -90,6 +90,16 @@ function installHandlers(
     if (method === "GET" && path === `/api/channels?brandId=${B2}`) return widgetsChannels;
     throw new Error(`unhandled request in test: ${method} ${path}`);
   });
+}
+
+function delayedTranscript() {
+  let finish!: (text: string) => void;
+  const text = new Promise<string>((resolve) => {
+    finish = resolve;
+  });
+  const file = new File(["Video interview notes."], "interview.txt", { type: "text/plain" });
+  Object.defineProperty(file, "text", { value: () => text });
+  return { file, finish };
 }
 
 beforeEach(() => {
@@ -822,6 +832,123 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     });
   });
 
+  it("reviews an uploaded SRT, then sends only accepted text and the optional video URL", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        path === "/api/runs" && method === "POST" ? { id: "video-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await open(user);
+    await user.upload(
+      screen.getByLabelText(en.ContentNew.transcriptLabel),
+      new File(
+        [
+          "1\n00:00:01,000 --> 00:00:02,000\n<i>First point.</i>\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond point.",
+        ],
+        "interview.srt",
+        { type: "application/x-subrip" },
+      ),
+    );
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    expect(screen.getByText("First point. Second point.")).toBeInTheDocument();
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
+    await user.type(
+      screen.getByLabelText(en.ContentNew.sourceUrlLabel),
+      "https://youtu.be/example",
+    );
+    expect(screen.getByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByText(en.ContentNew.sourcePreviewNeedsUse)).toBeInTheDocument();
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(
+      "First point.\nSecond point.",
+    );
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/video-run"));
+    const payload = parsedBody(calls.find((call) => call.path === "/api/runs"));
+    expect(payload).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      material: "First point.\nSecond point.",
+      sourceUrl: "https://youtu.be/example",
+    });
+    expect(runCreateSchema.parse(payload)).toEqual(payload);
+    expect(calls.some((call) => call.path === "/api/source-extraction")).toBe(false);
+  });
+
+  it("waits for transcript reading before starting generation", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        path === "/api/runs" && method === "POST" ? { id: "transcript-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+    await screen.findByLabelText(/Main channel/);
+    await user.click(screen.getByLabelText(/Main channel/));
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Summarize this interview");
+    await open(user);
+    const pending = delayedTranscript();
+    await user.upload(screen.getByLabelText(en.ContentNew.transcriptLabel), pending.file);
+    expect(screen.getByRole("status")).toHaveTextContent(en.ContentNew.readingTranscript);
+    expect(screen.queryByText(en.ContentNew.transcriptPreviewTitle)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.transcriptReadInProgress);
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+
+    await act(async () => pending.finish("Video interview notes."));
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourcePreviewNeedsUse);
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+    await user.click(screen.getByRole("button", { name: en.ContentNew.useSourceText }));
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/transcript-run"),
+    );
+    const payload = parsedBody(calls.find((call) => call.path === "/api/runs"));
+    expect(payload).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      brief: "Summarize this interview",
+      material: "Video interview notes.",
+    });
+    expect(runCreateSchema.parse(payload)).toEqual(payload);
+  });
+
+  it("refuses oversized files before reading them and leaves existing source text intact", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+    await user.type(screen.getByLabelText(en.ContentNew.materialLabel), "Existing text.");
+    await user.upload(
+      screen.getByLabelText(en.ContentNew.transcriptLabel),
+      new File([new Uint8Array(2 * 1024 * 1024 + 1)], "oversized.txt", { type: "text/plain" }),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.transcriptTooLarge);
+    expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("Existing text.");
+    expect(calls.some((call) => call.path === "/api/runs")).toBe(false);
+  });
+
   it("drops an in-flight preview when the source URL changes", async () => {
     const calls: Call[] = [];
     let finish: ((value: unknown) => void) | undefined;
@@ -856,6 +983,42 @@ describe("the Source disclosure (Task 5 Step 1)", () => {
     );
     expect(screen.queryByText(en.ContentNew.sourcePreviewTitle)).not.toBeInTheDocument();
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue("");
+  });
+
+  it("keeps a transcript preview when an older article request finishes", async () => {
+    const calls: Call[] = [];
+    let finish: ((value: unknown) => void) | undefined;
+    installHandlers(
+      calls,
+      (path, method) => {
+        if (path === "/api/source-extraction" && method === "POST") {
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        }
+        return undefined;
+      },
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await open(user);
+    await user.type(screen.getByLabelText(en.ContentNew.sourceUrlLabel), "https://example.com/old");
+    await user.click(screen.getByRole("button", { name: en.ContentNew.fetchSource }));
+    await user.upload(
+      screen.getByLabelText(en.ContentNew.transcriptLabel),
+      new File(["Local video notes."], "video.txt", { type: "text/plain" }),
+    );
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    await act(async () => {
+      finish?.({ title: "Old article", material: "Old article text.", truncated: false });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.ContentNew.fetchSource })).toBeEnabled(),
+    );
+    expect(screen.getByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    expect(screen.queryByText("Old article text.")).not.toBeInTheDocument();
   });
 
   it("requires a decision on a new preview before generating from previously pasted text", async () => {
@@ -1202,7 +1365,7 @@ describe("what Generate sends (Task 5 Steps 2 and 4)", () => {
  * would create a post from the typed body and drop whatever is in that section
  * with no undo and nothing on screen to say it happened.
  *
- * The refusal reads `hasMaterial || hasSourceUrl` — `Advanced`'s `dirty`
+ * The refusal reads `hasMaterial || hasSourceUrl || sourcePreview` — `Advanced`'s `dirty`
  * expression, character for character. The dot says "there is something in
  * here"; the primary action may not then throw that something away without a
  * word, and a link typed seconds earlier is exactly as much a person's value as
@@ -1259,6 +1422,52 @@ describe("'Create post' while the Source section holds something (Task 5 Step 3)
     expect(routerMock.push).not.toHaveBeenCalled();
     // Refused, not consumed: both texts are still on screen to act on.
     expect(screen.getByLabelText(en.ContentNew.materialLabel)).toHaveValue(ARTICLE_PASTE);
+    expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
+  });
+
+  it("refuses to discard an unaccepted transcript preview with no URL", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, {});
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    await user.upload(
+      screen.getByLabelText(en.ContentNew.transcriptLabel),
+      new File(["Video interview notes."], "interview.txt", { type: "text/plain" }),
+    );
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
+    expect(screen.getByText(en.ContentNew.transcriptPreviewTitle)).toBeVisible();
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("refuses to discard a transcript while its file is still being read", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+    const { container } = render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await compose(user, {});
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    const pending = delayedTranscript();
+    await user.upload(screen.getByLabelText(en.ContentNew.transcriptLabel), pending.file);
+    expect(screen.getByRole("status")).toHaveTextContent(en.ContentNew.readingTranscript);
+    expect(screen.queryByText(en.ContentNew.transcriptPreviewTitle)).not.toBeInTheDocument();
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+    await user.click(screen.getByText(en.ContentNew.sourceTitle));
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: en.ContentNew.submit }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.ContentNew.sourceBlocksCreate);
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    expect(routerMock.push).not.toHaveBeenCalled();
+
+    await act(async () => pending.finish("Video interview notes."));
+    expect(await screen.findByText(en.ContentNew.transcriptPreviewTitle)).toBeInTheDocument();
     expect(screen.getByLabelText(en.ContentNew.body)).toHaveValue("Text I typed myself");
   });
 

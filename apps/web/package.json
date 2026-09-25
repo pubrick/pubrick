@@ -19,6 +19,7 @@
     "csv-stringify": "^6.8.3",
     "fflate": "^0.8.3",
     "html-escaper": "^3.0.3",
+    "media-captions": "^0.0.18",
     "next": "^16.3.2",
     "next-intl": "^4.13.7",
     "react": "^19.2.8",
