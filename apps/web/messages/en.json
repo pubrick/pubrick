@@ -212,6 +212,7 @@
     "recheckUsageUnknown": "Usage records could not be saved for {count} calls. The displayed cost is incomplete.",
     "recheckStatus_queued": "Queued",
     "recheckStatus_running": "Running",
+    "recheckStatus_halting": "Stopping after current articles",
     "recheckStatus_completed": "Complete",
     "recheckStatus_partial": "Partly complete",
     "recheckStatus_halted": "Stopped",

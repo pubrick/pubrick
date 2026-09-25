@@ -212,6 +212,7 @@
     "recheckUsageUnknown": "Не удалось сохранить данные о расходе для {count} вызовов. Показанная стоимость неполная.",
     "recheckStatus_queued": "В очереди",
     "recheckStatus_running": "Выполняется",
+    "recheckStatus_halting": "Останавливается после текущих статей",
     "recheckStatus_completed": "Завершено",
     "recheckStatus_partial": "Частично завершено",
     "recheckStatus_halted": "Остановлено",

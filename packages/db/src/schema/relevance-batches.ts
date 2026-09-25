@@ -17,6 +17,7 @@ import { enumCheck } from "./enum-check.js";
 export const RELEVANCE_BATCH_STATUSES = [
   "queued",
   "running",
+  "halting",
   "completed",
   "partial",
   "halted",
@@ -45,9 +46,7 @@ export const relevanceBatches = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    brandId: uuid("brand_id")
-      .notNull()
-      .references(() => brands.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id").notNull(),
     days: integer("days").notNull(),
     selectedCount: integer("selected_count").notNull(),
     processedCount: integer("processed_count").notNull().default(0),
@@ -65,8 +64,13 @@ export const relevanceBatches = pgTable(
     uniqueIndex("news_relevance_batches_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     uniqueIndex("news_relevance_batches_one_active_idx")
       .on(t.orgId, t.brandId)
-      .where(sql`${t.status} IN ('queued', 'running')`),
+      .where(sql`${t.status} IN ('queued', 'running', 'halting')`),
     index("news_relevance_batches_history_idx").on(t.orgId, t.brandId, t.createdAt.desc()),
+    foreignKey({
+      name: "news_relevance_batches_brand_org_fk",
+      columns: [t.orgId, t.brandId],
+      foreignColumns: [brands.orgId, brands.id],
+    }).onDelete("cascade"),
     check("news_relevance_batches_days_check", sql`${t.days} BETWEEN 1 AND 30`),
     check(
       "news_relevance_batches_counts_check",

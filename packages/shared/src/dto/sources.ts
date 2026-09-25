@@ -226,7 +226,7 @@ export const newsRecheckPreviewSchema = z.strictObject({
 export type NewsRecheckPreview = z.infer<typeof newsRecheckPreviewSchema>;
 export const newsRecheckBatchSchema = z.strictObject({
   id: z.string().uuid(),
-  status: z.enum(["queued", "running", "completed", "partial", "halted"]),
+  status: z.enum(["queued", "running", "halting", "completed", "partial", "halted"]),
   days: z.number().int(),
   selectedCount: z.number().int(),
   processedCount: z.number().int(),

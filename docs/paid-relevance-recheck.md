@@ -22,8 +22,10 @@ the prior article verdict unchanged.
 The batch and each article's result are tenant scoped. A partial unique index
 prevents overlapping paid batches for one brand. Invalid or unreadable keys
 and unknown models stop the batch after the first terminal
-failure; remaining queued articles are marked skipped. Other failures are
-counted per article. The UI polls the latest batch and shows updated, failed,
+failure; remaining queued articles are marked skipped. Articles already
+running may finish before the batch becomes terminal, and the active-brand
+lock remains held during that interval. Other failures are counted per
+article. The UI polls the latest batch and shows updated, failed,
 and skipped counts. It never receives raw provider error text or credentials.
 
 An expired or crashed job is sent to the dead-letter queue and marked failed;

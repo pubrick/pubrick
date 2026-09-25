@@ -20,7 +20,7 @@ export class RelevanceRepository {
       FROM news_relevance_batch_items i
       JOIN news_relevance_batches b ON b.id = i.batch_id AND b.org_id = i.org_id AND b.brand_id = i.brand_id
       LEFT JOIN pgboss.job j ON j.id = i.id AND j.name = ${RELEVANCE_BATCH_QUEUE}
-      WHERE b.status IN ('queued', 'running') AND i.status IN ('queued', 'running')
+      WHERE b.status IN ('queued', 'running', 'halting') AND i.status IN ('queued', 'running')
       AND (j.id IS NULL OR j.state::text IN ('failed', 'completed', 'cancelled'))
       ORDER BY b.created_at, i.id LIMIT 100`);
     return result.rows as Array<{
@@ -45,59 +45,69 @@ export class RelevanceRepository {
     if (!recorded) throw new Error("Batch usage loss could not be recorded");
   }
   async claimBatch(orgId: string, brandId: string, batchId: string, itemId: string) {
-    const [claimed] = await db
-      .update(schema.relevanceBatchItems)
-      .set({ status: "running" })
-      .where(
-        and(
-          eq(schema.relevanceBatchItems.orgId, orgId),
-          eq(schema.relevanceBatchItems.brandId, brandId),
-          eq(schema.relevanceBatchItems.batchId, batchId),
-          eq(schema.relevanceBatchItems.itemId, itemId),
-          eq(schema.relevanceBatchItems.status, "queued"),
-          sql`EXISTS (SELECT 1 FROM news_relevance_batches b WHERE b.id = ${batchId} AND b.org_id = ${orgId} AND b.brand_id = ${brandId} AND b.status IN ('queued', 'running'))`,
-        ),
-      )
-      .returning({ itemId: schema.relevanceBatchItems.itemId });
-    if (!claimed) return null;
-    await db
-      .update(schema.relevanceBatches)
-      .set({ status: "running", startedAt: new Date() })
-      .where(
-        and(
-          eq(schema.relevanceBatches.id, batchId),
-          eq(schema.relevanceBatches.orgId, orgId),
-          eq(schema.relevanceBatches.brandId, brandId),
-          eq(schema.relevanceBatches.status, "queued"),
-        ),
-      );
-    const [item] = await db
-      .select({
-        title: schema.newsItems.title,
-        summary: schema.newsItems.summary,
-        publishedAt: schema.newsItems.publishedAt,
-      })
-      .from(schema.newsItems)
-      .where(
-        and(
-          eq(schema.newsItems.orgId, orgId),
-          eq(schema.newsItems.brandId, brandId),
-          eq(schema.newsItems.id, itemId),
-        ),
-      )
-      .limit(1);
-    const [brand] = await db
-      .select({
-        name: schema.brands.name,
-        description: schema.brands.description,
-        voice: schema.brands.voice,
-        audience: schema.brands.audience,
-        contentLanguage: schema.brands.contentLanguage,
-      })
-      .from(schema.brands)
-      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-      .limit(1);
-    return item && brand ? { ...item, brand } : { missing: true as const };
+    return db.transaction(async (tx) => {
+      // Claim and terminal stop serialize on this row. A queued item cannot
+      // become payable after the batch has entered halting or halted state.
+      const [batch] = await tx
+        .select({ status: schema.relevanceBatches.status })
+        .from(schema.relevanceBatches)
+        .where(
+          and(
+            eq(schema.relevanceBatches.orgId, orgId),
+            eq(schema.relevanceBatches.brandId, brandId),
+            eq(schema.relevanceBatches.id, batchId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!batch || (batch.status !== "queued" && batch.status !== "running")) return null;
+      const [claimed] = await tx
+        .update(schema.relevanceBatchItems)
+        .set({ status: "running" })
+        .where(
+          and(
+            eq(schema.relevanceBatchItems.orgId, orgId),
+            eq(schema.relevanceBatchItems.brandId, brandId),
+            eq(schema.relevanceBatchItems.batchId, batchId),
+            eq(schema.relevanceBatchItems.itemId, itemId),
+            eq(schema.relevanceBatchItems.status, "queued"),
+          ),
+        )
+        .returning({ itemId: schema.relevanceBatchItems.itemId });
+      if (!claimed) return null;
+      if (batch.status === "queued")
+        await tx
+          .update(schema.relevanceBatches)
+          .set({ status: "running", startedAt: new Date() })
+          .where(eq(schema.relevanceBatches.id, batchId));
+      const [item] = await tx
+        .select({
+          title: schema.newsItems.title,
+          summary: schema.newsItems.summary,
+          publishedAt: schema.newsItems.publishedAt,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, itemId),
+          ),
+        )
+        .limit(1);
+      const [brand] = await tx
+        .select({
+          name: schema.brands.name,
+          description: schema.brands.description,
+          voice: schema.brands.voice,
+          audience: schema.brands.audience,
+          contentLanguage: schema.brands.contentLanguage,
+        })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .limit(1);
+      return item && brand ? { ...item, brand } : { missing: true as const };
+    });
   }
 
   /** Each result and its progress counters commit together. A failed recheck never erases an older score. */
@@ -137,6 +147,7 @@ export class RelevanceRepository {
           failedCount: schema.relevanceBatches.failedCount,
           skippedCount: schema.relevanceBatches.skippedCount,
           status: schema.relevanceBatches.status,
+          errorCode: schema.relevanceBatches.errorCode,
         })
         .from(schema.relevanceBatches)
         .where(
@@ -148,7 +159,7 @@ export class RelevanceRepository {
         )
         .for("update")
         .limit(1);
-      if (!batch || !["queued", "running"].includes(batch.status)) return;
+      if (!batch || !["queued", "running", "halting"].includes(batch.status)) return;
       const [pending] = await tx
         .select({ id: schema.relevanceBatchItems.id })
         .from(schema.relevanceBatchItems)
@@ -158,7 +169,10 @@ export class RelevanceRepository {
             eq(schema.relevanceBatchItems.brandId, brandId),
             eq(schema.relevanceBatchItems.batchId, batchId),
             eq(schema.relevanceBatchItems.itemId, itemId),
-            inArray(schema.relevanceBatchItems.status, ["queued", "running"]),
+            inArray(
+              schema.relevanceBatchItems.status,
+              batch.status === "halting" ? ["running"] : ["queued", "running"],
+            ),
           ),
         )
         .limit(1);
@@ -176,9 +190,15 @@ export class RelevanceRepository {
             relevanceErrorCode: null,
             relevanceScoredAt: new Date(),
             relevanceAttempts: 0,
-            embedding: result.embedding ?? null,
-            embeddingModel: result.embedding ? KNOWLEDGE_EMBEDDING_MODEL : null,
-            embeddingDimensions: result.embedding ? result.embedding.length : null,
+            // A successful new verdict must not erase a usable vector merely
+            // because the optional embedding call was unavailable this time.
+            ...(result.embedding
+              ? {
+                  embedding: result.embedding,
+                  embeddingModel: KNOWLEDGE_EMBEDDING_MODEL,
+                  embeddingDimensions: result.embedding.length,
+                }
+              : {}),
           })
           .where(
             and(
@@ -198,21 +218,21 @@ export class RelevanceRepository {
           completedAt: new Date(),
         })
         .where(eq(schema.relevanceBatchItems.id, pending.id));
-      const remaining =
-        result.kind === "failed" && result.halt
-          ? await tx
-              .update(schema.relevanceBatchItems)
-              .set({ status: "skipped", completedAt: new Date() })
-              .where(
-                and(
-                  eq(schema.relevanceBatchItems.orgId, orgId),
-                  eq(schema.relevanceBatchItems.brandId, brandId),
-                  eq(schema.relevanceBatchItems.batchId, batchId),
-                  eq(schema.relevanceBatchItems.status, "queued"),
-                ),
-              )
-              .returning({ id: schema.relevanceBatchItems.id })
-          : [];
+      const halting = batch.status === "halting" || (result.kind === "failed" && result.halt);
+      const remaining = halting
+        ? await tx
+            .update(schema.relevanceBatchItems)
+            .set({ status: "skipped", completedAt: new Date() })
+            .where(
+              and(
+                eq(schema.relevanceBatchItems.orgId, orgId),
+                eq(schema.relevanceBatchItems.brandId, brandId),
+                eq(schema.relevanceBatchItems.batchId, batchId),
+                eq(schema.relevanceBatchItems.status, "queued"),
+              ),
+            )
+            .returning({ id: schema.relevanceBatchItems.id })
+        : [];
       const processed = batch.processedCount + 1 + remaining.length;
       const updated = batch.updatedCount + Number(outcome === "scored");
       const failed = batch.failedCount + Number(outcome === "failed");
@@ -224,15 +244,18 @@ export class RelevanceRepository {
           updatedCount: updated,
           failedCount: failed,
           skippedCount: skipped,
-          status:
-            remaining.length > 0 || (result.kind === "failed" && result.halt)
+          status: halting
+            ? processed === batch.selectedCount
               ? "halted"
-              : processed === batch.selectedCount
-                ? failed + skipped
-                  ? "partial"
-                  : "completed"
-                : "running",
-          errorCode: result.kind === "failed" && result.halt ? result.code : null,
+              : "halting"
+            : processed === batch.selectedCount
+              ? failed + skipped
+                ? "partial"
+                : "completed"
+              : "running",
+          errorCode: halting
+            ? (batch.errorCode ?? (result.kind === "failed" ? result.code : null))
+            : null,
           completedAt: processed === batch.selectedCount ? new Date() : null,
         })
         .where(

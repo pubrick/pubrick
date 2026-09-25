@@ -212,6 +212,7 @@
     "recheckUsageUnknown": "Não foi possível guardar os registos de uso de {count} chamadas. O custo apresentado está incompleto.",
     "recheckStatus_queued": "Em fila",
     "recheckStatus_running": "Em curso",
+    "recheckStatus_halting": "A parar após os artigos em curso",
     "recheckStatus_completed": "Concluída",
     "recheckStatus_partial": "Parcial",
     "recheckStatus_halted": "Parada",
