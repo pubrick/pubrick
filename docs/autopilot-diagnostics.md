@@ -1,6 +1,6 @@
 # Autopilot diagnostics
 
-Brand owners and organization admins can inspect the **Today at a glance** panel on a brand's Autopilot settings page. The read-only `GET /api/brands/:brandId/autopilot/diagnostics` endpoint uses the active organization and brand authorization. It makes no provider call and does not trigger a scheduler pass.
+Organization owners and admins can inspect the **Today at a glance** panel on a brand's Autopilot settings page. The read-only `GET /api/brands/:brandId/autopilot/diagnostics` endpoint uses the active organization and brand authorization. It makes no provider call and does not trigger a scheduler pass.
 
 The response reports the brand's local date and hour, saved generation schedule, automatic dispatches for that local date, the configured daily run limit, approved undated topics without a dispatch, active automatic runs, and ten recent dispatches. The existing `/history` endpoint retains its 50-row window and now includes the topic title. A topic in the waiting count is **not guaranteed eligible**: the scheduler also checks brief length, selected channels, organization concurrency, and other conditions when it runs.
 
