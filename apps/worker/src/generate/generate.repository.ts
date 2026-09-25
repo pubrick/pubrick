@@ -10,7 +10,7 @@ import {
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
-import { schema, withImageCallLock } from "@pubrick/db";
+import { newsRankScore, schema, withImageCallLock } from "@pubrick/db";
 import {
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
@@ -785,7 +785,7 @@ export class GenerateRepository {
       eq(schema.newsSources.brandId, brandId),
       ne(schema.newsSources.kind, "telegram_private"),
       eq(schema.newsItems.relevanceStatus, "scored"),
-      sql`${schema.newsItems.relevanceScore} >= 0.5`,
+      sql`${newsRankScore} >= 0.5`,
       sql`${schema.newsItems.editorSignal} IS DISTINCT FROM 'irrelevant'`,
       sql`coalesce(${schema.newsItems.publishedAt}, ${schema.newsItems.createdAt}) >= now() - interval '30 days'`,
       sql`coalesce(${schema.newsItems.publishedAt}, ${schema.newsItems.createdAt}) <= now()`,
