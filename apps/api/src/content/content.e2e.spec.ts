@@ -7664,8 +7664,10 @@ describe.skipIf(!url)("content e2e", () => {
           followupOutcome: "rejected",
         });
         expect(detail.body.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(contentDetailDtoSchema.safeParse(detail.body).success).toBe(true);
         const list = await agent.get("/api/content").expect(200);
         const card = list.body.find((row: { id: string }) => row.id === itemId);
+        expect(contentListItemDtoSchema.safeParse(card).success).toBe(true);
         expect(card?.adaptations[0].deliveryOutcome).toBe("partial");
         expect(card?.adaptations[0]).not.toHaveProperty("partialTelegram");
         expect(JSON.stringify(card)).not.toContain("Frozen missing reply");
