@@ -256,6 +256,7 @@ describe("timestamps carry their zone", () => {
       "brands.created_at",
       "brands.updated_at",
       "channels.created_at",
+      "channels.health_checked_at",
       "channels.updated_at",
       "content_items.created_at",
       "content_items.first_opened_at",

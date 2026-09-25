@@ -243,11 +243,14 @@ export const maxPublisher: Publisher<MaxCredentials> = {
   async verify(credentials, options): Promise<VerifyResult> {
     try {
       const me = meBody.safeParse(await call("GET", "/me", credentials, undefined, options));
-      if (!me.success) return { ok: false, reason: "MAX returned unexpected bot details" };
+      if (!me.success)
+        return { ok: false, reason: "MAX returned unexpected bot details", indeterminate: true };
       const chat = chatBody.safeParse(
         await call("GET", `/chats/${credentials.chatId}`, credentials, undefined, options),
       );
-      if (!chat.success || chat.data.status !== "active") {
+      if (!chat.success)
+        return { ok: false, reason: "MAX returned unexpected chat details", indeterminate: true };
+      if (chat.data.status !== "active") {
         return { ok: false, reason: "The MAX chat is unavailable to this bot" };
       }
       const member = membershipBody.safeParse(
@@ -259,7 +262,12 @@ export const maxPublisher: Publisher<MaxCredentials> = {
           options,
         ),
       );
-      if (!member.success) return { ok: false, reason: "MAX returned unexpected bot permissions" };
+      if (!member.success)
+        return {
+          ok: false,
+          reason: "MAX returned unexpected bot permissions",
+          indeterminate: true,
+        };
       const canWrite =
         member.data.is_owner ||
         (member.data.is_admin &&
@@ -275,12 +283,9 @@ export const maxPublisher: Publisher<MaxCredentials> = {
         target: chat.data.title ?? credentials.chatId,
       };
     } catch (error) {
-      if (
-        error instanceof PermanentPublishError ||
-        error instanceof TransientPublishError ||
-        error instanceof UnknownOutcomePublishError
-      )
-        return { ok: false, reason: error.message };
+      if (error instanceof PermanentPublishError) return { ok: false, reason: error.message };
+      if (error instanceof TransientPublishError || error instanceof UnknownOutcomePublishError)
+        return { ok: false, reason: error.message, indeterminate: true };
       throw error;
     }
   },

@@ -3,9 +3,10 @@ import { createServer, type Server } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
+import { telegramPublisher } from "@pubrick/integrations";
 import { eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -145,6 +146,132 @@ describe.skipIf(!url)("channels verify e2e", () => {
     expect(result.body).toEqual({ ok: true, account: "@my_bot", target: "My Channel" });
     expect(JSON.stringify(result.body)).not.toContain("123:abc");
     expect(telegramCalls.some((u) => u.includes("getChatMember"))).toBe(true);
+  });
+
+  it("shows a scoped cached check and scheduled exposure, then invalidates it on rotation", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Health" }).expect(201);
+    const created = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Health channel",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const id = created.body.id as string;
+    const [brandRow] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    if (!brandRow) throw new Error("brand lookup failed");
+    const [post] = await direct.db
+      .insert(schema.contentItems)
+      .values({ orgId: brandRow.orgId, brandId: brand.body.id, body: "Ready", status: "approved" })
+      .returning({ id: schema.contentItems.id });
+    if (!post) throw new Error("post insert failed");
+    await direct.db.insert(schema.adaptations).values({
+      orgId: brandRow.orgId,
+      contentItemId: post.id,
+      channelId: id,
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 60_000),
+    });
+
+    await agent.post(`/api/channels/${id}/test`).send({}).expect(200);
+    const [checked] = (await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200)).body;
+    expect(checked.health.state).toBe("ok");
+    expect(checked.health.checkedAt).toBeTruthy();
+    expect(checked.scheduledCount).toBe(1);
+    expect(JSON.stringify(checked)).not.toContain("123:abc");
+
+    await agent
+      .patch(`/api/channels/${id}`)
+      .send({ credentials: { botToken: "123:new", chatId: "-1001234567890" } })
+      .expect(200);
+    const [rotated] = (await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200)).body;
+    expect(rotated.health).toEqual({ state: "unknown", checkedAt: null });
+    expect(rotated.scheduledCount).toBe(1);
+    const outsider = await orgAgent();
+    expect((await outsider.get("/api/channels").expect(200)).body).toEqual([]);
+  });
+
+  it("does not cache a manual Test answer for credentials rotated while it ran", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Race" }).expect(201);
+    const created = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Race channel",
+        credentials: { botToken: "123:old", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const id = created.body.id as string;
+    let started!: () => void;
+    let release!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(telegramPublisher, "verify").mockImplementation(async () => {
+      started();
+      await hold;
+      return { ok: true, account: "@old", target: "Old channel" };
+    });
+    try {
+      const test = Promise.resolve(agent.post(`/api/channels/${id}/test`).send({}).expect(200));
+      await checking;
+      await agent
+        .patch(`/api/channels/${id}`)
+        .send({ credentials: { botToken: "123:new", chatId: "-1001234567890" } })
+        .expect(200);
+      release();
+      expect((await test).body.ok).toBe(true);
+      const [listed] = (await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200)).body;
+      expect(listed.health).toEqual({ state: "unknown", checkedAt: null });
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it("returns a successful manual Test even if the advisory cache write fails", async () => {
+    const agent = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Cache failure" }).expect(201);
+    const created = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Cache failure channel",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const [brandRow] = await direct.db
+      .select({ orgId: schema.brands.orgId })
+      .from(schema.brands)
+      .where(eq(schema.brands.id, brand.body.id));
+    if (!brandRow) throw new Error("brand lookup failed");
+    const { db } = await import("../db");
+    const { ChannelsRepository } = await import("./channels.repository");
+    const cacheWrite = vi.spyOn(db, "update").mockImplementationOnce(() => {
+      throw new Error("cache write unavailable");
+    });
+    try {
+      expect(await app.get(ChannelsRepository).verify(brandRow.orgId, created.body.id)).toEqual({
+        ok: true,
+        account: "@my_bot",
+        target: "My Channel",
+      });
+      expect(cacheWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      cacheWrite.mockRestore();
+    }
   });
 
   it("verifies a VK community through the API without exposing its token", async () => {

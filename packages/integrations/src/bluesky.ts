@@ -245,12 +245,11 @@ export const blueskyPublisher: Publisher<BlueskyCredentials> = {
       const authenticated = await session(credentials, options);
       return { ok: true, account: `@${authenticated.handle}`, target: `@${authenticated.handle}` };
     } catch (error) {
-      if (
-        error instanceof PermanentPublishError ||
-        error instanceof TransientPublishError ||
-        error instanceof UnknownOutcomePublishError
-      ) {
+      if (error instanceof PermanentPublishError) {
         return { ok: false, reason: error.message };
+      }
+      if (error instanceof TransientPublishError || error instanceof UnknownOutcomePublishError) {
+        return { ok: false, reason: error.message, indeterminate: true };
       }
       throw error;
     }

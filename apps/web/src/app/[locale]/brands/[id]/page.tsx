@@ -26,13 +26,21 @@ import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 import { BrandImport } from "./brand-import";
 
-type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
+type Channel = {
+  id: string;
+  platform: string;
+  name: string;
+  metricsAutoRefresh?: boolean;
+  scheduledCount?: number;
+  health?: { state: "ok" | "failed" | "unknown"; checkedAt: string | null };
+};
 /**
  * Voice, audience and language shape generation. Description is used for
  * source relevance and topic suggestions, not generation instructions.
@@ -202,10 +210,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     [router, locale, t, te],
   );
 
-  const load = useCallback(() => {
-    api<Brand>(`/api/brands/${id}`)
-      .then(setBrand)
-      .catch((err) => setError(describeError(err)));
+  const loadChannels = useCallback(() => {
     setChannelsError(null);
     api<Channel[]>(`/api/channels?brandId=${id}`)
       .then(setChannels)
@@ -222,7 +227,19 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       });
   }, [id, describeError]);
 
+  const load = useCallback(() => {
+    api<Brand>(`/api/brands/${id}`)
+      .then(setBrand)
+      .catch((err) => setError(describeError(err)));
+    loadChannels();
+  }, [id, describeError, loadChannels]);
+
   useEffect(load, [load]);
+  useEffect(() => {
+    // Read the cache while this screen stays open; the GET never tests a token.
+    const timer = window.setInterval(loadChannels, 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadChannels]);
 
   function startProfileEditing() {
     if (!brand) return;
@@ -359,6 +376,16 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         delete next[editing.id];
         return next;
       });
+      if (filled.length > 0) {
+        setChannels(
+          (current) =>
+            current?.map((channel) =>
+              channel.id === editing.id
+                ? { ...channel, health: { state: "unknown", checkedAt: null } }
+                : channel,
+            ) ?? null,
+        );
+      }
       load();
     } catch (err) {
       setEditError(describeError(err));
@@ -457,6 +484,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     try {
       const result = await api<VerifyResult>(`/api/channels/${channelId}/test`, { method: "POST" });
       setTestResults((prev) => ({ ...prev, [channelId]: result }));
+      // Read the persisted CAS result. A concurrent token rotation can make
+      // this Test answer true for an older token without making it current.
+      loadChannels();
     } catch (err) {
       // errorMessage() keeps a specific 4xx verdict from the verify endpoint
       // ("wrong bot token", etc.) but swaps a network/5xx failure for the
@@ -687,6 +717,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <div className="mb-6 overflow-hidden rounded-card border border-border bg-panel">
           {channels.map((c) => {
             const result = testResults[c.id];
+            const health = c.health?.state ?? "unknown";
             return (
               <ListRow
                 key={c.id}
@@ -706,16 +737,30 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                     </span>
                   ) : isManualPlatform(c.platform) ? (
                     t("vcManualMeta")
-                  ) : result === "loading" ? (
-                    "…"
-                  ) : result && !result.ok ? (
-                    <span role="alert" className="text-danger">
-                      {result.reason}
+                  ) : (
+                    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <StatusBadge
+                        status={
+                          health === "ok" ? "published" : health === "failed" ? "review" : "draft"
+                        }
+                      >
+                        {t(`health.${health}`)}
+                      </StatusBadge>
+                      {result === "loading" ? (
+                        "…"
+                      ) : result && !result.ok ? (
+                        <span role="alert" className="text-danger">
+                          {result.reason}
+                        </span>
+                      ) : result?.ok ? (
+                        t("testOk", { account: result.account, target: result.target })
+                      ) : null}
+                      {(c.scheduledCount ?? 0) > 0 &&
+                        t("scheduledDependents", { count: c.scheduledCount ?? 0 })}
                     </span>
-                  ) : result?.ok ? (
-                    t("testOk", { account: result.account, target: result.target })
-                  ) : undefined
+                  )
                 }
+                metaClassName="whitespace-normal"
                 trailing={
                   <>
                     {c.platform === "vk" && (

@@ -531,6 +531,8 @@
     "autoMetricsOff": "Metrics: off",
     "autoMetricsHint": "Opt in to hourly checks of recent VK posts. Each post is checked at most once per day after a successful read.",
     "testOk": "OK — connected as {account}, can post to {target}",
+    "health": { "ok": "Checked OK", "failed": "Last check failed", "unknown": "Not checked" },
+    "scheduledDependents": "{count, plural, one {# scheduled post depends on this channel} other {# scheduled posts depend on this channel}}",
     "genericError": "Something went wrong. Please try again.",
     "empty": "No channels yet.",
     "emptyAddAction": "Add your first channel",
@@ -609,6 +611,10 @@
       "sendAbandoned": "The send to {channel} stopped before it reached the platform and no retry is left. Nothing was sent — publish now to try again."
     },
     "channelsUnavailable": "Channel names could not be loaded, so channels are shown by ID.",
+    "channelHealthTitle": "Channels need attention",
+    "channelHealthFailed": "Check failed",
+    "channelHealthRisk": "{channel}: {count, plural, one {# scheduled post depends on this connection} other {# scheduled posts depend on this connection}}.",
+    "channelHealthReview": "Review channel",
     "tryAgain": "Try again",
     "loadMore": "Load more"
   },

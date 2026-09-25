@@ -375,17 +375,21 @@ export const vkPublisher: Publisher<VkCredentials> = {
   async verify(credentials, options): Promise<VerifyResult> {
     try {
       const users = userResponse.safeParse(await call("users.get", credentials, {}, options));
-      if (!users.success) return { ok: false, reason: "VK did not identify a user token" };
+      if (!users.success)
+        return { ok: false, reason: "VK did not identify a user token", indeterminate: true };
       const permissions = permissionsResponse.safeParse(
         await call("account.getAppPermissions", credentials, {}, options),
       );
-      if (!permissions.success || (permissions.data & WALL_PERMISSION) === 0) {
+      if (!permissions.success)
+        return { ok: false, reason: "VK returned unexpected permissions", indeterminate: true };
+      if ((permissions.data & WALL_PERMISSION) === 0) {
         return { ok: false, reason: "The VK user token needs wall permission" };
       }
       const groups = groupResponse.safeParse(
         await call("groups.getById", credentials, { group_id: credentials.groupId }, options),
       );
-      if (!groups.success) return { ok: false, reason: "VK returned unexpected group details" };
+      if (!groups.success)
+        return { ok: false, reason: "VK returned unexpected group details", indeterminate: true };
       const group = groups.data.groups.find((g) => String(g.id) === credentials.groupId);
       if (!group) return { ok: false, reason: "The VK community ID does not match the token" };
       if (group.is_admin !== 1) {
@@ -393,12 +397,11 @@ export const vkPublisher: Publisher<VkCredentials> = {
       }
       return { ok: true, account: `id${users.data[0]?.id}`, target: group.name };
     } catch (error) {
-      if (
-        error instanceof PermanentPublishError ||
-        error instanceof TransientPublishError ||
-        error instanceof UnknownOutcomePublishError
-      ) {
+      if (error instanceof PermanentPublishError) {
         return { ok: false, reason: error.message };
+      }
+      if (error instanceof TransientPublishError || error instanceof UnknownOutcomePublishError) {
+        return { ok: false, reason: error.message, indeterminate: true };
       }
       throw error;
     }

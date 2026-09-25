@@ -567,7 +567,11 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       const meRaw = await call<unknown>("getMe", credentials, {}, options);
       const me = getMeResultSchema.safeParse(meRaw);
       if (!me.success) {
-        return { ok: false, reason: "Telegram returned an unexpected getMe response" };
+        return {
+          ok: false,
+          reason: "Telegram returned an unexpected getMe response",
+          indeterminate: true,
+        };
       }
 
       const chatRaw = await call<unknown>(
@@ -578,7 +582,11 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       );
       const chat = getChatResultSchema.safeParse(chatRaw);
       if (!chat.success) {
-        return { ok: false, reason: "Telegram returned an unexpected getChat response" };
+        return {
+          ok: false,
+          reason: "Telegram returned an unexpected getChat response",
+          indeterminate: true,
+        };
       }
 
       const memberRaw = await call<unknown>(
@@ -589,7 +597,11 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       );
       const member = getChatMemberResultSchema.safeParse(memberRaw);
       if (!member.success) {
-        return { ok: false, reason: "Telegram returned an unexpected getChatMember response" };
+        return {
+          ok: false,
+          reason: "Telegram returned an unexpected getChatMember response",
+          indeterminate: true,
+        };
       }
 
       const canPost =
@@ -608,12 +620,11 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
       // error — including the unknown one: getMe/getChat/getChatMember change
       // nothing, so "we do not know what happened" carries none of the weight
       // it carries on the publish path and the operator just needs the reason.
-      if (
-        error instanceof PermanentPublishError ||
-        error instanceof TransientPublishError ||
-        error instanceof UnknownOutcomePublishError
-      ) {
+      if (error instanceof PermanentPublishError) {
         return { ok: false, reason: error.message };
+      }
+      if (error instanceof TransientPublishError || error instanceof UnknownOutcomePublishError) {
+        return { ok: false, reason: error.message, indeterminate: true };
       }
       throw error;
     }

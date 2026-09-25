@@ -186,19 +186,22 @@ export const mastodonPublisher: Publisher<MastodonCredentials> = {
         ),
       );
       if (!account.success)
-        return { ok: false, reason: "Mastodon returned unusable account details" };
+        return {
+          ok: false,
+          reason: "Mastodon returned unusable account details",
+          indeterminate: true,
+        };
       return {
         ok: true,
         account: `@${account.data.username}@${origin.hostname}`,
         target: origin.hostname,
       };
     } catch (error) {
-      if (
-        error instanceof PermanentPublishError ||
-        error instanceof TransientPublishError ||
-        error instanceof UnknownOutcomePublishError
-      ) {
+      if (error instanceof PermanentPublishError) {
         return { ok: false, reason: error.message };
+      }
+      if (error instanceof TransientPublishError || error instanceof UnknownOutcomePublishError) {
+        return { ok: false, reason: error.message, indeterminate: true };
       }
       throw error;
     }

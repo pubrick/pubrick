@@ -52,7 +52,14 @@ type Adaptation = {
   attemptCount: number;
 };
 
-type Channel = { id: string; platform: string; name: string };
+type Channel = {
+  id: string;
+  brandId?: string;
+  platform: string;
+  name: string;
+  scheduledCount?: number;
+  health?: { state: "ok" | "failed" | "unknown" };
+};
 
 type ContentItem = {
   id: string;
@@ -186,6 +193,46 @@ beforeEach(() => {
   // block; the aliased auth-client stub defaults to signed-out, so a page
   // whose own tests don't care about that content still opts in explicitly.
   signedInSession();
+});
+
+describe("cached channel health in the queue", () => {
+  it("links a failed check with scheduled posts to the channel's brand", async () => {
+    installHandlers([], () => [], [
+      {
+        id: "ch1",
+        brandId: BRAND_ID,
+        platform: "telegram",
+        name: "Main",
+        health: { state: "failed" },
+        scheduledCount: 3,
+      },
+    ]);
+    render(<ContentQueuePage />);
+    expect(
+      await screen.findByRole("heading", { name: en.Content.channelHealthTitle }),
+    ).toBeVisible();
+    expect(screen.getByText(/3 scheduled posts depend on this connection/)).toBeVisible();
+    expect(screen.getByRole("link", { name: en.Content.channelHealthReview })).toHaveAttribute(
+      "href",
+      `/en/brands/${BRAND_ID}#channels`,
+    );
+  });
+
+  it("does not warn about an unknown check result", async () => {
+    installHandlers([], () => [], [
+      {
+        id: "ch1",
+        brandId: BRAND_ID,
+        platform: "telegram",
+        name: "Main",
+        health: { state: "unknown" },
+        scheduledCount: 3,
+      },
+    ]);
+    render(<ContentQueuePage />);
+    await screen.findByText(en.Content.empty);
+    expect(screen.queryByRole("heading", { name: en.Content.channelHealthTitle })).toBeNull();
+  });
 });
 
 describe("grouping by status (Step 2)", () => {

@@ -124,6 +124,7 @@ const ZONED_COLUMNS = [
   "calendar_slots.topic_updated_at",
   "calendar_slots.updated_at",
   "channels.created_at",
+  "channels.health_checked_at",
   "channels.updated_at",
   "claim_correction_proposals.created_at",
   "claim_reviews.completed_at",
@@ -374,6 +375,9 @@ const NON_ENUM_CHECKS = [
   "channels_credentials_mode_check",
   // Automatic reads must remain a per-VK opt-in even for direct SQL writers.
   "channels_metrics_auto_refresh_vk_check",
+  // A cached verdict must identify when the platform was checked. A null
+  // verdict may still carry the time of an inconclusive attempt for backoff.
+  "channels_health_result_pair_check",
   // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
   // — it pins a value into a RELATIONSHIP with another column, so there is no
   // single `bogus` scalar the loop could try. Proved directly by "adds the
