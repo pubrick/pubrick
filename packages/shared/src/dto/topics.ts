@@ -144,6 +144,24 @@ export const topicSuggestionRequestDtoSchema = z.object({
 });
 export type TopicSuggestionRequestDto = z.infer<typeof topicSuggestionRequestDtoSchema>;
 
+export const topicSuggestionHistoryQuerySchema = z.object({
+  cursor: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type TopicSuggestionHistoryQuery = z.infer<typeof topicSuggestionHistoryQuerySchema>;
+
+export const topicSuggestionHistoryItemSchema = topicSuggestionRequestDtoSchema.extend({
+  origin: z.enum(["manual", "automatic"]),
+  localDate: z.iso.date().nullable(),
+});
+export type TopicSuggestionHistoryItem = z.infer<typeof topicSuggestionHistoryItemSchema>;
+
+export const topicSuggestionHistoryPageSchema = z.object({
+  rows: z.array(topicSuggestionHistoryItemSchema),
+  nextCursor: z.uuid().nullable(),
+});
+export type TopicSuggestionHistoryPage = z.infer<typeof topicSuggestionHistoryPageSchema>;
+
 export const newsFeedbackSchema = z.object({
   signal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),
 });

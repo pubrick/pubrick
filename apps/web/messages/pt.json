@@ -1552,7 +1552,21 @@
     "suggestionError_no_api_key": "Adicione uma chave de IA nas Definições e tente novamente.",
     "suggestionError_unreadable_key": "Não foi possível ler a chave de IA. Substitua-a nas Definições.",
     "suggestionError_model_failed": "Não foi possível sugerir temas. Tente mais tarde.",
-    "aiSuggestion": "Sugestão de IA"
+    "aiSuggestion": "Sugestão de IA",
+    "historyTitle": "Histórico de sugestões",
+    "historyHint": "Pedidos manuais e diários de IA para esta marca. As ideias ainda precisam de aprovação.",
+    "historyEmpty": "Ainda não há pedidos. Use Sugerir temas para pedir ideias.",
+    "historyLoading": "A carregar histórico…",
+    "historyError": "Não foi possível carregar o histórico de sugestões.",
+    "historyLoadMore": "Carregar mais",
+    "historyOrigin_manual": "Pedido manual",
+    "historyOrigin_automatic": "Pedido diário",
+    "historyStatus_queued": "Em fila",
+    "historyStatus_running": "Em curso",
+    "historyStatus_succeeded": "Concluído",
+    "historyStatus_failed": "Falhou",
+    "historyCount": "Ideias adicionadas: {count}",
+    "historyLocalDate": "Para {date}"
   },
   "Autopilot": {
     "title": "Piloto automático",

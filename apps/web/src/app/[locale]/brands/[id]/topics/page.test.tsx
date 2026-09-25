@@ -39,6 +39,8 @@ describe("topic bank page", () => {
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -129,6 +131,8 @@ describe("topic bank page", () => {
       calls.push({ url, method });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) {
         if (method === "POST") request = queued;
         return response(200, method === "POST" ? request : { request });
@@ -146,6 +150,11 @@ describe("topic bank page", () => {
       url: expect.stringContaining(`/api/topics/suggestions?brandId=${BRAND_ID}`),
       method: "POST",
     });
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.url.includes("/api/topics/suggestions/history?")),
+      ).toHaveLength(2),
+    );
     expect(calls.some((call) => call.url.includes("/run"))).toBe(false);
   });
 
@@ -159,6 +168,8 @@ describe("topic bank page", () => {
       calls.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/block?")) blocked = true;
       if (url.includes("/unblock?")) blocked = false;
@@ -205,6 +216,8 @@ describe("topic bank page", () => {
       const url = String(input);
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -250,6 +263,8 @@ describe("topic bank page", () => {
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?"))
         return response(200, [
@@ -296,6 +311,8 @@ describe("topic bank page", () => {
       requests.push({ url, method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes("/api/topics?") || url.endsWith("/api/topics"))
         return response(method === "POST" ? 201 : 200, method === "POST" ? body : []);
@@ -353,6 +370,8 @@ describe("topic bank page", () => {
       requests.push({ method, body });
       if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
       if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
       if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
       if (url.includes(`/api/topics/${TOPIC_ID}`)) return response(200, { ...topic, ...body });
       if (url.includes("/api/topics?")) return response(200, [topic]);

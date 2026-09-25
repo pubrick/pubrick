@@ -28,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { SuggestionHistory } from "./suggestion-history";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
@@ -605,6 +606,10 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
           ))
         )}
       </Card>
+      <SuggestionHistory
+        key={`${id}:${suggestionRequest?.id ?? ""}:${suggestionRequest?.updatedAt ?? ""}`}
+        brandId={id}
+      />
       <Modal
         open={editing !== null}
         onClose={closeEdit}

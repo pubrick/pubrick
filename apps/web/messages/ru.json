@@ -1552,7 +1552,21 @@
     "suggestionError_no_api_key": "Добавьте ключ ИИ в настройках и попробуйте снова.",
     "suggestionError_unreadable_key": "Не удалось прочитать ключ ИИ. Замените его в настройках и попробуйте снова.",
     "suggestionError_model_failed": "Не удалось предложить темы. Попробуйте позже.",
-    "aiSuggestion": "Предложено ИИ"
+    "aiSuggestion": "Предложено ИИ",
+    "historyTitle": "История предложений тем",
+    "historyHint": "Ручные и ежедневные запросы ИИ для этого бренда. Идеи по-прежнему требуют утверждения.",
+    "historyEmpty": "Запросов пока нет. Нажмите «Предложить темы», чтобы получить идеи.",
+    "historyLoading": "Загрузка истории…",
+    "historyError": "Не удалось загрузить историю предложений тем.",
+    "historyLoadMore": "Загрузить ещё",
+    "historyOrigin_manual": "Ручной запрос",
+    "historyOrigin_automatic": "Ежедневный запрос",
+    "historyStatus_queued": "В очереди",
+    "historyStatus_running": "Выполняется",
+    "historyStatus_succeeded": "Завершён",
+    "historyStatus_failed": "Ошибка",
+    "historyCount": "Добавлено идей: {count}",
+    "historyLocalDate": "За {date}"
   },
   "Autopilot": {
     "title": "Автопилот",

@@ -16,10 +16,12 @@ import {
   type TopicBlock,
   type TopicCreate,
   type TopicRun,
+  type TopicSuggestionHistoryQuery,
   type TopicUpdate,
   topicBlockSchema,
   topicCreateSchema,
   topicRunSchema,
+  topicSuggestionHistoryQuerySchema,
   topicUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
@@ -54,6 +56,16 @@ export class TopicsController {
     @Query("brandId", ParseUUIDPipe) brandId: string,
   ) {
     return this.topics.latestSuggestionRequest(orgId, brandId);
+  }
+
+  @Get("suggestions/history")
+  suggestionHistory(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(topicSuggestionHistoryQuerySchema))
+    query: TopicSuggestionHistoryQuery,
+  ) {
+    return this.topics.suggestionHistory(orgId, brandId, query);
   }
 
   @Post("suggestions")
