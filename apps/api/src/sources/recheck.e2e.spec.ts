@@ -90,6 +90,19 @@ describe.skipIf(!url)("paid relevance recheck admission", () => {
         orgId: first.orgId,
         brandId: first.brandId,
         sourceId: first.sourceId,
+        title: "Dismissed scored",
+        url: "https://example.com/dismissed-scored",
+        relevanceStatus: "scored",
+        relevanceScore: 0.95,
+        relevanceReason: "Old verdict",
+        relevanceUrgency: "timely",
+        relevanceScoredAt: new Date(),
+        dismissedAt: new Date(),
+      },
+      {
+        orgId: first.orgId,
+        brandId: first.brandId,
+        sourceId: first.sourceId,
         title: "Unscored",
         url: "https://example.com/unscored",
       },
@@ -169,6 +182,16 @@ describe.skipIf(!url)("paid relevance recheck admission", () => {
         ),
       );
     expect(items).toHaveLength(2);
+    const dismissed = await db
+      .select({ id: schema.newsItems.id })
+      .from(schema.newsItems)
+      .where(
+        and(
+          eq(schema.newsItems.orgId, first.orgId),
+          eq(schema.newsItems.title, "Dismissed scored"),
+        ),
+      );
+    expect(items.map((item) => item.itemId)).not.toContain(dismissed[0]?.id);
     expect((await first.agent.get(route).expect(200)).body.batch.id).toBe(admitted.body.id);
     // Admission never mutates old verdicts before an explicitly queued worker runs.
     const [old] = await db
@@ -194,8 +217,25 @@ describe.skipIf(!url)("paid relevance recheck admission", () => {
         relevanceReason: "Prior verdict",
         relevanceUrgency: "timely" as const,
         relevanceScoredAt: new Date(),
+        ...(index === 0 ? { dismissedAt: new Date() } : {}),
       })),
     );
+    const before = await fixture.agent
+      .get(`/api/sources/items/recheck/preview?brandId=${fixture.brandId}&days=30`)
+      .expect(200);
+    expect(before.body).toMatchObject({ eligible: 500, capped: false });
+    await db.insert(schema.newsItems).values({
+      orgId: fixture.orgId,
+      brandId: fixture.brandId,
+      sourceId: fixture.sourceId,
+      title: "One more visible",
+      url: "https://example.com/one-more-visible",
+      relevanceStatus: "scored",
+      relevanceScore: 0.5,
+      relevanceReason: "Prior verdict",
+      relevanceUrgency: "timely",
+      relevanceScoredAt: new Date(),
+    });
     const preview = await fixture.agent
       .get(`/api/sources/items/recheck/preview?brandId=${fixture.brandId}&days=30`)
       .expect(200);

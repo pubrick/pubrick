@@ -19,7 +19,7 @@ import {
   type PrivateTelegramSourceCreate,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, forbidden, notFound } from "../api-error";
@@ -55,6 +55,7 @@ const ITEM_COLUMNS = {
   commentsErrorCode: schema.newsItems.commentsErrorCode,
   createdAt: schema.newsItems.createdAt,
   editorSignal: schema.newsItems.editorSignal,
+  dismissedAt: schema.newsItems.dismissedAt,
   relevanceStatus: schema.newsItems.relevanceStatus,
   relevanceScore: schema.newsItems.relevanceScore,
   rankScore: newsRankScore,
@@ -347,6 +348,9 @@ export class SourcesRepository {
         and(
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, query.brandId),
+          query.view === "dismissed"
+            ? isNotNull(schema.newsItems.dismissedAt)
+            : isNull(schema.newsItems.dismissedAt),
           ...(query.status === "all" ? [] : [eq(schema.newsItems.relevanceStatus, query.status)]),
           ...(query.minScorePercent === undefined
             ? []
@@ -367,6 +371,82 @@ export class SourcesRepository {
         desc(schema.newsItems.id),
       )
       .limit(100);
+  }
+
+  private async setDismissed(orgId: string, brandId: string, id: string, dismiss: boolean) {
+    return db.transaction(async (tx) => {
+      const [item] = await tx
+        .select({
+          id: schema.newsItems.id,
+          dismissedAt: schema.newsItems.dismissedAt,
+          editorSignal: schema.newsItems.editorSignal,
+          dismissedPreviousSignal: schema.newsItems.dismissedPreviousSignal,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!item) throw notFound("news_item_not_found", "Article not found");
+      if (Boolean(item.dismissedAt) === dismiss)
+        return { dismissedAt: item.dismissedAt, editorSignal: item.editorSignal };
+      const [linked] = await tx
+        .select({ id: schema.topics.id })
+        .from(schema.topics)
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.newsItemId, id),
+          ),
+        )
+        .limit(1);
+      const [updated] = await tx
+        .update(schema.newsItems)
+        .set(
+          dismiss
+            ? {
+                dismissedAt: new Date(),
+                dismissedPreviousSignal: item.editorSignal,
+                editorSignal: linked ? item.editorSignal : "irrelevant",
+              }
+            : {
+                dismissedAt: null,
+                dismissedPreviousSignal: null,
+                editorSignal: linked
+                  ? item.editorSignal
+                  : item.editorSignal === "irrelevant"
+                    ? item.dismissedPreviousSignal
+                    : item.editorSignal,
+              },
+        )
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, id),
+          ),
+        )
+        .returning({
+          dismissedAt: schema.newsItems.dismissedAt,
+          editorSignal: schema.newsItems.editorSignal,
+        });
+      if (!updated) throw new Error("Locked article could not be updated");
+      return updated;
+    });
+  }
+
+  dismiss(orgId: string, brandId: string, id: string) {
+    return this.setDismissed(orgId, brandId, id, true);
+  }
+
+  restore(orgId: string, brandId: string, id: string) {
+    return this.setDismissed(orgId, brandId, id, false);
   }
 
   /** Recalculate at most one page from local feedback, without invoking a provider. */
@@ -428,6 +508,7 @@ export class SourcesRepository {
             eq(schema.newsItems.orgId, orgId),
             eq(schema.newsItems.brandId, brandId),
             eq(schema.newsItems.relevanceStatus, "scored"),
+            isNull(schema.newsItems.dismissedAt),
             gte(schema.newsItems.createdAt, cutoff),
             ...(request.cursor
               ? [
@@ -460,6 +541,7 @@ export class SourcesRepository {
               eq(schema.newsItems.brandId, brandId),
               eq(schema.newsItems.id, item.id),
               eq(schema.newsItems.relevanceStatus, "scored"),
+              isNull(schema.newsItems.dismissedAt),
               eq(schema.newsItems.relevanceFeedbackDelta, item.feedbackDelta),
             ),
           )
@@ -491,6 +573,7 @@ export class SourcesRepository {
             eq(schema.newsItems.orgId, orgId),
             eq(schema.newsItems.brandId, brandId),
             eq(schema.newsItems.id, id),
+            isNull(schema.newsItems.dismissedAt),
           ),
         )
         .limit(1);

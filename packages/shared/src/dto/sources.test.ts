@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { newsSourceCreateSchema, newsSourceUpdateSchema } from "./sources.js";
+import {
+  newsItemListQuerySchema,
+  newsSourceCreateSchema,
+  newsSourceUpdateSchema,
+} from "./sources.js";
 
 const brandId = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 
 describe("watched source inputs", () => {
+  it("defaults to current stories and accepts only an explicit dismissed view", () => {
+    expect(newsItemListQuerySchema.parse({ brandId }).view).toBe("active");
+    expect(newsItemListQuerySchema.parse({ brandId, view: "dismissed" }).view).toBe("dismissed");
+    expect(newsItemListQuerySchema.safeParse({ brandId, view: "both" }).success).toBe(false);
+  });
   it("keeps existing RSS clients valid when kind is omitted", () => {
     expect(
       newsSourceCreateSchema.parse({ brandId, name: "Journal", url: "https://example.com/feed" }),

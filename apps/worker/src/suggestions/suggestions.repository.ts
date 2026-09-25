@@ -3,7 +3,7 @@ import { Injectable } from "@nestjs/common";
 import { KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
 import { decryptJson, parseStoredAiCredential, toLedgerCostUsd } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -113,6 +113,7 @@ export class SuggestionsRepository {
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, brandId),
           eq(schema.newsItems.relevanceStatus, "scored"),
+          isNull(schema.newsItems.dismissedAt),
           sql`${schema.newsSources.kind} <> 'telegram_private'`,
         ),
       )

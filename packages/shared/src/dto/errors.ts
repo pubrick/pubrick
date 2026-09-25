@@ -407,6 +407,7 @@ export const API_ERROR_CODES = [
   "source_unreadable",
   "topic_not_found",
   "news_item_not_found",
+  "news_item_dismissed",
   "topic_not_approved",
   "topic_blocked",
   "topic_changed",

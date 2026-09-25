@@ -177,49 +177,67 @@ export class TopicsRepository {
   }
 
   async fromNews(orgId: string, brandId: string, newsItemId: string) {
-    const news = await db
-      .select({
-        id: schema.newsItems.id,
-        title: schema.newsItems.title,
-        summary: schema.newsItems.summary,
-        url: schema.newsItems.url,
-      })
-      .from(schema.newsItems)
-      .where(
-        and(
-          eq(schema.newsItems.orgId, orgId),
-          eq(schema.newsItems.brandId, brandId),
-          eq(schema.newsItems.id, newsItemId),
-        ),
-      )
-      .limit(1);
-    if (!news[0]) throw notFound("news_item_not_found", "Article not found");
-    const rows = await db
-      .insert(schema.topics)
-      .values({
-        orgId,
-        brandId,
-        newsItemId,
-        title: news[0].title,
-        description: news[0].summary.slice(0, 2000),
-        sourceUrl: news[0].url,
-      })
-      .onConflictDoNothing()
-      .returning(COLUMNS);
-    if (rows[0]) return rows[0];
-    const existing = await db
-      .select(COLUMNS)
-      .from(schema.topics)
-      .where(
-        and(
-          eq(schema.topics.orgId, orgId),
-          eq(schema.topics.brandId, brandId),
-          eq(schema.topics.newsItemId, newsItemId),
-        ),
-      )
-      .limit(1);
-    if (!existing[0]) throw new ConflictException("Topic could not be created");
-    return existing[0];
+    return db.transaction(async (tx) => {
+      // Dismiss takes this same row lock before checking linked topics.
+      const [news] = await tx
+        .select({
+          id: schema.newsItems.id,
+          title: schema.newsItems.title,
+          summary: schema.newsItems.summary,
+          url: schema.newsItems.url,
+          dismissedAt: schema.newsItems.dismissedAt,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, newsItemId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!news) throw notFound("news_item_not_found", "Article not found");
+      if (news.dismissedAt)
+        throw conflict("news_item_dismissed", "Restore the article before creating a topic");
+      const [created] = await tx
+        .insert(schema.topics)
+        .values({
+          orgId,
+          brandId,
+          newsItemId,
+          title: news.title,
+          description: news.summary.slice(0, 2000),
+          sourceUrl: news.url,
+        })
+        .onConflictDoNothing()
+        .returning(COLUMNS);
+      const [existing] = created
+        ? [created]
+        : await tx
+            .select(COLUMNS)
+            .from(schema.topics)
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.newsItemId, newsItemId),
+              ),
+            )
+            .limit(1);
+      if (!existing) throw new ConflictException("Topic could not be created");
+      await tx
+        .update(schema.newsItems)
+        .set({ editorSignal: "relevant" })
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.id, newsItemId),
+          ),
+        );
+      return existing;
+    });
   }
 
   async update(orgId: string, brandId: string, id: string, data: TopicUpdate) {

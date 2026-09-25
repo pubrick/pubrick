@@ -167,6 +167,7 @@ export const newsItemDtoSchema = z.object({
   commentsErrorCode: z.string().nullable(),
   createdAt: z.string(),
   editorSignal: z.enum(NEWS_FEEDBACK_SIGNALS).nullable(),
+  dismissedAt: z.string().nullable(),
   relevanceStatus: z.enum(["unscored", "scored", "failed"]),
   relevanceScore: z.number().min(0).max(1).nullable(),
   /** Advisory ranking score after the bounded editor-feedback adjustment. */
@@ -183,6 +184,7 @@ export const newsItemListQuerySchema = z.object({
   brandId: z.string().uuid(),
   sort: z.enum(["recent", "relevance"]).default("recent"),
   status: z.enum(["all", "unscored", "scored", "failed"]).default("all"),
+  view: z.enum(["active", "dismissed"]).default("active"),
   sourceId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(200).optional(),
   minScorePercent: z

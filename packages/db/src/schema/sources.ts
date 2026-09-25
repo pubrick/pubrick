@@ -158,6 +158,9 @@ export const newsItems = pgTable(
     commentsCheckedAt: timestamp("comments_checked_at", { withTimezone: true }),
     commentsErrorCode: text("comments_error_code"),
     editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    /** Restored if Dismiss replaced a free-standing editor signal. */
+    dismissedPreviousSignal: text("dismissed_previous_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
     embedding: vector("embedding", { dimensions: 768 }),
     embeddingModel: text("embedding_model"),
     embeddingDimensions: integer("embedding_dimensions"),
@@ -186,6 +189,15 @@ export const newsItems = pgTable(
     ),
     enumCheck("news_items_comments_status_check", t.commentsStatus, NEWS_COMMENT_STATUSES),
     enumCheck("news_items_editor_signal_check", t.editorSignal, NEWS_FEEDBACK_SIGNALS),
+    enumCheck(
+      "news_items_dismissed_previous_signal_check",
+      t.dismissedPreviousSignal,
+      NEWS_FEEDBACK_SIGNALS,
+    ),
+    check(
+      "news_items_dismissed_previous_signal_state_check",
+      sql`${t.dismissedAt} IS NOT NULL OR ${t.dismissedPreviousSignal} IS NULL`,
+    ),
     enumCheck("news_items_relevance_status_check", t.relevanceStatus, [
       "unscored",
       "scored",

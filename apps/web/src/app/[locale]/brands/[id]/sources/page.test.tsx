@@ -7,6 +7,8 @@ import {
 } from "@pubrick/shared";
 import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { navigationState, routerMock } from "@/test/next-navigation.stub";
@@ -39,6 +41,26 @@ describe("watched sources page", () => {
 
   afterEach(() => window.history.replaceState({}, "", "/"));
 
+  it("server-renders the dismissed URL state without accessing window", () => {
+    navigationState.searchParams = new URLSearchParams("news_view=dismissed");
+    const browserWindow = window;
+    const resolvedParams = Object.assign(Promise.resolve({ id: BRAND_ID }), {
+      status: "fulfilled" as const,
+      value: { id: BRAND_ID },
+    });
+    try {
+      vi.stubGlobal("window", undefined);
+      const html = renderToString(
+        <NextIntlClientProvider locale="en" messages={en}>
+          <SourcesPage params={resolvedParams} />
+        </NextIntlClientProvider>,
+      );
+      expect(html).toContain('value="dismissed" selected=""');
+    } finally {
+      vi.stubGlobal("window", browserWindow);
+    }
+  });
+
   function install(
     items: unknown[] = [],
     sources: unknown[] = [],
@@ -58,7 +80,28 @@ describe("watched sources page", () => {
           200,
           rerankResults.shift() ?? { processed: 0, changed: 0, nextCursor: null },
         );
-      if (url.includes("/api/sources/items?")) return response(200, items);
+      if (
+        url.includes("/api/sources/items/") &&
+        method === "POST" &&
+        /\/(dismiss|restore)\?/.test(url)
+      ) {
+        const itemId = url.split("/items/")[1]?.split("/")[0];
+        const item = items.find((entry) => (entry as { id: string }).id === itemId) as
+          | Record<string, unknown>
+          | undefined;
+        if (item) item.dismissedAt = url.includes("/dismiss?") ? new Date().toISOString() : null;
+        return response(201, { dismissedAt: item?.dismissedAt ?? null });
+      }
+      if (url.includes("/api/sources/items?")) {
+        const dismissed = new URL(url, "http://localhost").searchParams.get("view") === "dismissed";
+        return response(
+          200,
+          items.filter(
+            (entry) =>
+              Boolean((entry as { dismissedAt?: string | null }).dismissedAt) === dismissed,
+          ),
+        );
+      }
       if (url.includes("/comment-analysis?"))
         return response(
           method === "POST" ? 201 : 200,
@@ -145,6 +188,52 @@ describe("watched sources page", () => {
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     expect(await screen.findByText(en.Sources.aiScore.replace("{score}", "70"))).toBeVisible();
     expect(screen.getByText(en.Sources.rankScore.replace("{score}", "82"))).toBeVisible();
+  });
+
+  it("dismisses and restores a story through the visible URL view without AI calls", async () => {
+    const calls = install([
+      {
+        id: ITEM_ID,
+        brandId: BRAND_ID,
+        sourceId: SOURCE_ID,
+        title: "Battery rules",
+        summary: "Recycling guidance",
+        url: "https://example.com/batteries",
+        publishedAt: null,
+        createdAt: "2026-09-23T12:00:00.000Z",
+        relevanceStatus: "unscored",
+        relevanceScore: null,
+        rankScore: null,
+        feedbackDelta: 0,
+        relevanceReason: null,
+        relevanceUrgency: null,
+        relevanceErrorCode: null,
+        relevanceScoredAt: null,
+        editorSignal: null,
+        dismissedAt: null,
+      },
+    ]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    expect(await screen.findByText("Battery rules")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: en.Sources.more }));
+    await user.click(screen.getByRole("menuitem", { name: en.Sources.dismissItem }));
+    await waitFor(() => expect(screen.queryByText("Battery rules")).not.toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText(en.Sources.viewLabel), "dismissed");
+    expect(new URLSearchParams(window.location.search).get("news_view")).toBe("dismissed");
+    expect(await screen.findByText("Battery rules")).toBeVisible();
+    expect(screen.queryByRole("button", { name: en.Sources.createDraft })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Sources.restoreItem }));
+    await waitFor(() => expect(screen.queryByText("Battery rules")).not.toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText(en.Sources.viewLabel), "active");
+    expect(new URLSearchParams(window.location.search).has("news_view")).toBe(false);
+    expect(await screen.findByText("Battery rules")).toBeVisible();
+    expect(
+      calls.filter((call) => /\/(dismiss|restore)\?/.test(call.url)).map((call) => call.method),
+    ).toEqual(["POST", "POST"]);
+    expect(
+      calls.some((call) => call.url.includes("/api/usage") || call.url.includes("/score?")),
+    ).toBe(false);
   });
 
   it("updates saved-feedback rankings in bounded pages without requesting AI scoring", async () => {
@@ -602,7 +691,12 @@ describe("watched sources page", () => {
     );
     const request = calls.find((call) => call.url.includes("sort=relevance&status=unscored"));
     const query = Object.fromEntries(new URL(request?.url ?? "", "http://localhost").searchParams);
-    expect(query).toEqual({ brandId: BRAND_ID, sort: "relevance", status: "unscored" });
+    expect(query).toEqual({
+      brandId: BRAND_ID,
+      sort: "relevance",
+      status: "unscored",
+      view: "active",
+    });
     expect(newsItemListQuerySchema.parse(query)).toEqual(query);
     await user.click(screen.getByRole("button", { name: en.Sources.more }));
     await user.click(screen.getByRole("menuitem", { name: en.Sources.score }));
@@ -641,6 +735,7 @@ describe("watched sources page", () => {
       brandId: BRAND_ID,
       sort: "recent",
       status: "all",
+      view: "active",
       minScorePercent: "75",
       sourceId: SOURCE_ID,
       search: "Сводка 100%_",

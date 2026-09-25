@@ -104,6 +104,16 @@ describe.skipIf(!url)("automatic public Telegram comment collection", () => {
     );
     await story(f, 4, { commentsCheckedAt: new Date(), commentsStatus: "available" });
     await story(f, 5, { commentsStatus: "pending" });
+    const dismissed = await story(f, 8, { dismissedAt: new Date() });
+    expect(
+      await repo.eligibleAuto({
+        kind: "news_auto",
+        orgId: f.orgId,
+        brandId: f.brandId,
+        itemId: dismissed,
+        revision: 1,
+      }),
+    ).toBeNull();
     const [paused] = await db
       .insert(schema.newsSources)
       .values({

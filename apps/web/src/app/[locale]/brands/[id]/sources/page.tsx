@@ -40,6 +40,7 @@ type Run = { id: string };
 const FORM_ID = "source-add-form";
 const SCORE_PERCENT_OPTIONS = Array.from({ length: 21 }, (_, index) => index * 5);
 const NEWS_RELEVANCE_PARAM = "news_relevance";
+const NEWS_VIEW_PARAM = "news_view";
 
 function parseRelevance(brandId: string, value: string | null): number | null {
   if (value === null) return null;
@@ -55,6 +56,13 @@ function relevanceFromUrl(brandId: string): number | null {
   );
 }
 
+function viewFromUrl(brandId: string): "active" | "dismissed" {
+  if (!window.location.pathname.replace(/\/$/, "").endsWith(`/${brandId}/sources`)) return "active";
+  return new URLSearchParams(window.location.search).get(NEWS_VIEW_PARAM) === "dismissed"
+    ? "dismissed"
+    : "active";
+}
+
 export default function SourcesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const t = useTranslations("Sources");
@@ -67,6 +75,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
+  const [view, setView] = useState<"active" | "dismissed">(() =>
+    urlSearchParams.get(NEWS_VIEW_PARAM) === "dismissed" ? "dismissed" : "active",
+  );
   const [minScorePercent, setMinScorePercent] = useState<number | null>(() =>
     parseRelevance(id, urlSearchParams.get(NEWS_RELEVANCE_PARAM)),
   );
@@ -74,8 +85,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const loadVersion = useRef(0);
+  const loadCurrent = useRef<() => void>(() => {});
   const inFlight = useRef<{ key: string; version: number } | null>(null);
   const renderedBrandId = useRef(id);
+  const activeBrandId = useRef(id);
+  activeBrandId.current = id;
   const editVersion = useRef(0);
   const [rerankCursor, setRerankCursor] = useState<NewsRerankCursor | null>(null);
   const [rerankBusy, setRerankBusy] = useState(false);
@@ -103,6 +117,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [itemActionBusy, setItemActionBusy] = useState<string | null>(null);
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
 
   const describeError = useCallback(
@@ -133,17 +148,29 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setMinScorePercent(score);
   }, []);
 
+  const updateView = useCallback((nextView: "active" | "dismissed") => {
+    const url = new URL(window.location.href);
+    if (nextView === "active") url.searchParams.delete(NEWS_VIEW_PARAM);
+    else url.searchParams.set(NEWS_VIEW_PARAM, "dismissed");
+    window.history.replaceState(window.history.state, "", url);
+    loadVersion.current++;
+    setItems(null);
+    setView(nextView);
+  }, []);
+
   useEffect(() => {
     const restoreFromUrl = () => {
       const score = relevanceFromUrl(id);
-      if (score === minScorePercent) return;
+      const nextView = viewFromUrl(id);
+      if (score === minScorePercent && nextView === view) return;
       loadVersion.current++;
       setItems(null);
       setMinScorePercent(score);
+      setView(nextView);
     };
     window.addEventListener("popstate", restoreFromUrl);
     return () => window.removeEventListener("popstate", restoreFromUrl);
-  }, [id, minScorePercent]);
+  }, [id, minScorePercent, view]);
 
   useEffect(() => {
     if (renderedBrandId.current === id) return;
@@ -158,10 +185,12 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setSearch("");
     setSort("recent");
     setStatus("all");
+    setView(viewFromUrl(id));
     setMinScorePercent(relevanceFromUrl(id));
     setEditingSource(null);
     setEditBusy(false);
     setEditError(null);
+    setItemActionBusy(null);
   }, [id]);
 
   const load = useCallback(
@@ -171,6 +200,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         brandId: id,
         sort,
         status,
+        view,
         ...(minScorePercent !== null ? { minScorePercent } : {}),
         ...(sourceFilter ? { sourceId: sourceFilter } : {}),
         ...(search ? { search } : {}),
@@ -213,8 +243,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           if (inFlight.current?.version === version) inFlight.current = null;
         });
     },
-    [id, sort, status, minScorePercent, sourceFilter, searchInput, search, describeError],
+    [id, sort, status, view, minScorePercent, sourceFilter, searchInput, search, describeError],
   );
+
+  loadCurrent.current = () => load();
 
   useEffect(() => {
     load();
@@ -487,6 +519,27 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  async function setDismissed(item: NewsItemDto, dismiss: boolean) {
+    if (itemActionBusy) return;
+    setItemActionBusy(item.id);
+    setError(null);
+    try {
+      await api(`/api/sources/items/${item.id}/${dismiss ? "dismiss" : "restore"}?brandId=${id}`, {
+        method: "POST",
+      });
+      if (activeBrandId.current !== id) return;
+      feedbackVersion.current += 1;
+      setRerankCursor(null);
+      setNotice(t(dismiss ? "itemDismissed" : "itemRestored"));
+      setItems(null);
+      loadCurrent.current();
+    } catch (err) {
+      if (activeBrandId.current === id) setError(describeError(err));
+    } finally {
+      if (activeBrandId.current === id) setItemActionBusy(null);
+    }
+  }
+
   async function rerankNews() {
     const startedWithFeedbackVersion = feedbackVersion.current;
     setRerankBusy(true);
@@ -560,7 +613,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   }
 
   const hasNewsFilters =
-    status !== "all" || Boolean(sourceFilter || searchInput) || minScorePercent !== null;
+    status !== "all" ||
+    view !== "active" ||
+    Boolean(sourceFilter || searchInput) ||
+    minScorePercent !== null;
 
   return (
     <AppShell
@@ -788,6 +844,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <option value="failed">{t("statusFailed")}</option>
         </Select>
         <Select
+          label={t("viewLabel")}
+          value={view}
+          onChange={(event) => updateView(event.target.value as typeof view)}
+        >
+          <option value="active">{t("viewActive")}</option>
+          <option value="dismissed">{t("viewDismissed")}</option>
+        </Select>
+        <Select
           label={t("minScoreLabel")}
           value={minScorePercent === null ? "" : String(minScorePercent)}
           onChange={(event) =>
@@ -839,6 +903,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   variant="secondary"
                   onClick={() => {
                     setStatus("all");
+                    updateView("active");
                     updateMinScorePercent(null);
                     setSourceFilter("");
                     setSearchInput("");
@@ -863,6 +928,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                       ? new Date(item.publishedAt).toLocaleDateString(locale)
                       : new Date(item.createdAt).toLocaleDateString(locale)}
                     {item.editorSignal ? ` · ${t(item.editorSignal)}` : ""}
+                    {item.dismissedAt
+                      ? ` · ${t("dismissedDate", { date: new Date(item.dismissedAt).toLocaleDateString(locale) })}`
+                      : ""}
                   </span>
                   <span className="flex flex-wrap items-center gap-2">
                     <StatusBadge
@@ -901,41 +969,62 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   >
                     {t("open")}
                   </a>
-                  <Button variant="secondary" size="sm" onClick={() => openRun(item)}>
-                    {t("createDraft")}
-                  </Button>
-                  <Menu
-                    trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
-                    items={[
-                      ...(item.relevanceStatus === "scored"
-                        ? []
-                        : [
-                            {
-                              label: t(item.relevanceStatus === "failed" ? "retryScore" : "score"),
-                              onSelect: () => void score(item),
-                            },
-                          ]),
-                      { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
-                      {
-                        label: t(item.editorSignal === "relevant" ? "clearRelevant" : "relevant"),
-                        onSelect: () =>
-                          void setSignal(
-                            item,
-                            item.editorSignal === "relevant" ? null : "relevant",
-                          ),
-                      },
-                      {
-                        label: t(
-                          item.editorSignal === "irrelevant" ? "clearIrrelevant" : "irrelevant",
-                        ),
-                        onSelect: () =>
-                          void setSignal(
-                            item,
-                            item.editorSignal === "irrelevant" ? null : "irrelevant",
-                          ),
-                      },
-                    ]}
-                  />
+                  {view === "dismissed" ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={itemActionBusy !== null}
+                      onClick={() => void setDismissed(item, false)}
+                    >
+                      {t("restoreItem")}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button variant="secondary" size="sm" onClick={() => openRun(item)}>
+                        {t("createDraft")}
+                      </Button>
+                      <Menu
+                        trigger={<span className={buttonClasses("ghost", "sm")}>{t("more")}</span>}
+                        items={[
+                          ...(item.relevanceStatus === "scored"
+                            ? []
+                            : [
+                                {
+                                  label: t(
+                                    item.relevanceStatus === "failed" ? "retryScore" : "score",
+                                  ),
+                                  onSelect: () => void score(item),
+                                },
+                              ]),
+                          { label: t("saveTopic"), onSelect: () => void saveTopic(item) },
+                          {
+                            label: t(
+                              item.editorSignal === "relevant" ? "clearRelevant" : "relevant",
+                            ),
+                            onSelect: () =>
+                              void setSignal(
+                                item,
+                                item.editorSignal === "relevant" ? null : "relevant",
+                              ),
+                          },
+                          {
+                            label: t(
+                              item.editorSignal === "irrelevant" ? "clearIrrelevant" : "irrelevant",
+                            ),
+                            onSelect: () =>
+                              void setSignal(
+                                item,
+                                item.editorSignal === "irrelevant" ? null : "irrelevant",
+                              ),
+                          },
+                          {
+                            label: t("dismissItem"),
+                            onSelect: () => void setDismissed(item, true),
+                          },
+                        ]}
+                      />
+                    </>
+                  )}
                   {sources?.some(
                     (source) => source.id === item.sourceId && source.kind === "telegram",
                   ) && (

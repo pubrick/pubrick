@@ -206,6 +206,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   source_unreadable: "source_unreadable",
   topic_not_found: "topic_not_found",
   news_item_not_found: "news_item_not_found",
+  news_item_dismissed: "news_item_dismissed",
   topic_not_approved: "topic_not_approved",
   topic_blocked: "topic_blocked",
   topic_changed: "topic_changed",

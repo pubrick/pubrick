@@ -70,6 +70,7 @@ describe("RelevanceService", () => {
       recordEmbeddingUsage: vi.fn().mockResolvedValue(undefined),
       googleKey: vi.fn().mockResolvedValue("secret"),
       recentFeedback: vi.fn().mockResolvedValue({ relevant: [], irrelevant: [] }),
+      isVisible: vi.fn().mockResolvedValue(true),
       unscored: vi.fn().mockResolvedValue([]),
     };
     const credentials = {
@@ -202,6 +203,18 @@ describe("RelevanceService", () => {
     expect(repo.recordEmbeddingUsage).not.toHaveBeenCalled();
     expect(repo.recentFeedback).not.toHaveBeenCalled();
     expect(repo.googleKey).not.toHaveBeenCalled();
+  });
+
+  it("skips a story dismissed after batch claim without calling the provider", async () => {
+    const { service, repo, calls, embedText } = harness("{}");
+    repo.isVisible.mockResolvedValue(false);
+    await service.handleBatch({ ...job, batchId: "batch-1" });
+    expect(calls).toHaveLength(0);
+    expect(embedText).not.toHaveBeenCalled();
+    expect(repo.recordUsage).not.toHaveBeenCalled();
+    expect(repo.finishBatch).toHaveBeenCalledWith(job.orgId, job.brandId, "batch-1", job.itemId, {
+      kind: "skipped",
+    });
   });
 
   it("uses scoped prior editor feedback with one separately metered embedding call", async () => {

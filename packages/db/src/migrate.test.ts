@@ -153,6 +153,7 @@ const ZONED_COLUMNS = [
   "news_comments.published_at",
   "news_items.comments_checked_at",
   "news_items.created_at",
+  "news_items.dismissed_at",
   "news_items.published_at",
   "news_items.relevance_scored_at",
   "news_relevance_batch_items.completed_at",
@@ -277,6 +278,11 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // The historical seed has no news row to update here; schema-invariants.test.ts
+  // compares this enum CHECK to the migration SQL instead.
+  "news_items_dismissed_previous_signal_check",
+  // A previous signal can be retained only while a story is dismissed.
+  "news_items_dismissed_previous_signal_state_check",
   // Webhook payload and subscription shape are checked on late-created tables.
   "webhook_deliveries_event_check",
   "webhook_deliveries_status_check",

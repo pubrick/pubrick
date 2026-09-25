@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { DEFAULT_MODELS, estimateCostUsd, priceFor } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { type NewsRecheckRequest, preferredCredential } from "@pubrick/shared";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
@@ -28,6 +28,7 @@ function eligibleStory(orgId: string, brandId: string, days: number) {
     eq(schema.newsItems.orgId, orgId),
     eq(schema.newsItems.brandId, brandId),
     eq(schema.newsItems.relevanceStatus, "scored"),
+    isNull(schema.newsItems.dismissedAt),
     gte(schema.newsItems.createdAt, sql`now() - (${days} * interval '1 day')`),
   );
 }

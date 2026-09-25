@@ -7,12 +7,28 @@ import {
   RELEVANCE_BATCH_QUEUE,
   toLedgerCostUsd,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
 @Injectable()
 export class RelevanceRepository {
+  async isVisible(orgId: string, brandId: string, itemId: string): Promise<boolean> {
+    const [item] = await db
+      .select({ id: schema.newsItems.id })
+      .from(schema.newsItems)
+      .where(
+        and(
+          eq(schema.newsItems.orgId, orgId),
+          eq(schema.newsItems.brandId, brandId),
+          eq(schema.newsItems.id, itemId),
+          isNull(schema.newsItems.dismissedAt),
+        ),
+      )
+      .limit(1);
+    return Boolean(item);
+  }
+
   /** Privileged repair scan: terminal or missing queue jobs must not hold a brand's paid-action lock forever. */
   async orphanedBatchJobs() {
     const result = await db.execute(sql`SELECT i.org_id AS "orgId", i.brand_id AS "brandId",
@@ -92,6 +108,7 @@ export class RelevanceRepository {
             eq(schema.newsItems.orgId, orgId),
             eq(schema.newsItems.brandId, brandId),
             eq(schema.newsItems.id, itemId),
+            isNull(schema.newsItems.dismissedAt),
           ),
         )
         .limit(1);
@@ -205,6 +222,7 @@ export class RelevanceRepository {
               eq(schema.newsItems.orgId, orgId),
               eq(schema.newsItems.brandId, brandId),
               eq(schema.newsItems.id, itemId),
+              isNull(schema.newsItems.dismissedAt),
             ),
           )
           .returning({ id: schema.newsItems.id });
@@ -301,6 +319,7 @@ export class RelevanceRepository {
       .where(
         and(
           eq(schema.newsItems.relevanceStatus, "unscored"),
+          isNull(schema.newsItems.dismissedAt),
           sql`${schema.newsSources.kind} <> 'telegram_private'`,
           ...(afterId ? [gt(schema.newsItems.id, afterId)] : []),
         ),
@@ -322,6 +341,7 @@ export class RelevanceRepository {
           eq(schema.newsItems.id, itemId),
           lt(schema.newsItems.relevanceAttempts, 3),
           sql`${schema.newsItems.relevanceStatus} <> 'scored'`,
+          isNull(schema.newsItems.dismissedAt),
         ),
       )
       .returning({
@@ -401,6 +421,7 @@ export class RelevanceRepository {
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, brandId),
           eq(schema.newsItems.id, itemId),
+          isNull(schema.newsItems.dismissedAt),
         ),
       );
   }
@@ -427,6 +448,7 @@ export class RelevanceRepository {
           eq(schema.newsItems.brandId, brandId),
           eq(schema.newsItems.id, itemId),
           sql`${schema.newsItems.relevanceStatus} <> 'scored'`,
+          isNull(schema.newsItems.dismissedAt),
         ),
       );
   }
@@ -446,6 +468,7 @@ export class RelevanceRepository {
           eq(schema.newsItems.id, itemId),
           eq(schema.newsItems.relevanceStatus, "unscored"),
           sql`${schema.newsItems.relevanceAttempts} >= 3`,
+          isNull(schema.newsItems.dismissedAt),
         ),
       );
   }
