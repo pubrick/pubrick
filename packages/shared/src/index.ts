@@ -170,4 +170,5 @@ export {
   type RefineAcceptArgs,
   type RefineAcceptPlan,
 } from "./refine-merge.js";
+export { TELEGRAM_PHOTO_CAPTION_LENGTH, telegramPhotoParts } from "./telegram-photo-parts.js";
 export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

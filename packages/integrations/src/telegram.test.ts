@@ -111,16 +111,68 @@ describe("telegramPublisher.publish", () => {
     expect(result.externalId).toBe("4711");
   });
 
-  it("refuses an overlong photo caption before sending any bytes", async () => {
-    const fetchImpl = fetchReturning(okMessage());
+  it("sends a reviewed long photo post as a caption and one reply without dropping text", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementation(async () => new Response(JSON.stringify(okMessage())));
+    const text = `${"A complete sentence. ".repeat(80)}\n\n${"Next paragraph. ".repeat(70)}`;
+    const result = await telegramPublisher.publish(
+      CREDS,
+      { text, image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
+      { fetchImpl },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [photoUrl, photoInit] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [replyUrl, replyInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+    expect(photoUrl.endsWith("/sendPhoto")).toBe(true);
+    expect(replyUrl.endsWith("/sendMessage")).toBe(true);
+    const caption = (photoInit.body as FormData).get("caption") as string;
+    const reply = JSON.parse(replyInit.body as string);
+    expect(caption.length).toBeLessThanOrEqual(1024);
+    expect(reply.text.length).toBeLessThanOrEqual(4096);
+    expect(caption + reply.text).toBe(text);
+    expect(reply.reply_parameters).toEqual({
+      message_id: 4711,
+      allow_sending_without_reply: true,
+    });
+    expect(reply.parse_mode).toBeUndefined();
+    expect(result).toEqual({ externalId: "4711", externalUrl: "https://t.me/mychannel/4711" });
+  });
+
+  it("stops as an unknown partial delivery when Telegram refuses the reply", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(okMessage())))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, error_code: 400, description: "reply refused" }), {
+          status: 400,
+        }),
+      );
     await expect(
       telegramPublisher.publish(
         CREDS,
         { text: "x".repeat(1025), image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
         { fetchImpl },
       ),
-    ).rejects.toBeInstanceOf(PermanentPublishError);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({
+      name: "UnknownOutcomePublishError",
+      message: expect.stringContaining(
+        "Telegram accepted the photo at https://t.me/mychannel/4711",
+      ),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send a reply when the accepted photo has no usable message ID", async () => {
+    const fetchImpl = fetchReturning({ ok: true, result: null });
+    await expect(
+      telegramPublisher.publish(
+        CREDS,
+        { text: "x".repeat(1025), image: { bytes: new Uint8Array([1]), mimeType: "image/jpeg" } },
+        { fetchImpl },
+      ),
+    ).rejects.toBeInstanceOf(UnknownOutcomePublishError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an interrupted photo delivery as an unknown outcome", async () => {

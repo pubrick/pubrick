@@ -358,6 +358,36 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(imageCaller.call).toHaveBeenCalledTimes(1);
     });
 
+    it("keeps an opt-in Telegram cover when the reviewed adaptation needs a photo reply", async () => {
+      const seeded = await seed({ generateCover: true, channels: 1 });
+      const png = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: "#e66142" },
+      })
+        .png()
+        .toBuffer();
+      const imageCaller = {
+        call: vi.fn(async () => ({
+          bytes: png,
+          mimeType: "image/png",
+          outcome: "completed" as const,
+          responseMs: 10,
+        })),
+      };
+      const model = scriptedModel({ adapter: () => ({ body: "x".repeat(1025) }) });
+      await serviceFor(model, new Repository(), imageCaller).handle({
+        id: "cover-long-telegram",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const [item] = await itemsOf(seeded.orgId);
+      expect(item?.coverMediaId).toBeTruthy();
+      expect(imageCaller.call).toHaveBeenCalledTimes(1);
+      const adaptations = await db
+        .select({ body: schema.adaptations.body })
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.contentItemId, item?.id as string));
+      expect(adaptations[0]?.body).toHaveLength(1025);
+    });
+
     it("keeps the text draft when the image outcome and cost are unknown", async () => {
       const seeded = await seed({ generateCover: true });
       const imageCaller = {

@@ -105,7 +105,8 @@ export const PUBLISH_HEARTBEAT_WINDOW_MS = PUBLISH_QUEUE_OPTIONS.heartbeatSecond
  */
 export const PUBLISH_STOP_TIMEOUT_MS =
   Math.max(
-    TELEGRAM_REQUEST_TIMEOUT_MS,
+    // A covered Telegram post may send a photo and then one text reply.
+    TELEGRAM_REQUEST_TIMEOUT_MS * 2,
     VK_REQUEST_TIMEOUT_MS,
     MAX_REQUEST_TIMEOUT_MS,
     // Bluesky: session, mention resolution, optional cover upload, createRecord.

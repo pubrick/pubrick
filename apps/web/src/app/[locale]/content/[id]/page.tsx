@@ -16,6 +16,7 @@ import {
   type RefineProposal,
   type RefineVerb,
   stripHashtagSuffix,
+  telegramPhotoParts,
   withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
@@ -1274,9 +1275,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function previewLimit(channelId: string): number {
     const ch = channels.find((c) => c.id === channelId);
-    return ch?.platform === "telegram" && (item?.coverMediaId || item?.videoMediaId)
-      ? 1024
-      : overrideLimit(channelId);
+    return ch?.platform === "telegram" && item?.videoMediaId ? 1024 : overrideLimit(channelId);
   }
 
   function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
@@ -1296,6 +1295,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       previewText !== (adaptation.body ?? currentItem.body) ||
       (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const photoParts = telegramCover ? telegramPhotoParts(previewText) : null;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
       currentItem.videoMediaId !== null;
@@ -1338,10 +1338,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           />
         )}
         {/* Publishers send literal plain text, without parse_mode or Markdown rendering. */}
-        <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        {photoParts ? (
+          <>
+            <p className="mb-1 text-xs font-medium text-fg-secondary">
+              {t("reviewPreviewPhotoCaption")}
+            </p>
+            <p className="whitespace-pre-wrap break-words text-sm text-fg">{photoParts.caption}</p>
+            {photoParts.followup !== null && (
+              <>
+                <p className="mb-1 mt-3 text-xs font-medium text-fg-secondary">
+                  {t("reviewPreviewPhotoReply")}
+                </p>
+                <p className="whitespace-pre-wrap break-words text-sm text-fg">
+                  {photoParts.followup}
+                </p>
+              </>
+            )}
+          </>
+        ) : (
+          <p className="whitespace-pre-wrap break-words text-sm text-fg">{previewText}</p>
+        )}
         {previewText.length > limit && (
           <p role="alert" className="mt-3 text-sm text-danger">
-            {telegramCover || (channel?.platform === "telegram" && supportedVideo)
+            {channel?.platform === "telegram" && supportedVideo
               ? t("reviewPreviewCaptionTooLong", { limit })
               : t("reviewPreviewTooLong", { limit })}
           </p>

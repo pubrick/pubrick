@@ -345,7 +345,7 @@ export class MediaRepository {
         if (asset?.kind !== "image")
           throw notFound("media_not_found", "Image not found in this brand");
         const targets = await tx
-          .select({ platform: schema.channels.platform, body: schema.adaptations.body })
+          .select({ platform: schema.channels.platform })
           .from(schema.adaptations)
           .innerJoin(schema.channels, eq(schema.channels.id, schema.adaptations.channelId))
           .where(
@@ -363,18 +363,6 @@ export class MediaRepository {
           throw conflict(
             "content_media_too_large_for_bluesky",
             "Bluesky covers must be 2 MB or smaller; choose a smaller image",
-          );
-        }
-        if (
-          targets.some(
-            (target) =>
-              target.platform === "telegram" &&
-              (target.body ?? item.body).length > TELEGRAM_CAPTION_LIMIT,
-          )
-        ) {
-          throw conflict(
-            "content_media_caption_too_long",
-            "Telegram photo captions must be 1024 characters or fewer",
           );
         }
       }
