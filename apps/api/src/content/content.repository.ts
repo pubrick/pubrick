@@ -749,7 +749,7 @@ const ADAPTATION_COLUMNS = {
    *
    * Scoped to `published` and deliberately NOT widened to `unknown` receipts.
    * A generic unknown has no confirmed link; a partial Telegram receipt may
-   * have a confirmed photo link, which `partialTelegram` exposes separately.
+   * have a confirmed first-message link, which `partialTelegram` exposes separately.
    *
    * The `order by`/`limit 1` are shape, not choice, and a mutation of either is
    * an equivalent one: `publications_one_published_per_adaptation` is a unique
@@ -823,17 +823,19 @@ const ADAPTATION_COLUMNS = {
       else adaptations.status
     end
   )`,
-  /** The last unresolved Telegram cover receipt, never reconstructed from log prose. */
+  /** The last unresolved Telegram multipart receipt, never reconstructed from log prose. */
   partialTelegram: sql<{
+    primaryKind: "photo" | "message" | null;
     photoId: string | null;
     photoUrl: string | null;
     followupText: string;
-    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown" | "confirmed";
   } | null>`(
     select case
       when adaptations.status = 'failed' and p.status = 'unknown'
         and p.partial_followup_text is not null
       then json_build_object(
+        'primaryKind', p.partial_primary_kind,
         'photoId', p.partial_photo_id,
         'photoUrl', p.partial_photo_url,
         'followupText', p.partial_followup_text,
@@ -5722,7 +5724,7 @@ export class ContentRepository {
         if (partialResolution !== (delivered ? "completed" : "removed")) {
           throw conflict(
             "delivery_outcome_unknown",
-            "Confirm the full Telegram reply was posted, or that the partial photo was removed",
+            "Confirm the full Telegram post was delivered, or that every accepted part was removed",
           );
         }
       } else if (partialResolution !== undefined) {
@@ -5757,8 +5759,8 @@ export class ContentRepository {
         adaptationId,
         channelId: current.channelId,
         status: delivered ? "published" : "failed",
-        // A partial Telegram receipt already has the platform-confirmed photo
-        // id and URL. The person attests completion of its tail, not its photo.
+        // A partial Telegram receipt already has the platform-confirmed first
+        // message id and URL. The person attests completion of the rest.
         // Generic unknown outcomes still have no id or link.
         externalId: delivered ? (current.partialTelegram?.photoId ?? null) : null,
         externalUrl: delivered ? (current.partialTelegram?.photoUrl ?? null) : null,

@@ -86,10 +86,11 @@ type Adaptation = {
    */
   deliveryOutcome: DeliveryOutcome;
   partialTelegram?: {
+    primaryKind?: "photo" | "message" | null;
     photoId: string | null;
     photoUrl: string | null;
     followupText: string;
-    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+    followupOutcome: "pending" | "not_sent" | "rejected" | "unknown" | "confirmed";
   } | null;
   origin: ContentOrigin;
   scheduledAt: string | null;
@@ -2614,14 +2615,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               It NAMES the channel, and that is the whole of what this screen
               can say about where the post went for a generic unknown: its
               answer never returned with a link. A partial Telegram receipt has
-              its accepted photo link and frozen reply in the separate branch.
+              its accepted first-message link and frozen suffix in the separate branch.
             */}
             {(a.deliveryOutcome === "unknown" || a.deliveryOutcome === "partial") && (
               <>
                 {a.partialTelegram ? (
                   <div className="space-y-3">
                     <p role="alert" className="text-sm text-[var(--status-review-fg)]">
-                      {t("partialTelegramWarning", { channel: channelLabel(a.channelId) })}
+                      {t(
+                        a.partialTelegram.primaryKind === "message"
+                          ? "partialTelegramWarningText"
+                          : "partialTelegramWarning",
+                        { channel: channelLabel(a.channelId) },
+                      )}
                     </p>
                     {a.partialTelegram.photoUrl && isLinkableUrl(a.partialTelegram.photoUrl) && (
                       <a
@@ -2630,41 +2636,70 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                         rel="noreferrer"
                         className="text-sm text-accent hover:underline"
                       >
-                        {t("partialTelegramViewPhoto")}
+                        {t(
+                          a.partialTelegram.primaryKind === "message"
+                            ? "partialTelegramViewMessage"
+                            : "partialTelegramViewPhoto",
+                        )}
                       </a>
                     )}
                     {!a.partialTelegram.photoUrl && a.partialTelegram.photoId && (
                       <p className="text-sm text-fg-tertiary">
-                        {t("partialTelegramPhotoId", { id: a.partialTelegram.photoId })}
+                        {t(
+                          a.partialTelegram.primaryKind === "message"
+                            ? "partialTelegramMessageId"
+                            : "partialTelegramPhotoId",
+                          { id: a.partialTelegram.photoId },
+                        )}
                       </p>
                     )}
-                    <div>
-                      <p className="text-sm font-medium text-fg">
-                        {t("partialTelegramMissingText")}
-                      </p>
-                      <pre className="whitespace-pre-wrap break-words rounded-md border border-border p-3 text-sm text-fg">
-                        {a.partialTelegram.followupText}
-                      </pre>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() =>
-                          copyManualField(
-                            `${a.id}:partialTelegram`,
-                            a.partialTelegram?.followupText ?? "",
-                          )
-                        }
-                      >
-                        {copiedManualField === `${a.id}:partialTelegram`
-                          ? t("copied")
-                          : t("partialTelegramCopyText")}
-                      </Button>
-                    </div>
+                    {a.partialTelegram.followupText && (
+                      <div>
+                        <p className="text-sm font-medium text-fg">
+                          {t(
+                            a.partialTelegram.primaryKind === "message"
+                              ? "partialTelegramRemainingText"
+                              : "partialTelegramMissingText",
+                          )}
+                        </p>
+                        <pre className="whitespace-pre-wrap break-words rounded-md border border-border p-3 text-sm text-fg">
+                          {a.partialTelegram.followupText}
+                        </pre>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() =>
+                            copyManualField(
+                              `${a.id}:partialTelegram`,
+                              a.partialTelegram?.followupText ?? "",
+                            )
+                          }
+                        >
+                          {copiedManualField === `${a.id}:partialTelegram`
+                            ? t("copied")
+                            : t(
+                                a.partialTelegram.primaryKind === "message"
+                                  ? "partialTelegramCopyRemainingText"
+                                  : "partialTelegramCopyText",
+                              )}
+                        </Button>
+                      </div>
+                    )}
                     <p className="text-sm text-fg-tertiary">
-                      {a.partialTelegram.followupOutcome === "unknown" ||
-                      a.partialTelegram.followupOutcome === "pending"
-                        ? t("partialTelegramVerifyReply")
-                        : t("partialTelegramReplyNotSent")}
+                      {a.partialTelegram.followupOutcome === "confirmed"
+                        ? t("partialTelegramAllPartsAccepted")
+                        : a.partialTelegram.followupOutcome === "unknown" ||
+                            a.partialTelegram.followupOutcome === "pending"
+                          ? t(
+                              a.partialTelegram.primaryKind === "message"
+                                ? "partialTelegramVerifyNextPart"
+                                : "partialTelegramVerifyReply",
+                            )
+                          : t(
+                              a.partialTelegram.primaryKind === "message"
+                                ? "partialTelegramNextPartNotSent"
+                                : "partialTelegramReplyNotSent",
+                            )}
                     </p>
                   </div>
                 ) : (
@@ -2689,7 +2724,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 */}
                 <p className="text-sm text-fg-tertiary">
                   {a.partialTelegram
-                    ? t("partialTelegramRecoveryHint")
+                    ? t(
+                        a.partialTelegram.primaryKind === "message"
+                          ? "partialTelegramRecoveryHintText"
+                          : "partialTelegramRecoveryHint",
+                      )
                     : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
                 </p>
                 <div className="flex flex-wrap gap-2">

@@ -8036,15 +8036,23 @@ describe.skipIf(!url)("content e2e", () => {
       await pool.end();
     }
 
-    async function seedPartialTelegram(adaptationId: string) {
+    async function seedPartialTelegram(
+      adaptationId: string,
+      options: {
+        primaryKind?: "photo" | "message";
+        remaining?: string;
+        outcome?: "rejected" | "confirmed";
+      } = {},
+    ) {
       await seedDelivery(adaptationId, "unknown");
       const { createDb } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       await db.execute(
         `UPDATE publications SET partial_photo_id = '4711',
            partial_photo_url = 'https://t.me/mychannel/4711',
-           partial_followup_text = 'Frozen missing reply',
-           partial_followup_outcome = 'rejected'
+           partial_primary_kind = ${options.primaryKind ? `'${options.primaryKind}'` : "NULL"},
+           partial_followup_text = '${options.remaining ?? "Frozen missing reply"}',
+           partial_followup_outcome = '${options.outcome ?? "rejected"}'
          WHERE adaptation_id = '${adaptationId}' AND status = 'unknown'`,
       );
       await pool.end();
@@ -8138,6 +8146,7 @@ describe.skipIf(!url)("content e2e", () => {
 
         const detail = await agent.get(`/api/content/${itemId}`).expect(200);
         expect(detail.body.adaptations[0].partialTelegram).toEqual({
+          primaryKind: null,
           photoId: "4711",
           photoUrl: "https://t.me/mychannel/4711",
           followupText: "Frozen missing reply",
@@ -8201,6 +8210,36 @@ describe.skipIf(!url)("content e2e", () => {
           await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
           expect(await publishJobCount(adaptationId)).toBe(1);
         }
+      },
+    );
+
+    it.each([
+      ["message", "Frozen remaining parts", "rejected"],
+      ["photo", "", "confirmed"],
+    ] as const)(
+      "exposes a %s multipart checkpoint with a %s suffix and settles it",
+      async (primaryKind, remaining, outcome) => {
+        const agent = await orgAgent();
+        const { itemId, adaptationId } = await oneChannel(agent);
+        await seedPartialTelegram(adaptationId, { primaryKind, remaining, outcome });
+
+        const detail = await agent.get(`/api/content/${itemId}`).expect(200);
+        expect(detail.body.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(detail.body.adaptations[0].partialTelegram).toEqual({
+          primaryKind,
+          photoId: "4711",
+          photoUrl: "https://t.me/mychannel/4711",
+          followupText: remaining,
+          followupOutcome: outcome,
+        });
+        expect(contentDetailDtoSchema.safeParse(detail.body).success).toBe(true);
+
+        const settled = await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+          .send({ delivered: true, partialResolution: "completed" })
+          .expect(200);
+        expect(settled.body.adaptations[0].partialTelegram).toBeNull();
+        expect(settled.body.adaptations[0].externalUrl).toBe("https://t.me/mychannel/4711");
       },
     );
 
