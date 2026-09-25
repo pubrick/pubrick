@@ -348,6 +348,9 @@ export class SourcesRepository {
           eq(schema.newsItems.orgId, orgId),
           eq(schema.newsItems.brandId, query.brandId),
           ...(query.status === "all" ? [] : [eq(schema.newsItems.relevanceStatus, query.status)]),
+          ...(query.minScorePercent === undefined
+            ? []
+            : [gte(schema.newsItems.relevanceScore, query.minScorePercent / 100)]),
           ...(query.sourceId ? [eq(schema.newsItems.sourceId, query.sourceId)] : []),
           ...(query.search
             ? [

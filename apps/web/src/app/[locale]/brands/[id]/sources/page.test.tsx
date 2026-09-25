@@ -618,6 +618,7 @@ describe("watched sources page", () => {
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.selectOptions(screen.getByLabelText(en.Sources.minScoreLabel), "75");
     await user.type(screen.getByLabelText(en.Sources.searchLabel), "Сводка 100%_");
     await waitFor(() =>
       expect(
@@ -637,6 +638,7 @@ describe("watched sources page", () => {
       brandId: BRAND_ID,
       sort: "recent",
       status: "all",
+      minScorePercent: "75",
       sourceId: SOURCE_ID,
       search: "Сводка 100%_",
     });
@@ -644,6 +646,39 @@ describe("watched sources page", () => {
     await user.click(screen.getByRole("button", { name: en.Sources.showAll }));
     expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
     expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("");
+    await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
+  });
+
+  it("shows all stories by default and treats a zero threshold as scored only", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const threshold = screen.getByLabelText(en.Sources.minScoreLabel);
+    expect(threshold).toHaveValue("");
+    expect(screen.getByRole("option", { name: en.Sources.minScoreZero })).toHaveValue("0");
+    expect(screen.getByText(en.Sources.minScoreHint)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.selectOptions(threshold, "0");
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.includes("/api/sources/items?") &&
+            new URL(call.url, "http://localhost").searchParams.get("minScorePercent") === "0",
+        ),
+      ).toBe(true),
+    );
+    const filtered = calls.find(
+      (call) => new URL(call.url, "http://localhost").searchParams.get("minScorePercent") === "0",
+    );
+    expect(
+      newsItemListQuerySchema.parse(
+        Object.fromEntries(new URL(filtered?.url ?? "", "http://localhost").searchParams),
+      ).minScorePercent,
+    ).toBe(0);
+    expect(screen.getByText(en.Sources.emptyFiltered)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Sources.clearMinScore }));
+    expect(threshold).toHaveValue("");
     await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
   });
 
@@ -711,6 +746,7 @@ describe("watched sources page", () => {
     const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText(en.Sources.sourceFilterLabel), SOURCE_ID);
+    await user.selectOptions(screen.getByLabelText(en.Sources.minScoreLabel), "75");
     await user.type(screen.getByLabelText(en.Sources.searchLabel), "first");
     await waitFor(() => expect(calls.some((call) => call.url.includes("search=first"))).toBe(true));
     await act(async () => {
@@ -719,6 +755,7 @@ describe("watched sources page", () => {
     await waitFor(() => {
       expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
       expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
+      expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("");
     });
     await waitFor(() =>
       expect(
@@ -728,7 +765,8 @@ describe("watched sources page", () => {
           return (
             query.get("brandId") === OTHER_BRAND_ID &&
             !query.has("sourceId") &&
-            !query.has("search")
+            !query.has("search") &&
+            !query.has("minScorePercent")
           );
         }),
       ).toBe(true),

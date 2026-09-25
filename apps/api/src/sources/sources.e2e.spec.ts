@@ -700,6 +700,152 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.get(`${endpoint}&search=${"x".repeat(201)}`).expect(400);
   });
 
+  it("applies the original AI score threshold before the news limit and preserves unfiltered stories", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: outsider } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Threshold" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other" }).expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Main", url: "https://example.com/main.xml" })
+      .expect(201);
+    const otherSource = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Another", url: "https://example.com/another.xml" })
+      .expect(201);
+    const foreignSource = await owner
+      .post("/api/sources")
+      .send({
+        brandId: otherBrand.body.id,
+        name: "Foreign",
+        url: "https://example.com/foreign.xml",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    const scored = {
+      relevanceStatus: "scored" as const,
+      relevanceReason: "Local test verdict",
+      relevanceUrgency: "timely" as const,
+      relevanceScoredAt: new Date("2026-09-24T00:00:00Z"),
+    };
+    await db.insert(schema.newsItems).values(
+      Array.from({ length: 101 }, (_, index) => ({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.body.id,
+        title: `Match recent ${index}`,
+        url: `https://example.com/low-${index}`,
+        publishedAt: new Date("2026-09-24T00:00:00Z"),
+        ...scored,
+        relevanceScore: 0.2,
+      })),
+    );
+    const [high, boosted, zero, pending, failed] = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Match high",
+          url: "https://example.com/high",
+          publishedAt: new Date("2026-09-01T00:00:00Z"),
+          ...scored,
+          relevanceScore: 0.8,
+          relevanceFeedbackDelta: -0.2,
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Match boosted",
+          url: "https://example.com/boosted",
+          ...scored,
+          relevanceScore: 0.7,
+          relevanceFeedbackDelta: 0.2,
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Zero score",
+          url: "https://example.com/zero",
+          ...scored,
+          relevanceScore: 0,
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Pending score",
+          url: "https://example.com/pending-score",
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Failed score",
+          url: "https://example.com/failed-score",
+          relevanceStatus: "failed",
+          relevanceErrorCode: "model_failed",
+        },
+      ])
+      .returning({ id: schema.newsItems.id });
+    if (!high || !boosted || !zero || !pending || !failed)
+      throw new Error("Threshold fixture failed");
+    await db.insert(schema.newsItems).values([
+      {
+        orgId,
+        brandId: brand.body.id,
+        sourceId: otherSource.body.id,
+        title: "Match other source",
+        url: "https://example.com/other-source",
+        ...scored,
+        relevanceScore: 0.99,
+      },
+      {
+        orgId,
+        brandId: otherBrand.body.id,
+        sourceId: foreignSource.body.id,
+        title: "Match other brand",
+        url: "https://example.com/other-brand",
+        ...scored,
+        relevanceScore: 0.99,
+      },
+    ]);
+    const endpoint = `/api/sources/items?brandId=${brand.body.id}&sourceId=${source.body.id}`;
+    const filtered = await owner
+      .get(`${endpoint}&search=Match&sort=recent&minScorePercent=75`)
+      .expect(200);
+    expect(filtered.body.map((item: { id: string }) => item.id)).toEqual([high.id]);
+    expect(filtered.body[0]).toMatchObject({ relevanceScore: 0.8, rankScore: 0.6 });
+    expect(
+      (await owner.get(`${endpoint}&search=Zero&minScorePercent=0`).expect(200)).body.map(
+        (item: { id: string }) => item.id,
+      ),
+    ).toEqual([zero.id]);
+    expect(
+      (await owner.get(`${endpoint}&search=Pending`).expect(200)).body.map(
+        (item: { id: string }) => item.id,
+      ),
+    ).toEqual([pending.id]);
+    expect(
+      (await owner.get(`${endpoint}&search=Failed`).expect(200)).body.map(
+        (item: { id: string }) => item.id,
+      ),
+    ).toEqual([failed.id]);
+    expect(
+      (await owner.get(`${endpoint}&search=Pending&minScorePercent=0`).expect(200)).body,
+    ).toEqual([]);
+    expect(
+      (await owner.get(`${endpoint}&status=unscored&minScorePercent=0`).expect(200)).body,
+    ).toEqual([]);
+    await outsider.get(`${endpoint}&minScorePercent=75`).expect(404);
+    for (const invalid of ["-1", "101", "0.5", "abc", " "]) {
+      await owner.get(`${endpoint}&minScorePercent=${encodeURIComponent(invalid)}`).expect(400);
+    }
+  });
+
   it("reranks scored news in bounded pages from local feedback without model usage", async () => {
     const { agent: owner, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();

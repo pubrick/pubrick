@@ -185,6 +185,13 @@ export const newsItemListQuerySchema = z.object({
   status: z.enum(["all", "unscored", "scored", "failed"]).default("all"),
   sourceId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(200).optional(),
+  minScorePercent: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" && /^(?:100|[1-9]?\d)$/.test(value) ? Number(value) : value,
+      z.number().int().min(0).max(100),
+    )
+    .optional(),
 });
 export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;
 

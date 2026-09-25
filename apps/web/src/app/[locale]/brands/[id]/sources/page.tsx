@@ -38,6 +38,7 @@ type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
 type Run = { id: string };
 const FORM_ID = "source-add-form";
+const SCORE_PERCENT_OPTIONS = Array.from({ length: 21 }, (_, index) => index * 5);
 
 export default function SourcesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -50,6 +51,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
+  const [minScorePercent, setMinScorePercent] = useState<number | null>(null);
   const [sourceFilter, setSourceFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -116,6 +118,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setSearch("");
     setSort("recent");
     setStatus("all");
+    setMinScorePercent(null);
     setEditingSource(null);
     setEditBusy(false);
     setEditError(null);
@@ -128,6 +131,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         brandId: id,
         sort,
         status,
+        ...(minScorePercent !== null ? { minScorePercent } : {}),
         ...(sourceFilter ? { sourceId: sourceFilter } : {}),
         ...(search ? { search } : {}),
       });
@@ -169,7 +173,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           if (inFlight.current?.version === version) inFlight.current = null;
         });
     },
-    [id, sort, status, sourceFilter, searchInput, search, describeError],
+    [id, sort, status, minScorePercent, sourceFilter, searchInput, search, describeError],
   );
 
   useEffect(() => {
@@ -515,6 +519,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  const hasNewsFilters =
+    status !== "all" || Boolean(sourceFilter || searchInput) || minScorePercent !== null;
+
   return (
     <AppShell
       title={brand ? t("title", { brand: brand.name }) : <Skeleton lines={1} className="w-40" />}
@@ -740,10 +747,39 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <option value="scored">{t("statusScored")}</option>
           <option value="failed">{t("statusFailed")}</option>
         </Select>
+        <Select
+          label={t("minScoreLabel")}
+          value={minScorePercent === null ? "" : String(minScorePercent)}
+          onChange={(event) => {
+            setItems(null);
+            setMinScorePercent(event.target.value === "" ? null : Number(event.target.value));
+          }}
+        >
+          <option value="">{t("minScoreAny")}</option>
+          {SCORE_PERCENT_OPTIONS.map((score) => (
+            <option key={score} value={score}>
+              {t(score === 0 ? "minScoreZero" : "minScoreAtLeast", { score })}
+            </option>
+          ))}
+        </Select>
+        {minScorePercent !== null && (
+          <Button
+            variant="ghost"
+            className="self-end"
+            aria-label={t("clearMinScore")}
+            onClick={() => {
+              setItems(null);
+              setMinScorePercent(null);
+            }}
+          >
+            {t("clear")}
+          </Button>
+        )}
         <Button variant="secondary" onClick={rerankNews} disabled={rerankBusy} className="self-end">
           {t(rerankBusy ? "reranking" : rerankCursor ? "rerankContinue" : "rerank")}
         </Button>
       </div>
+      <p className="mb-3 text-sm text-fg-secondary">{t("minScoreHint")}</p>
       <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
       <RecheckPanel brandId={id} onFinished={load} />
       <Card padded={false}>
@@ -753,17 +789,16 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </div>
         ) : items.length === 0 ? (
           <EmptyState
-            title={t(
-              status === "all" && !sourceFilter && !searchInput ? "emptyNews" : "emptyFiltered",
-            )}
+            title={t(hasNewsFilters ? "emptyFiltered" : "emptyNews")}
             action={
-              status === "all" && !sourceFilter && !searchInput ? (
+              !hasNewsFilters ? (
                 <span className="text-sm text-fg-secondary">{t("emptyNewsHint")}</span>
               ) : (
                 <Button
                   variant="secondary"
                   onClick={() => {
                     setStatus("all");
+                    setMinScorePercent(null);
                     setSourceFilter("");
                     setSearchInput("");
                   }}
