@@ -1449,7 +1449,8 @@
     "quietEnd": "Fim do horário de silêncio",
     "quietHint": "O período pode atravessar a meia-noite. Use o mesmo horário no início e no fim para desativá-lo.",
     "scanTitle": "Verificações agendadas",
-    "scanHint": "Cada checagem registra a decisão do agendador. Um rascunho enviado ainda está sendo gerado e pode falhar. Apenas marcas ativadas entram no agendamento. O histórico é mantido por 14 dias.",
+    "scanHint": "Cada checagem registra a decisão do agendador naquele momento. Um envio indica que a geração foi solicitada; abra a execução para ver o resultado. Apenas marcas ativadas entram no agendamento. O histórico é mantido por 14 dias.",
+    "scanDispatchDecision": "Enviado para gerar rascunho",
     "scanFilter": "Decisão",
     "scanFilterStatus": {
       "all": "Todas",
@@ -1463,7 +1464,7 @@
     "scanError": "Não foi possível carregar as verificações. Tente novamente.",
     "scanStatus": {
       "skipped": "Ignorada",
-      "dispatched": "Rascunho na fila",
+      "dispatched": "Enviado para geração",
       "failed": "Verificação falhou"
     },
     "history": "Execuções automáticas",

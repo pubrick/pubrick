@@ -1449,7 +1449,8 @@
     "quietEnd": "Fin del horario de descanso",
     "quietHint": "El período puede cruzar la medianoche. Usa la misma hora de inicio y fin para desactivarlo.",
     "scanTitle": "Comprobaciones programadas",
-    "scanHint": "Cada comprobación registra la decisión del planificador. Un borrador enviado sigue generándose y puede fallar. Solo se comprueban las marcas activadas. El historial se conserva 14 días.",
+    "scanHint": "Cada comprobación registra la decisión del planificador en ese momento. Un envío indica que se solicitó la generación; abre la ejecución para ver el resultado. Solo se comprueban las marcas activadas. El historial se conserva 14 días.",
+    "scanDispatchDecision": "Enviado para generar borrador",
     "scanFilter": "Decisión",
     "scanFilterStatus": {
       "all": "Todas",
@@ -1463,7 +1464,7 @@
     "scanError": "No se pudieron cargar las comprobaciones. Inténtalo de nuevo.",
     "scanStatus": {
       "skipped": "Omitida",
-      "dispatched": "Borrador en cola",
+      "dispatched": "Enviado a generación",
       "failed": "Comprobación fallida"
     },
     "history": "Trabajos automáticos",

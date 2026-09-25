@@ -1664,7 +1664,7 @@
         },
         "autopilot_scan_events_terminal_check": {
           "name": "autopilot_scan_events_terminal_check",
-          "value": "(\"autopilot_scan_events\".\"status\" = 'dispatched' AND \"autopilot_scan_events\".\"decision\" = 'dispatched' AND \"autopilot_scan_events\".\"run_id\" IS NOT NULL) OR (\"autopilot_scan_events\".\"status\" = 'failed' AND \"autopilot_scan_events\".\"decision\" = 'worker_failed' AND \"autopilot_scan_events\".\"run_id\" IS NULL) OR (\"autopilot_scan_events\".\"status\" = 'skipped' AND \"autopilot_scan_events\".\"decision\" NOT IN ('dispatched', 'worker_failed') AND \"autopilot_scan_events\".\"run_id\" IS NULL)"
+          "value": "(\"autopilot_scan_events\".\"status\" = 'dispatched' AND \"autopilot_scan_events\".\"decision\" = 'dispatched') OR (\"autopilot_scan_events\".\"status\" = 'failed' AND \"autopilot_scan_events\".\"decision\" = 'worker_failed' AND \"autopilot_scan_events\".\"run_id\" IS NULL) OR (\"autopilot_scan_events\".\"status\" = 'skipped' AND \"autopilot_scan_events\".\"decision\" NOT IN ('dispatched', 'worker_failed') AND \"autopilot_scan_events\".\"run_id\" IS NULL)"
         }
       },
       "isRLSEnabled": false

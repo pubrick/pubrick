@@ -25,14 +25,17 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const expanded = useRef(false);
+  const requestGeneration = useRef(0);
 
   useEffect(() => {
     let active = true;
+    requestGeneration.current += 1;
     const url = `/api/brands/${brandId}/autopilot/scans${filter === "all" ? "" : `?status=${filter}`}`;
     expanded.current = false;
     setRows([]);
     setCursor(null);
     setLoading(true);
+    setLoadingMore(false);
     const load = async () => {
       try {
         const page = await api<AutopilotScanPage>(url);
@@ -58,6 +61,7 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
 
   async function loadMore() {
     if (!cursor || loadingMore) return;
+    const generation = requestGeneration.current;
     // Keep the older page visible until the filter changes; polling the first
     // page would otherwise discard the reader's position every 30 seconds.
     expanded.current = true;
@@ -66,6 +70,7 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
       const params = new URLSearchParams({ cursor });
       if (filter !== "all") params.set("status", filter);
       const page = await api<AutopilotScanPage>(`/api/brands/${brandId}/autopilot/scans?${params}`);
+      if (generation !== requestGeneration.current) return;
       setRows((current) => [
         ...current,
         ...page.rows.filter((row) => !current.some((old) => old.id === row.id)),
@@ -73,9 +78,9 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
       setCursor(page.nextCursor);
       setError(null);
     } catch (err) {
-      setError(errorMessage(err, t("scanError"), te));
+      if (generation === requestGeneration.current) setError(errorMessage(err, t("scanError"), te));
     } finally {
-      setLoadingMore(false);
+      if (generation === requestGeneration.current) setLoadingMore(false);
     }
   }
 
@@ -88,7 +93,10 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
         <Select
           label={t("scanFilter")}
           value={filter}
-          onChange={(event) => setFilter(event.target.value as Filter)}
+          onChange={(event) => {
+            requestGeneration.current += 1;
+            setFilter(event.target.value as Filter);
+          }}
         >
           {(["all", "skipped", "dispatched", "failed"] as const).map((status) => (
             <option key={status} value={status}>
@@ -118,8 +126,12 @@ export function AutopilotScheduledChecks({ brandId }: { brandId: string }) {
                     href={`/${locale}/content/runs/${row.runId}`}
                     className="text-accent underline"
                   >
-                    {t(`triggerDecision.${row.decision}`)}
+                    {row.decision === "dispatched"
+                      ? t("scanDispatchDecision")
+                      : t(`triggerDecision.${row.decision}`)}
                   </Link>
+                ) : row.decision === "dispatched" ? (
+                  t("scanDispatchDecision")
                 ) : (
                   t(`triggerDecision.${row.decision}`)
                 )

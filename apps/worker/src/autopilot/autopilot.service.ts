@@ -20,6 +20,23 @@ const RETENTION_BATCH = 500;
 export type AutopilotDecision = (typeof AUTOPILOT_DECISIONS)[number];
 type ScanContext = { jobId: string; startedAt: Date };
 
+/** A brand or organization deleted after discovery cannot receive an event. */
+function scanScopeWasDeleted(error: unknown): boolean {
+  let cause: unknown = error;
+  for (let depth = 0; depth < 3 && cause && typeof cause === "object"; depth++) {
+    if (
+      "code" in cause &&
+      cause.code === "23503" &&
+      "constraint" in cause &&
+      (cause.constraint === "autopilot_scan_events_brand_id_brands_id_fk" ||
+        cause.constraint === "autopilot_scan_events_org_id_organization_id_fk")
+    )
+      return true;
+    cause = "cause" in cause ? cause.cause : undefined;
+  }
+  return false;
+}
+
 @Injectable()
 export class AutopilotService {
   private readonly logger = new Logger(AutopilotService.name);
@@ -96,20 +113,25 @@ export class AutopilotService {
         } catch {
           // Admission rolled back, including any run, dispatch and queue job.
           // Store only a closed failure code; exception text may hold secrets.
-          await db
-            .insert(schema.autopilotScanEvents)
-            .values({
-              orgId: config.orgId,
-              brandId: config.brandId,
-              scanJobId,
-              status: "failed",
-              decision: "worker_failed",
-              startedAt: scan.startedAt,
-              finishedAt: sql`clock_timestamp()`,
-            })
-            .onConflictDoNothing({
-              target: [schema.autopilotScanEvents.scanJobId, schema.autopilotScanEvents.brandId],
-            });
+          try {
+            await db
+              .insert(schema.autopilotScanEvents)
+              .values({
+                orgId: config.orgId,
+                brandId: config.brandId,
+                scanJobId,
+                status: "failed",
+                decision: "worker_failed",
+                startedAt: scan.startedAt,
+                finishedAt: sql`clock_timestamp()`,
+              })
+              .onConflictDoNothing({
+                target: [schema.autopilotScanEvents.scanJobId, schema.autopilotScanEvents.brandId],
+              });
+          } catch (error) {
+            if (scanScopeWasDeleted(error)) continue;
+            throw error;
+          }
           this.logger.error(`Autopilot scan failed for brand ${config.brandId}`);
         }
       }

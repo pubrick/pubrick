@@ -150,7 +150,7 @@ export const autopilotScanEvents = pgTable(
     enumCheck("autopilot_scan_events_decision_check", t.decision, AUTOPILOT_DECISIONS),
     check(
       "autopilot_scan_events_terminal_check",
-      sql`(${t.status} = 'dispatched' AND ${t.decision} = 'dispatched' AND ${t.runId} IS NOT NULL) OR (${t.status} = 'failed' AND ${t.decision} = 'worker_failed' AND ${t.runId} IS NULL) OR (${t.status} = 'skipped' AND ${t.decision} NOT IN ('dispatched', 'worker_failed') AND ${t.runId} IS NULL)`,
+      sql`(${t.status} = 'dispatched' AND ${t.decision} = 'dispatched') OR (${t.status} = 'failed' AND ${t.decision} = 'worker_failed' AND ${t.runId} IS NULL) OR (${t.status} = 'skipped' AND ${t.decision} NOT IN ('dispatched', 'worker_failed') AND ${t.runId} IS NULL)`,
     ),
   ],
 );

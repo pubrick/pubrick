@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { schema } from "@pubrick/db";
 import { eq, sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -110,6 +110,46 @@ describe.skipIf(!url)("scheduled Autopilot decisions", () => {
     expect(
       await boss.findJobs("generate", { data: { runId: rows[0]?.runId, orgId } }),
     ).toHaveLength(1);
+    await db
+      .delete(schema.pipelineRuns)
+      .where(eq(schema.pipelineRuns.id, rows[0]?.runId as string));
+    const [retained] = await db
+      .select()
+      .from(schema.autopilotScanEvents)
+      .where(eq(schema.autopilotScanEvents.id, rows[0]?.id as string));
+    expect(retained).toMatchObject({ status: "dispatched", decision: "dispatched", runId: null });
+    await db.delete(schema.brands).where(eq(schema.brands.id, brandId));
+    expect(
+      await db
+        .select()
+        .from(schema.autopilotScanEvents)
+        .where(eq(schema.autopilotScanEvents.id, rows[0]?.id as string)),
+    ).toHaveLength(0);
+  });
+
+  it("continues past a brand deleted between discovery and admission", async () => {
+    const first = await brand(false);
+    const second = await brand(false);
+    const [deletedBrand, healthyBrand] = [first, second].sort();
+    const original = service.trigger.bind(service);
+    const spy = vi.spyOn(service, "trigger").mockImplementation(async (...args) => {
+      if (args[2] === deletedBrand) {
+        await db.delete(schema.brands).where(eq(schema.brands.id, deletedBrand));
+      }
+      return original(...args);
+    });
+    const jobId = randomUUID();
+    try {
+      await service.scan(boss, jobId);
+    } finally {
+      spy.mockRestore();
+    }
+    const surviving = await db
+      .select()
+      .from(schema.autopilotScanEvents)
+      .where(eq(schema.autopilotScanEvents.scanJobId, jobId));
+    expect(surviving.some((row) => row.brandId === healthyBrand)).toBe(true);
+    expect(surviving.some((row) => row.brandId === deletedBrand)).toBe(false);
   });
 
   it("rolls back failed admission, records only a safe failure code, and continues scanning", async () => {
