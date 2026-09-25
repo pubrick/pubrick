@@ -89,11 +89,19 @@ describe.skipIf(!url)("planned calendar generation", () => {
       .where(eq(schema.calendarSlots.id, slotId));
     expect(slot?.runId).toBeTruthy();
     const rows = await db
-      .select({ orgId: schema.pipelineRuns.orgId, input: schema.pipelineRuns.input })
+      .select({
+        orgId: schema.pipelineRuns.orgId,
+        topicId: schema.pipelineRuns.topicId,
+        input: schema.pipelineRuns.input,
+      })
       .from(schema.pipelineRuns)
       .where(eq(schema.pipelineRuns.id, slot?.runId as string));
     expect(rows).toEqual([
-      { orgId, input: { kind: "brief", text: "A useful topic", channelIds: [channelId] } },
+      {
+        orgId,
+        topicId: null,
+        input: { kind: "brief", text: "A useful topic", channelIds: [channelId] },
+      },
     ]);
     const jobs = await boss.findJobs("generate", { data: { runId: slot?.runId, orgId } });
     expect(jobs).toHaveLength(1);
@@ -238,9 +246,10 @@ describe.skipIf(!url)("planned calendar generation", () => {
       .where(eq(schema.calendarSlots.id, slot?.id as string));
     expect(started?.runId).toBeTruthy();
     const [run] = await db
-      .select({ input: schema.pipelineRuns.input })
+      .select({ topicId: schema.pipelineRuns.topicId, input: schema.pipelineRuns.input })
       .from(schema.pipelineRuns)
       .where(eq(schema.pipelineRuns.id, started?.runId as string));
+    expect(run?.topicId).toBe(topic?.id);
     expect(run?.input).toEqual({
       kind: "source",
       text: null,

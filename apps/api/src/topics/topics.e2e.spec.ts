@@ -175,6 +175,18 @@ describe.skipIf(!url)("topic bank e2e", () => {
       sourceUrl: "https://example.com/market-hall",
       material: "Market hall opening\n\nThe council approved it.",
     });
+    const [linkedRun] = await db
+      .select({ topicId: schema.pipelineRuns.topicId })
+      .from(schema.pipelineRuns)
+      .where(sql`${schema.pipelineRuns.id} = ${run.body.id}`);
+    expect(linkedRun?.topicId).toBe(saved.body.id);
+    const retry = await owner.agent.post(`/api/runs/${run.body.id}/retry`).expect(201);
+    const [retriedRun] = await db
+      .select({ topicId: schema.pipelineRuns.topicId, input: schema.pipelineRuns.input })
+      .from(schema.pipelineRuns)
+      .where(sql`${schema.pipelineRuns.id} = ${retry.body.id}`);
+    expect(retriedRun).toMatchObject({ topicId: saved.body.id, input: run.body.input });
+    await db.execute(sql`update pipeline_runs set status = 'failed' where id = ${retry.body.id}`);
     await owner.agent
       .post(`/api/topics/${saved.body.id}/run?brandId=${brand.body.id}`)
       .send({ channelIds: [channel.body.id], seoKeywords: ["local market hall"] })
@@ -213,7 +225,14 @@ describe.skipIf(!url)("topic bank e2e", () => {
       .post(`/api/topics/${saved.body.id}/run?brandId=${brand.body.id}`)
       .send({ channelIds: [channel.body.id] })
       .expect(409);
+    const vetoedRetry = await owner.agent.post(`/api/runs/${run.body.id}/retry`).expect(409);
+    expect(vetoedRetry.body.code).toBe("topic_not_approved");
     await owner.agent.delete(`/api/topics/${saved.body.id}?brandId=${brand.body.id}`).expect(200);
+    const [unlinkedRun] = await db
+      .select({ topicId: schema.pipelineRuns.topicId })
+      .from(schema.pipelineRuns)
+      .where(sql`${schema.pipelineRuns.id} = ${run.body.id}`);
+    expect(unlinkedRun?.topicId).toBeNull();
     expect(
       (await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body,
     ).toEqual([]);

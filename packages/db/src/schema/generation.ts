@@ -31,6 +31,7 @@ import { brands, channels } from "./content.js";
 import { adaptations, contentItems } from "./content-items.js";
 import { enumCheck } from "./enum-check.js";
 import type { RoleTemplateRunSnapshot } from "./role-templates.js";
+import { topics } from "./topics.js";
 
 /** One BYOK provider key per org. */
 export const aiCredentials = pgTable(
@@ -75,6 +76,8 @@ export const pipelineRuns = pgTable(
     brandId: uuid("brand_id")
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
+    /** Originating approved topic, when one exists. The input remains an immutable snapshot. */
+    topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
     /**
      * Typed from `runInputSchema` (`@pubrick/shared`), not from a shape written
      * out here. A jsonb column's shape is whatever its last writer put there, so
@@ -167,6 +170,7 @@ export const pipelineRuns = pgTable(
   (t) => [
     index("pipeline_runs_org_id_idx").on(t.orgId),
     index("pipeline_runs_brand_id_idx").on(t.brandId),
+    index("pipeline_runs_topic_id_idx").on(t.topicId),
     /** Observational template cohorts scan only runs pinned at claim time. */
     index("pipeline_runs_template_cohort_idx")
       .on(t.orgId, t.brandId, t.createdAt, t.id)

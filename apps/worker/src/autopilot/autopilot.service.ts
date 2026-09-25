@@ -383,7 +383,7 @@ export class AutopilotService {
       const input: RunInput = { kind: "brief", text: brief, channelIds: config.channelIds };
       const inserted = await tx
         .insert(schema.pipelineRuns)
-        .values({ orgId, brandId, input })
+        .values({ orgId, brandId, topicId: topic.id, input })
         .returning({ id: schema.pipelineRuns.id });
       const runId = inserted[0]?.id;
       if (!runId) throw new Error("Autopilot run insert returned no id");

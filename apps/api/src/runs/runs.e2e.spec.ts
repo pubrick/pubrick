@@ -403,6 +403,27 @@ describe.skipIf(!url)("runs e2e", () => {
     expect((jobs.rows[0] as { n: number }).n).toBe(1);
   });
 
+  it("does not accept a caller-supplied topic lineage on generic runs", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const response = await agent
+      .post("/api/runs")
+      .send({
+        brandId,
+        channelIds: [channelId],
+        brief: "A manual brief",
+        topicId: randomUUID(),
+      })
+      .expect(201);
+    const { createDb } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    const rows = await db.execute(
+      sql`select topic_id from pipeline_runs where id = ${response.body.id}`,
+    );
+    await pool.end();
+    expect(rows.rows[0]).toMatchObject({ topic_id: null });
+  });
+
   it("requires a Google key for an opted-in cover and preserves the choice on retry", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);

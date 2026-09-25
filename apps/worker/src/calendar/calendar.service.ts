@@ -256,6 +256,7 @@ export class CalendarService {
         .values({
           orgId,
           brandId: slot.brandId,
+          topicId: slot.topicId,
           input,
         })
         .returning({ id: schema.pipelineRuns.id });
