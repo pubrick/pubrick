@@ -1,5 +1,5 @@
 {
-  "id": "21bb8b89-98d6-42fa-a1f7-576dcd2fdf7b",
+  "id": "dee05abd-9deb-4f0e-9862-56b12dfa942e",
   "prevId": "ae428fa7-b606-4cac-b35e-743041913be5",
   "version": "7",
   "dialect": "postgresql",
@@ -9579,6 +9579,33 @@
           "method": "btree",
           "with": {}
         },
+        "topic_suggestion_requests_org_brand_id_idx": {
+          "name": "topic_suggestion_requests_org_brand_id_idx",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "brand_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "topic_suggestion_requests_org_brand_local_date_idx": {
           "name": "topic_suggestion_requests_org_brand_local_date_idx",
           "columns": [
@@ -9781,27 +9808,33 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "topic_suggestion_scan_decisions_brand_id_brands_id_fk": {
-          "name": "topic_suggestion_scan_decisions_brand_id_brands_id_fk",
+        "topic_suggestion_scan_decisions_brand_org_fk": {
+          "name": "topic_suggestion_scan_decisions_brand_org_fk",
           "tableFrom": "topic_suggestion_scan_decisions",
           "tableTo": "brands",
           "columnsFrom": [
+            "org_id",
             "brand_id"
           ],
           "columnsTo": [
+            "org_id",
             "id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "topic_suggestion_scan_decisions_request_id_topic_suggestion_requests_id_fk": {
-          "name": "topic_suggestion_scan_decisions_request_id_topic_suggestion_requests_id_fk",
+        "topic_suggestion_scan_decisions_request_org_brand_fk": {
+          "name": "topic_suggestion_scan_decisions_request_org_brand_fk",
           "tableFrom": "topic_suggestion_scan_decisions",
           "tableTo": "topic_suggestion_requests",
           "columnsFrom": [
+            "org_id",
+            "brand_id",
             "request_id"
           ],
           "columnsTo": [
+            "org_id",
+            "brand_id",
             "id"
           ],
           "onDelete": "cascade",

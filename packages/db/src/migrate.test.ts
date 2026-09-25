@@ -2782,6 +2782,79 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("keeps daily topic scan decisions linked to their own brand and request", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('decision_a', 'A', 'decision-a'), ('decision_b', 'B', 'decision-b')",
+        );
+        const firstBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_a', 'A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const secondBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_b', 'B brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const sameOrgOtherBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('decision_a', 'Another A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const firstRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_a', $1) RETURNING id",
+            [firstBrand],
+          )
+        ).rows[0]?.id as string;
+        const sameOrgOtherRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_a', $1) RETURNING id",
+            [sameOrgOtherBrand],
+          )
+        ).rows[0]?.id as string;
+        const otherOrgSameBrandRequest = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topic_suggestion_requests (org_id, brand_id) VALUES ('decision_b', $1) RETURNING id",
+            [firstBrand],
+          )
+        ).rows[0]?.id as string;
+
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision) VALUES ('decision_a', $1, '2026-09-23', 'ideas_pending')",
+            [secondBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+            [firstBrand, sameOrgOtherRequest],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          pool.query(
+            "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+            [firstBrand, otherOrgSameBrandRequest],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await pool.query(
+          "INSERT INTO topic_suggestion_scan_decisions (org_id, brand_id, local_date, decision, request_id) VALUES ('decision_a', $1, '2026-09-25', 'queued', $2)",
+          [firstBrand, firstRequest],
+        );
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
   it("rejects a paid relevance batch with another organization's brand", async () => {
     const fresh = await withFreshDatabase(url as string);
     try {
