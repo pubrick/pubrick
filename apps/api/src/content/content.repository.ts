@@ -9,6 +9,8 @@ import {
 } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  type AcceptedClaimCorrectionDto,
+  type AcceptedClaimCorrectionListDto,
   ADAPTATION_STATUSES,
   type AdaptationProposal,
   type AdaptationStatus,
@@ -407,6 +409,36 @@ const CLAIM_CORRECTION_COLUMNS = {
   evidence: schema.claimCorrectionProposals.evidence,
   createdAt: schema.claimCorrectionProposals.createdAt,
 };
+
+const ACCEPTED_CORRECTION_COLUMNS = {
+  id: schema.acceptedClaimCorrections.id,
+  contentItemId: schema.acceptedClaimCorrections.contentItemId,
+  reviewId: schema.acceptedClaimCorrections.reviewId,
+  fragmentVersionId: schema.acceptedClaimCorrections.fragmentVersionId,
+  claimIndex: schema.acceptedClaimCorrections.claimIndex,
+  sourceBodyHash: schema.acceptedClaimCorrections.sourceBodyHash,
+  claim: schema.acceptedClaimCorrections.claim,
+  replacement: schema.acceptedClaimCorrections.replacement,
+  reason: schema.acceptedClaimCorrections.reason,
+  evidence: schema.acceptedClaimCorrections.evidence,
+  acceptedAt: schema.acceptedClaimCorrections.acceptedAt,
+};
+
+function acceptedCorrectionDto(row: {
+  id: string;
+  contentItemId: string;
+  reviewId: string;
+  fragmentVersionId: string;
+  claimIndex: number;
+  sourceBodyHash: string;
+  claim: string;
+  replacement: string;
+  reason: string;
+  evidence: ClaimReviewClaim["evidence"];
+  acceptedAt: Date;
+}): AcceptedClaimCorrectionDto {
+  return { ...row, acceptedAt: row.acceptedAt.toISOString() };
+}
 
 function claimCorrectionDto(row: {
   id: string;
@@ -2441,6 +2473,61 @@ export class ContentRepository {
     return row ? claimCorrectionDto(row) : null;
   }
 
+  /** Newest accepted corrections first; a receipt ID is an opaque item-scoped cursor. */
+  async acceptedClaimCorrections(
+    orgId: string,
+    id: string,
+    cursor?: string,
+  ): Promise<AcceptedClaimCorrectionListDto> {
+    const [item] = await db
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    if (!item) throw notFound("content_not_found", "Post not found");
+    const [before] = cursor
+      ? await db
+          .select({ id: schema.acceptedClaimCorrections.id })
+          .from(schema.acceptedClaimCorrections)
+          .where(
+            and(
+              eq(schema.acceptedClaimCorrections.orgId, orgId),
+              eq(schema.acceptedClaimCorrections.contentItemId, id),
+              eq(schema.acceptedClaimCorrections.id, cursor),
+            ),
+          )
+          .limit(1)
+      : [undefined];
+    if (cursor && !before) throw badRequest("invalid_request", "Unknown correction cursor");
+    const page = await db
+      .select(ACCEPTED_CORRECTION_COLUMNS)
+      .from(schema.acceptedClaimCorrections)
+      .where(
+        and(
+          eq(schema.acceptedClaimCorrections.orgId, orgId),
+          eq(schema.acceptedClaimCorrections.contentItemId, id),
+          before
+            ? sql<boolean>`(${schema.acceptedClaimCorrections.acceptedAt}, ${schema.acceptedClaimCorrections.id}) < (
+          SELECT cursor_receipt.accepted_at, cursor_receipt.id
+          FROM accepted_claim_corrections AS cursor_receipt
+          WHERE cursor_receipt.id = ${before.id}
+            AND cursor_receipt.org_id = ${orgId}
+            AND cursor_receipt.content_item_id = ${id}
+        )`
+            : undefined,
+        ),
+      )
+      .orderBy(
+        desc(schema.acceptedClaimCorrections.acceptedAt),
+        desc(schema.acceptedClaimCorrections.id),
+      )
+      .limit(21);
+    return {
+      rows: page.slice(0, 20).map(acceptedCorrectionDto),
+      nextCursor: page.length > 20 ? (page[19]?.id ?? null) : null,
+    };
+  }
+
   /** Spend only after the exact saved body and an evidence conflict qualify. */
   async proposeClaimCorrection(
     orgId: string,
@@ -2733,15 +2820,31 @@ export class ContentRepository {
           status: "draft",
         })
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
-      await tx.insert(schema.contentVersions).values({
+      const [fragment] = await tx
+        .insert(schema.contentVersions)
+        .values({
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          body: plan.fragmentBody,
+          origin: "ai",
+          scope: "fragment",
+          unitDelta: plan.unitDelta,
+          createdBy: null,
+        })
+        .returning({ id: schema.contentVersions.id });
+      if (!fragment) throw new Error("Claim correction fragment was not recorded");
+      await tx.insert(schema.acceptedClaimCorrections).values({
         orgId,
         contentItemId: id,
-        adaptationId: null,
-        body: plan.fragmentBody,
-        origin: "ai",
-        scope: "fragment",
-        unitDelta: plan.unitDelta,
-        createdBy: null,
+        reviewId: proposal.reviewId,
+        fragmentVersionId: fragment.id,
+        claimIndex: proposal.claimIndex,
+        sourceBodyHash: proposal.sourceBodyHash,
+        claim: proposal.claim,
+        replacement: proposal.replacement,
+        reason: proposal.reason,
+        evidence: proposal.evidence,
       });
       await tx
         .delete(schema.claimCorrectionProposals)

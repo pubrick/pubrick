@@ -3,7 +3,11 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
 import type { ClaimReviewOutcome } from "@pubrick/shared";
-import { claimCorrectionProposalDtoSchema, claimCorrectionRequestSchema } from "@pubrick/shared";
+import {
+  acceptedClaimCorrectionListDtoSchema,
+  claimCorrectionProposalDtoSchema,
+  claimCorrectionRequestSchema,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -264,6 +268,22 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     const accepted = await owner.visitor.post(`${path}/${proposed.body.id}/accept`).expect(200);
     expect(accepted.body.body).toBe(source.replace(claim, replacement));
     expect((await owner.visitor.get(path).expect(200)).text).toBe("null");
+    const historyPath = `/api/content/${owner.itemId}/claim-corrections`;
+    const history = await owner.visitor.get(historyPath).expect(200);
+    expect(acceptedClaimCorrectionListDtoSchema.parse(history.body)).toEqual(history.body);
+    expect(history.body).toMatchObject({
+      nextCursor: null,
+      rows: [
+        {
+          contentItemId: owner.itemId,
+          reviewId,
+          claim,
+          replacement,
+          evidence: proposed.body.evidence,
+        },
+      ],
+    });
+    await outsider.visitor.get(historyPath).expect(404);
     const fragments = await db
       .select({ body: schema.contentVersions.body, scope: schema.contentVersions.scope })
       .from(schema.contentVersions)
@@ -443,5 +463,39 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     expect(calls).toHaveLength(1);
     const accepted = await visitor.post(`${path}/${proposed.body.id}/accept`).expect(200);
     expect(accepted.body.body).toBe(fullBody.replace(fullClaim, replacement));
+  });
+
+  it("pages immutable accepted receipts by an item-scoped keyset", async () => {
+    const { visitor, orgId, itemId } = await actor();
+    const path = `/api/content/${itemId}/claim-correction`;
+    const historyPath = `/api/content/${itemId}/claim-corrections`;
+    const reviewTime = Date.now();
+    for (let index = 0; index < 21; index++) {
+      if (index > 0)
+        await visitor.patch(`/api/content/${itemId}`).send({ body: source }).expect(200);
+      const reviewId = await review(
+        orgId,
+        itemId,
+        "ready",
+        "evidence_conflicts",
+        new Date(reviewTime + index * 1_000),
+      );
+      const proposed = await visitor
+        .post(path)
+        .send({ expectedBody: source, reviewId, claimIndex: 0 })
+        .expect(201);
+      await visitor.post(`${path}/${proposed.body.id}/accept`).expect(200);
+    }
+    const first = acceptedClaimCorrectionListDtoSchema.parse(
+      (await visitor.get(historyPath).expect(200)).body,
+    );
+    expect(first.rows).toHaveLength(20);
+    expect(first.nextCursor).toBe(first.rows[19]?.id);
+    const second = acceptedClaimCorrectionListDtoSchema.parse(
+      (await visitor.get(`${historyPath}?cursor=${first.nextCursor}`).expect(200)).body,
+    );
+    expect(second.rows).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.rows, ...second.rows].map((row) => row.id)).size).toBe(21);
   });
 });

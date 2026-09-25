@@ -14,8 +14,10 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  type AcceptedClaimCorrectionListQuery,
   type AdaptationReschedule,
   type AdaptationUpdate,
+  acceptedClaimCorrectionListQuerySchema,
   adaptationRescheduleSchema,
   adaptationUpdateSchema,
   type ClaimCorrectionProposalDto,
@@ -78,6 +80,16 @@ export class ContentController {
     @Res() response: { json: (value: ClaimCorrectionProposalDto | null) => void },
   ): Promise<void> {
     response.json(await this.content.claimCorrection(orgId, id));
+  }
+
+  @Get(":id/claim-corrections")
+  acceptedClaimCorrections(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(acceptedClaimCorrectionListQuerySchema))
+    query: AcceptedClaimCorrectionListQuery,
+  ) {
+    return this.content.acceptedClaimCorrections(orgId, id, query.cursor);
   }
 
   @Post(":id/claim-correction")
