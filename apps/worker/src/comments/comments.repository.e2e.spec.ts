@@ -55,7 +55,7 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
     if (pool) await pool.end();
   });
 
-  it("replaces only this story's sampled replies and clears them when discussion becomes private", async () => {
+  it("replaces only this story's sampled replies and retains them when discussion becomes private", async () => {
     const sample = {
       status: "available" as const,
       comments: [
@@ -67,6 +67,11 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       ],
     };
     await repo.save(orgId, itemId, itemUrl, sample);
+    const [saved] = await db
+      .select({ version: schema.newsItems.commentsSampleVersion })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, itemId));
+    expect(saved?.version).toBeTruthy();
     expect(await repo.item(randomUUID(), itemId)).toBeNull();
     await repo.save(randomUUID(), itemId, itemUrl, { status: "private", comments: [] });
     let rows = await db
@@ -79,13 +84,17 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       .select({ body: schema.newsComments.body })
       .from(schema.newsComments)
       .where(eq(schema.newsComments.itemId, itemId));
-    expect(rows).toEqual([]);
+    expect(rows).toEqual([{ body: "Detailed useful reader response" }]);
     const [item] = await db
-      .select({ status: schema.newsItems.commentsStatus })
+      .select({
+        status: schema.newsItems.commentsStatus,
+        version: schema.newsItems.commentsSampleVersion,
+      })
       .from(schema.newsItems)
       .where(eq(schema.newsItems.id, itemId));
     if (!item) throw new Error("Story was removed unexpectedly");
     expect(item.status).toBe("private");
+    expect(item.version).toBe(saved?.version);
   });
 
   it("rejects an unknown comment status at the database boundary", async () => {
