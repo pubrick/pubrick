@@ -94,11 +94,39 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
       .set({ autoSuggestTopics: true, timezone: zoneFor((hour) => hour < 9) })
       .where(eq(schema.autopilotConfigs.brandId, brandId));
     expect(await service.trigger(boss, orgId, brandId)).toBe("before_start");
+    expect(
+      await db
+        .select({ id: schema.topicSuggestionScanDecisions.id })
+        .from(schema.topicSuggestionScanDecisions)
+        .where(eq(schema.topicSuggestionScanDecisions.brandId, brandId)),
+    ).toEqual([]);
     await db
       .update(schema.autopilotConfigs)
       .set({ timezone: zoneFor((hour) => hour >= 9) })
       .where(eq(schema.autopilotConfigs.brandId, brandId));
     expect(await service.trigger(boss, orgId, brandId)).toBe("no_ai_key");
+    const [skip] = await db
+      .select({
+        id: schema.topicSuggestionScanDecisions.id,
+        decision: schema.topicSuggestionScanDecisions.decision,
+        localDate: schema.topicSuggestionScanDecisions.localDate,
+        requestId: schema.topicSuggestionScanDecisions.requestId,
+      })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(eq(schema.topicSuggestionScanDecisions.brandId, brandId));
+    expect(skip).toMatchObject({ decision: "no_ai_key", requestId: null });
+    expect(skip?.localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const oldUpdate = new Date("2026-01-01T00:00:00.000Z");
+    await db
+      .update(schema.topicSuggestionScanDecisions)
+      .set({ updatedAt: oldUpdate })
+      .where(eq(schema.topicSuggestionScanDecisions.id, skip?.id as string));
+    expect(await service.trigger(boss, orgId, brandId)).toBe("no_ai_key");
+    const [unchanged] = await db
+      .select({ updatedAt: schema.topicSuggestionScanDecisions.updatedAt })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(eq(schema.topicSuggestionScanDecisions.id, skip?.id as string));
+    expect(unchanged?.updatedAt).toEqual(oldUpdate);
     await db.insert(schema.aiCredentials).values({
       orgId,
       provider: "openrouter",
@@ -115,7 +143,12 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
     const dailyBefore = await db
       .select({ id: schema.topicSuggestionRequests.id })
       .from(schema.topicSuggestionRequests)
-      .where(eq(schema.topicSuggestionRequests.origin, "automatic"));
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+        ),
+      );
     expect(dailyBefore).toHaveLength(0);
     await db
       .update(schema.topicSuggestionRequests)
@@ -130,6 +163,11 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
       })),
     );
     expect(await service.trigger(boss, orgId, brandId)).toBe("ideas_pending");
+    const [pendingDecision] = await db
+      .select({ decision: schema.topicSuggestionScanDecisions.decision })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(eq(schema.topicSuggestionScanDecisions.brandId, brandId));
+    expect(pendingDecision?.decision).toBe("ideas_pending");
     await db
       .update(schema.topics)
       .set({ status: "archived" })
@@ -181,8 +219,18 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
       await db
         .select({ id: schema.topicSuggestionRequests.id })
         .from(schema.topicSuggestionRequests)
-        .where(eq(schema.topicSuggestionRequests.origin, "automatic")),
+        .where(
+          and(
+            eq(schema.topicSuggestionRequests.orgId, orgId),
+            eq(schema.topicSuggestionRequests.origin, "automatic"),
+          ),
+        ),
     ).toHaveLength(0);
+    const [rolledBack] = await db
+      .select({ decision: schema.topicSuggestionScanDecisions.decision })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(eq(schema.topicSuggestionScanDecisions.brandId, brandId));
+    expect(rolledBack?.decision).toBe("ideas_pending");
     const decisions = await Promise.all([
       service.trigger(boss, orgId, brandId),
       service.trigger(boss, orgId, brandId),
@@ -191,9 +239,29 @@ describe.skipIf(!url)("daily topic suggestion scan (Postgres)", () => {
     const [request] = await db
       .select()
       .from(schema.topicSuggestionRequests)
-      .where(eq(schema.topicSuggestionRequests.origin, "automatic"));
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+        ),
+      );
     expect(request).toMatchObject({ orgId, brandId, origin: "automatic", status: "queued" });
     expect(request?.localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const decisionsForDay = await db
+      .select({
+        decision: schema.topicSuggestionScanDecisions.decision,
+        localDate: schema.topicSuggestionScanDecisions.localDate,
+        requestId: schema.topicSuggestionScanDecisions.requestId,
+      })
+      .from(schema.topicSuggestionScanDecisions)
+      .where(eq(schema.topicSuggestionScanDecisions.brandId, brandId));
+    expect(decisionsForDay).toEqual([
+      {
+        decision: "queued",
+        localDate: request?.localDate,
+        requestId: request?.id,
+      },
+    ]);
     expect(
       await boss.findJobs(TOPIC_SUGGESTIONS_QUEUE, { data: { requestId: request?.id } }),
     ).toHaveLength(1);

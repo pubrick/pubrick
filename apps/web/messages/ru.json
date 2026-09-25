@@ -1572,7 +1572,12 @@
     "historyStatus_succeeded": "Завершён",
     "historyStatus_failed": "Ошибка",
     "historyCount": "Добавлено идей: {count}",
-    "historyLocalDate": "За {date}"
+    "historyLocalDate": "За {date}",
+    "scanDecisionsTitle": "Ежедневные проверки",
+    "scanDecisionsHint": "Почему автоматический запрос идей был пропущен. Запросы и их результаты показаны выше.",
+    "scanDecision_ideas_pending": "Три идеи ожидают проверки",
+    "scanDecision_no_ai_key": "Нет ключа ИИ",
+    "scanDecision_queued": "Ежедневный запрос в очереди"
   },
   "Autopilot": {
     "title": "Автопилот",

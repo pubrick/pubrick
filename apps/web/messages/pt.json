@@ -1572,7 +1572,12 @@
     "historyStatus_succeeded": "Concluído",
     "historyStatus_failed": "Falhou",
     "historyCount": "Ideias adicionadas: {count}",
-    "historyLocalDate": "Para {date}"
+    "historyLocalDate": "Para {date}",
+    "scanDecisionsTitle": "Verificações diárias",
+    "scanDecisionsHint": "Porque foi ignorado o pedido automático de ideias. Os pedidos e os seus resultados aparecem acima.",
+    "scanDecision_ideas_pending": "Há três ideias à espera de revisão",
+    "scanDecision_no_ai_key": "Chave de IA em falta",
+    "scanDecision_queued": "Pedido diário em fila"
   },
   "Autopilot": {
     "title": "Piloto automático",

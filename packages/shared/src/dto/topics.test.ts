@@ -5,6 +5,7 @@ import {
   topicRunSchema,
   topicSuggestionHistoryPageSchema,
   topicSuggestionHistoryQuerySchema,
+  topicSuggestionScanDecisionsSchema,
   topicUpdateSchema,
 } from "./topics.js";
 
@@ -134,5 +135,30 @@ describe("topic suggestion history contract", () => {
         nextCursor: null,
       }).rows[0],
     ).not.toHaveProperty("attempts");
+  });
+});
+
+describe("daily topic scan decision contract", () => {
+  it("accepts a local-day skip and omits the linked request", () => {
+    const [row] = topicSuggestionScanDecisionsSchema.parse([
+      {
+        id: brandId,
+        brandId,
+        localDate: "2026-09-25",
+        decision: "ideas_pending",
+        requestId: brandId,
+        createdAt: "2026-09-25T09:00:00.000Z",
+        updatedAt: "2026-09-25T09:00:00.000Z",
+      },
+    ]);
+    expect(row).not.toHaveProperty("requestId");
+    expect(
+      topicSuggestionScanDecisionsSchema.safeParse([
+        {
+          ...row,
+          decision: "before_start",
+        },
+      ]).success,
+    ).toBe(false);
   });
 });

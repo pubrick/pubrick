@@ -1572,7 +1572,12 @@
     "historyStatus_succeeded": "Succeeded",
     "historyStatus_failed": "Failed",
     "historyCount": "Ideas added: {count}",
-    "historyLocalDate": "For {date}"
+    "historyLocalDate": "For {date}",
+    "scanDecisionsTitle": "Daily checks",
+    "scanDecisionsHint": "Why the automatic idea request was skipped. Requests and their outcomes appear above.",
+    "scanDecision_ideas_pending": "Three ideas are waiting for review",
+    "scanDecision_no_ai_key": "AI key missing",
+    "scanDecision_queued": "Daily request queued"
   },
   "Autopilot": {
     "title": "Autopilot",

@@ -3,6 +3,7 @@ import {
   TOPIC_ORIGINS,
   TOPIC_STATUSES,
   TOPIC_SUGGESTION_REQUEST_STATUSES,
+  TOPIC_SUGGESTION_SCAN_DECISIONS,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -107,5 +108,47 @@ export const topicSuggestionRequests = pgTable(
       "unreadable_key",
       "model_failed",
     ]),
+  ],
+);
+
+/** One meaningful automatic admission outcome per brand-local day. */
+export const topicSuggestionScanDecisions = pgTable(
+  "topic_suggestion_scan_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    localDate: date("local_date").notNull(),
+    decision: text("decision", { enum: TOPIC_SUGGESTION_SCAN_DECISIONS }).notNull(),
+    requestId: uuid("request_id").references(() => topicSuggestionRequests.id, {
+      onDelete: "cascade",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("topic_suggestion_scan_decisions_org_brand_day_idx").on(
+      t.orgId,
+      t.brandId,
+      t.localDate,
+    ),
+    index("topic_suggestion_scan_decisions_org_brand_created_idx").on(
+      t.orgId,
+      t.brandId,
+      t.createdAt,
+    ),
+    enumCheck(
+      "topic_suggestion_scan_decisions_decision_check",
+      t.decision,
+      TOPIC_SUGGESTION_SCAN_DECISIONS,
+    ),
+    check(
+      "topic_suggestion_scan_decisions_request_check",
+      sql`(${t.decision} = 'queued' and ${t.requestId} is not null) or (${t.decision} <> 'queued' and ${t.requestId} is null)`,
+    ),
   ],
 );

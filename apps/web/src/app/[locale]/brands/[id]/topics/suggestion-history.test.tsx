@@ -28,7 +28,7 @@ function row(
   };
 }
 
-function response(body: TopicSuggestionHistoryPage): Response {
+function response(body: TopicSuggestionHistoryPage | unknown[]): Response {
   return {
     ok: true,
     status: 200,
@@ -46,6 +46,17 @@ describe("topic suggestion history", () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
       urls.push(url);
+      if (url.includes("scan-decisions"))
+        return response([
+          {
+            id: FIRST,
+            brandId: BRAND,
+            localDate: "2026-09-23",
+            decision: "ideas_pending",
+            createdAt: "2026-09-23T12:00:00Z",
+            updatedAt: "2026-09-23T12:00:00Z",
+          },
+        ]);
       return url.includes("cursor=")
         ? response({
             rows: [
@@ -65,19 +76,22 @@ describe("topic suggestion history", () => {
     expect(await screen.findByText(en.Topics.historyOrigin_manual)).toBeInTheDocument();
     expect(screen.getByText(en.Topics.historyStatus_succeeded)).toBeInTheDocument();
     expect(screen.getByText(/Ideas added: 2/)).toBeInTheDocument();
+    expect(await screen.findByText(en.Topics.scanDecision_ideas_pending)).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: en.Topics.historyLoadMore }));
     expect(await screen.findByText(en.Topics.historyOrigin_automatic)).toBeInTheDocument();
     expect(screen.getByText(en.Topics.historyStatus_failed)).toBeInTheDocument();
     expect(screen.getByText(/For 2026-09-22/)).toBeInTheDocument();
     expect(screen.getByText(/Ideas could not be suggested/)).toBeInTheDocument();
     expect(urls.at(-1)).toContain(`cursor=${FIRST}`);
-    expect(urls.every((url) => url.includes("limit=20"))).toBe(true);
+    expect(
+      urls.filter((url) => url.includes("/history?")).every((url) => url.includes("limit=20")),
+    ).toBe(true);
     firstPage = response({ rows: [row(SECOND, { status: "running" })], nextCursor: null });
     view.rerender(<SuggestionHistory brandId={BRAND} refreshKey="request-1:succeeded" />);
     expect(await screen.findByText(en.Topics.historyStatus_running)).toBeInTheDocument();
     expect(screen.getByText(en.Topics.historyStatus_succeeded)).toBeInTheDocument();
     expect(screen.queryByText(en.Topics.historyStatus_failed)).not.toBeInTheDocument();
-    expect(urls).toHaveLength(3);
+    expect(urls.filter((url) => url.includes("/history?"))).toHaveLength(3);
   });
 
   it("keeps an in-flight older page through heartbeat updates", async () => {
@@ -89,6 +103,7 @@ describe("topic suggestion history", () => {
     vi.mocked(fetch).mockImplementation((input) => {
       const url = String(input);
       urls.push(url);
+      if (url.includes("scan-decisions")) return Promise.resolve(response([]));
       return url.includes("cursor=")
         ? older
         : Promise.resolve(
@@ -103,7 +118,7 @@ describe("topic suggestion history", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: en.Topics.historyLoadMore }));
     expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
     view.rerender(<SuggestionHistory brandId={BRAND} refreshKey="request-1:running" />);
-    expect(urls).toHaveLength(2);
+    expect(urls.filter((url) => url.includes("/history?"))).toHaveLength(2);
     await act(async () => {
       resolveOlder(response({ rows: [row(SECOND, { origin: "automatic" })], nextCursor: null }));
       await older;
@@ -122,12 +137,14 @@ describe("topic suggestion history", () => {
     });
     vi.mocked(fetch).mockImplementation((input) =>
       Promise.resolve(
-        String(input).includes(`brandId=${BRAND}`)
-          ? old
-          : response({
-              rows: [row(SECOND, { brandId: OTHER_BRAND, origin: "automatic" })],
-              nextCursor: null,
-            }),
+        String(input).includes("scan-decisions")
+          ? response([])
+          : String(input).includes(`brandId=${BRAND}`)
+            ? old
+            : response({
+                rows: [row(SECOND, { brandId: OTHER_BRAND, origin: "automatic" })],
+                nextCursor: null,
+              }),
       ).then((result) => result),
     );
     const view = render(<SuggestionHistory brandId={BRAND} refreshKey="" />);
@@ -140,5 +157,49 @@ describe("topic suggestion history", () => {
     await waitFor(() =>
       expect(screen.queryByText(en.Topics.historyOrigin_manual)).not.toBeInTheDocument(),
     );
+  });
+
+  it("drops a late daily decision from the previous brand", async () => {
+    let resolveOld!: (value: Response) => void;
+    const old = new Promise<Response>((resolve) => {
+      resolveOld = resolve;
+    });
+    vi.mocked(fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (!url.includes("scan-decisions"))
+        return Promise.resolve(response({ rows: [], nextCursor: null }));
+      if (url.includes(`brandId=${BRAND}`)) return old;
+      return Promise.resolve(
+        response([
+          {
+            id: SECOND,
+            brandId: OTHER_BRAND,
+            localDate: "2026-09-24",
+            decision: "no_ai_key",
+            createdAt: "2026-09-24T12:00:00Z",
+            updatedAt: "2026-09-24T12:00:00Z",
+          },
+        ]),
+      );
+    });
+    const view = render(<SuggestionHistory brandId={BRAND} refreshKey="" />);
+    view.rerender(<SuggestionHistory brandId={OTHER_BRAND} refreshKey="" />);
+    expect(await screen.findByText(en.Topics.scanDecision_no_ai_key)).toBeInTheDocument();
+    await act(async () => {
+      resolveOld(
+        response([
+          {
+            id: FIRST,
+            brandId: BRAND,
+            localDate: "2026-09-23",
+            decision: "ideas_pending",
+            createdAt: "2026-09-23T12:00:00Z",
+            updatedAt: "2026-09-23T12:00:00Z",
+          },
+        ]),
+      );
+      await old;
+    });
+    expect(screen.queryByText(en.Topics.scanDecision_ideas_pending)).not.toBeInTheDocument();
   });
 });

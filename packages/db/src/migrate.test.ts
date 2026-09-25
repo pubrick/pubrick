@@ -196,6 +196,8 @@ const ZONED_COLUMNS = [
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
   "topic_suggestion_requests.updated_at",
+  "topic_suggestion_scan_decisions.created_at",
+  "topic_suggestion_scan_decisions.updated_at",
   "topics.blocked_at",
   "topics.created_at",
   "topics.updated_at",
@@ -403,6 +405,8 @@ const NON_ENUM_CHECKS = [
   "topic_suggestion_requests_error_code_check",
   // 0057 adds an origin pin; historical request rows receive the manual default.
   "topic_suggestion_requests_origin_check",
+  "topic_suggestion_scan_decisions_decision_check",
+  "topic_suggestion_scan_decisions_request_check",
   "news_items_editor_signal_check",
   "news_items_relevance_status_check",
   "news_items_relevance_urgency_check",
