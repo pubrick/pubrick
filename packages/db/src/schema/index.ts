@@ -28,6 +28,7 @@ export * from "./publication-metrics.js";
 export * from "./readapt.js";
 export * from "./refine.js";
 export * from "./relevance-batches.js";
+export * from "./role-templates.js";
 export * from "./search.js";
 export * from "./sources.js";
 export * from "./topics.js";

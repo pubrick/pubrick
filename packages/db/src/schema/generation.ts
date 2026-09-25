@@ -30,6 +30,7 @@ import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { adaptations, contentItems } from "./content-items.js";
 import { enumCheck } from "./enum-check.js";
+import type { RoleTemplateRunSnapshot } from "./role-templates.js";
 
 /** One BYOK provider key per org. */
 export const aiCredentials = pgTable(
@@ -96,6 +97,8 @@ export const pipelineRuns = pgTable(
       jsonb("guidance_snapshot").$type<
         Partial<Record<PromptRole, { revisionId: string; version: number; text: string }>>
       >(),
+    /** Null means not pinned; claim-time template state is never backfilled. */
+    templateSnapshot: jsonb("template_snapshot").$type<RoleTemplateRunSnapshot>(),
     /**
      * Set on success. `set null` rather than cascade: a run is a record of what
      * was spent and when, and it must outlive the draft it produced.

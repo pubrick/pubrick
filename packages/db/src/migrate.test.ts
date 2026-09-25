@@ -196,6 +196,8 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "role_template_activation_gate.updated_at",
+  "role_template_revisions.created_at",
   "search_credentials.updated_at",
   "search_requests.completed_at",
   "search_requests.created_at",
@@ -389,6 +391,35 @@ const NON_ENUM_CHECKS = [
   "prompt_revisions_role_check",
   "prompt_revisions_version_positive_check",
   "prompt_revisions_guidance_limit_check",
+  // 0092: paid reply settings, attempts, and handoffs arrived after the
+  // historical seed. Their invariants are exercised by the paid reply tests.
+  "brand_paid_reply_settings_threshold_check",
+  "brand_paid_reply_settings_revisions_check",
+  "organization_paid_reply_settings_threshold_check",
+  "organization_paid_reply_settings_revision_check",
+  "organization_paid_reply_settings_timezone_check",
+  "paid_reply_analysis_attempts_target_kind_check",
+  "paid_reply_analysis_attempts_origin_check",
+  "paid_reply_analysis_attempts_status_check",
+  "paid_reply_analysis_attempts_live_fields_check",
+  "paid_reply_analysis_attempts_legacy_check",
+  "paid_reply_analysis_attempts_dispatch_check",
+  "paid_reply_analysis_attempts_revisions_check",
+  "paid_reply_analysis_handoffs_target_kind_check",
+  "paid_reply_analysis_handoffs_status_check",
+  "paid_reply_analysis_handoffs_revisions_check",
+  "paid_reply_analysis_handoffs_reason_check",
+  // 0093: role-template heads are tenant/role-bound and activation starts off.
+  // The focused migration test below writes rows to exercise these guards.
+  "role_template_activation_gate_singleton_check",
+  "role_template_activation_gate_epoch_check",
+  "role_template_activation_gate_enabled_epoch_check",
+  "role_template_heads_role_check",
+  "role_template_heads_generation_check",
+  "role_template_revisions_role_check",
+  "role_template_revisions_version_check",
+  "role_template_revisions_source_check",
+  "role_template_revisions_sha_check",
   // The nullable calendar error enum is on a table that did not exist when
   // seedEveryTable wrote its pre-0009 rows, so the UPDATE loop cannot test it.
   // schema-invariants.test.ts verifies the schema declaration; this count
@@ -855,6 +886,132 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("adds immutable tenant-bound role templates without activating or rewriting existing runs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0093_medical_red_skull");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('tpl_a', 'A', 'tpl-a'), ('tpl_b', 'B', 'tpl-b')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('tpl_a', 'A brand') RETURNING id",
+        );
+        const run = await pool.query<{ id: string }>(
+          'INSERT INTO pipeline_runs (org_id, brand_id, input, steps, guidance_snapshot) VALUES (\'tpl_a\', $1, \'{"kind":"brief","text":"x","channelIds":[]}\'::jsonb, \'{"writer":{"status":"succeeded"}}\'::jsonb, \'{}\'::jsonb) RETURNING id',
+          [brand.rows[0]?.id],
+        );
+
+        await runMigrations(fresh.url);
+        const oldRun = await pool.query<{
+          template_snapshot: unknown;
+          guidance_snapshot: unknown;
+          steps: unknown;
+        }>("SELECT template_snapshot, guidance_snapshot, steps FROM pipeline_runs WHERE id = $1", [
+          run.rows[0]?.id,
+        ]);
+        expect(oldRun.rows[0]).toEqual({
+          template_snapshot: null,
+          guidance_snapshot: {},
+          steps: { writer: { status: "succeeded" } },
+        });
+        expect(
+          (
+            await pool.query(
+              "SELECT id, activation_enabled, release_epoch FROM role_template_activation_gate",
+            )
+          ).rows,
+        ).toEqual([{ id: 1, activation_enabled: false, release_epoch: 0 }]);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('tpl_new', 'New', 'tpl-new')",
+        );
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_heads")).rows,
+        ).toEqual([{ n: 0 }]);
+
+        const revision = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('tpl_a', 'writer', 1, 'Write clearly.', $1) RETURNING id",
+          ["a".repeat(64)],
+        );
+        const revisionId = revision.rows[0]?.id;
+        for (const [role, version, source, sha] of [
+          ["wrong", 1, "Good", "a".repeat(64)],
+          ["editor", 0, "Good", "a".repeat(64)],
+          ["editor", 1, "", "a".repeat(64)],
+          ["editor", 1, "Good", "not-a-sha"],
+        ] as const) {
+          expect(
+            await refusal(
+              pool,
+              "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('tpl_a', $1, $2, $3, $4)",
+              [role, version, source, sha],
+            ),
+          ).toBe(CHECK_VIOLATION);
+        }
+        await pool.query(
+          "INSERT INTO role_template_heads (org_id, role, active_revision_id, generation) VALUES ('tpl_a', 'writer', $1, 1)",
+          [revisionId],
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, generation) VALUES ('tpl_b', 'editor', -1)",
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, active_revision_id) VALUES ('tpl_b', 'writer', $1)",
+            [revisionId],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, active_revision_id) VALUES ('tpl_a', 'editor', $1)",
+            [revisionId],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE role_template_revisions SET source = 'changed' WHERE id = $1",
+            [revisionId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "DELETE FROM role_template_revisions WHERE id = $1", [revisionId]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "UPDATE role_template_activation_gate SET activation_enabled = true"),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "INSERT INTO role_template_activation_gate (id) VALUES (2)"),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "UPDATE role_template_activation_gate SET release_epoch = -1"),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "UPDATE role_template_activation_gate SET release_epoch = 1, activation_enabled = true",
+        );
+        await pool.query("DELETE FROM organization WHERE id = 'tpl_a'");
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_revisions")).rows,
+        ).toEqual([{ n: 0 }]);
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_heads")).rows,
+        ).toEqual([{ n: 0 }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
   it("backfills saved reply versions and consumes an old manual admission without opting in", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0092_bent_arclight");
