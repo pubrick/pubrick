@@ -99,12 +99,8 @@ CREATE INDEX "paid_reply_analysis_attempts_brand_day_idx" ON "paid_reply_analysi
 CREATE INDEX "paid_reply_analysis_attempts_dispatch_idx" ON "paid_reply_analysis_attempts" USING btree ("status","dispatch_started_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "paid_reply_analysis_handoffs_sample_idx" ON "paid_reply_analysis_handoffs" USING btree ("org_id","target_kind","target_id","sample_version");--> statement-breakpoint
 CREATE INDEX "paid_reply_analysis_handoffs_pending_idx" ON "paid_reply_analysis_handoffs" USING btree ("org_id","created_at") WHERE "paid_reply_analysis_handoffs"."status" = 'pending';--> statement-breakpoint
-CREATE INDEX "usage_ledger_org_brand_created_idx" ON "usage_ledger" USING btree ("org_id","brand_id","created_at");--> statement-breakpoint
--- Install explicit default-off settings without inferring consent from free collection.
-INSERT INTO organization_paid_reply_settings (org_id)
-SELECT id FROM organization ON CONFLICT DO NOTHING;--> statement-breakpoint
-INSERT INTO brand_paid_reply_settings (org_id, brand_id)
-SELECT org_id, id FROM brands ON CONFLICT DO NOTHING;--> statement-breakpoint
+-- The existing ledger index is built CONCURRENTLY by runMigrations after this
+-- transaction. Existing tenants and samples are backfilled there in batches.
 CREATE FUNCTION paid_reply_org_settings_default() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   INSERT INTO organization_paid_reply_settings (org_id) VALUES (NEW.id);
@@ -120,45 +116,4 @@ BEGIN
 END;
 $$;--> statement-breakpoint
 CREATE TRIGGER paid_reply_brand_settings_default AFTER INSERT ON brands
-FOR EACH ROW EXECUTE FUNCTION paid_reply_brand_settings_default();--> statement-breakpoint
--- Only persisted row sets receive versions. A failed check may retain rows.
-UPDATE news_items i SET comments_sample_version = gen_random_uuid()
-WHERE EXISTS (SELECT 1 FROM news_comments c WHERE c.item_id = i.id);--> statement-breakpoint
-UPDATE publication_comment_samples s SET sample_version = gen_random_uuid()
-WHERE EXISTS (SELECT 1 FROM publication_comments c WHERE c.publication_id = s.publication_id);--> statement-breakpoint
--- Preserve an old ready aggregate against its exact current rows when the
--- checked timestamps match. Otherwise label it as an earlier version.
-UPDATE news_comment_analyses a SET sample_version =
-  CASE WHEN (a.sample_checked_at = i.comments_checked_at OR i.comments_status IN ('error', 'unavailable')) AND i.comments_sample_version IS NOT NULL
-    THEN i.comments_sample_version ELSE gen_random_uuid() END
-FROM news_items i WHERE i.id = a.item_id;--> statement-breakpoint
-UPDATE publication_comment_analyses a SET sample_version =
-  CASE WHEN (a.sample_checked_at = s.checked_at OR s.status IN ('error', 'unavailable')) AND s.sample_version IS NOT NULL
-    THEN s.sample_version ELSE gen_random_uuid() END
-FROM publication_comment_samples s WHERE s.publication_id = a.publication_id;--> statement-breakpoint
--- One old manual admission is enough to permanently consume the current
--- sample. It does not create a handoff, reservation, or new provider call.
-INSERT INTO paid_reply_analysis_attempts
-  (org_id, brand_id, target_kind, target_id, sample_version, admission_id,
-   origin, status, completed_at)
-SELECT i.org_id, i.brand_id, 'source_comment', i.id, i.comments_sample_version,
-  a.id, 'legacy', 'legacy_consumed', now()
-FROM news_items i
-JOIN LATERAL (
-  SELECT id FROM analysis_admissions
-  WHERE org_id = i.org_id AND target_kind = 'source_comment' AND target_id = i.id
-  ORDER BY requested_at DESC, id DESC LIMIT 1
-) a ON true
-WHERE i.comments_sample_version IS NOT NULL;--> statement-breakpoint
-INSERT INTO paid_reply_analysis_attempts
-  (org_id, brand_id, target_kind, target_id, sample_version, admission_id,
-   origin, status, completed_at)
-SELECT s.org_id, s.brand_id, 'publication_comment', s.publication_id, s.sample_version,
-  a.id, 'legacy', 'legacy_consumed', now()
-FROM publication_comment_samples s
-JOIN LATERAL (
-  SELECT id FROM analysis_admissions
-  WHERE org_id = s.org_id AND target_kind = 'publication_comment' AND target_id = s.publication_id
-  ORDER BY requested_at DESC, id DESC LIMIT 1
-) a ON true
-WHERE s.sample_version IS NOT NULL;
+FOR EACH ROW EXECUTE FUNCTION paid_reply_brand_settings_default();

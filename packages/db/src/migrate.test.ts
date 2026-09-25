@@ -984,6 +984,29 @@ describe.skipIf(!url)("runMigrations", () => {
         expect(
           await refusal(pool, "DELETE FROM role_template_revisions WHERE id = $1", [revisionId]),
         ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('tpl_author', 'Author', 'tpl_author@example.com')",
+        );
+        const authored = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256, created_by) VALUES ('tpl_a', 'writer', 2, 'Keep this revision.', $1, 'tpl_author') RETURNING id",
+          ["b".repeat(64)],
+        );
+        expect(
+          await refusal(
+            pool,
+            "UPDATE role_template_revisions SET created_by = NULL WHERE id = $1",
+            [authored.rows[0]?.id],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query("DELETE FROM \"user\" WHERE id = 'tpl_author'");
+        expect(
+          (
+            await pool.query(
+              "SELECT created_by, source FROM role_template_revisions WHERE id = $1",
+              [authored.rows[0]?.id],
+            )
+          ).rows,
+        ).toEqual([{ created_by: null, source: "Keep this revision." }]);
         expect(
           await refusal(pool, "UPDATE role_template_activation_gate SET activation_enabled = true"),
         ).toBe(CHECK_VIOLATION);
@@ -1024,6 +1047,10 @@ describe.skipIf(!url)("runMigrations", () => {
         await migrate(drizzle(pool), { migrationsFolder: before });
         await pool.query(
           "INSERT INTO organization (id, name, slug) VALUES ('paid_old', 'Paid old', 'paid-old')",
+        );
+        // Cross the post-migration backfill page boundary on a populated table.
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) SELECT 'paid_batch_' || n, 'Batch ' || n, 'paid-batch-' || n FROM generate_series(1, 501) AS n",
         );
         brandId = (
           await pool.query<{ id: string }>(
@@ -1081,6 +1108,13 @@ describe.skipIf(!url)("runMigrations", () => {
         expect(settings.rows).toEqual([
           { source_enabled: false, publication_enabled: false, timezone: "UTC" },
         ]);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM organization_paid_reply_settings WHERE org_id LIKE 'paid_batch_%'",
+            )
+          ).rows,
+        ).toEqual([{ count: 501 }]);
         const rows = await after.query<{
           id: string;
           comments_sample_version: string;
@@ -1110,6 +1144,30 @@ describe.skipIf(!url)("runMigrations", () => {
           origin: null,
           status: null,
         });
+        const originalVersions = rows.rows.map((row) => [row.id, row.comments_sample_version]);
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ id: string; comments_sample_version: string }>(
+              "SELECT id, comments_sample_version FROM news_items WHERE id IN ($1, $2) ORDER BY id",
+              [admittedItem, untouchedItem],
+            )
+          ).rows.map((row) => [row.id, row.comments_sample_version]),
+        ).toEqual(originalVersions);
+        expect(
+          (
+            await after.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'usage_ledger_org_brand_created_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: true }]);
+        expect(
+          (
+            await after.query<{ validated: boolean }>(
+              "SELECT convalidated AS validated FROM pg_constraint WHERE conname = 'content_items_body_revision_check'",
+            )
+          ).rows,
+        ).toEqual([{ validated: true }]);
         const consumed = rows.rows.find((row) => row.id === admittedItem);
         expect(
           await refusal(

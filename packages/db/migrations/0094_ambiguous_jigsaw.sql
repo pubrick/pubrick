@@ -2,7 +2,9 @@ ALTER TABLE "content_items" ADD COLUMN "rich_body" jsonb;--> statement-breakpoin
 ALTER TABLE "content_items" ADD COLUMN "body_revision" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "feed_entries" ADD COLUMN "rich_body" jsonb;--> statement-breakpoint
 ALTER TABLE "content_versions" ADD COLUMN "rich_body" jsonb;--> statement-breakpoint
-ALTER TABLE "content_items" ADD CONSTRAINT "content_items_body_revision_check" CHECK ("content_items"."body_revision" >= 0);
+-- Validate outside Drizzle's schema transaction so a populated table is not
+-- scanned while the ADD CONSTRAINT lock is held.
+ALTER TABLE "content_items" ADD CONSTRAINT "content_items_body_revision_check" CHECK ("content_items"."body_revision" >= 0) NOT VALID;
 --> statement-breakpoint
 -- The trigger covers every body writer, including the worker and older API clients.
 -- A text-only write invalidates the rich projection in the same transaction.

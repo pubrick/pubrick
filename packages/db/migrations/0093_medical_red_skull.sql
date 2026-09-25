@@ -48,6 +48,17 @@ INSERT INTO role_template_activation_gate (id) VALUES (1);--> statement-breakpoi
 -- An organization cascade may still remove its entire tenant-owned history.
 CREATE FUNCTION role_template_revisions_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  -- The created_by FK uses ON DELETE SET NULL. Preserve every other field,
+  -- and only permit that FK action after its user row has been deleted.
+  IF TG_OP = 'UPDATE' AND OLD.created_by IS NOT NULL
+    AND NEW.created_by IS NULL
+    AND NOT EXISTS (SELECT 1 FROM "user" WHERE id = OLD.created_by)
+    AND (NEW.id, NEW.org_id, NEW.role, NEW.version, NEW.source,
+         NEW.source_sha256, NEW.created_at) IS NOT DISTINCT FROM
+        (OLD.id, OLD.org_id, OLD.role, OLD.version, OLD.source,
+         OLD.source_sha256, OLD.created_at) THEN
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'DELETE' AND NOT EXISTS (
     SELECT 1 FROM organization WHERE id = OLD.org_id
   ) THEN
