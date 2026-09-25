@@ -11,6 +11,7 @@ import {
   newsItemListQuerySchema,
   newsRerankRequestSchema,
   newsSourceCreateSchema,
+  newsSourceNameSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
@@ -55,6 +56,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const loadVersion = useRef(0);
   const inFlight = useRef<{ key: string; version: number } | null>(null);
   const renderedBrandId = useRef(id);
+  const editVersion = useRef(0);
   const [rerankCursor, setRerankCursor] = useState<NewsRerankCursor | null>(null);
   const [rerankBusy, setRerankBusy] = useState(false);
   const feedbackVersion = useRef(0);
@@ -68,6 +70,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<NewsSourceDto | null>(null);
+  const [editingSource, setEditingSource] = useState<NewsSourceDto | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<NewsItemDto | null>(null);
   const [commentsItem, setCommentsItem] = useState<NewsItemDto | null>(null);
   const [comments, setComments] = useState<NewsCommentDto[] | null>(null);
@@ -100,6 +107,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     if (renderedBrandId.current === id) return;
     renderedBrandId.current = id;
     loadVersion.current++;
+    editVersion.current++;
     setBrand(null);
     setSources(null);
     setItems(null);
@@ -108,6 +116,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setSearch("");
     setSort("recent");
     setStatus("all");
+    setEditingSource(null);
+    setEditBusy(false);
+    setEditError(null);
   }, [id]);
 
   const load = useCallback(
@@ -229,6 +240,70 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       load();
     } catch (err) {
       setError(describeError(err));
+    }
+  }
+
+  function openEdit(source: NewsSourceDto) {
+    editVersion.current++;
+    setEditingSource(source);
+    setEditName(source.name);
+    setEditUrl(source.url);
+    setEditError(null);
+    setEditBusy(false);
+  }
+
+  const closeEdit = useCallback(() => {
+    if (editBusy) return;
+    editVersion.current++;
+    setEditingSource(null);
+    setEditError(null);
+  }, [editBusy]);
+
+  async function saveSource() {
+    if (!editingSource || editBusy) return;
+    const validName = newsSourceNameSchema.safeParse(editName);
+    if (!validName.success) {
+      setEditError(t("invalidName"));
+      return;
+    }
+    const body: { name?: string; url?: string } = {};
+    if (validName.data !== editingSource.name) body.name = validName.data;
+    if (editingSource.kind !== "telegram_private") {
+      const validSource = newsSourceCreateSchema.safeParse({
+        brandId: id,
+        kind: editingSource.kind,
+        name: validName.data,
+        url: editUrl,
+      });
+      if (!validSource.success) {
+        setEditError(
+          t(editingSource.kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"),
+        );
+        return;
+      }
+      if (validSource.data.url !== editingSource.url) body.url = validSource.data.url;
+    }
+    if (Object.keys(body).length === 0) {
+      closeEdit();
+      return;
+    }
+    const version = editVersion.current;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      await api(`/api/sources/${editingSource.id}?brandId=${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      if (version !== editVersion.current || renderedBrandId.current !== id) return;
+      setEditingSource(null);
+      setNotice(t("saved"));
+      load();
+    } catch (err) {
+      if (version === editVersion.current && renderedBrandId.current === id)
+        setEditError(describeError(err));
+    } finally {
+      if (version === editVersion.current) setEditBusy(false);
     }
   }
 
@@ -589,6 +664,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               }
               trailing={
                 <>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(source)}>
+                    {t("edit")}
+                  </Button>
                   <Button
                     variant="secondary"
                     size="sm"
@@ -953,6 +1031,48 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         </section>
       </Modal>
 
+      <Modal
+        open={editingSource !== null}
+        onClose={closeEdit}
+        title={t("editTitle")}
+        footer={
+          <>
+            <Button variant="secondary" disabled={editBusy} onClick={closeEdit}>
+              {t("cancel")}
+            </Button>
+            <Button disabled={editBusy} onClick={saveSource}>
+              {t("save")}
+            </Button>
+          </>
+        }
+      >
+        {editError && (
+          <p role="alert" className="mb-4 text-sm text-danger">
+            {editError}
+          </p>
+        )}
+        <div className="space-y-4">
+          <Input
+            label={t("name")}
+            value={editName}
+            onChange={(event) => setEditName(event.target.value)}
+            maxLength={120}
+            required
+          />
+          {editingSource?.kind === "telegram_private" ? (
+            <p className="text-sm text-fg-secondary">{t("privateIdentityFixed")}</p>
+          ) : (
+            <Input
+              label={t(editingSource?.kind === "telegram" ? "telegramUrl" : "url")}
+              value={editUrl}
+              onChange={(event) => setEditUrl(event.target.value)}
+              inputMode="url"
+              maxLength={2048}
+              required
+            />
+          )}
+        </div>
+      </Modal>
       <Modal
         open={pendingDelete !== null}
         onClose={closeDelete}

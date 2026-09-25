@@ -240,6 +240,193 @@ describe("watched sources page", () => {
     );
   });
 
+  it("edits a feed in place without deleting its collected stories", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "New journal");
+    await user.clear(within(dialog).getByLabelText(en.Sources.url));
+    await user.type(within(dialog).getByLabelText(en.Sources.url), "https://example.com/new.xml");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === "PATCH" && call.url.includes(SOURCE_ID))).toBe(
+        true,
+      ),
+    );
+    expect(calls.find((call) => call.method === "PATCH" && call.url.includes(SOURCE_ID))).toEqual({
+      url: `/api/sources/${SOURCE_ID}?brandId=${BRAND_ID}`,
+      method: "PATCH",
+      body: { name: "New journal", url: "https://example.com/new.xml" },
+    });
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("sends only the changed feed name, preserving a newer URL from another editor", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Updated journal");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
+      name: "Updated journal",
+    });
+  });
+
+  it("rejects an invalid edited feed URL before the API and cancels without a write", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/old.xml",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.url));
+    await user.type(within(dialog).getByLabelText(en.Sources.url), "javascript:bad");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(en.Sources.invalidFeedUrl);
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.cancel }));
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("edits a private Telegram source name without exposing its identity as an input", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Internal",
+          kind: "telegram_private",
+          url: "https://t.me/c/123456",
+          isActive: true,
+        },
+      ],
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    expect(within(dialog).getByText(en.Sources.privateIdentityFixed)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(en.Sources.url)).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(en.Sources.telegramUrl)).not.toBeInTheDocument();
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Staff");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ name: "Staff" });
+  });
+
+  it("closes a source edit when navigating to another brand in the same page instance", async () => {
+    const calls = install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/feed.xml",
+          isActive: true,
+        },
+      ],
+    );
+    const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    await userEvent.click(screen.getByRole("button", { name: en.Sources.edit }));
+    expect(screen.getByRole("dialog", { name: en.Sources.editTitle })).toBeInTheDocument();
+    await act(async () => {
+      view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument(),
+    );
+    expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("does not show an old brand save after navigating away during the request", async () => {
+    install(
+      [],
+      [
+        {
+          id: SOURCE_ID,
+          brandId: BRAND_ID,
+          name: "Journal",
+          kind: "rss",
+          url: "https://example.com/feed.xml",
+          isActive: true,
+        },
+      ],
+    );
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let resolvePatch: ((result: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (init?.method === "PATCH" && String(input).includes(`/api/sources/${SOURCE_ID}`)) {
+        return new Promise<Response>((resolve) => {
+          resolvePatch = resolve;
+        });
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+    const view = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Sources.edit }));
+    const dialog = screen.getByRole("dialog", { name: en.Sources.editTitle });
+    await user.clear(within(dialog).getByLabelText(en.Sources.name));
+    await user.type(within(dialog).getByLabelText(en.Sources.name), "Updated journal");
+    await user.click(within(dialog).getByRole("button", { name: en.Sources.save }));
+    await waitFor(() => expect(resolvePatch).toBeDefined());
+    await act(async () => {
+      view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
+    });
+    await act(async () => resolvePatch?.(response(200, {})));
+    expect(screen.queryByRole("dialog", { name: en.Sources.editTitle })).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Sources.saved)).not.toBeInTheDocument();
+  });
+
   it("sends a private invite only in the protected request body and clears the field", async () => {
     const calls = install();
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
