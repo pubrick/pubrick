@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
@@ -355,7 +356,8 @@ export class CommentsRepository {
     await db.transaction(async (tx) => {
       if (!(await this.lockAuto(tx, job, url))) return;
       const comments = result.comments.slice(0, 50);
-      if (comments.length)
+      const sampleVersion = result.status === "available" ? randomUUID() : null;
+      if (sampleVersion && comments.length)
         await tx.insert(schema.newsComments).values(
           comments.map((comment) => ({
             orgId: job.orgId,
@@ -372,8 +374,46 @@ export class CommentsRepository {
           commentsStatus: result.status,
           commentsCheckedAt: new Date(),
           commentsErrorCode: null,
+          commentsSampleVersion: sampleVersion,
         })
         .where(and(eq(schema.newsItems.orgId, job.orgId), eq(schema.newsItems.id, job.itemId)));
+      if (sampleVersion && comments.length) {
+        const [paid] = await tx
+          .select({
+            enabled: schema.brandPaidReplySettings.sourceEnabled,
+            revision: schema.brandPaidReplySettings.sourceRevision,
+            thresholdRevision: schema.brandPaidReplySettings.thresholdRevision,
+          })
+          .from(schema.brandPaidReplySettings)
+          .where(
+            and(
+              eq(schema.brandPaidReplySettings.orgId, job.orgId),
+              eq(schema.brandPaidReplySettings.brandId, job.brandId),
+            ),
+          )
+          .limit(1)
+          .for("share");
+        if (paid?.enabled) {
+          const [organization] = await tx
+            .select({ revision: schema.organizationPaidReplySettings.revision })
+            .from(schema.organizationPaidReplySettings)
+            .where(eq(schema.organizationPaidReplySettings.orgId, job.orgId))
+            .limit(1)
+            .for("share");
+          if (organization)
+            await tx.insert(schema.paidReplyAnalysisHandoffs).values({
+              orgId: job.orgId,
+              brandId: job.brandId,
+              targetKind: "source_comment",
+              targetId: job.itemId,
+              sampleVersion,
+              freeRevision: job.revision,
+              paidRevision: paid.revision,
+              orgSettingsRevision: organization.revision,
+              brandThresholdRevision: paid.thresholdRevision,
+            });
+        }
+      }
     });
   }
 
@@ -617,9 +657,13 @@ export class CommentsRepository {
           requestedAt: sql`now()`,
           checkedAt: sql`now()`,
           errorCode,
+          sampleVersion: result?.status === "available" ? randomUUID() : null,
         })
         .onConflictDoNothing()
-        .returning({ id: schema.publicationCommentSamples.publicationId });
+        .returning({
+          id: schema.publicationCommentSamples.publicationId,
+          sampleVersion: schema.publicationCommentSamples.sampleVersion,
+        });
       if (!inserted) return;
       if (status === "available")
         await tx.insert(schema.publicationComments).values(
@@ -632,6 +676,43 @@ export class CommentsRepository {
             publishedAt: comment.publishedAt,
           })),
         );
+      if (status === "available" && inserted.sampleVersion) {
+        const [paid] = await tx
+          .select({
+            enabled: schema.brandPaidReplySettings.publicationEnabled,
+            revision: schema.brandPaidReplySettings.publicationRevision,
+            thresholdRevision: schema.brandPaidReplySettings.thresholdRevision,
+          })
+          .from(schema.brandPaidReplySettings)
+          .where(
+            and(
+              eq(schema.brandPaidReplySettings.orgId, job.orgId),
+              eq(schema.brandPaidReplySettings.brandId, job.brandId),
+            ),
+          )
+          .limit(1)
+          .for("share");
+        if (paid?.enabled) {
+          const [organization] = await tx
+            .select({ revision: schema.organizationPaidReplySettings.revision })
+            .from(schema.organizationPaidReplySettings)
+            .where(eq(schema.organizationPaidReplySettings.orgId, job.orgId))
+            .limit(1)
+            .for("share");
+          if (organization)
+            await tx.insert(schema.paidReplyAnalysisHandoffs).values({
+              orgId: job.orgId,
+              brandId: job.brandId,
+              targetKind: "publication_comment",
+              targetId: job.publicationId,
+              sampleVersion: inserted.sampleVersion,
+              freeRevision: job.revision,
+              paidRevision: paid.revision,
+              orgSettingsRevision: organization.revision,
+              brandThresholdRevision: paid.thresholdRevision,
+            });
+        }
+      }
     });
   }
 
@@ -715,6 +796,7 @@ export class CommentsRepository {
           status,
           checkedAt: new Date(),
           errorCode: null,
+          ...(result.status === "available" ? { sampleVersion: randomUUID() } : {}),
         })
         .where(
           and(
@@ -834,26 +916,29 @@ export class CommentsRepository {
         .limit(1);
       const item = rows[0];
       if (!item) return;
-      await tx
-        .delete(schema.newsComments)
-        .where(and(eq(schema.newsComments.orgId, orgId), eq(schema.newsComments.itemId, itemId)));
-      if (result.comments.length)
-        await tx.insert(schema.newsComments).values(
-          result.comments.map((comment) => ({
-            orgId,
-            brandId: item.brandId,
-            itemId,
-            telegramMessageId: comment.messageId,
-            body: comment.body,
-            publishedAt: comment.publishedAt,
-          })),
-        );
+      if (result.status === "available") {
+        await tx
+          .delete(schema.newsComments)
+          .where(and(eq(schema.newsComments.orgId, orgId), eq(schema.newsComments.itemId, itemId)));
+        if (result.comments.length)
+          await tx.insert(schema.newsComments).values(
+            result.comments.map((comment) => ({
+              orgId,
+              brandId: item.brandId,
+              itemId,
+              telegramMessageId: comment.messageId,
+              body: comment.body,
+              publishedAt: comment.publishedAt,
+            })),
+          );
+      }
       await tx
         .update(schema.newsItems)
         .set({
           commentsStatus: result.status,
           commentsCheckedAt: new Date(),
           commentsErrorCode: null,
+          ...(result.status === "available" ? { commentsSampleVersion: randomUUID() } : {}),
         })
         .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.id, itemId)));
     });

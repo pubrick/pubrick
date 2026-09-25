@@ -211,6 +211,55 @@ describe.skipIf(!url)("automatic public Telegram comment collection", () => {
     expect(
       await db.select().from(schema.newsComments).where(eq(schema.newsComments.itemId, itemId)),
     ).toHaveLength(50);
+    expect(
+      await db
+        .select()
+        .from(schema.paidReplyAnalysisHandoffs)
+        .where(eq(schema.paidReplyAnalysisHandoffs.targetId, itemId)),
+    ).toHaveLength(0);
+  });
+
+  it("commits an opted-in paid handoff with a nonempty automatic sample only once", async () => {
+    const f = await fixture();
+    const itemId = await story(f, 11);
+    await db
+      .update(schema.brandPaidReplySettings)
+      .set({ sourceEnabled: true, sourceRevision: 1 })
+      .where(eq(schema.brandPaidReplySettings.brandId, f.brandId));
+    const job = {
+      kind: "news_auto" as const,
+      orgId: f.orgId,
+      brandId: f.brandId,
+      itemId,
+      revision: 1,
+    };
+    const result = {
+      status: "available" as const,
+      comments: [{ messageId: 1, body: "Question", publishedAt: new Date() }],
+    };
+    await repo.saveAuto(job, "https://t.me/example_channel/11", result);
+    await repo.saveAuto(job, "https://t.me/example_channel/11", result);
+    const [item] = await db
+      .select({ version: schema.newsItems.commentsSampleVersion })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, itemId));
+    const handoffs = await db
+      .select()
+      .from(schema.paidReplyAnalysisHandoffs)
+      .where(eq(schema.paidReplyAnalysisHandoffs.targetId, itemId));
+    expect(item?.version).toBeTruthy();
+    expect(handoffs).toMatchObject([
+      {
+        orgId: f.orgId,
+        brandId: f.brandId,
+        targetKind: "source_comment",
+        targetId: itemId,
+        sampleVersion: item?.version,
+        freeRevision: 1,
+        paidRevision: 1,
+        status: "pending",
+      },
+    ]);
   });
 
   it("discards an in-flight Telegram response when collection is disabled", async () => {
