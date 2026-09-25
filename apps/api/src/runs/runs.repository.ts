@@ -76,7 +76,8 @@ const RUN_COLUMNS = {
 };
 
 /**
- * The list's `input`, WITHOUT the pasted article or editorial note text,
+ * The list's `input`, WITHOUT the pasted article, editorial note text, or
+ * SEO phrases,
  * evaluated by Postgres so the 8 000 characters never leave it.
  *
  * The queue strip polls `?state=open` every five seconds and reads the brief,
@@ -98,7 +99,7 @@ const RUN_COLUMNS = {
  */
 const RUN_LIST_COLUMNS = {
   ...RUN_COLUMNS,
-  input: sql<RunListInput>`${schema.pipelineRuns.input} - 'material'::text - 'editorialFeedback'::text`,
+  input: sql<RunListInput>`${schema.pipelineRuns.input} - 'material'::text - 'editorialFeedback'::text - 'seoKeywords'::text`,
 };
 
 /**
@@ -496,6 +497,7 @@ export class RunsRepository {
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
                   ...(data.generateInlineImages && { generateInlineImages: true }),
+                  ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
                   ...(data.useEditorialFeedback && {
                     useEditorialFeedback: true,
                     editorialFeedback,
@@ -510,6 +512,7 @@ export class RunsRepository {
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
                   ...(data.generateInlineImages && { generateInlineImages: true }),
+                  ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
                   ...(data.useEditorialFeedback && {
                     useEditorialFeedback: true,
                     editorialFeedback,
@@ -576,6 +579,7 @@ export class RunsRepository {
         contentType: stored.contentType,
         generateCover: stored.generateCover,
         generateInlineImages: stored.generateInlineImages,
+        seoKeywords: stored.seoKeywords,
         useEditorialFeedback: stored.useEditorialFeedback,
         brief: stored.text ?? undefined,
         ...(stored.kind === "source"

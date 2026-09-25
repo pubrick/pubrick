@@ -18,7 +18,7 @@ import { MockLanguageModelV4 } from "ai/test";
  * NESTED usage shape, and `finishReason` as an object — a bare string passes
  * vitest and fails `tsc`.
  */
-export type StepRole = "researcher" | "writer" | "editor" | "factcheck" | "adapter";
+export type StepRole = "researcher" | "writer" | "seo_polish" | "editor" | "factcheck" | "adapter";
 
 /**
  * What a role replies with. A string is sent verbatim (for malformed-output
@@ -59,6 +59,7 @@ const stop = { unified: "stop" as const, raw: undefined };
 const ROLE_MARKERS: ReadonlyArray<[StepRole, string]> = [
   ["researcher", "You plan a content draft before anyone writes it."],
   ["writer", "You write the master draft, working from a brief"],
+  ["seo_polish", "You improve the discoverability and readability of a draft expert article"],
   ["editor", "You edit a draft into the brand's voice."],
   ["factcheck", "You read a draft and list the factual claims"],
   ["adapter", "You rewrite an approved draft for one channel:"],
@@ -94,6 +95,7 @@ function halvesOf(prompt: readonly PromptMessage[]): { system: string; user: str
 const DEFAULT_REPLIES: Record<StepRole, RoleReply> = {
   researcher: () => ({ angle: "An angle", keyPoints: ["A key point"], avoid: [] }),
   writer: () => ({ body: "A first draft." }),
+  seo_polish: () => ({ body: "A polished first draft." }),
   editor: () => ({ body: "An edited draft.", changes: ["Tightened the opening."] }),
   factcheck: () => ({ claims: [{ text: "A claim.", needsCheck: true }] }),
   adapter: (system) => ({ body: `An adaptation for ${channelOf(system)}.` }),

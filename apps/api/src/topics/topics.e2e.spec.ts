@@ -153,6 +153,22 @@ describe.skipIf(!url)("topic bank e2e", () => {
       sourceUrl: "https://example.com/market-hall",
       material: "Market hall opening\n\nThe council approved it.",
     });
+    await owner.agent
+      .post(`/api/topics/${saved.body.id}/run?brandId=${brand.body.id}`)
+      .send({ channelIds: [channel.body.id], seoKeywords: ["local market hall"] })
+      .expect(400);
+    const expertRun = await owner.agent
+      .post(`/api/topics/${saved.body.id}/run?brandId=${brand.body.id}`)
+      .send({
+        channelIds: [channel.body.id],
+        contentType: "expert_article",
+        seoKeywords: ["local market hall"],
+      })
+      .expect(201);
+    expect(expertRun.body.input).toMatchObject({
+      contentType: "expert_article",
+      seoKeywords: ["local market hall"],
+    });
     const edited = await owner.agent
       .patch(`/api/topics/${saved.body.id}?brandId=${brand.body.id}`)
       .send({ title: "Revised market hall" })

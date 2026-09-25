@@ -102,6 +102,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     generateCover?: boolean;
     generateInlineImages?: boolean;
     contentType?: import("@pubrick/shared").ContentType;
+    seoKeywords?: string[];
   };
 
   async function seed(options: SeedOptions = {}): Promise<Seeded> {
@@ -171,6 +172,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           ...(options.generateCover && { generateCover: true }),
           ...(options.generateInlineImages && { generateInlineImages: true }),
           ...(options.contentType && { contentType: options.contentType }),
+          ...(options.seoKeywords && { seoKeywords: options.seoKeywords }),
         },
       })
       .returning({ id: schema.pipelineRuns.id });
@@ -204,6 +206,93 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   async function ledgerOf(orgId: string) {
     return db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId));
   }
+
+  describe("optional expert-article SEO polish", () => {
+    it("uses the extra metered step only for a reviewed expert-article input", async () => {
+      const ordinary = await seed({ contentType: "expert_article" });
+      const without = scriptedModel();
+      await serviceFor(without).handle({
+        id: "seo-default-off",
+        data: { runId: ordinary.runId, orgId: ordinary.orgId },
+      });
+      expect(without.callsFor("seo_polish")).toBe(0);
+
+      const chosen = await seed({
+        contentType: "expert_article",
+        seoKeywords: ["local cafe planning"],
+      });
+      const script = scriptedModel({
+        seo_polish: () => ({ body: "## Local cafe planning\n\nA polished first draft." }),
+      });
+      await serviceFor(script).handle({
+        id: "seo-opted-in",
+        data: { runId: chosen.runId, orgId: chosen.orgId },
+      });
+      expect(script.callsFor("seo_polish")).toBe(1);
+      expect(script.calls.find((call) => call.role === "seo_polish")?.user).toContain(
+        "local cafe planning",
+      );
+      expect(script.calls.find((call) => call.role === "editor")?.user).toContain(
+        "A polished first draft.",
+      );
+      expect((await runRow(chosen.runId))?.steps.seo_polish?.output).toMatchObject({
+        result: "polished",
+      });
+      expect(
+        (await ledgerOf(chosen.orgId)).filter((entry) => entry.step === "seo_polish"),
+      ).toHaveLength(1);
+    }, 30_000);
+
+    it("checkpoints a visible fallback and does not repay SEO on takeover", async () => {
+      const seeded = await seed({
+        contentType: "expert_article",
+        seoKeywords: ["practical guide"],
+      });
+      const repo = new Repository();
+      const write = repo.writeCheckpoint.bind(repo);
+      let tookOver = false;
+      vi.spyOn(repo, "writeCheckpoint").mockImplementation(async (...args) => {
+        const result = await write(...(args as Parameters<typeof write>));
+        if (args[3] === "seo_polish" && !tookOver) {
+          tookOver = true;
+          await new Repository().claim(
+            seeded.orgId,
+            seeded.runId,
+            "seo-fallback#other",
+            "seo-fallback",
+          );
+        }
+        return result;
+      });
+      const first = scriptedModel({ seo_polish: () => "invalid structured response" });
+      await serviceFor(first, repo).handle({
+        id: "seo-fallback",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      const afterFirst = await runRow(seeded.runId);
+      expect(afterFirst?.steps.seo_polish?.output).toMatchObject({
+        body: "A first draft.",
+        result: "unavailable",
+      });
+      expect(first.callsFor("seo_polish")).toBe(2); // structured-output repair
+      const billed = (await ledgerOf(seeded.orgId)).filter((entry) => entry.step === "seo_polish");
+      expect(billed).toHaveLength(2);
+
+      const resumed = scriptedModel();
+      await serviceFor(resumed).handle({
+        id: "seo-fallback",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(resumed.callsFor("seo_polish")).toBe(0);
+      expect(resumed.calls.find((call) => call.role === "editor")?.user).toContain(
+        "A first draft.",
+      );
+      expect((await runRow(seeded.runId))?.status).toBe("succeeded");
+      expect(
+        (await ledgerOf(seeded.orgId)).filter((entry) => entry.step === "seo_polish"),
+      ).toHaveLength(2);
+    }, 30_000);
+  });
 
   describe("opt-in draft covers", () => {
     it("does not call the image provider unless the run requested a cover", async () => {

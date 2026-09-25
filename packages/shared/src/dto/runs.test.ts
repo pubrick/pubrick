@@ -316,6 +316,29 @@ describe("what a run may be asked for", () => {
     );
   });
 
+  it("bounds reviewed SEO terms and admits them only for expert articles", () => {
+    const article = {
+      ...base,
+      brief: "Explain the evidence",
+      contentType: "expert_article",
+      seoKeywords: ["evidence review", "practical guide"],
+    };
+    expect(runCreateSchema.parse(article)).toEqual(article);
+    for (const seoKeywords of [
+      [],
+      ["x"],
+      ["x".repeat(61)],
+      Array.from({ length: 9 }, (_, index) => `phrase ${index}`),
+      ["Practical guide", "practical guide"],
+      ["valid phrase", "bad\u0000phrase"],
+    ]) {
+      expect(runCreateSchema.safeParse({ ...article, seoKeywords }).success).toBe(false);
+    }
+    expect(runCreateSchema.safeParse({ ...article, contentType: "social_post" }).success).toBe(
+      false,
+    );
+  });
+
   it("admits generated inline images only for article formats", () => {
     for (const contentType of [
       "expert_article",

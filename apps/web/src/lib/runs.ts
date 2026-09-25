@@ -154,7 +154,7 @@ export type { RunStepCheckpoint, RunSteps } from "@pubrick/shared";
 export type RunDetail = RunDetailDto;
 
 /**
- * The five text roles, followed by optional image steps. `adapter` is one row for
+ * The five default text roles, optional SEO polish, then optional image steps. `adapter` is one row for
  * the whole fan-out even though its checkpoints are keyed `adapter:<channelId>`
  * — the human is watching one pipeline, not N of them, and the per-channel
  * progress rides along as a count.
@@ -162,6 +162,7 @@ export type RunDetail = RunDetailDto;
 export const RUN_STEP_KEYS = [
   "researcher",
   "writer",
+  "seo_polish",
   "editor",
   "factcheck",
   "adapter",
@@ -204,7 +205,8 @@ export function runStepStates(run: RunDetail): RunStepProgress[] {
   return RUN_STEP_KEYS.filter(
     (key) =>
       (key !== "cover" || run.input.generateCover === true) &&
-      (key !== "inline_image" || run.input.generateInlineImages === true),
+      (key !== "inline_image" || run.input.generateInlineImages === true) &&
+      (key !== "seo_polish" || Boolean(run.input.seoKeywords?.length)),
   ).map((key) => {
     if (key === "adapter") {
       const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);
@@ -266,6 +268,17 @@ export function runStepStates(run: RunDetail): RunStepProgress[] {
 
     const checkpoint = run.steps[key];
     const isCurrent = run.currentStep === key;
+    if (key === "seo_polish" && checkpoint?.status === "succeeded") {
+      const output = checkpoint.output;
+      if (
+        typeof output === "object" &&
+        output !== null &&
+        "result" in output &&
+        output.result === "unavailable"
+      ) {
+        return { key, state: "unavailable", done: 0, total: 0 };
+      }
+    }
     if (key === "cover" && checkpoint?.status === "succeeded") {
       const output = checkpoint.output;
       if (

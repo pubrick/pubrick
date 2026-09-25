@@ -341,6 +341,8 @@ export class TopicsRepository {
       runCreateSchema.parse({
         brandId,
         channelIds: data.channelIds,
+        ...(data.contentType && { contentType: data.contentType }),
+        ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
         material: `${topic.title}\n\n${topic.description}`.trim(),
         ...(topic.sourceUrl ? { sourceUrl: topic.sourceUrl } : {}),
       }),
