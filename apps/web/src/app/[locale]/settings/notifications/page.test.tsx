@@ -159,7 +159,15 @@ describe("notifications settings", () => {
     });
     const user = userEvent.setup();
     render(<NotificationsPage />);
-    await user.click(await screen.findByRole("button", { name: "Send now" }));
+    const send = await screen.findByRole("button", { name: "Send now" });
+    await user.type(screen.getByLabelText("Bot token"), "123:new");
+    expect(send).toBeDisabled();
+    await user.clear(screen.getByLabelText("Bot token"));
+    await user.type(screen.getByLabelText("Destination chat ID"), "-10099");
+    expect(send).toBeDisabled();
+    await user.clear(screen.getByLabelText("Destination chat ID"));
+    expect(send).toBeEnabled();
+    await user.click(send);
     expect(await screen.findByRole("status")).toHaveTextContent("already queued for today");
     expect(request).toHaveBeenCalledWith(`/api/notifications/digests/${brandId}/send`, {
       method: "POST",

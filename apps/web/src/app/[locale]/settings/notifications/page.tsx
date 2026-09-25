@@ -335,7 +335,9 @@ export default function NotificationsPage() {
                               type="button"
                               variant="secondary"
                               className="mt-3"
-                              disabled={busy || sendingDigest !== null}
+                              disabled={
+                                busy || sendingDigest !== null || botToken !== "" || chatId !== ""
+                              }
                               onClick={() => void sendDigest(digest.brandId)}
                             >
                               {sendingDigest === digest.brandId
