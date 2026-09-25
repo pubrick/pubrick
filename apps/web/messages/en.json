@@ -707,6 +707,7 @@
     "approveNow": "Publish now",
     "scheduleLabel": "Or schedule for",
     "approveScheduled": "Approve with schedule",
+    "approveAfterThirtyMinutes": "Approve, send in 30 min",
     "reject": "Reject",
     "retractApproval": "Undo approval",
     "archive": "Archive",

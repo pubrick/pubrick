@@ -825,8 +825,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  async function approve(withSchedule: boolean) {
+  async function approve(withSchedule: boolean, scheduledOverride?: Date) {
     setActionError(null);
+    const chosen = withSchedule
+      ? (scheduledOverride ?? (scheduledAt ? new Date(scheduledAt) : null))
+      : null;
     /*
      * Re-checked HERE, at click time, rather than trusted from the button's
      * `disabled` prop: this screen's poll (`usePoll`/`itemSettled`) stops
@@ -840,16 +843,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
      * clock crosses the picked instant reads identically whether this check
      * or `ContentRepository.approve`'s catches it.
      */
-    if (withSchedule && scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) {
+    if (
+      withSchedule &&
+      (!chosen || !Number.isFinite(chosen.getTime()) || chosen.getTime() <= Date.now())
+    ) {
       setActionError(te("schedule_in_past"));
       return;
     }
     try {
       await api(`/api/content/${id}/approve`, {
         method: "POST",
-        body: JSON.stringify(
-          withSchedule && scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {},
-        ),
+        body: JSON.stringify(chosen ? { scheduledAt: chosen.toISOString() } : {}),
       });
       await reload();
     } catch (err) {
@@ -1470,6 +1474,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    */
   const nowLocal = toDatetimeLocalValue(new Date());
   const scheduledAtIsPast = scheduledAt !== "" && new Date(scheduledAt).getTime() <= Date.now();
+  const canApproveAfterThirtyMinutes =
+    ["draft", "rejected", "failed"].includes(item.status) &&
+    item.adaptations.length > 0 &&
+    manualAdaptations.length === 0;
 
   return (
     <AppShell
@@ -2116,8 +2124,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
-        action; the other two paths live here — "Approve with schedule" because
-        it is meaningless away from the date field it reads, and Reject because
+        action; the other paths live here — "Approve with schedule" because
+        it is meaningless away from the date field it reads, the 30-minute
+        shortcut beside it, and Reject because
         the constitution allows exactly one control in the primary slot and
         Approve is it. Reject keeps its danger styling, so nothing about its
         weight changed except where it sits.
@@ -2173,6 +2182,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             >
               {t("approveScheduled")}
             </Button>
+            {canApproveAfterThirtyMinutes && (
+              <Button
+                variant="secondary"
+                onClick={() => approve(true, new Date(Date.now() + 30 * 60_000))}
+              >
+                {t("approveAfterThirtyMinutes")}
+              </Button>
+            )}
             {manualAdaptations.length > 0 && (
               <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
             )}
