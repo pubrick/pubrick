@@ -15,6 +15,37 @@ const COPY: Record<NotificationEvent, string> = {
   morning_digest: "",
 };
 
+function notificationLine(value: string | null, fallback: string, limit: number): string {
+  // Telegram receives plain text, but an embedded newline or directional
+  // control could still make user-authored titles look like another field.
+  return (
+    value
+      ?.replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, limit) || fallback
+  );
+}
+
+export function draftReviewUrl(rawOrigin: string, itemId: string): string | null {
+  let origin: URL;
+  try {
+    origin = new URL(rawOrigin);
+  } catch {
+    return null;
+  }
+  if (
+    origin.protocol !== "https:" ||
+    origin.username ||
+    origin.password ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash
+  )
+    return null;
+  return new URL(`/en/content/${encodeURIComponent(itemId)}`, origin.origin).toString();
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -266,6 +297,41 @@ export class NotificationsService {
                   .limit(1)
               )[0]
             : null;
+        const draft =
+          event.event === "draft_ready"
+            ? (
+                await db
+                  .select({
+                    title: schema.contentItems.title,
+                    brandName: schema.brands.name,
+                  })
+                  .from(schema.contentItems)
+                  .innerJoin(
+                    schema.brands,
+                    and(
+                      eq(schema.brands.id, schema.contentItems.brandId),
+                      eq(schema.brands.orgId, schema.contentItems.orgId),
+                    ),
+                  )
+                  .innerJoin(
+                    schema.pipelineRuns,
+                    and(
+                      eq(schema.pipelineRuns.id, event.subjectId),
+                      eq(schema.pipelineRuns.orgId, event.orgId),
+                      eq(schema.pipelineRuns.brandId, schema.contentItems.brandId),
+                      eq(schema.pipelineRuns.contentItemId, schema.contentItems.id),
+                    ),
+                  )
+                  .where(
+                    and(
+                      eq(schema.contentItems.orgId, event.orgId),
+                      eq(schema.contentItems.id, event.targetId),
+                      eq(schema.contentItems.status, "draft"),
+                    ),
+                  )
+                  .limit(1)
+              )[0]
+            : null;
         let digestEnabled = event.event !== "morning_digest";
         if (event.event === "morning_digest") {
           const [config] = await db
@@ -280,27 +346,49 @@ export class NotificationsService {
             .limit(1);
           digestEnabled = Boolean(config?.enabled && digest);
         }
-        if (digestEnabled) {
+        if (event.event === "draft_ready" && !draft) {
+          // The item was removed, left review, or is outside this event's org.
+          status = "skipped";
+        } else if (digestEnabled) {
           const credentials = decryptJson<{ botToken: string; chatId: string }>(
             settings.credentialsEncrypted,
             env.APP_ENCRYPTION_KEY,
           );
-          const url = new URL(
-            event.event === "morning_digest"
-              ? `/en/brands/${event.targetId}`
-              : `/en/content/${event.targetId}`,
-            env.WEB_ORIGIN,
-          ).toString();
-          attemptedSend = true;
-          const result = await sendTelegramNotification(
-            credentials,
-            digest?.message ?? COPY[event.event],
-            {
+          const url =
+            event.event === "draft_ready"
+              ? draftReviewUrl(env.WEB_ORIGIN, event.targetId)
+              : new URL(
+                  event.event === "morning_digest"
+                    ? `/en/brands/${event.targetId}`
+                    : `/en/content/${event.targetId}`,
+                  env.WEB_ORIGIN,
+                ).toString();
+          if (!url) {
+            status = "failed";
+            this.logger.warn(`Notification ${event.id} needs an HTTPS WEB_ORIGIN`);
+          } else {
+            const message = draft
+              ? [
+                  "Draft ready for review",
+                  `Brand: ${notificationLine(draft.brandName, "Unknown brand", 100)}`,
+                  `Title: ${notificationLine(draft.title, "Untitled draft", 160)}`,
+                  "Open Pubrick to read and decide. This link takes no action.",
+                ].join("\n")
+              : (digest?.message ?? COPY[event.event]);
+            attemptedSend = true;
+            const result = await sendTelegramNotification(credentials, message, {
               baseUrl: env.TELEGRAM_API_BASE_URL,
-              button: { text: event.event === "morning_digest" ? "Open brand" : "Open post", url },
-            },
-          );
-          status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+              button: {
+                text: draft
+                  ? "Review draft"
+                  : event.event === "morning_digest"
+                    ? "Open brand"
+                    : "Open post",
+                url,
+              },
+            });
+            status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+          }
         }
       }
     } catch {

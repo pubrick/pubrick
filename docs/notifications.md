@@ -4,7 +4,14 @@ Configure a private Telegram bot and destination chat in **Settings → Notifica
 
 Self-hosters with restricted Telegram egress can set `TELEGRAM_API_BASE_URL` to a compatible Bot API proxy; Compose passes it to both the API (Test) and worker (event delivery).
 
-Notifications are off until explicitly enabled. Draft-ready alerts are off by default. Delivery failures and unknown outcomes are selected by default, but they are sent only after notifications are enabled. Unknown means the post may already be live; inspect the channel before retrying. Each Telegram alert has an Open post URL button to the configured public origin (`PUBLIC_ORIGIN` in Compose).
+Notifications are off until explicitly enabled. Draft-ready alerts are off by default. Delivery failures and unknown outcomes are selected by default, but they are sent only after notifications are enabled. Unknown means the post may already be live; inspect the channel before retrying. Delivery alerts have an **Open post** URL button to the configured public origin (`PUBLIC_ORIGIN` in Compose).
+
+A draft-ready alert names the brand and the saved post title (or **Untitled draft**
+when no title has been saved). Its **Review draft** button opens the post in the
+authenticated Pubrick web app; opening the link never approves or publishes.
+The worker sends this link only when `PUBLIC_ORIGIN` / `WEB_ORIGIN` is a plain
+HTTPS origin. Configure the public HTTPS address before enabling draft-ready
+alerts. A stale alert whose post has left the draft queue is skipped.
 
 Events are inserted in the same database transaction as a successful generation or terminal delivery failure. Delivery alerts are deduplicated per publication attempt, so an editor's later retry can still produce a fresh alert. A separate worker poll claims the event before calling Telegram, so notification traffic cannot cause a generation retry or duplicate a publication. A network failure or worker crash after the claim leaves an unconfirmed event; Pubrick does not automatically resend it because Telegram might already have received it. The status remains in the database for operator inspection, while the draft or delivery receipt remains visible in the app. Disabling notifications before delivery skips pending alerts.
 
