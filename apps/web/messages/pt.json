@@ -1624,7 +1624,12 @@
     "planningFinishedAt": "Concluído em {date}",
     "planningFailedHint": "O planeamento falhou após várias tentativas. Tente novamente após o intervalo.",
     "planningSlot": "Entrada do calendário em {date}",
-    "planningStatus": { "queued": "Na fila", "running": "Em curso", "completed": "Concluído", "failed": "Falhou" },
+    "planningStatus": {
+      "queued": "Na fila",
+      "running": "Em curso",
+      "completed": "Concluído",
+      "failed": "Falhou"
+    },
     "planNowTitle": "Planear agora os tópicos aprovados?",
     "planNowBody": "O Pubrick irá verificar os tópicos aprovados com data prevista e adicionar as entradas elegíveis. Isto não inicia a geração nem publica nada.",
     "planNowConfirm": "Pedir planeamento",

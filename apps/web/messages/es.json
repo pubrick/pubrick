@@ -1624,7 +1624,12 @@
     "planningFinishedAt": "Finalizado el {date}",
     "planningFailedHint": "La planificación falló tras varios intentos. Vuelve a intentarlo después de la espera.",
     "planningSlot": "Entrada del calendario del {date}",
-    "planningStatus": { "queued": "En cola", "running": "En curso", "completed": "Completado", "failed": "Fallido" },
+    "planningStatus": {
+      "queued": "En cola",
+      "running": "En curso",
+      "completed": "Completado",
+      "failed": "Fallido"
+    },
     "planNowTitle": "¿Planificar ahora los temas aprobados?",
     "planNowBody": "Pubrick revisará los temas aprobados con fecha prevista y añadirá las entradas elegibles. Esto no inicia la generación ni publica nada.",
     "planNowConfirm": "Solicitar planificación",

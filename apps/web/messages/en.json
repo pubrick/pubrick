@@ -1624,7 +1624,12 @@
     "planningFinishedAt": "Finished {date}",
     "planningFailedHint": "Planning failed after retries. Try again after the cooldown.",
     "planningSlot": "Calendar slot at {date}",
-    "planningStatus": { "queued": "Queued", "running": "Running", "completed": "Completed", "failed": "Failed" },
+    "planningStatus": {
+      "queued": "Queued",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed"
+    },
     "planNowTitle": "Plan approved topics now?",
     "planNowBody": "Pubrick will check approved topics with target dates and add eligible calendar slots. This does not start generation or publish anything.",
     "planNowConfirm": "Request planning",
