@@ -20,6 +20,7 @@ import { PromptsModule } from "./prompts/prompts.module";
 import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
+import { SearchCredentialsModule } from "./search-credentials/search-credentials.module";
 import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
 import { SourcesModule } from "./sources/sources.module";
 import { TopicsModule } from "./topics/topics.module";
@@ -47,6 +48,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     PublicApiModule,
     AiCredentialsModule,
     RunsModule,
+    SearchCredentialsModule,
     SourceExtractionModule,
     SourcesModule,
     TopicsModule,

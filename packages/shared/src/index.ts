@@ -67,6 +67,7 @@ export {
   promptRoleSchema,
 } from "./dto/prompts.js";
 export * from "./dto/runs.js";
+export * from "./dto/search-credentials.js";
 export * from "./dto/source-extraction.js";
 export * from "./dto/sources.js";
 export * from "./dto/text.js";
