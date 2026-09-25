@@ -39,6 +39,7 @@ export function InlineImages({
   bodyHasUnsavedChanges,
   editable,
   manualVc,
+  onReloadArticle,
 }: {
   itemId: string;
   brandId: string;
@@ -46,6 +47,7 @@ export function InlineImages({
   bodyHasUnsavedChanges: boolean;
   editable: boolean;
   manualVc: boolean;
+  onReloadArticle: () => void;
 }) {
   const t = useTranslations("InlineImages");
   const te = useTranslations("Errors");
@@ -57,6 +59,7 @@ export function InlineImages({
   const [slots, setSlots] = useState<ImageSlot[]>([]);
   const [revision, setRevision] = useState(0);
   const [stale, setStale] = useState(false);
+  const [bodyStale, setBodyStale] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -232,7 +235,7 @@ export function InlineImages({
   }
 
   async function regenerate(slotId: string) {
-    if (busy || dirty || stale || bodyHasUnsavedChanges || !hasGoogleKey) return;
+    if (busy || dirty || stale || bodyStale || bodyHasUnsavedChanges || !hasGoogleKey) return;
     setBusy(true);
     setRegeneratingSlotId(slotId);
     setError(null);
@@ -246,10 +249,15 @@ export function InlineImages({
       setDirty(false);
       setReviewedSlots(new Set());
       setStale(false);
+      setBodyStale(false);
       setBodyChangedWhileEditing(false);
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "content_images_changed") setStale(true);
-      setError(errorMessage(cause, t("regenerateFailed"), te));
+      if (cause instanceof ApiError && cause.code === "content_image_body_conflict") {
+        setBodyStale(true);
+      } else {
+        setError(errorMessage(cause, t("regenerateFailed"), te));
+      }
     } finally {
       setBusy(false);
       setRegeneratingSlotId(null);
@@ -279,6 +287,7 @@ export function InlineImages({
       (!dirty && !pendingReview) ||
       busy ||
       stale ||
+      bodyStale ||
       invalidAlt ||
       invalidPosition ||
       unacknowledgedReview
@@ -317,6 +326,7 @@ export function InlineImages({
   const canAdd =
     editable &&
     !bodyHasUnsavedChanges &&
+    !bodyStale &&
     paragraphs.length > 0 &&
     slots.length < Math.min(MAX_IMAGES, paragraphs.length);
   const invalidAlt = slots.some((slot) => slot.alt.trim().length === 0);
@@ -355,6 +365,7 @@ export function InlineImages({
                 (!dirty && !pendingReview) ||
                 busy ||
                 stale ||
+                bodyStale ||
                 bodyHasUnsavedChanges ||
                 invalidAlt ||
                 invalidPosition ||
@@ -424,7 +435,7 @@ export function InlineImages({
                       <Select
                         label={t("position")}
                         value={slot.afterParagraph}
-                        disabled={busy || bodyHasUnsavedChanges}
+                        disabled={busy || bodyHasUnsavedChanges || bodyStale}
                         onChange={(event) =>
                           changeSlot(index, { afterParagraph: Number(event.target.value) })
                         }
@@ -453,14 +464,14 @@ export function InlineImages({
                         maxLength={300}
                         required
                         placeholder={t("altPlaceholder")}
-                        disabled={busy}
+                        disabled={busy || bodyStale}
                         onChange={(event) => changeSlot(index, { alt: event.target.value })}
                       />
                       <Input
                         label={t("caption")}
                         value={slot.caption ?? ""}
                         maxLength={500}
-                        disabled={busy}
+                        disabled={busy || bodyStale}
                         onChange={(event) =>
                           changeSlot(index, { caption: event.target.value || null })
                         }
@@ -470,7 +481,7 @@ export function InlineImages({
                           <input
                             type="checkbox"
                             checked={reviewedSlots.has(slot.id)}
-                            disabled={busy || bodyHasUnsavedChanges}
+                            disabled={busy || bodyHasUnsavedChanges || bodyStale}
                             onChange={(event) => {
                               const slotId = slot.id;
                               if (!slotId) return;
@@ -492,7 +503,12 @@ export function InlineImages({
                             size="sm"
                             variant="secondary"
                             disabled={
-                              busy || dirty || stale || bodyHasUnsavedChanges || !hasGoogleKey
+                              busy ||
+                              dirty ||
+                              stale ||
+                              bodyStale ||
+                              bodyHasUnsavedChanges ||
+                              !hasGoogleKey
                             }
                             onClick={() => void regenerate(slot.id as string)}
                           >
@@ -502,7 +518,7 @@ export function InlineImages({
                         <Button
                           size="sm"
                           variant="secondary"
-                          disabled={busy || bodyHasUnsavedChanges}
+                          disabled={busy || bodyHasUnsavedChanges || bodyStale}
                           onClick={() => setChooser({ replaceIndex: index })}
                         >
                           {t("replace")}
@@ -510,7 +526,7 @@ export function InlineImages({
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={busy}
+                          disabled={busy || bodyStale}
                           onClick={() => {
                             setSlots((current) => current.filter((_, at) => at !== index));
                             setDirty(true);
@@ -542,6 +558,16 @@ export function InlineImages({
                   {t("reloadLatest")}
                 </Button>
               )}
+            </div>
+          )}
+          {bodyStale && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <p role="alert" className="text-sm text-danger">
+                {t("bodyStale")}
+              </p>
+              <Button size="sm" variant="secondary" onClick={onReloadArticle}>
+                {t("reloadArticle")}
+              </Button>
             </div>
           )}
           {paragraphs.length > 0 && (

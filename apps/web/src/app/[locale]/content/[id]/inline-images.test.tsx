@@ -40,6 +40,7 @@ const props = {
   bodyHasUnsavedChanges: false,
   editable: true,
   manualVc: false,
+  onReloadArticle: () => {},
 };
 
 describe("article image slots", () => {
@@ -277,6 +278,36 @@ describe("article image slots", () => {
     expect(await screen.findByRole("button", { name: "Reload latest images" })).toBeVisible();
     expect(screen.getAllByRole("img", { name: "Original illustration" })).toHaveLength(2);
     expect(regenerate).toBeDisabled();
+  });
+
+  it("offers to reload the article when its text changed before regeneration", async () => {
+    const original = {
+      id: "slot-1",
+      mediaId: image.id,
+      afterParagraph: 0,
+      alt: "Original illustration",
+      caption: null,
+      needsReview: false,
+    };
+    const onReloadArticle = vi.fn();
+    mockApi.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/ai-credentials") return Promise.resolve([{ provider: "google" }]);
+      if (path === "/api/content/post-1/images/slot-1/regenerate" && init?.method === "POST")
+        return Promise.reject(new ApiError(409, "changed", false, "content_image_body_conflict"));
+      if (path === "/api/content/post-1/images")
+        return Promise.resolve({ images: [original], revision: 4 });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(<InlineImages {...props} onReloadArticle={onReloadArticle} />);
+    const user = userEvent.setup();
+    const regenerate = await screen.findByRole("button", { name: "Regenerate image" });
+    await waitFor(() => expect(regenerate).toBeEnabled());
+    await user.click(regenerate);
+    expect(await screen.findByText(/article text changed in another editor/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Reload latest images" })).toBeNull();
+    expect(regenerate).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Reload article" }));
+    expect(onReloadArticle).toHaveBeenCalledTimes(1);
   });
 
   it("requires the text to be saved before changing image positions", async () => {

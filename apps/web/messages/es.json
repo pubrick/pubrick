@@ -1355,6 +1355,8 @@
     "regenerateHint": "Usa una llamada de imagen de Gemini. Revisa la nueva imagen antes de aprobar este borrador.",
     "regenerateNeedsGoogle": "Añade una clave de Google AI en Configuración para regenerar esta imagen.",
     "regenerateFailed": "No se pudo regenerar esta imagen.",
+    "bodyStale": "Otro editor cambió el texto del artículo. Recarga esta página antes de regenerar. Se perderán los cambios sin guardar.",
+    "reloadArticle": "Recargar artículo",
     "remove": "Quitar del artículo",
     "save": "Guardar imágenes",
     "saving": "Guardando…",

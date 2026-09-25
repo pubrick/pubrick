@@ -1555,6 +1555,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         bodyHasUnsavedChanges={draftMoved}
         editable={["draft", "rejected", "failed"].includes(item.status)}
         manualVc={manualAdaptations.length > 0}
+        onReloadArticle={() => window.location.reload()}
       />
 
       {/*

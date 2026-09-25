@@ -1355,6 +1355,8 @@
     "regenerateHint": "Uses one Gemini image call. Review the new image before approving this draft.",
     "regenerateNeedsGoogle": "Add a Google AI key in Settings to regenerate this image.",
     "regenerateFailed": "Could not regenerate this image.",
+    "bodyStale": "The article text changed in another editor. Reload this page before regenerating. Unsaved edits will be lost.",
+    "reloadArticle": "Reload article",
     "remove": "Remove from article",
     "save": "Save images",
     "saving": "Saving…",
