@@ -2,7 +2,7 @@
 
 The review screen also offers **Approve, send in 30 min** for an unsent draft
 with automatic channels. It records a human approval and schedules the channels
-30 minutes from the click using the existing transactional approval path. It
+30 minutes from the database clock using the existing transactional approval path. It
 never approves a draft automatically, and the reviewer can still choose an
 exact time. This shortcut is unavailable for manual channels and posts already
 in delivery; use the per-channel action below to move an existing slot.

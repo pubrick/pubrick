@@ -592,32 +592,38 @@ export type AdaptationProposal = {
   previousBody: string | null;
 };
 
-export const contentApproveSchema = z.object({
-  /**
-   * ISO timestamp; when omitted the post is queued immediately.
-   *
-   * IT MUST ALSO BE IN THE FUTURE — pg-boss treats a past `startAfter` as "run
-   * now", so a typo'd or stale date would silently publish immediately instead
-   * of being scheduled — but that rule is NOT here any more. It is
-   * `ContentRepository.approve`'s, and it moved for two reasons that point the
-   * same way.
-   *
-   * It is not a shape rule. This schema says what a well-formed request looks
-   * like, and a shape does not stop being well-formed while you look at it; a
-   * clock-reading `.refine` returns a different verdict for the same bytes a
-   * moment later, which is a domain rule wearing a schema's clothes.
-   *
-   * And where it stood it could not be named. The pipe refuses a whole body
-   * with one code (`invalid_request`), so the user was shown the developer's
-   * string — "scheduledAt: scheduledAt must be in the future", the pipe's
-   * `path: message` join wrapped around a message naming the field again. As a
-   * domain refusal it has its own code, `schedule_in_past`, and says "pick a
-   * time in the future" in four languages.
-   *
-   * `.datetime()` stays: THAT is a shape.
-   */
-  scheduledAt: z.string().datetime().optional(),
-});
+export const contentApproveSchema = z
+  .object({
+    /**
+     * ISO timestamp; when omitted the post is queued immediately.
+     *
+     * IT MUST ALSO BE IN THE FUTURE — pg-boss treats a past `startAfter` as "run
+     * now", so a typo'd or stale date would silently publish immediately instead
+     * of being scheduled — but that rule is NOT here any more. It is
+     * `ContentRepository.approve`'s, and it moved for two reasons that point the
+     * same way.
+     *
+     * It is not a shape rule. This schema says what a well-formed request looks
+     * like, and a shape does not stop being well-formed while you look at it; a
+     * clock-reading `.refine` returns a different verdict for the same bytes a
+     * moment later, which is a domain rule wearing a schema's clothes.
+     *
+     * And where it stood it could not be named. The pipe refuses a whole body
+     * with one code (`invalid_request`), so the user was shown the developer's
+     * string — "scheduledAt: scheduledAt must be in the future", the pipe's
+     * `path: message` join wrapped around a message naming the field again. As a
+     * domain refusal it has its own code, `schedule_in_past`, and says "pick a
+     * time in the future" in four languages.
+     *
+     * `.datetime()` stays: THAT is a shape.
+     */
+    scheduledAt: z.string().datetime().optional(),
+    /** Fixed, explicit shortcut; the database clock determines its actual time. */
+    delayMinutes: z.literal(30).optional(),
+  })
+  .refine((body) => !(body.scheduledAt && body.delayMinutes), {
+    message: "Choose either scheduledAt or delayMinutes",
+  });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
 
 /** Leave one dispatch window between an edit and an automatic channel send. */

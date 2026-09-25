@@ -4321,7 +4321,12 @@ export class ContentRepository {
    * (`requireHumanInvolvement`) — the promise, enforced here rather than in the
    * UI, because this is the only door to `enqueuePublish`.
    */
-  async approve(orgId: string, id: string, scheduledAt: Date | null) {
+  async approve(
+    orgId: string,
+    id: string,
+    requestedScheduledAt: Date | null,
+    delayMinutes: 30 | null = null,
+  ) {
     // A SCHEDULE IN THE PAST, refused here rather than by `contentApproveSchema`.
     //
     // It used to be a zod `.refine` on the DTO, and being there is what made the
@@ -4340,7 +4345,7 @@ export class ContentRepository {
     // refusal should cost neither. pg-boss treats a past `startAfter` as "run
     // now", so without this a typo'd or stale date publishes IMMEDIATELY
     // instead of being scheduled, which is the damage the rule exists to stop.
-    if (scheduledAt !== null && scheduledAt.getTime() <= Date.now()) {
+    if (requestedScheduledAt !== null && requestedScheduledAt.getTime() <= Date.now()) {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
     await db.transaction(async (tx) => {
@@ -4352,6 +4357,21 @@ export class ContentRepository {
         "scheduled",
         "manual_ready",
       ]);
+      // A relative shortcut uses the database clock after any lock wait. The
+      // browser may be minutes ahead or behind; the queue must still mean a
+      // full 30 minutes from this decision.
+      let scheduledAt = requestedScheduledAt;
+      if (delayMinutes !== null) {
+        const [clock] = await tx
+          .select({
+            nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
+          })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+          .limit(1);
+        if (!clock) throw notFound("content_not_found", "Content item not found");
+        scheduledAt = new Date(clock.nowMs + delayMinutes * 60_000);
+      }
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
       const journalDecision = await this.shouldJournalDecision(
         tx,

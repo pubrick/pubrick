@@ -181,21 +181,10 @@ const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel"
 /**
  * A `datetime-local` value that is still in the future when the test runs.
  *
- * Any date a test sends to approve MUST be in the future, because
- * `contentApproveSchema` refines `scheduledAt` against `Date.now()` — and the
- * pin below parses the request body back through that very schema. So a
- * hardcoded date rots: these tests held `2026-09-01T10:30` and went red the day
- * the wall clock passed it, with one `ZodError: scheduledAt must be in the
- * future` from the round-trip assertion — a suite that turns red on a calendar
- * boundary while the screen it covers is fine.
- *
- * The schema is no longer the ONLY thing that refuses a past instant (see
- * "the schedule field's lower bound" below), but it still MUST be, because
- * neither the field's `min` nor the button's `disabled` can be trusted to
- * catch every case — see `approve()`'s own doc comment on why it re-checks
- * `Date.now()` at click time rather than relying on either. This helper stays
- * a day ahead specifically so ordinary tests of the request/response cycle
- * never brush up against that boundary at all.
+ * The click handler and API refuse an absolute time once it is past. A fixed
+ * date would eventually cross that boundary and turn an ordinary approval
+ * test into an unrelated clock test. Keep these fixtures a day ahead; the
+ * separate lower-bound tests exercise the boundary deliberately.
  */
 function scheduleValue(daysAhead = 1): string {
   const when = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
@@ -737,20 +726,15 @@ describe("approve with a schedule (Step 3)", () => {
       target: { value: scheduleValue(2) },
     });
 
-    const before = Date.now();
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: en.Publish.approveAfterThirtyMinutes }));
-    const after = Date.now();
     await screen.findByText(en.Content.status.approved);
 
     const approveCall = calls.find((call) => call.path === "/api/content/c1/approve");
     const payload = contentApproveSchema.parse(JSON.parse(approveCall?.body ?? ""));
-    const scheduled = new Date(payload.scheduledAt ?? "").getTime();
     expect(approveCall?.method).toBe("POST");
-    expect(scheduled).toBeGreaterThanOrEqual(before + 30 * 60_000);
-    expect(scheduled).toBeLessThanOrEqual(after + 30 * 60_000);
-    expect(payload.scheduledAt).not.toBe(new Date(scheduleValue(2)).toISOString());
+    expect(payload).toEqual({ delayMinutes: 30 });
   });
 
   it("does not offer the shortcut for an already scheduled post", async () => {
@@ -763,6 +747,18 @@ describe("approve with a schedule (Step 3)", () => {
     installBaseHandlers(served, []);
     await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
     await screen.findByText(en.Content.status.approved);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("waits for channel details before offering the shortcut", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation({ status: "pending" })] }),
+    };
+    installBaseHandlers(served, [], undefined, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
     expect(
       screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
     ).not.toBeInTheDocument();
