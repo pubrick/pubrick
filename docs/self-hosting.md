@@ -187,8 +187,9 @@ which of your colleagues has an account.
 
 **Adding people.** Open **Settings** and find the **Workspace** card: it lists
 everyone in the organization, and **Invite** asks for an address. *Any* member
-can invite — Pubrick has no owner/admin distinction anywhere in its interface,
-so it does not pretend to have one here.
+can invite another ordinary member. Owners and admins may also grant elevated
+roles through the API. The Settings form always invites as a member; the API
+rejects attempts by ordinary members to assign an elevated role.
 
 Pubrick has no mailer, so it does not send the invitation for you. What you get
 back is a link to this instance, which you pass to the person yourself. It is
