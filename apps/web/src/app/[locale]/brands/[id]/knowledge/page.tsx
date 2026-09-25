@@ -52,6 +52,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const canManageIndex = member?.role === "owner" || member?.role === "admin";
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [categoryFilter, setCategoryFilter] = useState("");
+  const listRequest = useRef(0);
   const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -98,17 +99,29 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   );
 
   const load = useCallback(() => {
+    const request = ++listRequest.current;
     setListError(null);
     api<Entry[]>(`/api/knowledge?brandId=${brandId}`)
-      .then(setEntries)
+      .then((rows) => {
+        if (request !== listRequest.current) return;
+        setEntries(rows);
+        setCategoryFilter((current) =>
+          current && rows.some((entry) => entry.category === current) ? current : "",
+        );
+      })
       .catch((err) => {
+        if (request !== listRequest.current) return;
         const message = describeError(err);
         if (message === null) return;
         setEntries(null);
         setListError(message);
       });
   }, [brandId, describeError]);
-  useEffect(load, [load]);
+  useEffect(() => {
+    setEntries(null);
+    setCategoryFilter("");
+    load();
+  }, [load]);
   useEffect(() => {
     api<AutoIndexConfig>(`/api/knowledge/auto-index?brandId=${brandId}`)
       .then(setAutoIndex)
