@@ -6,6 +6,7 @@ import {
   readChannel,
   readComments,
   readPrivateChannel,
+  readPrivateComments,
 } from "@pubrick/telegram";
 import { env } from "../env";
 import type { FeedItem } from "./rss.fetcher";
@@ -72,10 +73,7 @@ export class TelegramReader {
     );
   }
 
-  async readPrivate(
-    encryptedPeer: string | null,
-    encryptedSession: string | null,
-  ): Promise<FeedItem[]> {
+  private peer(encryptedPeer: string | null): PrivateChannelPeer {
     let peer: PrivateChannelPeer;
     try {
       const stored = encryptedPeer ? decryptJson(encryptedPeer, env.APP_ENCRYPTION_KEY) : null;
@@ -92,6 +90,14 @@ export class TelegramReader {
     } catch {
       throw new TelegramSourceError("telegram_access_denied");
     }
+    return peer;
+  }
+
+  async readPrivate(
+    encryptedPeer: string | null,
+    encryptedSession: string | null,
+  ): Promise<FeedItem[]> {
+    const peer = this.peer(encryptedPeer);
     return this.call(
       (session) =>
         readPrivateChannel({
@@ -111,6 +117,25 @@ export class TelegramReader {
           apiId: Number(env.TELEGRAM_API_ID),
           apiHash: env.TELEGRAM_API_HASH ?? "",
           session,
+          url,
+        }),
+      encryptedSession,
+    );
+  }
+
+  async commentsPrivate(
+    url: string,
+    encryptedPeer: string | null,
+    encryptedSession: string | null,
+  ): Promise<ChannelComments> {
+    const peer = this.peer(encryptedPeer);
+    return this.call(
+      (session) =>
+        readPrivateComments({
+          apiId: Number(env.TELEGRAM_API_ID),
+          apiHash: env.TELEGRAM_API_HASH ?? "",
+          session,
+          peer,
           url,
         }),
       encryptedSession,

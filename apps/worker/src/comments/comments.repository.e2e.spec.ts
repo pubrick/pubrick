@@ -103,6 +103,44 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("loads a joined private peer only for an active story in its own workspace", async () => {
+    const encryptedPeer = "encrypted-private-peer";
+    const [source] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId,
+        brandId,
+        name: "Member channel",
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+        privatePeerEncrypted: encryptedPeer,
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!source) throw new Error("Private source fixture was not inserted");
+    const [story] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId,
+        sourceId: source.id,
+        title: "Member story",
+        url: "https://t.me/c/123456/42",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!story) throw new Error("Private story fixture was not inserted");
+    expect(await repo.item(randomUUID(), story.id)).toBeNull();
+    expect(await repo.item(orgId, story.id)).toMatchObject({
+      sourceKind: "telegram_private",
+      privatePeerEncrypted: encryptedPeer,
+      url: "https://t.me/c/123456/42",
+    });
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: false })
+      .where(eq(schema.newsSources.id, source.id));
+    expect(await repo.item(orgId, story.id)).toBeNull();
+  });
+
   it("retains bounded publication replies across errors, rejects stale jobs and erases them with the brand", async () => {
     const { encryptJson } = await import("@pubrick/shared");
     const [channel] = await db

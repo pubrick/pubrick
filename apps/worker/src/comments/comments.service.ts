@@ -79,7 +79,11 @@ export class CommentsService {
     const item = await this.comments.item(job.orgId, job.itemId);
     if (!item) return;
     try {
-      const result = await this.telegram.comments(item.url, await this.comments.session(job.orgId));
+      const session = await this.comments.session(job.orgId);
+      const result =
+        item.sourceKind === "telegram_private"
+          ? await this.telegram.commentsPrivate(item.url, item.privatePeerEncrypted, session)
+          : await this.telegram.comments(item.url, session);
       await this.comments.save(job.orgId, item.id, item.url, result);
     } catch (error) {
       if (!(error instanceof TelegramSourceError)) throw error;

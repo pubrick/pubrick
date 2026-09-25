@@ -870,6 +870,8 @@ export class CommentsRepository {
         brandId: schema.newsItems.brandId,
         url: schema.newsItems.url,
         sourceKind: schema.newsSources.kind,
+        sourceActive: schema.newsSources.isActive,
+        privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
       })
       .from(schema.newsItems)
       .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
@@ -883,7 +885,11 @@ export class CommentsRepository {
       )
       .limit(1);
     const item = rows[0];
-    return item?.sourceKind === "telegram" ? item : null;
+    return item?.sourceActive &&
+      (item.sourceKind === "telegram" ||
+        (item.sourceKind === "telegram_private" && item.privatePeerEncrypted))
+      ? item
+      : null;
   }
 
   async session(orgId: string): Promise<string | null> {

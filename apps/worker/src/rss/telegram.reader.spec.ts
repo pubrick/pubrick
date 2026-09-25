@@ -1,10 +1,11 @@
 import { encryptJson } from "@pubrick/shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fake = vi.hoisted(() => ({ readPrivateChannel: vi.fn() }));
+const fake = vi.hoisted(() => ({ readPrivateChannel: vi.fn(), readPrivateComments: vi.fn() }));
 vi.mock("@pubrick/telegram", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@pubrick/telegram")>()),
   readPrivateChannel: fake.readPrivateChannel,
+  readPrivateComments: fake.readPrivateComments,
 }));
 
 describe("private Telegram reader", () => {
@@ -45,5 +46,22 @@ describe("private Telegram reader", () => {
       code: "telegram_not_connected",
     });
     expect(fake.readPrivateChannel).not.toHaveBeenCalled();
+  });
+
+  it("decrypts a member-only post peer and session for manual discussion collection", async () => {
+    fake.readPrivateComments.mockResolvedValue({ status: "available", comments: [] });
+    const peer = encryptJson({ channelId: 123456, accessHash: "987654321" }, key);
+    const session = encryptJson({ session: "user-session" }, key);
+    expect(await reader.commentsPrivate("https://t.me/c/123456/42", peer, session)).toEqual({
+      status: "available",
+      comments: [],
+    });
+    expect(fake.readPrivateComments).toHaveBeenCalledWith({
+      apiId: 1234,
+      apiHash: "test-hash",
+      session: "user-session",
+      peer: { channelId: 123456, accessHash: "987654321" },
+      url: "https://t.me/c/123456/42",
+    });
   });
 });
