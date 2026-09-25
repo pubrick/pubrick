@@ -652,6 +652,13 @@
       "when": 1790347139830,
       "tag": "0093_medical_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1790348138242,
+      "tag": "0094_ambiguous_jigsaw",
+      "breakpoints": true
     }
   ]
 }

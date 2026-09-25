@@ -70,6 +70,7 @@ export class FeedsRepository {
           id: schema.contentItems.id,
           title: schema.contentItems.title,
           body: schema.contentItems.body,
+          richBody: schema.contentItems.richBody,
         })
         .from(schema.contentItems)
         .where(
@@ -98,6 +99,7 @@ export class FeedsRepository {
           contentItemId: item.id,
           title: item.title,
           body: item.body,
+          richBody: item.richBody,
         })
         .onConflictDoNothing({
           target: [schema.feedEntries.feedId, schema.feedEntries.contentItemId],
@@ -177,6 +179,7 @@ export class FeedsRepository {
         id: schema.feedEntries.id,
         title: schema.feedEntries.title,
         body: schema.feedEntries.body,
+        richBody: schema.feedEntries.richBody,
         publishedAt: schema.feedEntries.publishedAt,
       })
       .from(schema.feedEntries)
@@ -221,6 +224,7 @@ export class FeedsRepository {
       .select({
         title: schema.feedEntries.title,
         body: schema.feedEntries.body,
+        richBody: schema.feedEntries.richBody,
         publishedAt: schema.feedEntries.publishedAt,
         brandName: schema.brands.name,
         language: schema.brands.contentLanguage,

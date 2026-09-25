@@ -339,6 +339,7 @@ export const contentVersions = pgTable(
     /** Null for a version of the master body; set for a per-channel adaptation. */
     adaptationId: uuid("adaptation_id").references(() => adaptations.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
+    richBody: jsonb("rich_body"),
     title: text("title"),
     hashtags: text("hashtags").array().notNull().default([]),
     cta: text("cta"),

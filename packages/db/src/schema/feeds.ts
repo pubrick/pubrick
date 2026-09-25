@@ -1,6 +1,7 @@
 import {
   foreignKey,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -50,6 +51,7 @@ export const feedEntries = pgTable(
       .references(() => contentItems.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     body: text("body").notNull(),
+    richBody: jsonb("rich_body"),
     publishedAt: timestamp("published_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
