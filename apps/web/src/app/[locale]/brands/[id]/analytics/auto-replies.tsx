@@ -12,16 +12,21 @@ export function AutoReplies({ brandId }: { brandId: string }) {
   const t = useTranslations("Analytics");
   const te = useTranslations("Errors");
   const [config, setConfig] = useState<PublicationCommentCollectionDto | null>(null);
+  const [telegramConnected, setTelegramConnected] = useState<boolean | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const load = useCallback(
     (active: () => boolean = () => true) =>
-      api<PublicationCommentCollectionDto>(`/api/analytics/brands/${brandId}/comment-collection`)
-        .then((next) => {
+      Promise.all([
+        api<PublicationCommentCollectionDto>(`/api/analytics/brands/${brandId}/comment-collection`),
+        api<{ connected: boolean }>("/api/sources/telegram-connection"),
+      ])
+        .then(([next, connection]) => {
           if (!active()) return;
           setConfig(next);
+          setTelegramConnected(connection.connected);
           setError(null);
         })
         .catch((cause) => {
@@ -68,6 +73,11 @@ export function AutoReplies({ brandId }: { brandId: string }) {
             {config && (
               <p className="mt-2 text-sm font-medium text-fg">
                 {t(config.enabled ? "autoRepliesOn" : "autoRepliesOff")}
+              </p>
+            )}
+            {config && telegramConnected === false && (
+              <p className="mt-2 text-sm text-fg-secondary">
+                {t(config.enabled ? "autoRepliesWaitingConnection" : "autoRepliesConnection")}
               </p>
             )}
           </div>

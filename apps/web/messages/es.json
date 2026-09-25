@@ -1574,6 +1574,8 @@
     "autoRepliesLimits": "Cada revisión horaria visita hasta 10 marcas, 50 publicaciones por marca y 50 respuestas legibles por publicación. Solo se revisan publicaciones sin una muestra previa; la muestra no representa el total de comentarios.",
     "autoRepliesOn": "La recopilación automática está activada",
     "autoRepliesOff": "La recopilación automática está desactivada",
+    "autoRepliesConnection": "Un propietario o administrador debe conectar una cuenta de Telegram en Configuración para que pueda comenzar la recopilación.",
+    "autoRepliesWaitingConnection": "La recopilación espera a que un propietario o administrador conecte una cuenta de Telegram en Configuración.",
     "autoRepliesEnable": "Activar recopilación",
     "autoRepliesDisable": "Desactivar recopilación",
     "autoRepliesSaving": "Guardando…",

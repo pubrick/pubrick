@@ -391,6 +391,26 @@ describe.skipIf(!url)("watched sources e2e", () => {
     expect((await owner.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
       connected: true,
     });
+    const member = request.agent(app.getHttpServer());
+    const memberEmail = `connection-${randomUUID()}@example.com`;
+    await member
+      .post("/api/auth/sign-up/email")
+      .send({ email: memberEmail, password: "password1234", name: "Member" })
+      .expect(200);
+    const memberSession = await member.get("/api/auth/get-session").expect(200);
+    await db.insert(schema.member).values({
+      id: randomUUID(),
+      organizationId: ownerOrgId,
+      userId: memberSession.body.user.id,
+      role: "member",
+    });
+    await member
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: ownerOrgId })
+      .expect(200);
+    expect((await member.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: true,
+    });
     expect((await other.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
       connected: false,
     });

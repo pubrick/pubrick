@@ -22,28 +22,33 @@ describe("automatic publication reply setting", () => {
   beforeEach(() => signedInSession());
 
   it("requires a localized confirmation and sends the exact validated opt-in body", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(response(200, { enabled: false, updatedAt: null }))
-      .mockResolvedValueOnce(
-        response(200, { enabled: true, updatedAt: "2026-09-25T00:00:00.000Z" }),
-      )
-      .mockResolvedValueOnce(
-        response(200, { enabled: false, updatedAt: "2026-09-25T00:01:00.000Z" }),
-      );
+    const settings = [
+      response(200, { enabled: false, updatedAt: null }),
+      response(200, { enabled: true, updatedAt: "2026-09-25T00:00:00.000Z" }),
+      response(200, { enabled: false, updatedAt: "2026-09-25T00:01:00.000Z" }),
+    ];
+    const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith("/telegram-connection")) return response(200, { connected: true });
+      const next = settings.shift();
+      if (!next) throw new Error("Unexpected settings request");
+      return next;
+    });
     vi.stubGlobal("fetch", fetcher);
     render(<AutoReplies brandId={brandId} />);
     expect(await screen.findByText(en.Analytics.autoRepliesOff)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: en.Analytics.autoRepliesEnable }));
     expect(screen.getByRole("dialog")).toHaveTextContent(en.Analytics.autoRepliesConfirmBody);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
         name: en.Analytics.autoRepliesEnable,
       }),
     );
     expect(await screen.findByText(en.Analytics.autoRepliesOn)).toBeInTheDocument();
-    const [url, request] = fetcher.mock.calls[1] as [string, RequestInit];
+    const [url, request] = fetcher.mock.calls.find(([, init]) => init?.method === "PUT") as [
+      string,
+      RequestInit,
+    ];
     expect(url).toContain(`/api/analytics/brands/${brandId}/comment-collection`);
     expect(request.method).toBe("PUT");
     expect(JSON.parse(String(request.body))).toEqual({ enabled: true });
@@ -52,16 +57,34 @@ describe("automatic publication reply setting", () => {
     ).toEqual({ enabled: true });
     await userEvent.click(screen.getByRole("button", { name: en.Analytics.autoRepliesDisable }));
     expect(await screen.findByText(en.Analytics.autoRepliesOff)).toBeInTheDocument();
-    expect(JSON.parse(String((fetcher.mock.calls[2] as [string, RequestInit])[1].body))).toEqual({
+    const disable = fetcher.mock.calls.filter(([, init]) => init?.method === "PUT")[1];
+    expect(JSON.parse(String(disable?.[1]?.body))).toEqual({
       enabled: false,
     });
   });
 
+  it("explains why enabled collection is waiting without a connected Telegram account", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/telegram-connection")
+          ? response(200, { connected: false })
+          : response(200, { enabled: true, updatedAt: "2026-09-25T00:00:00.000Z" }),
+      ),
+    );
+    render(<AutoReplies brandId={brandId} />);
+    expect(await screen.findByText(en.Analytics.autoRepliesOn)).toBeInTheDocument();
+    expect(screen.getByText(en.Analytics.autoRepliesWaitingConnection)).toBeInTheDocument();
+  });
+
   it("shows a Spanish load failure and offers a retry", async () => {
-    const fetcher = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce(response(200, { enabled: false, updatedAt: null }));
+    let attempts = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.endsWith("/telegram-connection")) return response(200, { connected: true });
+      attempts++;
+      if (attempts === 1) throw new Error("offline");
+      return response(200, { enabled: false, updatedAt: null });
+    });
     vi.stubGlobal("fetch", fetcher);
     render(<AutoReplies brandId={brandId} />, { locale: "es" });
     expect(await screen.findByRole("alert")).toHaveTextContent(es.Analytics.autoRepliesError);
