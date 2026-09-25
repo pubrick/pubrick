@@ -12,11 +12,13 @@ import {
   decodeContentCursor,
   encodeContentCursor,
   isDeliveryOutcome,
+  isManualPublicationUrl,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
   MAX_CHANNEL_BODY_LENGTH,
   MAX_CONTENT_PAGE_SIZE,
   MAX_REFINE_CALLS_PER_HOUR,
+  manualPublicationSchema,
   nextItemStatus,
   OUTSTANDING_ADAPTATION_STATUSES,
   REFINE_VERBS,
@@ -27,6 +29,33 @@ import {
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
 const CHANNEL = "22222222-2222-4222-8222-222222222222";
+
+describe("manual publication URLs", () => {
+  it.each([
+    ["vc_ru", "https://vc.ru/marketing/123"],
+    ["dzen", "https://dzen.ru/a/example"],
+    ["instagram", "https://www.instagram.com/p/example/"],
+    ["youtube", "https://youtu.be/example"],
+    ["rutube", "https://rutube.ru/video/example/"],
+    ["tenchat", "https://tenchat.ru/media/example"],
+  ] as const)("accepts a %s post on its own host", (platform, url) => {
+    expect(manualPublicationSchema.safeParse({ url }).success).toBe(true);
+    expect(isManualPublicationUrl(platform, url)).toBe(true);
+  });
+
+  it("rejects cross-platform, spoofed, insecure and homepage links", () => {
+    expect(isManualPublicationUrl("dzen", "https://vc.ru/post/1")).toBe(false);
+    expect(isManualPublicationUrl("youtube", "https://youtube.com.evil.test/watch?v=1")).toBe(
+      false,
+    );
+    expect(isManualPublicationUrl("instagram", "http://instagram.com/p/1")).toBe(false);
+    expect(isManualPublicationUrl("rutube", "https://rutube.ru/")).toBe(false);
+    expect(isManualPublicationUrl("rutube", "https://rutube.ru////")).toBe(false);
+    expect(manualPublicationSchema.safeParse({ url: "https://rutube.ru////" }).success).toBe(false);
+    expect(isManualPublicationUrl("tenchat", "https://user:pass@tenchat.ru/post/1")).toBe(false);
+    expect(isManualPublicationUrl("vc_ru", "https://vc.ru:444/post/1")).toBe(false);
+  });
+});
 
 /**
  * The canonical form of a body, pinned at the boundary every writer crosses.

@@ -751,7 +751,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                       {metricsError[c.id]}
                     </span>
                   ) : isManualPlatform(c.platform) ? (
-                    t("vcManualMeta")
+                    t("manualMeta")
                   ) : (
                     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                       <StatusBadge
@@ -890,8 +890,10 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             {platform === "mastodon" && (
               <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
             )}
-            {platform === "vc_ru" && (
-              <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>
+            {isManualPlatform(platform) && (
+              <p className="text-sm text-fg-secondary">
+                {t("manualHint", { platform: platformName(platform) })}
+              </p>
             )}
           </form>
         </Card>
@@ -990,8 +992,10 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             label={t("namePlaceholder")}
             required
           />
-          {editing?.platform === "vc_ru" ? (
-            <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>
+          {editing && isManualPlatform(editing.platform) ? (
+            <p className="text-sm text-fg-secondary">
+              {t("manualHint", { platform: platformName(editing.platform) })}
+            </p>
           ) : (
             <p className="text-sm text-fg-secondary">{t("editCredsHint")}</p>
           )}
@@ -1212,12 +1216,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         }
       >
         <p className="text-sm text-fg-secondary">
-          {t(pendingRemoval?.platform === "vc_ru" ? "removeManualBody" : "removeBody", {
-            channel:
-              pendingRemoval === null
-                ? ""
-                : channelLabel(pendingRemoval.platform, pendingRemoval.name),
-          })}
+          {t(
+            pendingRemoval && isManualPlatform(pendingRemoval.platform)
+              ? "removeManualBody"
+              : "removeBody",
+            {
+              channel:
+                pendingRemoval === null
+                  ? ""
+                  : channelLabel(pendingRemoval.platform, pendingRemoval.name),
+            },
+          )}
         </p>
       </Modal>
     </AppShell>

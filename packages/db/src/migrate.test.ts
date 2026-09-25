@@ -921,6 +921,42 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("preserves a legacy encrypted Dzen token when adding manual channels", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0106_manual-publication-channels");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let channelId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        const seed = await seedEveryTable(old, "manual_dzen_upgrade");
+        channelId = seed.channelId;
+        await old.query("UPDATE channels SET platform = 'dzen' WHERE id = $1", [channelId]);
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const current = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const rows = await current.query<{
+          platform: string;
+          credentials_encrypted: string | null;
+        }>("SELECT platform, credentials_encrypted FROM channels WHERE id = $1", [channelId]);
+        expect(rows.rows).toEqual([{ platform: "dzen", credentials_encrypted: "blob" }]);
+        await current.query("UPDATE channels SET credentials_encrypted = NULL WHERE id = $1", [
+          channelId,
+        ]);
+      } finally {
+        await current.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  }, 60_000);
+
   it("0101 preserves old photo checkpoints and admits bounded message and confirmed checkpoints", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0101_telegram_partial_primary_kind");
@@ -2376,6 +2412,15 @@ describe.skipIf(!url)("runMigrations", () => {
         );
         expect(await refusal(pool, "UPDATE channels SET platform = 'vc_ru'")).toBe(CHECK_VIOLATION);
         await pool.query("UPDATE channels SET platform = 'vc_ru', credentials_encrypted = NULL");
+        await pool.query("UPDATE channels SET platform = 'dzen'");
+        await pool.query("UPDATE channels SET credentials_encrypted = 'legacy encrypted token'");
+        await pool.query("UPDATE channels SET credentials_encrypted = NULL");
+        for (const platform of ["instagram", "youtube", "rutube", "tenchat"]) {
+          await pool.query(`UPDATE channels SET platform = '${platform}'`);
+          expect(
+            await refusal(pool, "UPDATE channels SET credentials_encrypted = 'unexpected'"),
+          ).toBe(CHECK_VIOLATION);
+        }
       } finally {
         await pool.end();
       }

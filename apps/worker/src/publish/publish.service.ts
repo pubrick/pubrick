@@ -18,6 +18,7 @@ import {
   VK_REQUEST_TIMEOUT_MS,
 } from "@pubrick/integrations";
 import {
+  isManualPlatform,
   isUnreadableCiphertext,
   PUBLISH_QUEUE_OPTIONS,
   type PublishFailureReason,
@@ -223,7 +224,8 @@ export class PublishService {
 
   async handle(job: PublishJob): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
-    if (!adaptation || adaptation.status === "published" || adaptation.platform === "vc_ru") return;
+    if (!adaptation || adaptation.status === "published" || isManualPlatform(adaptation.platform))
+      return;
 
     // Defense in depth against a delivered rejection. The api cancels the
     // pg-boss job when an approved item is rejected, but a job that was

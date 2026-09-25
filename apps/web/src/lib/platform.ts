@@ -1,4 +1,6 @@
+import type { ManualPlatformId } from "@pubrick/shared";
 import {
+  isManualPlatform,
   adaptationLimit as platformAdaptationLimit,
   TELEGRAM_LONG_POST_LENGTH,
 } from "@pubrick/shared";
@@ -12,6 +14,10 @@ const PLATFORM_NAMES: Record<string, string> = {
   vk: "VK",
   dzen: "Dzen",
   vc_ru: "VC.ru",
+  instagram: "Instagram",
+  youtube: "YouTube",
+  rutube: "RuTube",
+  tenchat: "TenChat",
   max: "MAX",
   bluesky: "Bluesky",
   mastodon: "Mastodon",
@@ -20,6 +26,20 @@ const PLATFORM_NAMES: Record<string, string> = {
 
 export function platformName(id: string): string {
   return PLATFORM_NAMES[id] ?? id;
+}
+
+/** Manual editor homepages; opening these does not submit content. */
+const MANUAL_PLATFORM_HOMES: Record<ManualPlatformId, string> = {
+  vc_ru: "https://vc.ru/",
+  dzen: "https://dzen.ru/",
+  instagram: "https://www.instagram.com/",
+  youtube: "https://www.youtube.com/",
+  rutube: "https://rutube.ru/",
+  tenchat: "https://tenchat.ru/",
+};
+
+export function manualPlatformHome(id: string): string | undefined {
+  return isManualPlatform(id) ? MANUAL_PLATFORM_HOMES[id] : undefined;
 }
 
 /** "Telegram · Main channel" — the one way a channel is named across screens. */

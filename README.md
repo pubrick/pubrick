@@ -29,8 +29,8 @@ brands — each with a voice, an audience and a content language the generator i
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to
 Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon instances — through a restyled,
-installable (PWA) web app. [VC.ru publishing](docs/integrations-vc-ru.md)
-uses a manual copy and confirmation workflow. External clients can review a
+installable (PWA) web app. [VC.ru, Dzen, Instagram, YouTube, RuTube and TenChat](docs/manual-publications.md)
+use a manual copy and confirmation workflow. External clients can review a
 draft through an [expiring approval link](docs/client-review.md), while the team
 keeps [editorial notes](docs/editorial-notes.md) on saved versions. Editors can
 request a [metered whole-draft rewrite](docs/editorial-notes.md#whole-draft-ai-revision), compare
@@ -66,7 +66,7 @@ members. Authors can prepare drafts; editors can approve and publish for their
 assigned brands. The
 [OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
 [optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
-platforms remain unavailable until their publishers are implemented.
+platforms remain unavailable until a safe publishing workflow is implemented.
 Features land phase by phase — see
 [docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
 

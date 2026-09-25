@@ -736,6 +736,13 @@
       "when": 1790369625317,
       "tag": "0105_oval_mister_fear",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1790373635832,
+      "tag": "0106_manual-publication-channels",
+      "breakpoints": true
     }
   ]
 }

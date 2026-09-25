@@ -57,7 +57,12 @@ import { authClient } from "@/lib/auth-client";
 import { isLinkableUrl } from "@/lib/external-url";
 import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
-import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
+import {
+  adaptationLimit,
+  manualPlatformHome,
+  channelLabel as platformChannelLabel,
+  platformName,
+} from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
 import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
@@ -1440,6 +1445,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  function channelPlatform(channelId: string): string {
+    return channels.find((channel) => channel.id === channelId)?.platform ?? "";
+  }
+
   function channelLabel(channelId: string): string {
     const ch = channels.find((c) => c.id === channelId);
     return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
@@ -1641,8 +1650,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     item.adaptations.every((adaptation) =>
       ["pending", "scheduled", "queued"].includes(adaptation.status),
     );
-  const manualAdaptations = item.adaptations.filter(
-    (a) => channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru",
+  const manualAdaptations = item.adaptations.filter((a) =>
+    isManualPlatform(channelPlatform(a.channelId)),
   );
   const hasManualApprovalTarget = manualAdaptations.some(
     (a) => a.status === "pending" || a.status === "failed",
@@ -2635,26 +2644,58 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
-            {a.status === "manual_ready" &&
-              channels.find((channel) => channel.id === a.channelId)?.platform === "vc_ru" && (
-                <div className="flex flex-col gap-3 rounded-card border border-border bg-panel p-4">
-                  <p className="text-sm text-fg-secondary">{t("vcManualInstructions")}</p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => copyManualField(`${a.id}:title`, item.title ?? "")}
-                      disabled={!item.title}
-                    >
-                      {copiedManualField === `${a.id}:title` ? t("copied") : t("copyTitle")}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => copyManualField(`${a.id}:body`, a.body ?? item.body)}
-                    >
-                      {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
-                    </Button>
+            {a.status === "manual_ready" && isManualPlatform(channelPlatform(a.channelId)) && (
+              <div className="flex flex-col gap-3 rounded-card border border-border bg-panel p-4">
+                <p className="text-sm text-fg-secondary">
+                  {t("manualInstructions", {
+                    platform: platformName(channelPlatform(a.channelId)),
+                  })}
+                </p>
+                {["youtube", "rutube"].includes(channelPlatform(a.channelId)) && (
+                  <p className="text-xs text-fg-tertiary">{t("manualVideoHint")}</p>
+                )}
+                {channelPlatform(a.channelId) === "dzen" && (
+                  <p className="text-xs text-fg-tertiary">{t("manualDzenHint")}</p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      copyManualField(
+                        `${a.id}:all`,
+                        `${item.title ?? ""}\n\n${a.body ?? item.body}`.trim(),
+                      )
+                    }
+                  >
+                    {copiedManualField === `${a.id}:all` ? t("copied") : t("copyAll")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => copyManualField(`${a.id}:title`, item.title ?? "")}
+                    disabled={!item.title}
+                  >
+                    {copiedManualField === `${a.id}:title` ? t("copied") : t("copyTitle")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => copyManualField(`${a.id}:body`, a.body ?? item.body)}
+                  >
+                    {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
+                  </Button>
+                  {["youtube", "rutube"].includes(channelPlatform(a.channelId)) &&
+                    item.videoMediaId && (
+                      <a
+                        href={`/api/media/${item.videoMediaId}/file`}
+                        download="pubrick-video.mp4"
+                        className={buttonClasses("secondary", "sm")}
+                      >
+                        {t("downloadVideo")}
+                      </a>
+                    )}
+                  {channelPlatform(a.channelId) === "vc_ru" && (
                     <Button
                       variant="secondary"
                       size="sm"
@@ -2663,51 +2704,58 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     >
                       {vcPackageBusy === a.id ? t("vcPackageWorking") : t("downloadVcPackage")}
                     </Button>
-                    <a
-                      href="https://vc.ru/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className={buttonClasses("secondary", "sm")}
-                    >
-                      {t("openVc")}
-                    </a>
-                  </div>
-                  {vcPackageReady === a.id && (
-                    <p role="status" className="text-sm text-fg-secondary">
-                      {t("vcPackageReady")}
-                    </p>
                   )}
-                  {canDecideDelivery && (
-                    <Input
-                      type="url"
-                      label={t("vcUrlLabel")}
-                      placeholder="https://vc.ru/..."
-                      value={manualUrlDrafts[a.id] ?? ""}
-                      disabled={isArchived}
-                      onChange={(event) =>
-                        setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
-                      }
-                    />
-                  )}
-                  {canDecideDelivery && (
-                    <div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={
-                          isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id
-                        }
-                        onClick={() => confirmManualPublication(a.id)}
-                      >
-                        {t("recordManualPublication")}
-                      </Button>
-                    </div>
-                  )}
-                  {canDecideDelivery && (
-                    <p className="text-xs text-fg-tertiary">{t("manualAssertionHint")}</p>
-                  )}
+                  <a
+                    href={manualPlatformHome(channelPlatform(a.channelId))}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    {t("openManualPlatform", {
+                      platform: platformName(channelPlatform(a.channelId)),
+                    })}
+                  </a>
                 </div>
-              )}
+                {vcPackageReady === a.id && channelPlatform(a.channelId) === "vc_ru" && (
+                  <p role="status" className="text-sm text-fg-secondary">
+                    {t("vcPackageReady")}
+                  </p>
+                )}
+                {canDecideDelivery && (
+                  <Input
+                    type="url"
+                    label={t("manualUrlLabel", {
+                      platform: platformName(channelPlatform(a.channelId)),
+                    })}
+                    placeholder={`${manualPlatformHome(channelPlatform(a.channelId))}…`}
+                    value={manualUrlDrafts[a.id] ?? ""}
+                    disabled={isArchived}
+                    onChange={(event) =>
+                      setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
+                    }
+                  />
+                )}
+                {canDecideDelivery && (
+                  <div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
+                      onClick={() => confirmManualPublication(a.id)}
+                    >
+                      {t("recordManualPublication")}
+                    </Button>
+                  </div>
+                )}
+                {canDecideDelivery && (
+                  <p className="text-xs text-fg-tertiary">
+                    {t("manualAssertionHint", {
+                      platform: platformName(channelPlatform(a.channelId)),
+                    })}
+                  </p>
+                )}
+              </div>
+            )}
             {a.status === "published" &&
               (isLinkableUrl(a.externalUrl) ? (
                 <a
@@ -2761,9 +2809,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   ? t("manualPublicationAsserted", {
                       name: a.assertedByName,
                       date: new Date(a.assertedAt).toLocaleString(locale),
+                      platform: platformName(channelPlatform(a.channelId)),
                     })
                   : t("manualPublicationAssertedRemoved", {
                       date: new Date(a.assertedAt).toLocaleString(locale),
+                      platform: platformName(channelPlatform(a.channelId)),
                     })}
               </span>
             )}
@@ -2991,9 +3041,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               a.status === "scheduled" &&
               a.scheduledAt &&
               (item.status === "approved" || item.status === "partially_published") &&
-              !isManualPlatform(
-                channels.find((channel) => channel.id === a.channelId)?.platform ?? "",
-              ) &&
+              !isManualPlatform(channelPlatform(a.channelId)) &&
               (channelSchedule?.adaptationId === a.id ? (
                 <div className="flex flex-col gap-2">
                   <Input

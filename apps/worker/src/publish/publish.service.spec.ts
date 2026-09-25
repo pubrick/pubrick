@@ -15,6 +15,7 @@ import {
   UnknownOutcomePublishError,
 } from "@pubrick/integrations";
 import {
+  MANUAL_PLATFORM_IDS,
   PUBLISH_QUEUE_OPTIONS,
   UNREADABLE_CREDENTIALS_MESSAGE,
   UnreadableCiphertextError,
@@ -102,6 +103,19 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PublishService.handle", () => {
+  it.each(MANUAL_PLATFORM_IDS)(
+    "never sends a manual %s adaptation, even if a stale job exists",
+    async (platform) => {
+      const { repo } = fixture({ platform });
+      const lookup = vi.fn();
+      const service = new PublishService(repo as never, lookup);
+      await service.handle({ adaptationId: "a1", orgId: "o1" });
+      expect(lookup).not.toHaveBeenCalled();
+      expect(repo.credentials).not.toHaveBeenCalled();
+      expect(repo.markPublishing).not.toHaveBeenCalled();
+    },
+  );
+
   it("loads reviewed MP4 bytes for Telegram and VK and records publication", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "pubrick-publish-video-"));
     const previous = process.env.MEDIA_STORAGE_DIR;

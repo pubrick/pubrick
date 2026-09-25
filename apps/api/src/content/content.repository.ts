@@ -40,6 +40,7 @@ import {
   IMAGE_CALL_STEPS,
   isMalformedStoredAiCredential,
   isManualPlatform,
+  isManualPublicationUrl,
   isSameText,
   isUnreadableCiphertext,
   MAX_BODY_LENGTH,
@@ -6703,7 +6704,7 @@ export class ContentRepository {
     return this.get(orgId, contentItemId);
   }
 
-  /** Record a person's VC.ru publication only after they supply its public URL. */
+  /** Record a person's off-platform publication only after they supply its public URL. */
   async confirmManualPublication(
     orgId: string,
     contentItemId: string,
@@ -6739,11 +6740,14 @@ export class ContentRepository {
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
           .limit(1)
       )[0];
-      if (current?.platform !== "vc_ru" || current.status !== "manual_ready") {
+      if (!current || !isManualPlatform(current.platform) || current.status !== "manual_ready") {
         throw conflict(
           "manual_publication_not_ready",
-          "This VC.ru post is not ready for manual confirmation",
+          "This post is not ready for manual confirmation",
         );
+      }
+      if (!isManualPublicationUrl(current.platform, url)) {
+        throw badRequest("invalid_request", `Enter an HTTPS ${current.platform} post URL`);
       }
 
       await tx.insert(schema.publications).values({
