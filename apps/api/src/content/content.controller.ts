@@ -63,6 +63,7 @@ import { UserId } from "../org/user-id.decorator";
 import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
+import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 
@@ -72,6 +73,7 @@ import { EditorialNotesRepository } from "./editorial-notes.repository";
 export class ContentController {
   constructor(
     private readonly content: ContentRepository,
+    private readonly contentCost: ContentCostRepository,
     private readonly contentImages: ContentImagesRepository,
     private readonly editorialNotes: EditorialNotesRepository,
   ) {}
@@ -177,6 +179,11 @@ export class ContentController {
   @Get(":id")
   get(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.get(orgId, id);
+  }
+
+  @Get(":id/cost")
+  cost(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.contentCost.receipt(orgId, id);
   }
 
   @Get(":id/images")

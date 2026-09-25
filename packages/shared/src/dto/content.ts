@@ -948,6 +948,39 @@ export const contentDetailDtoSchema = contentListItemDtoSchema
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;
 
+/** One post's recorded model calls, including direct editor calls and its generation run. */
+export const contentCostReceiptDtoSchema = z.object({
+  summary: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("exact"), usd: z.number() }),
+    z.object({ kind: z.literal("approximate"), usd: z.number() }),
+    z.object({
+      kind: z.literal("atLeast"),
+      usd: z.number(),
+      unpricedCalls: z.number().int().nonnegative(),
+    }),
+  ]),
+  recordedCalls: z.number().int().nonnegative(),
+  unrecordedCalls: z.number().int().nonnegative(),
+  legacyRuns: z.number().int().nonnegative(),
+  calls: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        createdAt: z.iso.datetime(),
+        step: z.string(),
+        provider: z.string(),
+        modelId: z.string(),
+        attempt: z.number().int().positive(),
+        inputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        costUsd: z.number().nullable(),
+        costState: z.enum(["reported", "estimated", "unknown", "no_recorded_charge"]),
+      }),
+    )
+    .max(50),
+});
+export type ContentCostReceiptDto = z.infer<typeof contentCostReceiptDtoSchema>;
+
 /**
  * HOW MANY CARDS ONE READ OF THE QUEUE BRINGS BACK — the owner's answer to
  * design 0009 §6.1, decided 2026-09-11.

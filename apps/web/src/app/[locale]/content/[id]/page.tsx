@@ -65,6 +65,7 @@ import { CoverRegenerate } from "./cover-regenerate";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
+import { PostCostReceipt } from "./post-cost-receipt";
 import { RichMasterEditor } from "./rich-master-editor";
 import { hasRichApiSupport, richDocumentFromPlainText } from "./rich-master-flow";
 import { SourceStrip } from "./source-strip";
@@ -1861,6 +1862,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <Card className="mb-6">
         <SourceStrip input={item.runInput} />
+        <PostCostReceipt contentItemId={item.id} />
         {item.linkPolicyWebsite && (
           <p className="mb-4 text-sm text-fg-secondary">
             {t("linkPolicyApplied", { website: item.linkPolicyWebsite })}
