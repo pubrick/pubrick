@@ -27,7 +27,14 @@ import { env } from "../env";
 
 type Tx = PaidReplyTransaction;
 type Kind = "source_comment" | "publication_comment";
-type Target = { orgId: string; brandId: string; kind: Kind; id: string; version: string };
+type Target = {
+  orgId: string;
+  brandId: string;
+  kind: Kind;
+  id: string;
+  version: string;
+  automatic: boolean;
+};
 type Snapshot = { target: Target; title: string; comments: string[]; checkedAt: Date };
 const encryptedRequestSchema = z.object({
   modelId: z.literal(PAID_REPLY_MODEL_ID),
@@ -97,9 +104,13 @@ async function lockTarget(tx: Tx, target: Target): Promise<{ checkedAt: Date } |
           eq(schema.newsItems.brandId, target.brandId),
           eq(schema.newsItems.sourceId, source.id),
           eq(schema.newsItems.commentsSampleVersion, target.version),
-          eq(schema.newsItems.relevanceStatus, "scored"),
           sql`${schema.newsItems.dismissedAt} IS NULL`,
-          sql`${schema.newsItems.relevanceScore} >= 0.7`,
+          ...(target.automatic
+            ? [
+                eq(schema.newsItems.relevanceStatus, "scored"),
+                sql`${schema.newsItems.relevanceScore} >= 0.7`,
+              ]
+            : []),
         ),
       )
       .for("share");
@@ -277,6 +288,7 @@ export class PaidReplyRepository {
         kind: handoff.targetKind,
         id: handoff.targetId,
         version: handoff.sampleVersion,
+        automatic: true,
       };
       const snapshot = await readSnapshot(target);
       if (!snapshot) {
@@ -450,6 +462,7 @@ export class PaidReplyRepository {
       kind: hint.targetKind,
       id: hint.targetId,
       version: hint.sampleVersion,
+      automatic: hint.origin === "automatic",
     };
     return db.transaction(async (tx) => {
       const [org] = await tx
@@ -704,6 +717,7 @@ export class PaidReplyRepository {
       kind: hint.targetKind,
       id: hint.targetId,
       version: hint.sampleVersion,
+      automatic: hint.origin === "automatic",
     };
     await db.transaction(async (tx) => {
       const [org] = await tx

@@ -148,7 +148,7 @@ describe.skipIf(!url)("paid reply dispatch fence", () => {
     }
   });
 
-  it("only one concurrent worker can cross the dispatch fence and persist a result after metering", async () => {
+  it("fences concurrent dispatch, meters before results, and allows manual low-relevance samples", async () => {
     const job = { orgId, attemptId };
     const claims = await Promise.all([repo.claim(job), repo.claim(job)]);
     expect(claims.filter(Boolean)).toHaveLength(1);
@@ -197,5 +197,62 @@ describe.skipIf(!url)("paid reply dispatch fence", () => {
         ),
       );
     expect(rows).toHaveLength(1);
+
+    // Automatic collection's relevance threshold must not leak into the
+    // explicit manual Analyze action on an otherwise live saved sample.
+    const ai = await import("@pubrick/ai");
+    const { encryptJson } = await import("@pubrick/shared");
+    const sampleVersion = randomUUID();
+    await connection.db
+      .update(schema.newsItems)
+      .set({ commentsSampleVersion: sampleVersion, relevanceScore: 0.1 })
+      .where(eq(schema.newsItems.id, itemId));
+    const [manualAdmission] = await connection.db
+      .insert(schema.analysisAdmissions)
+      .values({
+        orgId,
+        targetKind: "source_comment",
+        targetId: itemId,
+        sampleCheckedAt: new Date(),
+        leaseUntil: new Date(Date.now() + 120_000),
+      })
+      .returning({ id: schema.analysisAdmissions.id });
+    if (!manualAdmission) throw new Error("manual admission fixture");
+    const request = ai.buildPaidReplyRequest({ title: "Story", comments: ["A reply"] });
+    const rate = ai.priceFor("google", request.modelId, new Date());
+    if (!rate) throw new Error("price fixture");
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    const [manual] = await connection.db
+      .insert(schema.paidReplyAnalysisAttempts)
+      .values({
+        orgId,
+        brandId,
+        targetKind: "source_comment",
+        targetId: itemId,
+        sampleVersion,
+        admissionId: manualAdmission.id,
+        origin: "manual",
+        status: "queued",
+        promptDigest: request.digest,
+        promptEncrypted: encryptJson(request, process.env.APP_ENCRYPTION_KEY as string),
+        sampleSize: 1,
+        modelId: request.modelId,
+        priceWindow: createHash("sha256").update(JSON.stringify(rate)).digest("hex"),
+        orgSettingsRevision: 0,
+        brandThresholdRevision: 0,
+        admissionLocalDate: start.toISOString().slice(0, 10),
+        admissionTimezone: "UTC",
+        dayStartUtc: start,
+        dayEndUtc: end,
+        reservedMaxUsd: "0.100000",
+      })
+      .returning({ id: schema.paidReplyAnalysisAttempts.id });
+    if (!manual) throw new Error("manual attempt fixture");
+    expect(await repo.claim({ orgId, attemptId: manual.id })).toMatchObject({
+      apiKey: "fixture-key",
+    });
   });
 });
