@@ -312,6 +312,11 @@
     "titleLabel": "Título",
     "contentLabel": "Contenido",
     "categoryLabel": "Categoría",
+    "customCategory": "Personalizada",
+    "customCategoryLabel": "Categoría personalizada",
+    "filterCategory": "Filtrar por categoría",
+    "filterAll": "Todas las categorías",
+    "filterEmpty": "No hay notas en esta categoría. Elige otra categoría.",
     "tagsLabel": "Etiquetas separadas por comas",
     "categories": {
       "product_info": "Productos",

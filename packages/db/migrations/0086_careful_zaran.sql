@@ -1,0 +1,2 @@
+ALTER TABLE "knowledge_entries" DROP CONSTRAINT "knowledge_entries_category_check";--> statement-breakpoint
+ALTER TABLE "knowledge_entries" ADD CONSTRAINT "knowledge_entries_category_check" CHECK (char_length("knowledge_entries"."category") between 1 and 100 and "knowledge_entries"."category" = btrim("knowledge_entries"."category") and "knowledge_entries"."category" !~ '[[:cntrl:]]' and "knowledge_entries"."category" !~ ('[' || chr(127) || '-' || chr(159) || ']')) NOT VALID;

@@ -30,6 +30,104 @@ beforeEach(() => {
 });
 
 describe("brand knowledge screen", () => {
+  it("shows a custom category literally and filters notes for the selected brand", async () => {
+    const notes = [
+      {
+        id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+        title: "Partner note",
+        content: "Facts",
+        category: "Retail Partners",
+        tags: [],
+        isActive: true,
+        hasEmbedding: true,
+      },
+      {
+        id: "e45c3e74-1b58-409b-a1c2-91e610ab5995",
+        title: "Product note",
+        content: "Facts",
+        category: "product_info",
+        tags: [],
+        isActive: true,
+        hasEmbedding: false,
+      },
+    ];
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?")) return notes as never;
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText("Partner note");
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: en.Knowledge.filterCategory }),
+      "Retail Partners",
+    );
+    expect(screen.getByText("Partner note")).toBeInTheDocument();
+    expect(screen.queryByText("Product note")).toBeNull();
+    expect(screen.getByText("Retail Partners · Active · Vector indexed")).toBeInTheDocument();
+  });
+
+  it("creates a note with an explicitly entered custom category", async () => {
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?")) return [] as never;
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText(en.Knowledge.empty);
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: en.Knowledge.add })[0] as HTMLElement);
+    const dialog = within(screen.getByRole("dialog"));
+    await user.type(dialog.getByRole("textbox", { name: en.Knowledge.titleLabel }), "Partner note");
+    await user.type(dialog.getByRole("textbox", { name: en.Knowledge.contentLabel }), "Facts");
+    await user.selectOptions(
+      dialog.getByRole("combobox", { name: en.Knowledge.categoryLabel }),
+      "__custom__",
+    );
+    await user.type(
+      dialog.getByRole("textbox", { name: en.Knowledge.customCategoryLabel }),
+      "Retail Partners",
+    );
+    await user.click(dialog.getByRole("button", { name: en.Knowledge.save }));
+    const call = mockApi.mock.calls.find(([path]) => path === "/api/knowledge");
+    expect(JSON.parse(String(call?.[1]?.body)).category).toBe("Retail Partners");
+  });
+
+  it("patches only the category when editing an indexed note", async () => {
+    const note = {
+      id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+      title: "Partner note",
+      content: "Facts",
+      category: "product_info",
+      tags: ["coffee, roasted"],
+      isActive: true,
+      hasEmbedding: true,
+    };
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?")) return [note] as never;
+      return {} as never;
+    });
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    await screen.findByText("Partner note");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Knowledge.edit }));
+    const dialog = within(screen.getByRole("dialog"));
+    await user.selectOptions(
+      dialog.getByRole("combobox", { name: en.Knowledge.categoryLabel }),
+      "__custom__",
+    );
+    await user.type(
+      dialog.getByRole("textbox", { name: en.Knowledge.customCategoryLabel }),
+      "Retail Partners",
+    );
+    await user.click(dialog.getByRole("button", { name: en.Knowledge.save }));
+    await waitFor(() => {
+      const call = mockApi.mock.calls.find(
+        ([path, init]) =>
+          path === `/api/knowledge/${note.id}?brandId=${brandId}` && init?.method === "PATCH",
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ category: "Retail Partners" });
+    });
+  });
   it("lets an owner explicitly opt in", async () => {
     mockApi.mockImplementation(async (path, init) => {
       if (String(path).startsWith("/api/knowledge?")) return [] as never;

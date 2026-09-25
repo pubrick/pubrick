@@ -74,9 +74,14 @@ describe.skipIf(!url)("knowledge e2e", () => {
       })
       .expect(201);
     expect(entry.body.hasEmbedding).toBe(false);
-    await expect(
-      pool.query("UPDATE knowledge_entries SET category = 'bogus' WHERE id = $1", [entry.body.id]),
-    ).rejects.toMatchObject({ code: "23514" });
+    for (const category of ["bad\ncategory", "bad\u0085category", "x".repeat(101), " padded "]) {
+      await expect(
+        pool.query("UPDATE knowledge_entries SET category = $1 WHERE id = $2", [
+          category,
+          entry.body.id,
+        ]),
+      ).rejects.toMatchObject({ code: "23514" });
+    }
     expect(
       (await owner.get(`/api/knowledge?brandId=${brand.body.id}`).expect(200)).body,
     ).toHaveLength(1);
@@ -109,6 +114,30 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .send({ isActive: false })
       .expect(200);
     expect(paused.body.hasEmbedding).toBe(true);
+    const recategorized = await owner
+      .patch(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
+      .send({ category: "  Retail Partners  " })
+      .expect(200);
+    expect(recategorized.body.category).toBe("Retail Partners");
+    expect(recategorized.body.hasEmbedding).toBe(true);
+    expect(
+      (
+        await owner
+          .get(`/api/knowledge?brandId=${brand.body.id}&category=Retail%20Partners`)
+          .expect(200)
+      ).body.map((note: { id: string }) => note.id),
+    ).toContain(entry.body.id);
+    expect(
+      (
+        await owner
+          .get(`/api/knowledge?brandId=${otherBrand.body.id}&category=Retail%20Partners`)
+          .expect(200)
+      ).body,
+    ).toEqual([]);
+    await outsider
+      .get(`/api/knowledge?brandId=${brand.body.id}&category=Retail%20Partners`)
+      .expect(404);
+    await owner.get(`/api/knowledge?brandId=${brand.body.id}&category=bad%0Acategory`).expect(400);
     const edited = await owner
       .patch(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
       .send({ content: "Only Robusta beans." })
@@ -241,7 +270,7 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .post("/api/knowledge/bulk-import")
       .send({
         brandId: brand.body.id,
-        entries: [...entries, { ...entries[0], category: "unknown" }],
+        entries: [...entries, { ...entries[0], category: "invalid\u0000category" }],
       })
       .expect(400);
     await owner
