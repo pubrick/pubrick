@@ -99,14 +99,25 @@ export class PromptsRepository {
     const counts = { approved: 0, rejected: 0 };
     for (const total of totals) counts[total.verdict] = total.count;
 
-    let seek: { decidedAt: Date; decisionId: string } | undefined;
+    let seek:
+      | { decidedAt: Date; contentItemId: string; ordinal: number; decisionId: string }
+      | undefined;
     if (cursor) {
       const [row] = await db
         .select({
           decidedAt: schema.promptDecisionRevisions.decidedAt,
           decisionId: schema.promptDecisionRevisions.decisionId,
+          contentItemId: schema.promptDecisions.contentItemId,
+          ordinal: schema.promptDecisions.ordinal,
         })
         .from(schema.promptDecisionRevisions)
+        .innerJoin(
+          schema.promptDecisions,
+          and(
+            eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+            eq(schema.promptDecisions.orgId, orgId),
+          ),
+        )
         .where(and(scope, eq(schema.promptDecisionRevisions.decisionId, cursor)))
         .limit(1);
       if (!row) throw new NotFoundException("Decision cursor not found");
@@ -139,12 +150,16 @@ export class PromptsRepository {
         and(
           scope,
           seek
-            ? sql`(${schema.promptDecisionRevisions.decidedAt}, ${schema.promptDecisionRevisions.decisionId}) < (${seek.decidedAt}, ${seek.decisionId})`
+            ? sql`(${schema.promptDecisionRevisions.decidedAt}, ${schema.promptDecisions.contentItemId}, ${schema.promptDecisions.ordinal}, ${schema.promptDecisionRevisions.decisionId}) < (${seek.decidedAt}, ${seek.contentItemId}, ${seek.ordinal}, ${seek.decisionId})`
             : undefined,
         ),
       )
       .orderBy(
         desc(schema.promptDecisionRevisions.decidedAt),
+        // One clock tick can hold several opposite acts on the same draft.
+        // Its locked ordinal, not the random UUID, gives them causal order.
+        desc(schema.promptDecisions.contentItemId),
+        desc(schema.promptDecisions.ordinal),
         desc(schema.promptDecisionRevisions.decisionId),
       )
       .limit(21);

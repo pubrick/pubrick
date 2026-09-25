@@ -296,15 +296,24 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
       .send({ guidance: "Keep facts explicit." })
       .expect(201);
     const at = new Date();
+    const tiedItemId = randomUUID();
+    // UUID order deliberately opposes the causal ordinal. The first page ends
+    // inside this three-decision timestamp tie, exercising the cursor too.
+    const tiedIds = [
+      "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "88888888-8888-4888-8888-888888888888",
+      "00000000-0000-4000-8000-000000000001",
+    ];
     const decisions = await db
       .insert(schema.promptDecisions)
       .values(
         Array.from({ length: 22 }, (_, index) => ({
+          id: index < 19 ? randomUUID() : (tiedIds[index - 19] as string),
           orgId: owner.orgId,
-          contentItemId: randomUUID(),
-          ordinal: 1,
+          contentItemId: index < 19 ? randomUUID() : tiedItemId,
+          ordinal: index < 19 ? 1 : index - 18,
           verdict: index % 2 === 0 ? ("approved" as const) : ("rejected" as const),
-          createdAt: new Date(at.getTime() - index * 1000),
+          createdAt: new Date(at.getTime() - (index < 19 ? index : 20) * 1000),
         })),
       )
       .returning({ id: schema.promptDecisions.id, createdAt: schema.promptDecisions.createdAt });
@@ -323,8 +332,11 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
     expect(first.body.counts).toEqual({ approved: 11, rejected: 11 });
     expect(first.body.rows).toHaveLength(20);
     expect(first.body.rows.every((row: { itemExists: boolean }) => !row.itemExists)).toBe(true);
+    expect(first.body.rows[19].id).toBe(tiedIds[2]);
+    expect(first.body.nextCursor).toBe(tiedIds[2]);
     const second = await owner.agent.get(`${path}&cursor=${first.body.nextCursor}`).expect(200);
     expect(second.body.rows).toHaveLength(2);
+    expect(second.body.rows.map((row: { id: string }) => row.id)).toEqual([tiedIds[1], tiedIds[0]]);
     expect(second.body.nextCursor).toBeNull();
     expect(new Set([...first.body.rows, ...second.body.rows].map((row) => row.id)).size).toBe(22);
     await owner.agent.get(`${path}&cursor=${randomUUID()}`).expect(404);

@@ -68,6 +68,8 @@ adaptation and item locks, because the journal itself has an organization FK.
 `GET /api/prompts/:role/revisions/:revisionId/decisions?days=30` requires an
 organization manager. It returns counts within a 7, 30, or 90 day window and a
 20-event newest-first keyset page; `cursor` is the last event ID from the page.
+Equal timestamps sort by item ID and then the item's causal ordinal, so a
+rapid Reject after Approve is never displayed in the opposite order.
 The Settings panel labels these historical acts separately from pinned-run and
 current-status counts. Unattributed events and decisions before the journal
 existed cannot appear in a per-revision report. A role's presence in a pinned
