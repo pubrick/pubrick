@@ -6,6 +6,7 @@ import {
   CONTENT_STATUSES,
   contentCreateSchema,
   contentUpdateSchema,
+  contentVersionRestoreSchema,
   DELIVERY_OUTCOMES,
   decodeContentCursor,
   encodeContentCursor,
@@ -71,12 +72,34 @@ describe("body newline normalisation", () => {
   });
 
   it("accepts a metadata-only channel PATCH while refusing an empty one", () => {
-    expect(adaptationUpdateSchema.parse({ hashtags: ["news"] })).toEqual({ hashtags: ["news"] });
-    expect(adaptationUpdateSchema.parse({ cta: "Ask a question" })).toEqual({
+    expect(adaptationUpdateSchema.parse({ hashtags: ["news"], expectedHashtags: [] })).toEqual({
+      hashtags: ["news"],
+      expectedHashtags: [],
+    });
+    expect(adaptationUpdateSchema.parse({ cta: "Ask a question", expectedCta: null })).toEqual({
       cta: "Ask a question",
+      expectedCta: null,
     });
     expect(adaptationUpdateSchema.safeParse({}).success).toBe(false);
-    expect(adaptationUpdateSchema.safeParse({ hashtags: [`bad\0tag`] }).success).toBe(false);
+    expect(adaptationUpdateSchema.safeParse({ hashtags: ["news"] }).success).toBe(false);
+    expect(adaptationUpdateSchema.safeParse({ cta: "Ask a question" }).success).toBe(false);
+    expect(
+      adaptationUpdateSchema.safeParse({ hashtags: [`bad\0tag`], expectedHashtags: [] }).success,
+    ).toBe(false);
+  });
+
+  it("requires a complete channel metadata snapshot for a restore request", () => {
+    expect(contentVersionRestoreSchema.safeParse({ expectedBody: "Copy" }).success).toBe(true);
+    expect(
+      contentVersionRestoreSchema.safeParse({ expectedBody: "Copy", expectedHashtags: [] }).success,
+    ).toBe(false);
+    expect(
+      contentVersionRestoreSchema.safeParse({
+        expectedBody: "Copy",
+        expectedHashtags: [],
+        expectedCta: null,
+      }).success,
+    ).toBe(true);
   });
 
   it("bounds the length AFTER normalising, so a CRLF body is not refused for a dropped character", () => {

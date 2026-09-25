@@ -6,9 +6,11 @@ appended hashtags to the adaptation body before delivery. The CTA field was
 shown to editors but was never appended to a published post.
 
 Pubrick keeps `adaptations.body` as the canonical text for one channel. A
-structured hashtag edit replaces the managed final tag block in that body in
-the same transaction that saves `adaptations.hashtags`. A generated adaptation
-is composed before its body and AI version are saved. A call to action is an
+structured hashtag edit replaces the exact managed final tag block in that body in
+the same transaction that saves `adaptations.hashtags`. PATCH `body` is authored
+text without managed tags; a metadata-only PATCH removes the exact saved suffix
+from the locked body before recomposition. A generated adaptation is composed
+before its body and AI version are saved. A call to action is an
 editorial suggestion only: it is stored and versioned, but never sent unless
 an editor writes it into the body. The editor states this next to the field.
 
@@ -21,10 +23,14 @@ an editor writes it into the body. The editor states this next to the field.
 | VC.ru export | The saved canonical channel body |
 | Public RSS | The master content body snapshotted at feed inclusion; it is a separate syndication choice and does not inherit channel tags |
 
+The editor sends only fields changed from its initial snapshot, with per-field
+expected values. A stale editor cannot overwrite a newer tag or CTA edit. The
+API enforces the destination platform's full composed-text limit before saving.
+
 The migration adds nullable CTA and empty tag arrays to existing rows without
 touching their bodies or publication receipts. Published adaptations remain
 locked, so existing platform posts cannot be silently rewritten. The tag
-composer is deterministic and idempotent for its own suffix. It removes only a
-trailing tag-only block separated by a blank line whose tags belong to the
-previous managed tag set; an inline hashtag typed into a sentence remains
-editorial text.
+composer removes only the exact previously saved suffix. An authored final
+tag-only paragraph, including one equal to a managed tag, remains text; it is
+never inferred to be a managed suffix. Hashtag punctuation is folded to
+underscores so structured tags remain portable across platforms.

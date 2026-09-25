@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
+  adaptationLimit,
   contentDetailDtoSchema,
   contentListItemDtoSchema,
   MAX_BODY_LENGTH,
@@ -827,7 +828,13 @@ describe.skipIf(!url)("content e2e", () => {
 
     const first = await agent
       .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
-      .send({ body: "Channel copy", hashtags: [" #new product ", "launch"], cta: "Ask a question" })
+      .send({
+        body: "Channel copy",
+        hashtags: [" #new product ", "launch"],
+        expectedHashtags: [],
+        cta: "Ask a question",
+        expectedCta: null,
+      })
       .expect(200);
     expect(first.body).toMatchObject({
       body: "Channel copy\n\n#new_product #launch",
@@ -837,7 +844,13 @@ describe.skipIf(!url)("content e2e", () => {
 
     const second = await agent
       .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
-      .send({ body: first.body.body, hashtags: ["launch"], cta: "" })
+      .send({
+        body: "Channel copy",
+        hashtags: ["launch"],
+        expectedHashtags: ["new_product", "launch"],
+        cta: "",
+        expectedCta: "Ask a question",
+      })
       .expect(200);
     expect(second.body).toMatchObject({
       body: "Channel copy\n\n#launch",
@@ -855,6 +868,10 @@ describe.skipIf(!url)("content e2e", () => {
     });
     const older = versions.body.find((row: { body: string }) => row.body.includes("#new_product"));
     expect(older).toMatchObject({ hashtags: ["new_product", "launch"], cta: "Ask a question" });
+    await agent
+      .post(`/api/content/${itemId}/versions/${older.id}/restore`)
+      .send({ expectedBody: second.body.body })
+      .expect(400);
     const restored = await agent
       .post(`/api/content/${itemId}/versions/${older.id}/restore`)
       .send({ expectedBody: second.body.body, expectedHashtags: ["launch"], expectedCta: "" })
@@ -876,17 +893,45 @@ describe.skipIf(!url)("content e2e", () => {
     const adaptationId = created.body.adaptations[0].id as string;
     const path = `/api/content/${created.body.id}/adaptations/${adaptationId}`;
     const suffix = "\n\n#tag";
+    const limit = adaptationLimit("telegram") ?? MAX_BODY_LENGTH;
     const atLimit = await agent
       .patch(path)
-      .send({ body: "x".repeat(MAX_BODY_LENGTH - suffix.length), hashtags: ["tag"] })
+      .send({
+        body: "x".repeat(limit - suffix.length),
+        hashtags: ["tag"],
+        expectedHashtags: [],
+      })
       .expect(200);
-    expect(atLimit.body.body).toHaveLength(MAX_BODY_LENGTH);
+    expect(atLimit.body.body).toHaveLength(limit);
     await agent
       .patch(path)
-      .send({ body: `${"x".repeat(MAX_BODY_LENGTH - suffix.length)}x`, hashtags: ["tag"] })
+      .send({
+        body: `${"x".repeat(limit - suffix.length)}x`,
+        hashtags: ["tag"],
+        expectedHashtags: ["tag"],
+      })
       .expect(400);
     const unchanged = await agent.get(`/api/content/${created.body.id}`).expect(200);
     expect(unchanged.body.adaptations[0].body).toBe(atLimit.body.body);
+  });
+
+  it("rejects tags added to an existing body at the platform boundary", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    const body = "x".repeat(adaptationLimit("telegram") ?? MAX_BODY_LENGTH);
+    await agent.patch(path).send({ body }).expect(200);
+    await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: [] })
+      .expect(400);
+    expect(
+      (await agent.get(`/api/content/${created.body.id}`).expect(200)).body.adaptations[0],
+    ).toMatchObject({ body, hashtags: [] });
   });
 
   it("changes tags on the locked current body without replacing a concurrent text edit", async () => {
@@ -899,14 +944,62 @@ describe.skipIf(!url)("content e2e", () => {
     const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
     await agent
       .patch(path)
-      .send({ body: "First", hashtags: ["one"] })
+      .send({ body: "First", hashtags: ["one"], expectedHashtags: [] })
       .expect(200);
     await agent.patch(path).send({ body: "Second" }).expect(200);
     const changed = await agent
       .patch(path)
-      .send({ hashtags: ["two"] })
+      .send({ hashtags: ["two"], expectedHashtags: ["one"] })
       .expect(200);
     expect(changed.body).toMatchObject({ body: "Second\n\n#two", hashtags: ["two"] });
+  });
+
+  it("preserves an authored final tag paragraph across structured tag edits and restores", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const path = `/api/content/${itemId}/adaptations/${created.body.adaptations[0].id}`;
+    const first = await agent
+      .patch(path)
+      .send({ body: "A post.\n\n#organic", hashtags: ["organic", "launch"], expectedHashtags: [] })
+      .expect(200);
+    expect(first.body.body).toBe("A post.\n\n#organic\n\n#organic #launch");
+    const second = await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: ["organic", "launch"] })
+      .expect(200);
+    expect(second.body.body).toBe("A post.\n\n#organic\n\n#news");
+    const history = await agent
+      .get(`/api/content/${itemId}/versions?adaptationId=${created.body.adaptations[0].id}`)
+      .expect(200);
+    const earlier = history.body.find((row: { body: string }) => row.body === first.body.body);
+    const restored = await agent
+      .post(`/api/content/${itemId}/versions/${earlier.id}/restore`)
+      .send({ expectedBody: second.body.body, expectedHashtags: ["news"], expectedCta: null })
+      .expect(200);
+    expect(restored.body.adaptations[0].body).toBe(first.body.body);
+  });
+
+  it("rejects a stale metadata field but lets an independent field edit proceed", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    await agent.patch(path).send({ body: "Copy" }).expect(200);
+    await agent.patch(path).send({ cta: "New CTA", expectedCta: null }).expect(200);
+    await agent.patch(path).send({ cta: "Old editor", expectedCta: null }).expect(409);
+    const tags = await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: [] })
+      .expect(200);
+    expect(tags.body).toMatchObject({ body: "Copy\n\n#news", cta: "New CTA" });
   });
 
   it("edits a rejected item and its override: rejecting hands the text back to the author", async () => {
@@ -4678,11 +4771,11 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(404);
       await stranger
         .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
-        .send({ expectedBody: "Second channel copy." })
+        .send({ expectedBody: "Second channel copy.", expectedHashtags: [], expectedCta: null })
         .expect(404);
       const restored = await agent
         .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
-        .send({ expectedBody: "Second channel copy." })
+        .send({ expectedBody: "Second channel copy.", expectedHashtags: [], expectedCta: null })
         .expect(200);
       expect(restored.body.body).toBe("Master copy.");
       expect(restored.body.adaptations[0].body).toBe("First channel copy.");
@@ -8173,11 +8266,17 @@ describe.skipIf(!url)("content e2e", () => {
       const { agent, itemId, adaptationId } = await setup();
       await agent
         .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
-        .send({ body: "Earlier channel text", hashtags: ["one", "two"], cta: "Ask a question" })
+        .send({
+          body: "Earlier channel text",
+          hashtags: ["one", "two"],
+          expectedHashtags: [],
+          cta: "Ask a question",
+          expectedCta: null,
+        })
         .expect(200);
       readaptOutcome = {
         ok: true,
-        text: "A revised channel post.\n\n#one",
+        text: "A revised channel post.",
         reason: "Shorter",
         usage: [],
       };
@@ -8198,6 +8297,25 @@ describe.skipIf(!url)("content e2e", () => {
         cta: "Ask a question",
         origin: "ai",
       });
+    });
+
+    it("refuses a re-adaptation whose managed tags exceed the channel limit", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["news"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "x".repeat(adaptationLimit("telegram") ?? MAX_BODY_LENGTH),
+        reason: "Long proposal",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      await agent.post(`${path}/${staged.body.id}/accept`).expect(400);
+      const unchanged = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(unchanged.body.adaptations[0].body).toBe("Earlier channel text\n\n#news");
     });
 
     it("keeps a paid suggestion on failed retries and refuses stale acceptance", async () => {

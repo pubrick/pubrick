@@ -9,6 +9,7 @@ import {
   type AdaptationUpdate,
   type AiVersionRow,
   type ApiErrorCode,
+  adaptationLimit,
   allSentencesAi,
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
@@ -1647,10 +1648,12 @@ export class ContentRepository {
         if (adaptation.body !== data.expectedBody) {
           throw conflict("version_changed", "This channel's text changed; reload before restoring");
         }
+        if (data.expectedHashtags === undefined || data.expectedCta === undefined) {
+          throw badRequest("invalid_request", "Channel restore requires current details");
+        }
         if (
-          (data.expectedHashtags !== undefined &&
-            JSON.stringify(adaptation.hashtags) !== JSON.stringify(data.expectedHashtags)) ||
-          (data.expectedCta !== undefined && adaptation.cta !== data.expectedCta)
+          JSON.stringify(adaptation.hashtags) !== JSON.stringify(data.expectedHashtags) ||
+          adaptation.cta !== data.expectedCta
         ) {
           throw conflict(
             "version_changed",
@@ -3058,6 +3061,7 @@ export class ContentRepository {
       const [adaptation] = await tx
         .select({
           status: schema.adaptations.status,
+          channelId: schema.adaptations.channelId,
           body: schema.adaptations.body,
           hashtags: schema.adaptations.hashtags,
           cta: schema.adaptations.cta,
@@ -3105,10 +3109,18 @@ export class ContentRepository {
         );
       }
       const proposedBody = withHashtags(proposal.proposal, adaptation.hashtags);
-      if (proposedBody.length > MAX_BODY_LENGTH) {
+      const [channel] = await tx
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, adaptation.channelId)))
+        .limit(1);
+      if (!channel) throw notFound("channel_not_found", "Channel not found");
+      const limit = adaptationLimit(channel.platform);
+      if (limit === undefined) throw badRequest("invalid_request", "Unknown channel platform");
+      if (proposedBody.length > limit) {
         throw badRequest(
           "invalid_request",
-          `Channel text with hashtags exceeds ${MAX_BODY_LENGTH} characters`,
+          `Channel text with hashtags exceeds ${limit} characters`,
         );
       }
       if (adaptation.body !== proposedBody) {
@@ -3178,6 +3190,7 @@ export class ContentRepository {
       const locked = await tx
         .select({
           status: schema.adaptations.status,
+          channelId: schema.adaptations.channelId,
           body: schema.adaptations.body,
           hashtags: schema.adaptations.hashtags,
           cta: schema.adaptations.cta,
@@ -3206,6 +3219,13 @@ export class ContentRepository {
         );
       }
 
+      if (
+        (data.hashtags !== undefined &&
+          JSON.stringify(current.hashtags) !== JSON.stringify(data.expectedHashtags)) ||
+        (data.cta !== undefined && current.cta !== data.expectedCta)
+      ) {
+        throw conflict("version_changed", "This channel's details changed; reload before saving");
+      }
       const bodySource = data.body === undefined ? current.body : data.body;
       const hashtags =
         bodySource === null
@@ -3215,11 +3235,23 @@ export class ContentRepository {
             : normalizeHashtags(data.hashtags);
       const cta = bodySource === null ? null : data.cta === undefined ? current.cta : data.cta;
       const nextBody =
-        bodySource === null ? null : replaceHashtags(bodySource, current.hashtags, hashtags);
-      if (nextBody !== null && nextBody.length > MAX_BODY_LENGTH) {
+        bodySource === null
+          ? null
+          : data.body === undefined
+            ? replaceHashtags(bodySource, current.hashtags, hashtags)
+            : withHashtags(bodySource, hashtags);
+      const [channel] = await tx
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, current.channelId)))
+        .limit(1);
+      if (!channel) throw notFound("channel_not_found", "Channel not found");
+      const limit = adaptationLimit(channel.platform);
+      if (limit === undefined) throw badRequest("invalid_request", "Unknown channel platform");
+      if (nextBody !== null && nextBody.length > limit) {
         throw badRequest(
           "invalid_request",
-          `Channel text with hashtags exceeds ${MAX_BODY_LENGTH} characters`,
+          `Channel text with hashtags exceeds ${limit} characters`,
         );
       }
       if (!nextBody?.trim() && (hashtags.length > 0 || cta)) {

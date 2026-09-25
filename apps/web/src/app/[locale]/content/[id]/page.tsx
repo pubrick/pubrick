@@ -259,6 +259,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [ctaDrafts, setCtaDrafts] = useState<Record<string, string>>({});
+  const tagBaselines = useRef<Record<string, string[]>>({});
+  const ctaBaselines = useRef<Record<string, string | null>>({});
+  const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -422,6 +425,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
       setTagDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags.join(", ")])));
       setCtaDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta ?? ""])));
+      tagBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags]));
+      ctaBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta]));
+      bodyBaselines.current = Object.fromEntries(
+        item.adaptations.map((a) => [
+          a.id,
+          a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags),
+        ]),
+      );
       return;
     }
     setOverrideDrafts((prev) => {
@@ -446,6 +457,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       ),
       ...prev,
     }));
+    for (const adaptation of item.adaptations) {
+      if (!(adaptation.id in tagBaselines.current)) {
+        tagBaselines.current[adaptation.id] = adaptation.hashtags;
+        ctaBaselines.current[adaptation.id] = adaptation.cta;
+        bodyBaselines.current[adaptation.id] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+      }
+    }
   }, [item]);
 
   /**
@@ -655,14 +674,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     const hashtags = normalizeHashtags((tagDrafts[adaptationId] ?? "").split(","));
     const cta = ctaDrafts[adaptationId] ?? "";
     const saved = item?.adaptations.find((adaptation) => adaptation.id === adaptationId);
-    const metadataChanged =
-      JSON.stringify(hashtags) !== JSON.stringify(saved?.hashtags ?? []) ||
-      cta !== (saved?.cta ?? "");
+    const baselineTags = tagBaselines.current[adaptationId] ?? saved?.hashtags ?? [];
+    const baselineCta =
+      adaptationId in ctaBaselines.current
+        ? ctaBaselines.current[adaptationId]
+        : (saved?.cta ?? null);
+    const tagsChanged = JSON.stringify(hashtags) !== JSON.stringify(baselineTags);
+    const ctaChanged = cta !== (baselineCta ?? "");
+    const metadataChanged = tagsChanged || ctaChanged;
     const canSaveMetadataWithoutReplacingBody =
       metadataChanged &&
       saved?.body !== null &&
       saved !== undefined &&
-      value === stripHashtagSuffix(saved.body, saved.hashtags);
+      value === bodyBaselines.current[adaptationId];
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}`, {
         method: "PATCH",
@@ -677,11 +701,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       : null
                     : value,
               }),
-          ...(metadataChanged ? { hashtags, cta } : {}),
+          ...(tagsChanged ? { hashtags, expectedHashtags: baselineTags } : {}),
+          ...(ctaChanged ? { cta, expectedCta: baselineCta } : {}),
         }),
       });
       await reload();
       setTagDrafts((current) => ({ ...current, [adaptationId]: hashtags.join(", ") }));
+      if (tagsChanged) tagBaselines.current[adaptationId] = hashtags;
+      if (ctaChanged) ctaBaselines.current[adaptationId] = cta;
+      bodyBaselines.current[adaptationId] = value;
     } catch (err) {
       handleError(err);
     }
@@ -726,7 +754,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
       applyToItem(() => updated);
       const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
-      if (adaptation)
+      if (adaptation) {
+        bodyBaselines.current[adaptationId] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
         setOverrideDrafts((drafts) => ({
           ...drafts,
           [adaptationId]:
@@ -734,6 +764,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               ? ""
               : stripHashtagSuffix(adaptation.body, adaptation.hashtags),
         }));
+      }
     } catch (err) {
       handleError(err);
       await reload();
@@ -1945,6 +1976,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               onRestored={async () => {
                 const updated = await api<ContentItem>(`/api/content/${id}`);
                 const restored = updated.adaptations.find((row) => row.id === a.id);
+                if (restored) {
+                  bodyBaselines.current[a.id] =
+                    restored.body === null
+                      ? ""
+                      : stripHashtagSuffix(restored.body, restored.hashtags);
+                  tagBaselines.current[a.id] = restored.hashtags;
+                  ctaBaselines.current[a.id] = restored.cta;
+                }
                 setOverrideDrafts((current) => ({
                   ...current,
                   [a.id]:

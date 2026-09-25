@@ -1091,8 +1091,33 @@ describe("per-channel override (Step 6)", () => {
     );
     expect(JSON.parse(saved?.body ?? "{}")).toEqual({
       hashtags: ["new_product", "launch"],
+      expectedHashtags: [],
       cta: "Ask a question",
+      expectedCta: null,
     });
+  });
+
+  it("saves only the changed CTA with the editor's original comparison value", async () => {
+    const adaptation = makeAdaptation({
+      body: "Saved text\n\n#news",
+      hashtags: ["news"],
+      cta: null,
+    });
+    const served = { current: makeItem({ adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) =>
+      method === "PATCH" && path === "/api/content/c1/adaptations/a1" ? adaptation : undefined,
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.ctaLabel }), {
+      target: { value: "Ask a question" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const saved = calls.find(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(saved?.body ?? "{}")).toEqual({ cta: "Ask a question", expectedCta: null });
   });
 
   it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
