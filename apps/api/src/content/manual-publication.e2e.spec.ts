@@ -184,6 +184,21 @@ describe.skipIf(!url)("manual publication e2e", () => {
         .post("/api/channels")
         .send({ brandId: brand.body.id, platform, name: platform })
         .expect(201);
+      if (platform === "dzen") {
+        // A pre-manual Dzen row can still hold encrypted credentials after the
+        // additive migration. It must be treated as manual, never sent.
+        const legacy = createDb(url as string);
+        try {
+          await legacy.db.execute(
+            sql`update channels set credentials_encrypted = 'legacy-ciphertext' where org_id = ${orgId} and id = ${channel.body.id}`,
+          );
+        } finally {
+          await legacy.pool.end();
+        }
+        const check = await agent.post(`/api/channels/${channel.body.id}/test`).expect(200);
+        expect(check.body).toMatchObject({ ok: false });
+        expect(JSON.stringify(check.body)).not.toContain("legacy-ciphertext");
+      }
       const item = await agent
         .post("/api/content")
         .send({
