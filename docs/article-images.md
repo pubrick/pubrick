@@ -55,6 +55,8 @@ keeps the slot's placement, alternative text, and caption, increments the image
 revision, and requires explicit image review before approval. The editor can
 revise the alternative text if the crop changes what it describes. Cropping
 an approved or published item is refused. No Gemini call or usage charge occurs.
+The crop frame supports arrow-key movement and a labelled zoom slider. A
+missing source image is reported in the editor and cannot be saved.
 
 For a saved slot, `POST /api/content/:id/images/:slotId/regenerate` with
 `{ "expectedRevision": 0, "expectedBody": "…" }` creates one metered Gemini
