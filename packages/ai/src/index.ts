@@ -41,6 +41,16 @@ export {
   resolveModel,
 } from "./provider.js";
 export {
+  previewRoleTemplate,
+  ROLE_TEMPLATE_LIMITS,
+  RoleTemplateError,
+  type RoleTemplateErrorCode,
+  type RoleTemplateRender,
+  type RoleTemplateValues,
+  type RoleTemplateVariable,
+  renderRoleTemplate,
+} from "./role-template.js";
+export {
   type AdaptationOutput,
   type AdapterInput,
   adaptationLimit,
