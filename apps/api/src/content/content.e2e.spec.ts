@@ -8101,6 +8101,11 @@ describe.skipIf(!url)("content e2e", () => {
           followupOutcome: "rejected",
         });
         expect(detail.body.adaptations[0].deliveryOutcome).toBe("partial");
+        const list = await agent.get("/api/content").expect(200);
+        const card = list.body.find((row: { id: string }) => row.id === itemId);
+        expect(card?.adaptations[0].deliveryOutcome).toBe("partial");
+        expect(card?.adaptations[0]).not.toHaveProperty("partialTelegram");
+        expect(JSON.stringify(card)).not.toContain("Frozen missing reply");
         const frozenItem = await agent
           .patch(`/api/content/${itemId}`)
           .send({ body: "Changed after the photo went live" })

@@ -767,7 +767,8 @@ export const adaptationDtoSchema = z.strictObject({
    * `failureReason` is the closed code the screens say a failure from, and
    * `lateBySeconds` the number its missed-slot sentence names; `assertedByName`
    * and `assertedAt` are whose word a delivery is when no platform answered for
-   * it. `partialTelegram` preserves the accepted cover and exact missing text.
+   * it. `partialTelegram` preserves the accepted cover and exact missing text
+   * on item detail; queue cards omit it and parse the default null.
    * They are declared here for the reason the docstring above gives: a
    * field on this schema is a field the api MUST return, and one that stops
    * being selected fails a parse rather than arriving in a browser as
