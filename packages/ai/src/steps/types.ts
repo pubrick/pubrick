@@ -75,6 +75,8 @@ export type StepContext = ModelCallOptions & {
   contentType?: ContentType;
   /** Extra trusted instructions written by this organization, keyed by role. */
   promptGuidance?: Partial<Record<PromptRole, string>>;
+  /** Exact first-claim instruction bytes. Only generation runs provide this map. */
+  pinnedInstructions?: Readonly<Record<string, string>>;
   model: LanguageModelV4;
   provider: AiProvider;
   onUsage: StepUsageSink;

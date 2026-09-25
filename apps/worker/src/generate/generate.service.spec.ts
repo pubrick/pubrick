@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import type { UsageRecord } from "@pubrick/ai";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { channelOf, type ScriptedUsage, scriptedModel } from "../test/scripted-model";
+import type { TemplateSnapshot } from "./template-snapshot";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -1461,12 +1462,25 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     it("never reads another org's brand or channels into a run's prompt", async () => {
       const { victim, intruder } = await twoOrgs();
       const repo = new Repository();
+      const claimed = await repo.claim(
+        victim.orgId,
+        victim.runId,
+        "victim-context#1",
+        "victim-context",
+      );
+      if (!claimed?.templateSnapshot) throw new Error("Expected pinned run context");
 
       // The brand carries the voice and audience that become the run's
       // instructions; reading it across orgs puts one org's positioning into
       // another org's post.
       expect(
-        await repo.context(intruder.orgId, victim.brandId, victim.channelIds, {}),
+        await repo.context(
+          intruder.orgId,
+          victim.brandId,
+          victim.channelIds,
+          {},
+          claimed.templateSnapshot,
+        ),
       ).toBeUndefined();
 
       const own = await repo.context(
@@ -1474,6 +1488,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         victim.brandId,
         [...victim.channelIds, ...intruder.channelIds],
         {},
+        claimed.templateSnapshot,
       );
       expect(own?.brand.name).toBe("Victim Coffee");
       // The channel list is scoped by brand as well as org — the brand predicate
@@ -1520,6 +1535,9 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
           text: "INTRUDER_ONLY",
         },
       });
+      if (!victimRun?.templateSnapshot || !intruderRun?.templateSnapshot) {
+        throw new Error("Expected pinned role instructions");
+      }
       expect(
         (
           await repo.context(
@@ -1527,6 +1545,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
             victim.brandId,
             victim.channelIds,
             victimRun?.guidanceSnapshot ?? {},
+            victimRun.templateSnapshot,
           )
         )?.promptGuidance,
       ).toEqual({ writer: "VICTIM_LATEST" });
@@ -1537,6 +1556,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
             intruder.brandId,
             intruder.channelIds,
             intruderRun?.guidanceSnapshot ?? {},
+            intruderRun.templateSnapshot,
           )
         )?.promptGuidance,
       ).toEqual({ writer: "INTRUDER_ONLY" });
@@ -1562,6 +1582,159 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(script.calls.find((call) => call.role === "writer")?.system).not.toContain(
         "ADDED_LATER",
       );
+    }, 25_000);
+
+    it("freezes a custom role, brand, and channel across a takeover", async () => {
+      const seeded = await seed({ channels: 1 });
+      const source = "PINNED_RESEARCH: plan for {{content_language}} on {{current_date_utc}}.";
+      const [revision] = await db
+        .insert(schema.roleTemplateRevisions)
+        .values({
+          orgId: seeded.orgId,
+          role: "researcher",
+          version: 1,
+          source,
+          sourceSha256: createHash("sha256").update(source).digest("hex"),
+        })
+        .returning({ id: schema.roleTemplateRevisions.id });
+      await db.insert(schema.roleTemplateHeads).values({
+        orgId: seeded.orgId,
+        role: "researcher",
+        activeRevisionId: revision?.id,
+        generation: 1,
+      });
+      const repo = new Repository();
+      const first = await repo.claim(seeded.orgId, seeded.runId, "frozen#one", "frozen");
+      const snapshot = first?.templateSnapshot;
+      if (!snapshot) throw new Error("Expected first-claim snapshot");
+      expect(snapshot.roles.researcher).toMatchObject({
+        kind: "revision",
+        revisionId: revision?.id,
+        source,
+      });
+      expect(snapshot.instructions.researcher.text).toContain("PINNED_RESEARCH");
+      await db
+        .update(schema.brands)
+        .set({ name: "Changed Brand", voice: "changed voice", contentLanguage: "ru" })
+        .where(eq(schema.brands.id, seeded.brandId));
+      await db
+        .update(schema.channels)
+        .set({ name: "Changed Channel", platform: "vk" })
+        .where(eq(schema.channels.id, seeded.channelIds[0] as string));
+      await db
+        .update(schema.roleTemplateHeads)
+        .set({ activeRevisionId: null, generation: 2 })
+        .where(eq(schema.roleTemplateHeads.orgId, seeded.orgId));
+      const resumed = await repo.claim(seeded.orgId, seeded.runId, "frozen#two", "frozen");
+      expect(resumed?.templateSnapshot).toEqual(snapshot);
+      const script = scriptedModel();
+      await serviceFor(script).handle({
+        id: "frozen",
+        data: { runId: seeded.runId, orgId: seeded.orgId },
+      });
+      expect(script.calls.find((call) => call.role === "researcher")?.system).toBe(
+        snapshot.instructions.researcher.text,
+      );
+      expect(script.calls.find((call) => call.role === "adapter")?.system).toBe(
+        snapshot.instructions.adapters[seeded.channelIds[0] as string]?.text,
+      );
+      expect(script.calls[0]?.system).not.toContain("Changed Brand");
+      expect(script.calls[0]?.system).not.toContain("changed voice");
+      expect(script.adaptedChannels()).toEqual(["Chan 0"]);
+    }, 25_000);
+
+    it("pins a pre-upgrade partial run to built-in roles despite an active head", async () => {
+      const seeded = await seed({ channels: 1 });
+      const source = "A newer writer direction";
+      const [revision] = await db
+        .insert(schema.roleTemplateRevisions)
+        .values({
+          orgId: seeded.orgId,
+          role: "writer",
+          version: 1,
+          source,
+          sourceSha256: createHash("sha256").update(source).digest("hex"),
+        })
+        .returning({ id: schema.roleTemplateRevisions.id });
+      await db.insert(schema.roleTemplateHeads).values({
+        orgId: seeded.orgId,
+        role: "writer",
+        activeRevisionId: revision?.id,
+        generation: 1,
+      });
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          steps: {
+            researcher: {
+              status: "succeeded",
+              output: { angle: "Earlier work", keyPoints: ["One point"], avoid: [] },
+            },
+          },
+          guidanceSnapshot: null,
+          templateSnapshot: null,
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      const claimed = await new Repository().claim(
+        seeded.orgId,
+        seeded.runId,
+        "legacy#one",
+        "legacy",
+      );
+      expect(claimed?.templateSnapshot?.roles.writer).toMatchObject({
+        kind: "default",
+        revisionId: null,
+        version: null,
+      });
+      expect(claimed?.templateSnapshot?.instructions.writer.text).not.toContain(source);
+      expect(claimed?.guidanceSnapshot).toEqual({});
+    }, 25_000);
+
+    it("refuses independently corrupted snapshots before a model call", async () => {
+      const corruptions = [
+        (snapshot: TemplateSnapshot) => {
+          snapshot.instructions.researcher.sha256 = "0".repeat(64);
+        },
+        (snapshot: TemplateSnapshot) => {
+          delete (snapshot.roles as Record<string, unknown>).editor;
+        },
+        (snapshot: TemplateSnapshot) => {
+          Object.assign(snapshot.roles, { unexpected: snapshot.roles.writer });
+        },
+        (snapshot: TemplateSnapshot) => {
+          snapshot.roles.researcher.source = "Invented default";
+          snapshot.roles.researcher.sourceSha256 = createHash("sha256")
+            .update("Invented default")
+            .digest("hex");
+        },
+        (snapshot: TemplateSnapshot) => {
+          snapshot.receipt.brand.voice = "Altered after claim";
+        },
+      ];
+      for (const [index, corrupt] of corruptions.entries()) {
+        const seeded = await seed({ channels: 1 });
+        const jobId = `corrupt-${index}`;
+        const pinned = await new Repository().claim(
+          seeded.orgId,
+          seeded.runId,
+          `${jobId}#first`,
+          jobId,
+        );
+        if (!pinned?.templateSnapshot) throw new Error("Expected first-claim snapshot");
+        const damaged = structuredClone(pinned.templateSnapshot);
+        corrupt(damaged);
+        await db
+          .update(schema.pipelineRuns)
+          .set({ templateSnapshot: damaged })
+          .where(eq(schema.pipelineRuns.id, seeded.runId));
+        const script = scriptedModel();
+        await serviceFor(script).handle({
+          id: jobId,
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        });
+        expect(script.calls).toHaveLength(0);
+        expect((await runRow(seeded.runId))?.status).toBe("failed");
+      }
     }, 25_000);
 
     it("keeps guidance through a lease takeover and checkpoint resume; a new run gets current guidance", async () => {

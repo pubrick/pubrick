@@ -4,14 +4,18 @@ import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
 import {
   type AiCredential,
+  builtInRoleTemplateSource,
+  composeRoleTemplateInstruction,
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,
+  RoleTemplateError,
   type StepAttribution,
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
 import { newsRankScore, schema, withImageCallLock } from "@pubrick/db";
 import {
+  adaptationLimit,
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
   IMAGE_CALL_STEPS,
@@ -21,11 +25,13 @@ import {
   MAX_IMAGE_CALLS_PER_HOUR,
   PermanentError,
   type PlatformId,
+  PROMPT_ROLES,
   type PromptRole,
   parseStoredAiCredential,
   preferredCredential,
   type RunFailure,
   type RunStepCheckpoint,
+  runInputSchema,
   toLedgerCostUsd,
 } from "@pubrick/shared";
 import {
@@ -46,6 +52,7 @@ import sharp from "sharp";
 import { db, pool } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
+import { digest, receiptDigest, type TemplateSnapshot } from "./template-snapshot";
 
 /**
  * Every write in this file that touches `pipeline_runs` sets `updated_at`
@@ -155,6 +162,7 @@ export type ClaimedRun = {
   input: unknown;
   steps: RunSteps;
   guidanceSnapshot: GuidanceSnapshot;
+  templateSnapshot: TemplateSnapshot | null;
   createdAt: Date;
 };
 
@@ -281,71 +289,228 @@ export class GenerateRepository {
     fence: string,
     jobId: string,
   ): Promise<ClaimedRun | undefined> {
-    const rows = await db
-      .update(schema.pipelineRuns)
-      .set({
-        activeJobId: fence,
-        status: "running",
-        // The UPDATE locks this run row. A re-claim sees the stored value,
-        // including {}, even when guidance changes between deliveries.
-        guidanceSnapshot: sql`coalesce(
-          ${schema.pipelineRuns.guidanceSnapshot},
-          (
-            select coalesce(
-              jsonb_object_agg(latest.role, jsonb_build_object(
-                'revisionId', latest.id,
-                'version', latest.version,
-                'text', latest.guidance
-              )),
-              '{}'::jsonb
-            )
-            from (
-              select distinct on (${schema.promptRevisions.role})
-                ${schema.promptRevisions.id} as id,
-                ${schema.promptRevisions.role} as role,
-                ${schema.promptRevisions.version} as version,
-                ${schema.promptRevisions.guidance} as guidance
-              from ${schema.promptRevisions}
-              where ${schema.promptRevisions.orgId} = ${orgId}
-              order by ${schema.promptRevisions.role}, ${schema.promptRevisions.version} desc
-            ) as latest
+    return db.transaction(async (tx) => {
+      // Activation and guidance edits take this row FOR UPDATE first. A claim
+      // takes it FOR SHARE before the run row, then reads one complete head set.
+      const [org] = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId))
+        .for("share");
+      if (!org) return undefined;
+      const [row] = await tx
+        .select({
+          id: schema.pipelineRuns.id,
+          brandId: schema.pipelineRuns.brandId,
+          input: schema.pipelineRuns.input,
+          steps: schema.pipelineRuns.steps,
+          guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
+          templateSnapshot: schema.pipelineRuns.templateSnapshot,
+          createdAt: schema.pipelineRuns.createdAt,
+        })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.id, runId),
+            inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
+            sql`(
+              ${schema.pipelineRuns.activeJobId} is null
+              or split_part(${schema.pipelineRuns.activeJobId}, '#', 1) = ${jobId}
+              or ${schema.pipelineRuns.leaseExpiresAt} is null
+              or ${schema.pipelineRuns.leaseExpiresAt} < now()
+            )`,
+          ),
+        )
+        .for("update");
+      if (!row) return undefined;
+
+      const legacyPartial =
+        Object.keys(row.steps ?? {}).length > 0 && row.templateSnapshot === null;
+      let guidanceSnapshot = row.guidanceSnapshot;
+      if (guidanceSnapshot === null) {
+        const latest = legacyPartial
+          ? []
+          : await tx
+              .selectDistinctOn([schema.promptRevisions.role], {
+                id: schema.promptRevisions.id,
+                role: schema.promptRevisions.role,
+                version: schema.promptRevisions.version,
+                text: schema.promptRevisions.guidance,
+              })
+              .from(schema.promptRevisions)
+              .where(eq(schema.promptRevisions.orgId, orgId))
+              .orderBy(schema.promptRevisions.role, desc(schema.promptRevisions.version));
+        guidanceSnapshot = Object.fromEntries(
+          latest.map(({ role, id, version, text }) => [role, { revisionId: id, version, text }]),
+        );
+      }
+
+      let templateSnapshot = row.templateSnapshot ?? null;
+      const parsed = runInputSchema.safeParse(row.input);
+      if (templateSnapshot === null && parsed.success) {
+        const input = parsed.data;
+        const [brand] = await tx
+          .select({
+            name: schema.brands.name,
+            voice: schema.brands.voice,
+            audience: schema.brands.audience,
+            contentLanguage: schema.brands.contentLanguage,
+          })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, row.brandId)))
+          .limit(1);
+        if (!brand) return undefined;
+        const channelRows = await tx
+          .select({
+            id: schema.channels.id,
+            name: schema.channels.name,
+            platform: schema.channels.platform,
+          })
+          .from(schema.channels)
+          .where(
+            and(
+              eq(schema.channels.orgId, orgId),
+              eq(schema.channels.brandId, row.brandId),
+              inArray(schema.channels.id, input.channelIds),
+            ),
           )
-        )`,
-        leaseExpiresAt: leaseExpiry(),
-        updatedAt: nowSql(),
-      })
-      .where(
-        and(
-          eq(schema.pipelineRuns.orgId, orgId),
-          eq(schema.pipelineRuns.id, runId),
-          inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
-          sql`(
-            ${schema.pipelineRuns.activeJobId} is null
-            or split_part(${schema.pipelineRuns.activeJobId}, '#', 1) = ${jobId}
-            or ${schema.pipelineRuns.leaseExpiresAt} is null
-            or ${schema.pipelineRuns.leaseExpiresAt} < now()
-          )`,
-        ),
-      )
-      .returning({
-        id: schema.pipelineRuns.id,
-        brandId: schema.pipelineRuns.brandId,
-        input: schema.pipelineRuns.input,
-        steps: schema.pipelineRuns.steps,
-        guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
-        createdAt: schema.pipelineRuns.createdAt,
-      });
-    const row = rows[0];
-    if (!row) return undefined;
-    return {
-      id: row.id,
-      orgId,
-      brandId: row.brandId,
-      input: row.input,
-      steps: row.steps ?? {},
-      guidanceSnapshot: row.guidanceSnapshot ?? {},
-      createdAt: row.createdAt,
-    };
+          .orderBy(asc(schema.channels.id));
+        const channels = channelRows.map((channel) => ({
+          ...channel,
+          limit: adaptationLimit(channel.platform) ?? 0,
+        }));
+        const heads = legacyPartial
+          ? []
+          : await tx
+              .select({
+                role: schema.roleTemplateHeads.role,
+                activeRevisionId: schema.roleTemplateHeads.activeRevisionId,
+                revisionId: schema.roleTemplateRevisions.id,
+                version: schema.roleTemplateRevisions.version,
+                source: schema.roleTemplateRevisions.source,
+                sourceSha256: schema.roleTemplateRevisions.sourceSha256,
+              })
+              .from(schema.roleTemplateHeads)
+              .leftJoin(
+                schema.roleTemplateRevisions,
+                and(
+                  eq(schema.roleTemplateRevisions.orgId, orgId),
+                  eq(schema.roleTemplateRevisions.role, schema.roleTemplateHeads.role),
+                  eq(schema.roleTemplateRevisions.id, schema.roleTemplateHeads.activeRevisionId),
+                ),
+              )
+              .where(eq(schema.roleTemplateHeads.orgId, orgId));
+        const byRole = new Map(heads.map((head) => [head.role, head]));
+        const roles = {} as TemplateSnapshot["roles"];
+        for (const role of PROMPT_ROLES) {
+          const selected = byRole.get(role);
+          if (selected?.activeRevisionId) {
+            if (
+              !selected.revisionId ||
+              !selected.version ||
+              !selected.source ||
+              digest(selected.source) !== selected.sourceSha256
+            ) {
+              this.logger.error(`Run ${runId}: active ${role} role template is invalid`);
+              await tx
+                .update(schema.pipelineRuns)
+                .set({ status: "failed", error: "internal", updatedAt: nowSql() })
+                .where(
+                  and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)),
+                );
+              return undefined;
+            }
+            roles[role] = {
+              kind: "revision",
+              revisionId: selected.revisionId,
+              version: selected.version,
+              source: selected.source,
+              sourceSha256: selected.sourceSha256,
+            };
+          } else {
+            const source = builtInRoleTemplateSource(role);
+            roles[role] = {
+              kind: "default",
+              revisionId: null,
+              version: null,
+              source,
+              sourceSha256: digest(source),
+            };
+          }
+        }
+        const claimDateUtc = new Date().toISOString().slice(0, 10);
+        const contentType = input.contentType ?? "social_post";
+        const instructions = {} as TemplateSnapshot["instructions"];
+        try {
+          for (const role of PROMPT_ROLES) {
+            if (role === "adapter") continue;
+            const text = composeRoleTemplateInstruction({
+              role,
+              source: roles[role].kind === "default" ? null : roles[role].source,
+              contentType,
+              claimDateUtc,
+              brand,
+              guidance: guidanceSnapshot?.[role]?.text,
+            });
+            instructions[role] = { text, sha256: digest(text) };
+          }
+          instructions.adapters = {};
+          for (const channel of channels) {
+            const text = composeRoleTemplateInstruction({
+              role: "adapter",
+              source: roles.adapter.kind === "default" ? null : roles.adapter.source,
+              contentType,
+              claimDateUtc,
+              brand,
+              channel,
+              guidance: guidanceSnapshot?.adapter?.text,
+            });
+            instructions.adapters[channel.id] = { text, sha256: digest(text) };
+          }
+        } catch (error) {
+          if (!(error instanceof RoleTemplateError)) throw error;
+          this.logger.error(`Run ${runId}: role template cannot be pinned (${error.code})`);
+          await tx
+            .update(schema.pipelineRuns)
+            .set({ status: "failed", error: "internal", updatedAt: nowSql() })
+            .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)));
+          return undefined;
+        }
+        const receipt = { contentType, claimDateUtc, brand, channels };
+        templateSnapshot = {
+          formatVersion: 1,
+          engineVersion: "role-template-v1",
+          roles,
+          receipt,
+          receiptSha256: receiptDigest(receipt),
+          instructions,
+        };
+      }
+      const [updated] = await tx
+        .update(schema.pipelineRuns)
+        .set({
+          activeJobId: fence,
+          status: "running",
+          guidanceSnapshot,
+          templateSnapshot,
+          leaseExpiresAt: leaseExpiry(),
+          updatedAt: nowSql(),
+        })
+        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)))
+        .returning({ id: schema.pipelineRuns.id });
+      if (!updated) return undefined;
+      return {
+        id: row.id,
+        orgId,
+        brandId: row.brandId,
+        input: row.input,
+        steps: row.steps ?? {},
+        guidanceSnapshot: guidanceSnapshot ?? {},
+        templateSnapshot,
+        createdAt: row.createdAt,
+      };
+    });
   }
 
   /**
@@ -602,13 +767,10 @@ export class GenerateRepository {
     brandId: string,
     channelIds: readonly string[],
     guidanceSnapshot: GuidanceSnapshot,
+    snapshot: TemplateSnapshot,
   ): Promise<RunContext | undefined> {
     const brands = await db
       .select({
-        name: schema.brands.name,
-        voice: schema.brands.voice,
-        audience: schema.brands.audience,
-        contentLanguage: schema.brands.contentLanguage,
         linkPolicy: schema.brands.linkPolicy,
       })
       .from(schema.brands)
@@ -620,12 +782,8 @@ export class GenerateRepository {
     // Ordered by id so the fan-out — and therefore the checkpoint keys a resume
     // looks for — is the same on every attempt. Scoped to the brand as well as
     // the org because `resolveChannels` admitted the run on exactly that basis.
-    const channels = await db
-      .select({
-        id: schema.channels.id,
-        name: schema.channels.name,
-        platform: schema.channels.platform,
-      })
+    const liveChannels = await db
+      .select({ id: schema.channels.id })
       .from(schema.channels)
       .where(
         and(
@@ -636,19 +794,51 @@ export class GenerateRepository {
       )
       .orderBy(asc(schema.channels.id));
 
+    const liveIds = new Set(liveChannels.map((channel) => channel.id));
     return {
-      brand: {
-        name: brand.name,
-        voice: brand.voice,
-        audience: brand.audience,
-        contentLanguage: brand.contentLanguage,
-      },
+      brand: snapshot.receipt.brand,
       linkPolicy: brand.linkPolicy,
-      channels,
+      channels: snapshot.receipt.channels.filter((channel) => liveIds.has(channel.id)),
       promptGuidance: Object.fromEntries(
         Object.entries(guidanceSnapshot).map(([role, revision]) => [role, revision.text]),
       ),
     };
+  }
+
+  /** A stored revision must still match its same-org immutable source row. */
+  async verifyTemplateRevisions(orgId: string, snapshot: TemplateSnapshot): Promise<boolean> {
+    const selected = PROMPT_ROLES.map((role) => ({ role, ...snapshot.roles[role] })).filter(
+      (entry) => entry.kind === "revision",
+    );
+    if (selected.length === 0) return true;
+    const rows = await db
+      .select({
+        id: schema.roleTemplateRevisions.id,
+        role: schema.roleTemplateRevisions.role,
+        version: schema.roleTemplateRevisions.version,
+        source: schema.roleTemplateRevisions.source,
+        sourceSha256: schema.roleTemplateRevisions.sourceSha256,
+      })
+      .from(schema.roleTemplateRevisions)
+      .where(
+        and(
+          eq(schema.roleTemplateRevisions.orgId, orgId),
+          inArray(
+            schema.roleTemplateRevisions.id,
+            selected.map((entry) => entry.revisionId),
+          ),
+        ),
+      );
+    return selected.every((entry) =>
+      rows.some(
+        (row) =>
+          row.id === entry.revisionId &&
+          row.role === entry.role &&
+          row.version === entry.version &&
+          row.source === entry.source &&
+          row.sourceSha256 === entry.sourceSha256,
+      ),
+    );
   }
 
   /**

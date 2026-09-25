@@ -53,6 +53,7 @@ export {
 } from "./provider.js";
 export {
   builtInRoleTemplateSource,
+  composeRoleTemplateInstruction,
   previewRoleTemplate,
   previewRoleTemplateInstruction,
   ROLE_TEMPLATE_LIMITS,

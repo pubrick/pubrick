@@ -9,7 +9,12 @@ import {
 } from "@pubrick/shared";
 import { contentTypePolicy } from "./steps/content-type-policy.js";
 import { instructionsFor } from "./steps/prompt.js";
-import { BUILT_IN_ROLE_SOURCES, customRoleLines } from "./steps/role-manifest.js";
+import {
+  BUILT_IN_ROLE_LINES,
+  BUILT_IN_ROLE_SOURCES,
+  builtInAdapterRoleLines,
+  customRoleLines,
+} from "./steps/role-manifest.js";
 
 export const ROLE_TEMPLATE_LIMITS = {
   sourceCodePoints: 12_000,
@@ -286,4 +291,55 @@ export function previewRoleTemplateInstruction(
     throw new RoleTemplateError("render_limit", "Complete role instruction exceeds 96 KiB");
   }
   return { instructionBytes };
+}
+
+export type RoleTemplateInstructionInput = {
+  role: PromptRole;
+  /** Null means the byte-compatible built-in role; a string selects editable prose. */
+  source: string | null;
+  contentType: ContentType;
+  claimDateUtc: string;
+  brand: { name: string; voice: string | null; audience: string | null; contentLanguage: string };
+  channel?: { name: string; platform: PlatformId; limit: number };
+  guidance?: string;
+};
+
+/** Compose once at first claim. Resume reads the stored instruction, never this function. */
+export function composeRoleTemplateInstruction(input: RoleTemplateInstructionInput): string {
+  const { role, channel } = input;
+  if (role === "adapter" && !channel) {
+    throw new RoleTemplateError("invalid_values", "An adapter instruction needs a channel");
+  }
+  if (role !== "adapter" && channel) {
+    throw new RoleTemplateError("invalid_values", "Only an adapter instruction has a channel");
+  }
+  if (channel && adaptationLimit(channel.platform) !== channel.limit) {
+    throw new RoleTemplateError("invalid_values", "Adapter limit does not match its platform");
+  }
+  const values: RoleTemplateValues = {
+    current_date_utc: input.claimDateUtc,
+    content_type: input.contentType,
+    content_language: input.brand.contentLanguage,
+    ...(channel ? { channel_platform: channel.platform, channel_limit: channel.limit } : {}),
+  };
+  const base =
+    input.source === null
+      ? role === "adapter"
+        ? builtInAdapterRoleLines(channel as NonNullable<typeof channel>)
+        : BUILT_IN_ROLE_LINES[role]
+      : customRoleLines(role, renderRoleTemplate(role, input.source, values).text, channel);
+  const instruction = instructionsFor(
+    { brand: input.brand, now: () => new Date(`${input.claimDateUtc}T00:00:00.000Z`) },
+    [
+      ...base,
+      ...contentTypePolicy(input.contentType, role),
+      ...(input.guidance
+        ? ["", "Additional guidance set by this organization:", input.guidance]
+        : []),
+    ],
+  );
+  if (Buffer.byteLength(instruction, "utf8") > 96 * 1024) {
+    throw new RoleTemplateError("render_limit", "Complete role instruction exceeds 96 KiB");
+  }
+  return instruction;
 }

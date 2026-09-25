@@ -49,6 +49,7 @@ import {
 } from "./generate.repository";
 import { applyLinkPolicy } from "./link-policy";
 import { freezeRelatedNews } from "./related-news";
+import { pinnedInstructionMap, validateTemplateSnapshot } from "./template-snapshot";
 
 export type { GenerateJob } from "@pubrick/shared";
 
@@ -362,7 +363,29 @@ export class GenerateService {
     secret: SecretBox,
   ): Promise<TerminalPayload | Stopped> {
     const input = this.parseInput(run.input);
-    const context = await this.loadContext(run, input.channelIds);
+    if (!run.templateSnapshot) {
+      throw withRunFailure(new PermanentError("run has no pinned role instructions"), "internal");
+    }
+    const snapshot = validateTemplateSnapshot(run.templateSnapshot);
+    if (snapshot.receipt.contentType !== (input.contentType ?? "social_post")) {
+      throw withRunFailure(
+        new PermanentError("run content type differs from pinned receipt"),
+        "internal",
+      );
+    }
+    if (snapshot.receipt.channels.some((channel) => !input.channelIds.includes(channel.id))) {
+      throw withRunFailure(
+        new PermanentError("run channels differ from pinned receipt"),
+        "internal",
+      );
+    }
+    if (!(await this.repo.verifyTemplateRevisions(run.orgId, snapshot))) {
+      throw withRunFailure(
+        new PermanentError("role template revision no longer matches the pinned receipt"),
+        "internal",
+      );
+    }
+    const context = await this.loadContext(run, input.channelIds, snapshot);
     if (context === undefined) {
       // The brand is gone, which means this run row is gone too (the FK cascades)
       // or is about to be. Ordinary fence loss, not an error.
@@ -420,8 +443,9 @@ export class GenerateService {
       // finish so the work it is already paying for gets checkpointed.
       ctx: {
         brand: context.brand,
-        contentType: input.contentType ?? "social_post",
+        contentType: snapshot.receipt.contentType,
         promptGuidance: context.promptGuidance,
+        pinnedInstructions: pinnedInstructionMap(snapshot),
         editorialFeedback: input.editorialFeedback,
         // THE THREE TEXT FIELDS COME FROM THE ARM THE RUN WAS STORED AS, and
         // each arm names all three: `RunStepContext` makes them
@@ -1049,12 +1073,14 @@ export class GenerateService {
   private async loadContext(
     run: ClaimedRun,
     channelIds: readonly string[],
+    snapshot: NonNullable<ClaimedRun["templateSnapshot"]>,
   ): Promise<RunContext | undefined> {
     const context = await this.repo.context(
       run.orgId,
       run.brandId,
       channelIds,
       run.guidanceSnapshot,
+      snapshot,
     );
     if (!context) return undefined;
     if (context.channels.length === 0) {

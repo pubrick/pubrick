@@ -125,6 +125,7 @@ export type RoleTemplateRunSnapshot = {
     };
     channels: Array<{ id: string; name: string; platform: PlatformId; limit: number }>;
   };
+  receiptSha256: string;
   instructions: {
     researcher: RoleTemplateInstruction;
     writer: RoleTemplateInstruction;

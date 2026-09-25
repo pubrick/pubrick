@@ -130,6 +130,13 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
       const role = PROMPT_ROLES.find((candidate) => candidate === key);
       const guidance = role ? ctx.promptGuidance?.[role] : undefined;
       const format = role ? contentTypePolicy(ctx.contentType ?? "social_post", role) : [];
+      const pinnedInstruction = role ? ctx.pinnedInstructions?.[spec.name] : undefined;
+      if (role && ctx.pinnedInstructions && !pinnedInstruction) {
+        throw withRunFailure(
+          new PermanentError(`the ${spec.name} step has no pinned instruction`),
+          "internal",
+        );
+      }
       return callStep(ctx, {
         schema: spec.schema,
         attribution,
@@ -138,6 +145,7 @@ export function defineStep<I, O, C extends StepContext = StepContext>(spec: {
           ...format,
           ...(guidance ? ["", "Additional guidance set by this organization:", guidance] : []),
         ],
+        pinnedInstruction,
         material: spec.material(ctx, input),
       });
     },
@@ -167,6 +175,7 @@ async function callStep<O>(
     schema: ZodType<O>;
     attribution: StepAttribution;
     role: readonly string[];
+    pinnedInstruction?: string;
     material: readonly Material[];
   },
 ): Promise<O> {
@@ -201,7 +210,7 @@ async function callStep<O>(
     model: ctx.model,
     provider: ctx.provider,
     schema: args.schema,
-    instructions: instructionsFor(ctx, args.role),
+    instructions: args.pinnedInstruction ?? instructionsFor(ctx, args.role),
     prompt: materialFor(args.material),
     onUsage: (record) => ctx.onUsage(record, args.attribution),
     onUsageError: ctx.onUsageError,
