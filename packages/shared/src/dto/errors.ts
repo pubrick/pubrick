@@ -101,6 +101,7 @@ export const API_ERROR_CODES = [
   "claim_correction_timed_out",
   "editorial_note_stale",
   "draft_revision_stale",
+  "draft_revision_incomplete",
   "draft_revision_note_not_found",
   "draft_revision_needs_ai_draft",
   "draft_revision_limit_reached",

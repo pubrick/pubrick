@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type ContentImagesState,
   type DraftRevisionProposal,
   draftRevisionRequestSchema,
   type EditorialNoteDto,
@@ -17,6 +18,7 @@ export function DraftRevision({
   itemId,
   currentTitle,
   currentBody,
+  coverMediaId,
   draftBody,
   eligible,
   staged,
@@ -25,6 +27,7 @@ export function DraftRevision({
   itemId: string;
   currentTitle: string | null;
   currentBody: string;
+  coverMediaId: string | null;
   draftBody: string;
   eligible: boolean;
   staged: DraftRevisionProposal | null;
@@ -39,15 +42,50 @@ export function DraftRevision({
   const [noteId, setNoteId] = useState("");
   const [proposal, setProposal] = useState(staged ?? null);
   const [busy, setBusy] = useState(false);
+  const [imageState, setImageState] = useState<ContentImagesState | null>(null);
+  const [imageLoadError, setImageLoadError] = useState(false);
+  const [regenerateCover, setRegenerateCover] = useState(false);
+  const [regenerateSlots, setRegenerateSlots] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const base = `/api/content/${itemId}`;
   const dirty = draftBody !== currentBody;
   const moved =
     proposal !== null &&
-    (proposal.sourceBody !== currentBody || proposal.sourceTitle !== currentTitle);
+    (proposal.sourceBody !== currentBody ||
+      proposal.sourceTitle !== currentTitle ||
+      (proposal.imagePlan !== null && proposal.imagePlan.sourceCoverMediaId !== coverMediaId));
+  const hasImageSelection = regenerateCover || regenerateSlots.length > 0;
+  const hasInstruction = mode === "instruction" ? Boolean(instruction.trim()) : Boolean(noteId);
+  const pendingImages =
+    proposal?.imagePlan?.selections.some((selection) => !selection.generatedMediaId) ?? false;
+  const uncertainImage = Boolean(proposal?.imagePlan?.inFlight);
+  const suggestedParagraphCount =
+    proposal?.proposal.split(/\n\s*\n/).filter((part) => part.trim()).length ?? 0;
+  const imageMoveCount =
+    imageState?.images.filter((slot) => slot.afterParagraph >= suggestedParagraphCount).length ?? 0;
 
   useEffect(() => setProposal(staged ?? null), [staged]);
+  useEffect(() => {
+    if (!eligible) return;
+    let active = true;
+    void api<ContentImagesState>(`${base}/images`, { cache: "no-store" })
+      .then((state) => {
+        if (active) {
+          setImageState(state);
+          setImageLoadError(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setImageState(null);
+          setImageLoadError(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [base, eligible]);
 
   async function loadNotes(next?: string) {
     try {
@@ -69,7 +107,13 @@ export function DraftRevision({
   }
 
   async function propose() {
-    if (busy || !eligible || dirty || (mode === "instruction" ? !instruction.trim() : !noteId))
+    if (
+      busy ||
+      !eligible ||
+      dirty ||
+      (!hasInstruction && !hasImageSelection) ||
+      (hasImageSelection && !imageState)
+    )
       return;
     setBusy(true);
     setError(null);
@@ -78,7 +122,75 @@ export function DraftRevision({
       const request = draftRevisionRequestSchema.parse({
         expectedTitle: currentTitle,
         expectedBody: currentBody,
-        ...(mode === "instruction" ? { instruction } : { noteId }),
+        ...(mode === "instruction"
+          ? instruction.trim()
+            ? { instruction }
+            : {}
+          : noteId
+            ? { noteId }
+            : {}),
+        ...(hasImageSelection
+          ? {
+              expectedImagesRevision: imageState?.revision,
+              expectedCoverMediaId: coverMediaId,
+              regenerateImages: { cover: regenerateCover, inlineSlotIds: regenerateSlots },
+            }
+          : {}),
+      });
+      const next = await api<DraftRevisionProposal>(`${base}/draft-revision`, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      setProposal(next);
+      setRegenerateCover(false);
+      setRegenerateSlots([]);
+      setNotice(t("ready"));
+    } catch (err) {
+      setError(errorMessage(err, t("error"), te));
+      if (hasImageSelection) {
+        try {
+          const latest = await api<{ draftRevisionProposal: DraftRevisionProposal | null }>(base, {
+            cache: "no-store",
+          });
+          if (
+            latest.draftRevisionProposal?.imagePlan?.selections.some(
+              (selection) => !selection.generatedMediaId,
+            )
+          ) {
+            setProposal(latest.draftRevisionProposal);
+            setNotice(
+              latest.draftRevisionProposal.imagePlan?.inFlight
+                ? t("uncertainImage")
+                : t("partialReady"),
+            );
+          }
+        } catch {
+          /* The original generation error remains visible. */
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeImages() {
+    const plan = proposal?.imagePlan;
+    if (!proposal || !plan || !pendingImages || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const request = draftRevisionRequestSchema.parse({
+        expectedTitle: proposal.sourceTitle,
+        expectedBody: proposal.sourceBody,
+        ...(plan.textModelUsed ? { instruction: proposal.instruction } : {}),
+        expectedCoverMediaId: plan.sourceCoverMediaId,
+        expectedImagesRevision: plan.sourceImagesRevision,
+        regenerateImages: {
+          cover: plan.selections.some((selection) => selection.kind === "cover"),
+          inlineSlotIds: plan.selections
+            .filter((selection) => selection.kind === "inline")
+            .map((selection) => selection.slotId),
+        },
       });
       const next = await api<DraftRevisionProposal>(`${base}/draft-revision`, {
         method: "POST",
@@ -94,7 +206,7 @@ export function DraftRevision({
   }
 
   async function accept() {
-    if (!proposal || busy || moved || dirty) return;
+    if (!proposal || busy || moved || dirty || pendingImages) return;
     setBusy(true);
     setError(null);
     try {
@@ -107,6 +219,9 @@ export function DraftRevision({
       setProposal(null);
       setNotice(t("accepted"));
       await onAccepted(updated.body, updated.title);
+      void api<ContentImagesState>(`${base}/images`, { cache: "no-store" })
+        .then(setImageState)
+        .catch(() => setImageState(null));
     } catch (err) {
       setError(errorMessage(err, t("error"), te));
     } finally {
@@ -194,12 +309,71 @@ export function DraftRevision({
           )}
         </div>
       )}
+      {eligible && (coverMediaId || (imageState?.images.length ?? 0) > 0 || imageLoadError) && (
+        <fieldset className="mt-4 space-y-2 rounded-control border border-border-soft p-3">
+          <legend className="px-1 text-sm font-medium text-fg">{t("imageSelection")}</legend>
+          <p className="text-xs text-fg-secondary">{t("imageCostHint")}</p>
+          {imageLoadError && (
+            <p role="alert" className="text-sm text-danger">
+              {t("imageLoadError")}
+            </p>
+          )}
+          {coverMediaId && (
+            <label className="flex items-center gap-3 rounded-control p-2 text-sm text-fg">
+              <input
+                type="checkbox"
+                checked={regenerateCover}
+                onChange={(event) => setRegenerateCover(event.target.checked)}
+                disabled={busy}
+              />
+              {/* biome-ignore lint/performance/noImgElement: same-origin authenticated media is served by the API */}
+              <img
+                src={`/api/media/${coverMediaId}/file`}
+                alt=""
+                className="h-12 w-12 rounded-control object-cover"
+              />
+              <span>{t("cover")}</span>
+            </label>
+          )}
+          {imageState?.images.map((slot) => (
+            <label
+              key={slot.id}
+              className="flex items-center gap-3 rounded-control p-2 text-sm text-fg"
+            >
+              <input
+                type="checkbox"
+                checked={regenerateSlots.includes(slot.id)}
+                disabled={busy}
+                onChange={(event) =>
+                  setRegenerateSlots((current) =>
+                    event.target.checked
+                      ? [...current, slot.id]
+                      : current.filter((id) => id !== slot.id),
+                  )
+                }
+              />
+              {/* biome-ignore lint/performance/noImgElement: same-origin authenticated media is served by the API */}
+              <img
+                src={`/api/media/${slot.mediaId}/file`}
+                alt=""
+                className="h-12 w-12 rounded-control object-cover"
+              />
+              <span>{t("inlineImage", { number: slot.afterParagraph + 1 })}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       <div className="mt-3 flex items-center gap-3">
         <Button
           variant="secondary"
           size="sm"
           disabled={
-            busy || !eligible || dirty || (mode === "instruction" ? !instruction.trim() : !noteId)
+            busy ||
+            !eligible ||
+            dirty ||
+            (!hasInstruction && !hasImageSelection) ||
+            (hasImageSelection && !imageState) ||
+            pendingImages
           }
           onClick={propose}
         >
@@ -242,12 +416,66 @@ export function DraftRevision({
             </div>
           </div>
           <p className="mt-3 text-sm text-fg-secondary">{proposal.reason}</p>
+          {imageMoveCount > 0 && (
+            <p className="mt-3 text-sm text-fg-secondary">{t("imagesMoveToLastParagraph")}</p>
+          )}
+          {proposal.imagePlan && proposal.imagePlan.selections.length > 0 && (
+            <div className="mt-4">
+              <h4 className="text-sm font-medium text-fg">{t("generatedImages")}</h4>
+              <p className="mt-1 text-xs text-fg-secondary">{t("generatedImagesHint")}</p>
+              <div className="mt-2 flex flex-wrap gap-3">
+                {proposal.imagePlan.selections.map((selection) => (
+                  <div
+                    key={`${selection.kind}:${selection.slotId ?? "cover"}`}
+                    className="rounded-control border border-border-soft p-2"
+                  >
+                    {selection.generatedMediaId ? (
+                      // biome-ignore lint/performance/noImgElement: same-origin authenticated media is served by the API
+                      <img
+                        src={`/api/media/${selection.generatedMediaId}/file`}
+                        alt={
+                          selection.kind === "cover"
+                            ? t("cover")
+                            : t("inlineImage", { number: (selection.afterParagraph ?? 0) + 1 })
+                        }
+                        className="h-32 w-32 rounded-control object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-32 w-32 items-center justify-center rounded-control bg-surface text-xs text-fg-secondary">
+                        {t("pendingImage")}
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs text-fg-secondary">
+                      {selection.kind === "cover"
+                        ? t("cover")
+                        : t("inlineImage", { number: (selection.afterParagraph ?? 0) + 1 })}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {moved && <p className="mt-2 text-sm text-danger">{t("stale")}</p>}
+          {uncertainImage ? (
+            <p className="mt-2 text-sm text-danger">{t("uncertainImage")}</p>
+          ) : pendingImages ? (
+            <p className="mt-2 text-sm text-fg-secondary">{t("partialReady")}</p>
+          ) : null}
           <div className="mt-3 flex gap-2">
+            {pendingImages && !uncertainImage && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy || moved || dirty || !eligible}
+                onClick={resumeImages}
+              >
+                {busy ? t("working") : t("resumeImages")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
-              disabled={busy || moved || dirty || !eligible}
+              disabled={busy || moved || dirty || !eligible || pendingImages}
               onClick={accept}
             >
               {t("accept")}

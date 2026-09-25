@@ -54,9 +54,32 @@ before approval; accepting a master rewrite does not claim to have rewritten
 channel copy. The accepted AI change is recorded as provenance without crediting
 unchanged body sentences to the model; a title-only change records an empty
 fragment with the new title. The original AI full anchor and human publication
-gate remain in place. This action does not regenerate images, add a summary
-field, or verify factual claims. Image regeneration and claim review remain
-separate, explicitly metered editor actions.
+gate remain in place. The editor can optionally select the saved cover and
+individual illustration slots in the same request. Only selected images get
+new Gemini variations; each call is metered separately through the image
+allowance. An image-only request skips the text-model call. Unselected media
+and alignment stay intact. If the suggested text has fewer paragraphs, images
+beyond its end are shown as needing a move and Accept places them after the
+last paragraph with image review required. Generated files remain in the brand media
+library even if the proposal is discarded or becomes stale.
+Pubrick saves the text suggestion and each successful selected image before
+requesting the next image. If a later image call fails, the proposal stays
+pending. **Resume missing images** uses the saved text and paid assets after a
+known pre-call refusal, and calls the provider only for missing selections.
+When a call may have been billed but its result cannot be linked, Pubrick
+pauses automatic retry; inspect the media library before discarding the
+proposal. Accept waits until every
+selected image is ready. A request with different instructions or selections
+must first discard that pending proposal.
+
+The proposal shows the selected results before acceptance. Accept compares the
+saved title, body, cover and inline-image revision, then replaces the text and
+selected images in one transaction. A changed slot or cover blocks acceptance
+without deleting the paid files. Generated inline slots require explicit image
+review, any earlier client verdict becomes stale, and the post returns to draft
+for normal approval. The editor must
+review any per-channel copy again. This action does not add a summary field or
+verify factual claims; claim review remains a separate editor action.
 
 Proposals staged before title snapshots were introduced have no saved title
 anchor. A proposal for a currently titled draft is treated as stale and can

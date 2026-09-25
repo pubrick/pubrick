@@ -5181,6 +5181,28 @@ describe.skipIf(!url)("content e2e", () => {
       ).toEqual(topic);
     });
 
+    it("records the supplied reason when the linked topic was already blocked", async () => {
+      const owner = await orgAgent();
+      const { brandId, topicId, itemId } = await linkedDraft(owner);
+      const prior = await owner
+        .post(`/api/topics/${topicId}/block?brandId=${brandId}`)
+        .send({ reason: "Earlier reason" })
+        .expect(201);
+      const archived = await owner
+        .post(`/api/content/${itemId}/block-topic`)
+        .send({ reason: "This draft is off brief" })
+        .expect(200);
+      expect(archived.body).toMatchObject({ status: "archived", archivedFromStatus: "draft" });
+      const topic = (await owner.get(`/api/topics?brandId=${brandId}`).expect(200)).body.find(
+        (row: { id: string }) => row.id === topicId,
+      );
+      expect(topic).toMatchObject({
+        blockReason: "This draft is off brief",
+        blockedAt: prior.body.blockedAt,
+        revision: prior.body.revision + 1,
+      });
+    });
+
     it("archives a rejected post after a scheduled send was canceled", async () => {
       const owner = await orgAgent();
       const { brandId, topicId, itemId } = await linkedDraft(owner);

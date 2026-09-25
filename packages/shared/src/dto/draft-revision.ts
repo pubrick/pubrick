@@ -23,11 +23,61 @@ export const draftRevisionRequestSchema = z
       .nullable(),
     instruction: instruction.optional(),
     noteId: z.string().uuid().optional(),
+    expectedImagesRevision: z.number().int().nonnegative().optional(),
+    expectedCoverMediaId: z.string().uuid().nullable().optional(),
+    regenerateImages: z
+      .strictObject({ cover: z.boolean(), inlineSlotIds: z.array(z.string().uuid()).max(5) })
+      .optional(),
   })
-  .refine((value) => Number(Boolean(value.instruction)) + Number(Boolean(value.noteId)) === 1, {
-    message: "Provide either an instruction or one saved editorial note",
-  });
+  .refine((value) => Number(Boolean(value.instruction)) + Number(Boolean(value.noteId)) <= 1, {
+    message: "Provide at most one instruction or saved editorial note",
+  })
+  .refine(
+    (value) =>
+      Boolean(
+        value.instruction ||
+          value.noteId ||
+          value.regenerateImages?.cover ||
+          value.regenerateImages?.inlineSlotIds.length,
+      ),
+    {
+      message: "Provide an instruction, saved note, or selected image",
+    },
+  )
+  .refine(
+    (value) =>
+      !value.regenerateImages ||
+      (value.expectedImagesRevision !== undefined && value.expectedCoverMediaId !== undefined),
+    {
+      message: "Image selections require a cover and image revision snapshot",
+    },
+  );
 export type DraftRevisionRequest = z.infer<typeof draftRevisionRequestSchema>;
+
+export const draftRevisionImagePlanSchema = z.strictObject({
+  sourceImagesRevision: z.number().int().nonnegative(),
+  sourceCoverMediaId: z.string().uuid().nullable(),
+  textModelUsed: z.boolean(),
+  inFlight: z
+    .strictObject({
+      token: z.string().uuid(),
+      startedAt: z.string().datetime(),
+      selection: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  selections: z
+    .array(
+      z.strictObject({
+        kind: z.enum(["cover", "inline"]),
+        slotId: z.string().uuid().nullable(),
+        sourceMediaId: z.string().uuid(),
+        afterParagraph: z.number().int().nonnegative().nullable(),
+        generatedMediaId: z.string().uuid().nullable(),
+      }),
+    )
+    .max(6),
+});
+export type DraftRevisionImagePlan = z.infer<typeof draftRevisionImagePlanSchema>;
 
 export const draftRevisionProposalSchema = z.object({
   id: z.string().uuid(),
@@ -37,5 +87,6 @@ export const draftRevisionProposalSchema = z.object({
   proposal: z.string(),
   proposedTitle: z.string().nullable(),
   reason: z.string(),
+  imagePlan: draftRevisionImagePlanSchema.nullable(),
 });
 export type DraftRevisionProposal = z.infer<typeof draftRevisionProposalSchema>;

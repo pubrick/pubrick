@@ -2427,6 +2427,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           itemId={id}
           currentTitle={item.title}
           currentBody={item.body}
+          coverMediaId={item.coverMediaId}
           draftBody={bodyDraft}
           eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
           staged={item.draftRevisionProposal}

@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { organization, user } from "./auth.js";
 import { contentItems } from "./content-items.js";
 
@@ -18,6 +18,7 @@ export const draftRevisionProposals = pgTable(
     instruction: text("instruction").notNull(),
     proposal: text("proposal").notNull(),
     proposedTitle: text("proposed_title"),
+    imagePlan: jsonb("image_plan"),
     reason: text("reason").notNull(),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
