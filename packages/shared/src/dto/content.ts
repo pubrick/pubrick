@@ -787,12 +787,15 @@ export const adaptationDtoSchema = z.strictObject({
       followupText: z.string(),
       followupOutcome: z.enum(TELEGRAM_FOLLOWUP_OUTCOMES),
     })
-    .nullable()
-    .default(null),
+    .nullable(),
   assertedByName: z.string().nullable(),
   assertedAt: z.string().nullable(),
 });
 export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
+
+/** Queue cards omit the frozen Telegram reply; it belongs on item detail. */
+export const adaptationListDtoSchema = adaptationDtoSchema.omit({ partialTelegram: true });
+export type AdaptationListDto = z.infer<typeof adaptationListDtoSchema>;
 
 /**
  * ONE CARD OF THE QUEUE — `GET /api/content`, one element.
@@ -828,7 +831,7 @@ export const contentListItemDtoSchema = z.strictObject({
   status: z.enum(CONTENT_STATUSES),
   origin: z.enum(CONTENT_ORIGINS),
   bodyIsAiVerbatim: z.boolean(),
-  adaptations: z.array(adaptationDtoSchema),
+  adaptations: z.array(adaptationListDtoSchema),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -884,6 +887,7 @@ export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
  */
 export const contentDetailDtoSchema = contentListItemDtoSchema
   .extend({
+    adaptations: z.array(adaptationDtoSchema),
     body: z.string(),
     linkPolicyWebsite: z.string().url().nullable(),
     archivedFromStatus: z.enum(CONTENT_STATUSES).nullable(),
