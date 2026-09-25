@@ -6,6 +6,7 @@ import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   analyticsDtoSchema,
+  brandOverviewDtoSchema,
   commentAnalysisDtoSchema,
   publicationCommentsDtoSchema,
   publicationMetricsDtoSchema,
@@ -97,6 +98,218 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("counts brand activity by event window without multiplying linked costs or leaking tenants", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Overview" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Sibling" }).expect(201);
+    const now = Date.now();
+    const daysAgo = (days: number) => new Date(now - days * 86_400_000);
+    const [item, oldItem, siblingItem] = await db
+      .insert(schema.contentItems)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          body: "Current",
+          origin: "ai",
+          status: "approved",
+          createdAt: daysAgo(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          body: "Old",
+          status: "draft",
+          createdAt: daysAgo(40),
+        },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling", createdAt: daysAgo(2) },
+      ])
+      .returning({ id: schema.contentItems.id });
+    if (!item || !oldItem || !siblingItem) throw new Error("Missing overview item");
+    const [run, legacyRun, siblingRun] = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          contentItemId: item.id,
+          input: { kind: "brief", text: "Current", channelIds: [] },
+          status: "succeeded",
+          unrecordedCalls: 2,
+          createdAt: daysAgo(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Legacy", channelIds: [] },
+          status: "failed",
+          unrecordedCalls: null,
+          createdAt: daysAgo(12),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          contentItemId: siblingItem.id,
+          input: { kind: "brief", text: "Sibling", channelIds: [] },
+          status: "succeeded",
+          createdAt: daysAgo(2),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    if (!run || !legacyRun || !siblingRun) throw new Error("Missing overview run");
+    await db.insert(schema.promptDecisions).values([
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        verdict: "rejected",
+        ordinal: 2,
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(40),
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        verdict: "approved",
+        ordinal: 1,
+        createdAt: daysAgo(1),
+      },
+    ]);
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, platform: "vc_ru", name: "VC" })
+      .returning({ id: schema.channels.id });
+    if (!channel) throw new Error("Missing overview channel");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("Missing overview adaptation");
+    await db.insert(schema.publications).values({
+      orgId: owner.orgId,
+      adaptationId: adaptation.id,
+      channelId: channel.id,
+      status: "published",
+      createdAt: daysAgo(1),
+    });
+    // A receipt may have been created in_flight long before it became
+    // published. Its creation time, not its later status change, owns the window.
+    const [oldAdaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!oldAdaptation) throw new Error("Missing older adaptation");
+    await db.insert(schema.publications).values({
+      orgId: owner.orgId,
+      adaptationId: oldAdaptation.id,
+      channelId: channel.id,
+      status: "published",
+      createdAt: daysAgo(40),
+    });
+    await db.insert(schema.usageLedger).values([
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        contentItemId: item.id,
+        channelId: channel.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "0.125000",
+        costSource: "price_table",
+        status: "ok",
+        outcome: "completed",
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "editor",
+        provider: "google",
+        modelId: "test",
+        inputTokens: 50,
+        costSource: "unknown",
+        status: "errored",
+        outcome: "unknown",
+        createdAt: daysAgo(1),
+      },
+      {
+        orgId: owner.orgId,
+        runId: siblingRun.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test",
+        costUsd: "5.000000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+        createdAt: daysAgo(1),
+      },
+    ]);
+    const path = `/api/analytics/brands/${brand.body.id}/overview`;
+    await outsider.agent.get(`${path}?days=30`).expect(404);
+    await owner.agent.get(`${path}?days=365`).expect(400);
+    const week = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=7`).expect(200)).body,
+    );
+    expect(week.drafts).toMatchObject({ total: 1, ai: 1, approved: 1 });
+    expect(week.runs).toMatchObject({ total: 1, succeeded: 1 });
+    expect(week.decisions).toEqual({ approved: 1, rejected: 1 });
+    expect(week.publications).toMatchObject({
+      total: 1,
+      byPlatform: [{ platform: "vc_ru", count: 1 }],
+    });
+    expect(week.spend).toEqual({
+      knownUsd: 0.125,
+      pricedCalls: 1,
+      estimatedCalls: 1,
+      unpricedCalls: 1,
+      unrecordedCalls: 2,
+      legacyRuns: 0,
+    });
+    const month = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=30`).expect(200)).body,
+    );
+    expect(month.runs).toMatchObject({ total: 2, failed: 1 });
+    expect(month.spend.legacyRuns).toBe(1);
+    const quarter = brandOverviewDtoSchema.parse(
+      (await owner.agent.get(`${path}?days=90`).expect(200)).body,
+    );
+    expect(quarter.drafts.total).toBe(2);
+    expect(quarter.decisions.approved).toBe(2);
+    expect(quarter.publications.total).toBe(2);
+    expect(
+      (
+        await owner.agent
+          .get(`/api/analytics/brands/${sibling.body.id}/overview?days=30`)
+          .expect(200)
+      ).body.spend.knownUsd,
+    ).toBe(5);
+  });
 
   it("keeps publication auto-collection off until an authorized brand opts in and increments the fence on every change", async () => {
     const owner = await orgAgent();

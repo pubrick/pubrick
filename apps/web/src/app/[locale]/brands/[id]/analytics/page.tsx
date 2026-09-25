@@ -14,6 +14,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutoReplies } from "./auto-replies";
+import { BrandOverview } from "./brand-overview";
 
 const PERIODS = [7, 30, 90] as const;
 type Period = (typeof PERIODS)[number];
@@ -240,6 +241,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
           value={String(days)}
           onChange={(value) => setDays(Number(value) as Period)}
         />
+        <BrandOverview brandId={id} days={days} />
         {error && (
           <div role="alert" className="flex items-center gap-3 text-sm text-danger">
             <span>{error}</span>
