@@ -13,6 +13,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 import { api } from "@/lib/api";
 
 const revisionId = "67b7855a-80e7-4d56-8ad9-831f3c14a9f0";
+const brandId = "369b0832-baa8-4e6d-974d-e9edb79e1db8";
+const otherBrandId = "606838b6-d805-4d4e-8f51-85dbd0e863ca";
 const head = {
   role: "researcher",
   activeRevisionId: null,
@@ -33,6 +35,7 @@ describe("role template editor", () => {
       const method = init?.method ?? "GET";
       const body = init?.body ? JSON.parse(String(init.body)) : null;
       calls.push({ path, method, body });
+      if (path === "/api/brands") return [];
       if (path === "/api/prompts/templates") return [head];
       if (path.endsWith("/templates/revisions") && method === "GET")
         return { rows: [], nextCursor: null };
@@ -92,6 +95,7 @@ describe("role template editor", () => {
 
   it("warns before changing roles with unsaved instructions", async () => {
     vi.mocked(api).mockImplementation(async (path) => {
+      if (path === "/api/brands") return [];
       if (path === "/api/prompts/templates") return [head, { ...head, role: "writer" }];
       return { rows: [], nextCursor: null };
     });
@@ -104,5 +108,173 @@ describe("role template editor", () => {
     expect(screen.getByLabelText(en.RoleTemplates.role)).toHaveValue("researcher");
     await user.click(screen.getByRole("button", { name: en.RoleTemplates.cancel }));
     expect(source).toHaveValue("Plan a clear angle. Extra");
+  });
+
+  it("shows default and revision cohorts, then loads the next page for the selected brand and window", async () => {
+    const calls: string[] = [];
+    const defaultRow = {
+      kind: "default",
+      revisionId: null,
+      version: null,
+      runCount: 3,
+      succeededRuns: 2,
+      publishedRuns: 1,
+      currentItemStatuses: { draft: 1 },
+      withoutCurrentItem: 1,
+      reviewActs: { approved: 2, rejected: 1 },
+    };
+    const revisionRow = {
+      ...defaultRow,
+      kind: "revision",
+      revisionId,
+      version: 2,
+      runCount: 7,
+    };
+    vi.mocked(api).mockImplementation(async (path) => {
+      calls.push(path);
+      if (path === "/api/brands")
+        return [
+          { id: brandId, name: "Example Brand" },
+          { id: otherBrandId, name: "Other Brand" },
+        ];
+      if (path === "/api/prompts/templates")
+        return [{ ...head, activeRevisionId: revisionId, activeVersion: 2 }];
+      if (path === "/api/prompts/researcher/templates/revisions")
+        return {
+          rows: [{ id: revisionId, version: 2, source: "Current source" }],
+          nextCursor: null,
+        };
+      if (path.endsWith("/templates/outcomes?days=30"))
+        return {
+          brandId,
+          role: "researcher",
+          days: 30,
+          activeRevisionId: revisionId,
+          default: defaultRow,
+          rows: [revisionRow],
+          nextCursor: 2,
+        };
+      if (path.endsWith("/templates/outcomes?days=30&cursor=2"))
+        return {
+          brandId,
+          role: "researcher",
+          days: 30,
+          activeRevisionId: revisionId,
+          default: defaultRow,
+          rows: [
+            { ...revisionRow, revisionId: "e7b2554c-7225-43de-a428-6f7dc5cb361c", version: 1 },
+          ],
+          nextCursor: null,
+        };
+      if (path === `/api/prompts/brands/${brandId}/researcher/templates/outcomes?days=7`)
+        return {
+          brandId,
+          role: "researcher",
+          days: 7,
+          activeRevisionId: revisionId,
+          default: { ...defaultRow, runCount: 0 },
+          rows: [],
+          nextCursor: null,
+        };
+      if (path === `/api/prompts/brands/${otherBrandId}/researcher/templates/outcomes?days=7`)
+        return {
+          brandId: otherBrandId,
+          role: "researcher",
+          days: 7,
+          activeRevisionId: revisionId,
+          default: { ...defaultRow, runCount: 5 },
+          rows: [],
+          nextCursor: null,
+        };
+      throw new Error(`Unexpected API call ${path}`);
+    });
+    render(<RoleTemplatesPage />);
+    const user = userEvent.setup();
+    await screen.findByLabelText(en.RoleTemplates.source);
+    expect(calls).not.toContain("/api/brands");
+    expect(calls.some((path) => path.includes("/templates/outcomes?"))).toBe(false);
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Built-in.*3.*2.*1/ })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Version 2.*7/ })).toHaveTextContent("Active now");
+    await user.click(screen.getByRole("button", { name: en.RoleTemplates.loadMore }));
+    expect(await screen.findByRole("row", { name: /Version 1.*7/ })).toBeInTheDocument();
+    expect(calls).toContain(
+      `/api/prompts/brands/${brandId}/researcher/templates/outcomes?days=30&cursor=2`,
+    );
+    await user.selectOptions(screen.getByLabelText(en.RoleTemplates.outcomesWindow), "7");
+    await waitFor(() =>
+      expect(calls).toContain(
+        `/api/prompts/brands/${brandId}/researcher/templates/outcomes?days=7`,
+      ),
+    );
+    expect(screen.queryByRole("row", { name: /Version 1.*7/ })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(en.RoleTemplates.outcomesBrand), otherBrandId);
+    expect(await screen.findByRole("row", { name: /Built-in.*5/ })).toBeInTheDocument();
+    const scanned = calls.filter((path) => path.includes("/templates/outcomes?")).length;
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    expect(calls.filter((path) => path.includes("/templates/outcomes?"))).toHaveLength(scanned);
+    expect(calls.filter((path) => path === "/api/brands")).toHaveLength(1);
+  });
+
+  it("refreshes the open outcome cohorts as soon as a new revision is saved", async () => {
+    let saved = false;
+    const outcomeCalls: string[] = [];
+    const created = {
+      id: revisionId,
+      role: "researcher",
+      version: 1,
+      source: "Plan a useful angle.",
+      sourceSha256: "a".repeat(64),
+      createdAt: "2026-09-25T00:00:00.000Z",
+    };
+    const defaultRow = {
+      kind: "default",
+      revisionId: null,
+      version: null,
+      runCount: 0,
+      succeededRuns: 0,
+      publishedRuns: 0,
+      currentItemStatuses: {},
+      withoutCurrentItem: 0,
+      reviewActs: { approved: 0, rejected: 0 },
+    };
+    vi.mocked(api).mockImplementation(async (path, init) => {
+      if (path === "/api/brands") return [{ id: brandId, name: "Example Brand" }];
+      if (path === "/api/prompts/templates") return [head];
+      if (path === "/api/prompts/researcher/templates/revisions" && !init)
+        return { rows: [], nextCursor: null };
+      if (path === "/api/prompts/researcher/templates/revisions" && init?.method === "POST") {
+        saved = true;
+        return created;
+      }
+      if (path === `/api/prompts/brands/${brandId}/researcher/templates/outcomes?days=30`) {
+        outcomeCalls.push(path);
+        return {
+          brandId,
+          role: "researcher",
+          days: 30,
+          activeRevisionId: null,
+          default: defaultRow,
+          rows: saved
+            ? [{ ...defaultRow, kind: "revision", revisionId, version: 1, runCount: 0 }]
+            : [],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`Unexpected API call ${path}`);
+    });
+    render(<RoleTemplatesPage />);
+    const user = userEvent.setup();
+    const source = await screen.findByLabelText(en.RoleTemplates.source);
+    await user.click(screen.getByText(en.RoleTemplates.outcomesTitle));
+    expect(await screen.findByText(en.RoleTemplates.outcomesNoRevisions)).toBeInTheDocument();
+    expect(outcomeCalls).toHaveLength(1);
+    await user.clear(source);
+    await user.type(source, created.source);
+    await user.click(screen.getByRole("button", { name: en.RoleTemplates.saveDraft }));
+    expect(await screen.findByRole("row", { name: /Version 1.*0/ })).toBeInTheDocument();
+    expect(outcomeCalls).toHaveLength(2);
   });
 });

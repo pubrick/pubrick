@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { ConflictException, Injectable, Logger } from "@nestjs/common";
-import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
+import {
+  type AiCredential,
+  type StepBrand,
+  type StepChannel,
+  type TemplateSnapshot,
+  validateTemplateSnapshot,
+} from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   ADAPTATION_STATUSES,
@@ -4032,12 +4038,19 @@ export class ContentRepository {
       .limit(2);
     let runId: string | null = null;
     let revisions: { role: PromptRole; revisionId: string; version: number }[] = [];
+    let templateLinks: {
+      role: PromptRole;
+      revisionId: string | null;
+      version: number | null;
+      isDefault: boolean;
+    }[] = [];
     // A second full AI master has no single trustworthy producing-run anchor.
     if (fullAiMasters.length === 1 && fullAiMasters[0]?.runId) {
       const [run] = await tx
         .select({
           id: schema.pipelineRuns.id,
           guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
+          templateSnapshot: schema.pipelineRuns.templateSnapshot,
         })
         .from(schema.pipelineRuns)
         .where(
@@ -4099,6 +4112,68 @@ export class ContentRepository {
           }
         }
       }
+      // Template evidence is independent of guidance: a corrupt snapshot in
+      // either system cannot erase a verified attribution in the other.
+      if (run?.templateSnapshot) {
+        let pinned: TemplateSnapshot | null = null;
+        try {
+          pinned = validateTemplateSnapshot(run.templateSnapshot);
+        } catch {
+          // Invalid stored evidence earns no template links.
+        }
+        if (pinned) {
+          const candidateLinks = PROMPT_ROLES.map((role) => {
+            const selected = pinned.roles[role];
+            return {
+              role,
+              revisionId: selected.revisionId,
+              version: selected.version,
+              isDefault: selected.kind === "default",
+              sourceSha256: selected.sourceSha256,
+            };
+          });
+          const selectedIds = candidateLinks.flatMap((link) =>
+            link.revisionId ? [link.revisionId] : [],
+          );
+          const stored = selectedIds.length
+            ? await tx
+                .select({
+                  id: schema.roleTemplateRevisions.id,
+                  role: schema.roleTemplateRevisions.role,
+                  version: schema.roleTemplateRevisions.version,
+                  sourceSha256: schema.roleTemplateRevisions.sourceSha256,
+                })
+                .from(schema.roleTemplateRevisions)
+                .where(
+                  and(
+                    eq(schema.roleTemplateRevisions.orgId, orgId),
+                    inArray(schema.roleTemplateRevisions.id, selectedIds),
+                  ),
+                )
+            : [];
+          if (
+            candidateLinks.every(
+              (link) =>
+                link.isDefault ||
+                stored.some(
+                  (revision) =>
+                    revision.id === link.revisionId &&
+                    revision.role === link.role &&
+                    revision.version === link.version &&
+                    revision.sourceSha256 === link.sourceSha256,
+                ),
+            )
+          ) {
+            templateLinks = candidateLinks.map(({ role, revisionId, version, isDefault }) => ({
+              role,
+              revisionId,
+              version,
+              isDefault,
+            }));
+            runId = run.id;
+          }
+        }
+      }
     }
     const decidedAt = new Date();
     const [decision] = await tx
@@ -4111,6 +4186,16 @@ export class ContentRepository {
           orgId,
           decisionId: decision.id,
           ...revision,
+          decidedAt,
+        })),
+      );
+    }
+    if (decision && templateLinks.length) {
+      await tx.insert(schema.promptDecisionTemplateRevisions).values(
+        templateLinks.map((link) => ({
+          orgId,
+          decisionId: decision.id,
+          ...link,
           decidedAt,
         })),
       );

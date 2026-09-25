@@ -5303,9 +5303,10 @@ describe.skipIf(!url)("content e2e", () => {
         .send({ brandId, body: "Current draft.", channelIds: [channelId] })
         .expect(201);
       const itemId = created.body.id as string;
+      const versionPrefix = randomUUID().slice(0, 8);
       await addItemVersions(itemId, [
         ...Array.from({ length: 23 }, (_, index) => ({
-          id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          id: `${versionPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
           body: `Saved draft ${index}.`,
           createdAt: new Date("2026-09-01T00:00:00.000Z"),
         })),

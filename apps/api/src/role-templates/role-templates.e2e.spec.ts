@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import {
+  builtInRoleTemplateSource,
+  digest,
+  receiptDigest,
+  type TemplateSnapshot,
+} from "@pubrick/ai";
 import { createDb, schema } from "@pubrick/db";
+import { PROMPT_ROLES } from "@pubrick/shared";
 import { eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -203,5 +210,260 @@ describe.skipIf(!url)("role template manager API", () => {
       .expect(200);
     expect(secondPage.body.rows.map((row: { version: number }) => row.version)).toEqual([3, 2, 1]);
     expect(secondPage.body.nextCursor).toBeNull();
+  });
+
+  it("reports default and paged revision cohorts without multiplying publication receipts", async () => {
+    const owner = await signUp();
+    const orgId = await createOrg(owner);
+    const other = await signUp();
+    await createOrg(other);
+    const brandId = (await owner.agent.post("/api/brands").send({ name: "Cohort" }).expect(201))
+      .body.id as string;
+    const revisions = await db
+      .insert(schema.roleTemplateRevisions)
+      .values(
+        Array.from({ length: 102 }, (_, index) => {
+          const source = `Template cohort ${index + 1}`;
+          return {
+            orgId,
+            role: "writer" as const,
+            version: index + 1,
+            source,
+            sourceSha256: digest(source),
+          };
+        }),
+      )
+      .returning({
+        id: schema.roleTemplateRevisions.id,
+        version: schema.roleTemplateRevisions.version,
+        source: schema.roleTemplateRevisions.source,
+      });
+    const oldest = revisions[0];
+    const newest = revisions.at(-1);
+    if (!oldest || !newest) throw new Error("No template revisions");
+    await db.insert(schema.roleTemplateHeads).values({
+      orgId,
+      role: "writer",
+      activeRevisionId: newest.id,
+      generation: 1,
+    });
+    function snapshot(selected?: typeof oldest): TemplateSnapshot {
+      const roles = Object.fromEntries(
+        PROMPT_ROLES.map((role) => {
+          const source =
+            role === "writer" && selected ? selected.source : builtInRoleTemplateSource(role);
+          return [
+            role,
+            role === "writer" && selected
+              ? {
+                  kind: "revision",
+                  revisionId: selected.id,
+                  version: selected.version,
+                  source,
+                  sourceSha256: digest(source),
+                }
+              : {
+                  kind: "default",
+                  revisionId: null,
+                  version: null,
+                  source,
+                  sourceSha256: digest(source),
+                },
+          ];
+        }),
+      ) as TemplateSnapshot["roles"];
+      const receipt: TemplateSnapshot["receipt"] = {
+        contentType: "social_post",
+        claimDateUtc: "2026-09-25",
+        brand: { name: "Cohort", voice: null, audience: null, contentLanguage: "en" },
+        channels: [],
+      };
+      const instruction = { text: "Pinned", sha256: digest("Pinned") };
+      return {
+        formatVersion: 1,
+        engineVersion: "role-template-v1",
+        roles,
+        receipt,
+        receiptSha256: receiptDigest(receipt),
+        instructions: {
+          researcher: instruction,
+          writer: instruction,
+          editor: instruction,
+          factcheck: instruction,
+          adapters: {},
+        },
+      };
+    }
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Published cohort", status: "published" })
+      .returning({ id: schema.contentItems.id });
+    if (!item) throw new Error("No cohort item");
+    const input = {
+      kind: "source" as const,
+      text: null,
+      sourceUrl: null,
+      material: "Source",
+      channelIds: [],
+    };
+    const runs = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId,
+          brandId,
+          input,
+          status: "succeeded",
+          contentItemId: item.id,
+          templateSnapshot: snapshot(),
+        },
+        { orgId, brandId, input, status: "failed", templateSnapshot: snapshot(oldest) },
+        { orgId, brandId, input, status: "succeeded", templateSnapshot: null },
+        {
+          orgId,
+          brandId,
+          input,
+          status: "succeeded",
+          createdAt: new Date(Date.now() - 31 * 86_400_000),
+          templateSnapshot: snapshot(oldest),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    const channels = await db
+      .insert(schema.channels)
+      .values(
+        [1, 2].map((n) => ({ orgId, brandId, platform: "vc_ru" as const, name: `Cohort ${n}` })),
+      )
+      .returning({ id: schema.channels.id });
+    const adaptations = await db
+      .insert(schema.adaptations)
+      .values(
+        channels.map((channel) => ({
+          orgId,
+          contentItemId: item.id,
+          channelId: channel.id,
+          status: "published" as const,
+        })),
+      )
+      .returning({ id: schema.adaptations.id });
+    await db.insert(schema.publications).values(
+      adaptations.map((adaptation, index) => ({
+        orgId,
+        adaptationId: adaptation.id,
+        channelId: channels[index]?.id,
+        status: "published" as const,
+      })),
+    );
+    const decisions = await db
+      .insert(schema.promptDecisions)
+      .values([
+        { orgId, contentItemId: item.id, ordinal: 1, runId: runs[0]?.id, verdict: "approved" },
+        { orgId, contentItemId: item.id, ordinal: 2, runId: runs[0]?.id, verdict: "approved" },
+      ])
+      .returning({ id: schema.promptDecisions.id, createdAt: schema.promptDecisions.createdAt });
+    await db.insert(schema.promptDecisionTemplateRevisions).values(
+      decisions.map((decision) => ({
+        orgId,
+        decisionId: decision.id,
+        role: "writer" as const,
+        revisionId: null,
+        version: null,
+        isDefault: true,
+        decidedAt: decision.createdAt,
+      })),
+    );
+    const path = `/api/prompts/brands/${brandId}/writer/templates/outcomes?days=30`;
+    const first = await owner.agent.get(path).expect(200);
+    expect(first.body.activeRevisionId).toBe(newest.id);
+    expect(first.body.default).toMatchObject({
+      kind: "default",
+      runCount: 1,
+      succeededRuns: 1,
+      publishedRuns: 1,
+      currentItemStatuses: { published: 1 },
+      reviewActs: { approved: 2, rejected: 0 },
+    });
+    expect(first.body.rows).toHaveLength(100);
+    expect(first.body.nextCursor).toBe(3);
+    const second = await owner.agent.get(`${path}&cursor=${first.body.nextCursor}`).expect(200);
+    expect(second.body.rows.map((row: { version: number }) => row.version)).toEqual([2, 1]);
+    expect(second.body.default).toEqual(first.body.default);
+    expect(second.body.rows[1]).toMatchObject({
+      revisionId: oldest.id,
+      runCount: 1,
+      succeededRuns: 0,
+      withoutCurrentItem: 1,
+    });
+    const usage = await owner.agent
+      .get(`/api/prompts/writer/templates/revisions/${oldest.id}/usage?brandId=${brandId}&days=30`)
+      .expect(200);
+    expect(usage.body).toEqual(second.body.rows[1]);
+    const [removedItem] = await db
+      .insert(schema.contentItems)
+      .values({ orgId, brandId, body: "Removed after review" })
+      .returning({ id: schema.contentItems.id });
+    if (!removedItem) throw new Error("No removable item");
+    const [removedRun] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId,
+        brandId,
+        input,
+        status: "succeeded",
+        contentItemId: removedItem.id,
+        templateSnapshot: snapshot(),
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const [removedDecision] = await db
+      .insert(schema.promptDecisions)
+      .values({
+        orgId,
+        contentItemId: removedItem.id,
+        runId: removedRun?.id,
+        ordinal: 1,
+        verdict: "approved",
+      })
+      .returning({ id: schema.promptDecisions.id, createdAt: schema.promptDecisions.createdAt });
+    await db.insert(schema.promptDecisionTemplateRevisions).values({
+      orgId,
+      decisionId: removedDecision?.id as string,
+      role: "writer",
+      revisionId: null,
+      version: null,
+      isDefault: true,
+      decidedAt: removedDecision?.createdAt as Date,
+    });
+    await db.delete(schema.contentItems).where(eq(schema.contentItems.id, removedItem.id));
+    expect((await owner.agent.get(path).expect(200)).body.default).toMatchObject({
+      runCount: 2,
+      withoutCurrentItem: 1,
+      reviewActs: { approved: 3, rejected: 0 },
+    });
+    const bulkSnapshot = snapshot();
+    await db.insert(schema.pipelineRuns).values(
+      Array.from({ length: 501 }, () => ({
+        orgId,
+        brandId,
+        input,
+        status: "failed" as const,
+        templateSnapshot: bulkSnapshot,
+      })),
+    );
+    expect((await owner.agent.get(path).expect(200)).body.default).toMatchObject({
+      runCount: 503,
+      succeededRuns: 2,
+      withoutCurrentItem: 502,
+      reviewActs: { approved: 3, rejected: 0 },
+    });
+    await other.agent.get(path).expect(404);
+    await owner.agent
+      .get(`/api/prompts/editor/templates/revisions/${oldest.id}/usage?brandId=${brandId}&days=30`)
+      .expect(404);
+    await owner.agent.get(`${path}&cursor=0`).expect(400);
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.userId, owner.userId));
+    await owner.agent.get(path).expect(403);
   });
 });

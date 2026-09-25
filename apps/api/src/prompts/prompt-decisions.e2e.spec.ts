@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import {
+  builtInRoleTemplateSource,
+  digest,
+  receiptDigest,
+  type TemplateSnapshot,
+} from "@pubrick/ai";
 import { createDb, schema } from "@pubrick/db";
+import { adaptationLimit, PROMPT_ROLES } from "@pubrick/shared";
 import { and, asc, eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -88,6 +95,7 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
     brandId: string,
     contentItemId: string,
     snapshot: typeof schema.pipelineRuns.$inferInsert.guidanceSnapshot,
+    templateSnapshot?: TemplateSnapshot,
   ) {
     const [run] = await db
       .insert(schema.pipelineRuns)
@@ -98,9 +106,51 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
         input,
         status: "succeeded",
         guidanceSnapshot: snapshot,
+        templateSnapshot,
       })
       .returning({ id: schema.pipelineRuns.id });
     return run?.id as string;
+  }
+
+  function pinnedTemplate(channelId: string): TemplateSnapshot {
+    const limit = adaptationLimit("telegram");
+    if (limit === undefined) throw new Error("Telegram limit is missing");
+    const roles = Object.fromEntries(
+      PROMPT_ROLES.map((role) => {
+        const source = builtInRoleTemplateSource(role);
+        return [
+          role,
+          {
+            kind: "default",
+            revisionId: null,
+            version: null,
+            source,
+            sourceSha256: digest(source),
+          },
+        ];
+      }),
+    ) as TemplateSnapshot["roles"];
+    const receipt: TemplateSnapshot["receipt"] = {
+      contentType: "social_post",
+      claimDateUtc: "2026-09-25",
+      brand: { name: "Decision brand", voice: null, audience: null, contentLanguage: "en" },
+      channels: [{ id: channelId, name: "Channel 0", platform: "telegram", limit }],
+    };
+    const instruction = { text: "Pinned instruction", sha256: digest("Pinned instruction") };
+    return {
+      formatVersion: 1,
+      engineVersion: "role-template-v1",
+      roles,
+      receipt,
+      receiptSha256: receiptDigest(receipt),
+      instructions: {
+        researcher: instruction,
+        writer: instruction,
+        editor: instruction,
+        factcheck: instruction,
+        adapters: { [channelId]: instruction },
+      },
+    };
   }
 
   async function seedAnchor(orgId: string, contentItemId: string, runId: string | null) {
@@ -288,6 +338,114 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
     }
   });
 
+  it("links all five verified template selections independently of guidance evidence", async () => {
+    const owner = await orgAgent();
+    const { brandId, channelIds } = await brandWithChannels(owner.agent);
+    const writer = await owner.agent
+      .post("/api/prompts/writer/templates/revisions")
+      .send({ source: "Write concise posts." })
+      .expect(201);
+    const guidance = await owner.agent
+      .post("/api/prompts/editor/revisions")
+      .send({ guidance: "Check every claim." })
+      .expect(201);
+    const template = pinnedTemplate(channelIds[0] as string);
+    template.roles.writer = {
+      kind: "revision",
+      revisionId: writer.body.id,
+      version: writer.body.version,
+      source: writer.body.source,
+      sourceSha256: digest(writer.body.source),
+    };
+    const firstItem = await item(owner.agent, brandId, channelIds);
+    const firstRun = await seedRun(
+      owner.orgId,
+      brandId,
+      firstItem,
+      { editor: { revisionId: randomUUID(), version: 1, text: "Missing revision" } },
+      template,
+    );
+    await seedAnchor(owner.orgId, firstItem, firstRun);
+    await owner.agent.post(`/api/content/${firstItem}/approve`).send({}).expect(200);
+    const firstDecision = (await events(owner.orgId, firstItem))[0];
+    expect(firstDecision?.runId).toBe(firstRun);
+    const templateLinks = await db
+      .select({
+        role: schema.promptDecisionTemplateRevisions.role,
+        revisionId: schema.promptDecisionTemplateRevisions.revisionId,
+        isDefault: schema.promptDecisionTemplateRevisions.isDefault,
+      })
+      .from(schema.promptDecisionTemplateRevisions)
+      .where(eq(schema.promptDecisionTemplateRevisions.decisionId, firstDecision?.id as string));
+    expect(templateLinks).toHaveLength(5);
+    expect(templateLinks).toContainEqual({
+      role: "writer",
+      revisionId: writer.body.id,
+      isDefault: false,
+    });
+    expect(templateLinks.filter((link) => link.isDefault)).toHaveLength(4);
+    expect(
+      await db
+        .select({ id: schema.promptDecisionRevisions.id })
+        .from(schema.promptDecisionRevisions)
+        .where(eq(schema.promptDecisionRevisions.decisionId, firstDecision?.id as string)),
+    ).toEqual([]);
+
+    const secondItem = await item(owner.agent, brandId, channelIds);
+    const corrupt = structuredClone(template);
+    corrupt.instructions.writer.text = "The hash no longer matches";
+    const secondRun = await seedRun(
+      owner.orgId,
+      brandId,
+      secondItem,
+      { editor: { revisionId: guidance.body.id, version: 1, text: "Check every claim." } },
+      corrupt,
+    );
+    await seedAnchor(owner.orgId, secondItem, secondRun);
+    await owner.agent.post(`/api/content/${secondItem}/approve`).send({}).expect(200);
+    const secondDecision = (await events(owner.orgId, secondItem))[0];
+    expect(secondDecision?.runId).toBe(secondRun);
+    expect(
+      await db
+        .select({ id: schema.promptDecisionTemplateRevisions.id })
+        .from(schema.promptDecisionTemplateRevisions)
+        .where(eq(schema.promptDecisionTemplateRevisions.decisionId, secondDecision?.id as string)),
+    ).toEqual([]);
+    const guidanceLinks = await db
+      .select({ revisionId: schema.promptDecisionRevisions.revisionId })
+      .from(schema.promptDecisionRevisions)
+      .where(eq(schema.promptDecisionRevisions.decisionId, secondDecision?.id as string));
+    expect(guidanceLinks).toEqual([{ revisionId: guidance.body.id }]);
+
+    const mismatched = structuredClone(template);
+    mismatched.roles.writer = {
+      kind: "revision",
+      revisionId: writer.body.id,
+      version: writer.body.version,
+      source: "A different saved source.",
+      sourceSha256: digest("A different saved source."),
+    };
+    const thirdItem = await item(owner.agent, brandId, channelIds);
+    const thirdRun = await seedRun(owner.orgId, brandId, thirdItem, null, mismatched);
+    await seedAnchor(owner.orgId, thirdItem, thirdRun);
+    await owner.agent.post(`/api/content/${thirdItem}/approve`).send({}).expect(200);
+    const thirdDecision = (await events(owner.orgId, thirdItem))[0];
+    expect(thirdDecision?.runId).toBeNull();
+    expect(
+      await db
+        .select({ id: schema.promptDecisionTemplateRevisions.id })
+        .from(schema.promptDecisionTemplateRevisions)
+        .where(eq(schema.promptDecisionTemplateRevisions.decisionId, thirdDecision?.id as string)),
+    ).toEqual([]);
+
+    const fourthItem = await item(owner.agent, brandId, channelIds);
+    const fourthRun = await seedRun(owner.orgId, brandId, fourthItem, null, template);
+    await seedAnchor(owner.orgId, fourthItem, fourthRun);
+    await seedAnchor(owner.orgId, fourthItem, fourthRun);
+    await owner.agent.post(`/api/content/${fourthItem}/approve`).send({}).expect(200);
+    expect((await events(owner.orgId, fourthItem))[0]?.runId).toBeNull();
+  });
+
   it("returns scoped counts and a stable bounded timeline only to organization managers", async () => {
     const owner = await orgAgent();
     const other = await orgAgent();
@@ -299,11 +457,9 @@ describe.skipIf(!url)("historical prompt review decisions", () => {
     const tiedItemId = randomUUID();
     // UUID order deliberately opposes the causal ordinal. The first page ends
     // inside this three-decision timestamp tie, exercising the cursor too.
-    const tiedIds = [
-      "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      "88888888-8888-4888-8888-888888888888",
-      "00000000-0000-4000-8000-000000000001",
-    ];
+    const tiedIds = Array.from({ length: 3 }, () => randomUUID()).sort((a, b) =>
+      b.localeCompare(a),
+    );
     const decisions = await db
       .insert(schema.promptDecisions)
       .values(

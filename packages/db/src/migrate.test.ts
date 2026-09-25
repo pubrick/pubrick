@@ -185,6 +185,7 @@ const ZONED_COLUMNS = [
   "paid_reply_backfill_state.completed_at",
   "paid_reply_backfill_state.started_at",
   "prompt_decision_revisions.decided_at",
+  "prompt_decision_template_revisions.decided_at",
   "prompt_decisions.created_at",
   "prompt_revisions.created_at",
   "publication_comment_analyses.created_at",
@@ -514,6 +515,8 @@ const NON_ENUM_CHECKS = [
   "prompt_decisions_ordinal_positive_check",
   "prompt_decision_revisions_role_check",
   "prompt_decision_revisions_version_positive_check",
+  "prompt_decision_template_revisions_role_check",
+  "prompt_decision_template_revisions_selection_check",
   // 0076 adds explicit opt-in for publication reply sampling.
   "publication_comment_collection_configs_revision_check",
   // 0084: the accepted Telegram cover and pending reply must remain a coherent receipt.
@@ -1035,6 +1038,205 @@ describe.skipIf(!url)("runMigrations", () => {
         expect(
           (await pool.query("SELECT count(*)::int AS n FROM role_template_heads")).rows,
         ).toEqual([{ n: 0 }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds immutable, tenant-bound template decision links without attributing old decisions", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0097_template_decision_attribution");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('decision_a', 'A', 'decision-a'), ('decision_b', 'B', 'decision-b')",
+        );
+        const revisionA = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('decision_a', 'writer', 1, 'Write.', $1) RETURNING id",
+          ["a".repeat(64)],
+        );
+        const revisionB = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('decision_b', 'writer', 1, 'Write.', $1) RETURNING id",
+          ["b".repeat(64)],
+        );
+        const oldDecision = await pool.query<{ id: string; created_at: Date }>(
+          "INSERT INTO prompt_decisions (org_id, content_item_id, ordinal, verdict) VALUES ('decision_a', gen_random_uuid(), 1, 'approved') RETURNING id, created_at",
+        );
+        await runMigrations(fresh.url);
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM prompt_decision_template_revisions"))
+            .rows,
+        ).toEqual([{ n: 0 }]);
+        expect(
+          (
+            await pool.query("SELECT id, created_at FROM prompt_decisions WHERE id = $1", [
+              oldDecision.rows[0]?.id,
+            ])
+          ).rows,
+        ).toEqual(oldDecision.rows);
+
+        const decisionId = oldDecision.rows[0]?.id;
+        const decidedAt = oldDecision.rows[0]?.created_at;
+        for (const role of ["researcher", "writer", "editor", "factcheck", "adapter"]) {
+          await pool.query(
+            "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, is_default, decided_at) VALUES ('decision_a', $1, $2, true, $3)",
+            [decisionId, role, decidedAt],
+          );
+        }
+        expect(
+          (
+            await pool.query(
+              "SELECT role, revision_id, version, is_default FROM prompt_decision_template_revisions WHERE decision_id = $1 ORDER BY role",
+              [decisionId],
+            )
+          ).rows,
+        ).toEqual(
+          ["adapter", "editor", "factcheck", "researcher", "writer"].map((role) => ({
+            role,
+            revision_id: null,
+            version: null,
+            is_default: true,
+          })),
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, is_default, decided_at) VALUES ('decision_a', $1, 'writer', true, $2)",
+            [decisionId, decidedAt],
+          ),
+        ).toBe(UNIQUE_VIOLATION);
+        const newDecision = await pool.query<{ id: string }>(
+          "INSERT INTO prompt_decisions (org_id, content_item_id, ordinal, verdict) VALUES ('decision_a', gen_random_uuid(), 1, 'approved') RETURNING id",
+        );
+        const newId = newDecision.rows[0]?.id;
+        for (const [isDefault, revisionId, version] of [
+          [true, revisionA.rows[0]?.id, 1],
+          [false, null, 1],
+          [false, revisionA.rows[0]?.id, null],
+          [false, revisionA.rows[0]?.id, 0],
+        ] as const) {
+          expect(
+            await refusal(
+              pool,
+              "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, revision_id, version, is_default, decided_at) VALUES ('decision_a', $1, 'writer', $2, $3, $4, $5)",
+              [newId, revisionId, version, isDefault, decidedAt],
+            ),
+          ).toBe(CHECK_VIOLATION);
+        }
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, is_default, decided_at) VALUES ('decision_b', $1, 'editor', true, $2)",
+            [newId, decidedAt],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        for (const [orgId, role, revisionId] of [
+          ["decision_a", "editor", revisionA.rows[0]?.id],
+          ["decision_a", "writer", revisionB.rows[0]?.id],
+        ] as const) {
+          expect(
+            await refusal(
+              pool,
+              "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, revision_id, version, is_default, decided_at) VALUES ($1, $2, $3, $4, 1, false, $5)",
+              [orgId, newId, role, revisionId, decidedAt],
+            ),
+          ).toBe(FOREIGN_KEY_VIOLATION);
+        }
+        const linked = await pool.query<{ id: string }>(
+          "INSERT INTO prompt_decision_template_revisions (org_id, decision_id, role, revision_id, version, is_default, decided_at) VALUES ('decision_a', $1, 'writer', $2, 1, false, $3) RETURNING id",
+          [newId, revisionA.rows[0]?.id, decidedAt],
+        );
+        expect(
+          await refusal(
+            pool,
+            "UPDATE prompt_decision_template_revisions SET version = 2 WHERE id = $1",
+            [linked.rows[0]?.id],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "DELETE FROM prompt_decision_template_revisions WHERE id = $1", [
+            linked.rows[0]?.id,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query("DELETE FROM organization WHERE id = 'decision_a'");
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM prompt_decision_template_revisions"))
+            .rows,
+        ).toEqual([{ n: 0 }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("builds the template cohort index online and repairs an interrupted build", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0098_template_cohort_index");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('template_cohort', 'Template cohort', 'template-cohort')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('template_cohort', 'Brand') RETURNING id",
+        );
+        const brandId = brand.rows[0]?.id;
+        const runs = await pool.query<{ id: string; template_snapshot: unknown }>(
+          `INSERT INTO pipeline_runs (org_id, brand_id, input, steps, template_snapshot)
+           VALUES ('template_cohort', $1, '{}'::jsonb, '{}'::jsonb, NULL),
+                  ('template_cohort', $1, '{}'::jsonb, '{}'::jsonb, '{"formatVersion":1}'::jsonb)
+           RETURNING id, template_snapshot`,
+          [brandId],
+        );
+        expect(
+          await refusal(
+            pool,
+            'CREATE UNIQUE INDEX CONCURRENTLY "pipeline_runs_template_cohort_idx" ON "pipeline_runs" ("org_id")',
+          ),
+        ).toBe(UNIQUE_VIOLATION);
+        expect(
+          (
+            await pool.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'pipeline_runs_template_cohort_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: false }]);
+
+        await runMigrations(fresh.url);
+        const index = await pool.query<{ valid: boolean; definition: string }>(
+          `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS definition
+           FROM pg_index i WHERE i.indexrelid = 'pipeline_runs_template_cohort_idx'::regclass`,
+        );
+        expect(index.rows).toHaveLength(1);
+        expect(index.rows[0]?.valid).toBe(true);
+        expect(index.rows[0]?.definition).toContain("(org_id, brand_id, created_at, id)");
+        expect(index.rows[0]?.definition).toContain("template_snapshot IS NOT NULL");
+        expect(
+          (
+            await pool.query(
+              "SELECT id, template_snapshot FROM pipeline_runs WHERE org_id = 'template_cohort' ORDER BY id",
+            )
+          ).rows,
+        ).toEqual([...runs.rows].sort((a, b) => a.id.localeCompare(b.id)));
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await pool.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'pipeline_runs_template_cohort_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: true }]);
       } finally {
         await pool.end();
       }

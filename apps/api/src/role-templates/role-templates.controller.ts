@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
+  analyticsDaysSchema,
   type PromptRole,
   promptRoleSchema,
   type RoleTemplateActivation,
@@ -30,6 +31,30 @@ import { RoleTemplatesRepository } from "./role-templates.repository";
 @BrandScope({ kind: "org", roles: "manager" })
 export class RoleTemplatesController {
   constructor(private readonly templates: RoleTemplatesRepository) {}
+
+  @Get("brands/:brandId/:role/templates/outcomes")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  outcomes(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("role", new ZodValidationPipe(promptRoleSchema)) role: PromptRole,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+    @Query("cursor", new ZodValidationPipe(roleTemplateCursorSchema)) cursor?: number,
+  ) {
+    return this.templates.outcomes(orgId, brandId, role, days, cursor);
+  }
+
+  @Get(":role/templates/revisions/:revisionId/usage")
+  @BrandScope({ kind: "brand", source: "query", key: "brandId", roles: "manager" })
+  usage(
+    @OrgId() orgId: string,
+    @Param("role", new ZodValidationPipe(promptRoleSchema)) role: PromptRole,
+    @Param("revisionId", ParseUUIDPipe) revisionId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Query("days", new ZodValidationPipe(analyticsDaysSchema)) days: 7 | 30 | 90,
+  ) {
+    return this.templates.usage(orgId, brandId, role, revisionId, days);
+  }
 
   @Get("templates")
   list(@OrgId() orgId: string) {

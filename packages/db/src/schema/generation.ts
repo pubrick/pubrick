@@ -167,6 +167,10 @@ export const pipelineRuns = pgTable(
   (t) => [
     index("pipeline_runs_org_id_idx").on(t.orgId),
     index("pipeline_runs_brand_id_idx").on(t.brandId),
+    /** Observational template cohorts scan only runs pinned at claim time. */
+    index("pipeline_runs_template_cohort_idx")
+      .on(t.orgId, t.brandId, t.createdAt, t.id)
+      .where(sql`${t.templateSnapshot} IS NOT NULL`),
     /** The queue strip reads open runs by status on every poll. */
     index("pipeline_runs_status_idx").on(t.status),
     /**
