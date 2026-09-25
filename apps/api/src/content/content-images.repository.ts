@@ -21,6 +21,7 @@ const COLUMNS = {
   afterParagraph: schema.contentImageSlots.afterParagraph,
   alt: schema.contentImageSlots.alt,
   caption: schema.contentImageSlots.caption,
+  alignment: schema.contentImageSlots.alignment,
   needsReview: schema.contentImageSlots.needsReview,
 };
 
@@ -181,6 +182,7 @@ export class ContentImagesRepository {
             afterParagraph: image.afterParagraph,
             alt: image.alt,
             caption: image.caption || null,
+            alignment: image.alignment,
             needsReview: !data.reviewGeneratedImages && pending.has(image.mediaId),
           })),
         );

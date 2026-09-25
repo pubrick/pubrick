@@ -1,6 +1,6 @@
 "use client";
 
-import type { MediaAssetDto } from "@pubrick/shared";
+import type { ContentImageAlignment, MediaAssetDto } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Area } from "react-easy-crop";
@@ -19,6 +19,7 @@ type ImageSlot = {
   afterParagraph: number;
   alt: string;
   caption: string | null;
+  alignment: ContentImageAlignment;
   needsReview?: boolean;
 };
 
@@ -92,7 +93,7 @@ export function InlineImages({
     try {
       const state = await api<ImageState>(`/api/content/${itemId}/images`, { cache: "no-store" });
       if (version !== requestVersion.current) return;
-      setSlots(state.images);
+      setSlots(state.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(state.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -184,6 +185,7 @@ export function InlineImages({
           afterParagraph: position,
           alt: "",
           caption: null,
+          alignment: "center",
         },
       ]);
       setDirty(true);
@@ -247,7 +249,7 @@ export function InlineImages({
         method: "POST",
         body: JSON.stringify({ expectedRevision: revision, expectedBody: savedBody }),
       });
-      setSlots(saved.images);
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(saved.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -286,7 +288,7 @@ export function InlineImages({
           }),
         },
       );
-      setSlots(saved.images);
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(saved.revision);
       setReviewedSlots(new Set());
       setDirty(false);
@@ -339,15 +341,16 @@ export function InlineImages({
         body: JSON.stringify({
           expectedRevision: revision,
           ...(pendingReview && { reviewGeneratedImages: true }),
-          images: slots.map(({ mediaId, afterParagraph, alt, caption }) => ({
+          images: slots.map(({ mediaId, afterParagraph, alt, caption, alignment }) => ({
             mediaId,
             afterParagraph,
             alt: alt.trim(),
+            alignment,
             ...(caption?.trim() ? { caption: caption.trim() } : {}),
           })),
         }),
       });
-      setSlots(saved.images);
+      setSlots(saved.images.map((image) => ({ ...image, alignment: image.alignment ?? "center" })));
       setRevision(saved.revision);
       setDirty(false);
       setReviewedSlots(new Set());
@@ -514,6 +517,20 @@ export function InlineImages({
                           changeSlot(index, { caption: event.target.value || null })
                         }
                       />
+                      <Select
+                        label={t("alignment")}
+                        value={slot.alignment}
+                        disabled={busy || bodyStale}
+                        onChange={(event) =>
+                          changeSlot(index, {
+                            alignment: event.target.value as ContentImageAlignment,
+                          })
+                        }
+                      >
+                        <option value="left">{t("alignLeft")}</option>
+                        <option value="center">{t("alignCenter")}</option>
+                        <option value="right">{t("alignRight")}</option>
+                      </Select>
                       {slot.needsReview && slot.id && (
                         <label className="flex items-start gap-2 text-sm text-fg-secondary">
                           <input
@@ -638,7 +655,7 @@ export function InlineImages({
                       .map((slot) => (
                         <figure
                           key={slot.id ?? `${slot.mediaId}-${position}`}
-                          className="mt-3 max-w-2xl"
+                          className={`mt-3 w-full max-w-lg ${slot.alignment === "right" ? "ml-auto" : slot.alignment === "center" ? "mx-auto" : "mr-auto"}`}
                         >
                           {/* biome-ignore lint/performance/noImgElement: session-bound media cannot use Next image optimization */}
                           <img

@@ -166,6 +166,7 @@ describe.skipIf(!url)("public syndication feed", () => {
         afterParagraph: 0,
         alt: 'A "copper" square',
         caption: "Caption <script>unsafe</script>",
+        alignment: "right",
       })
       .returning({ id: schema.contentImageSlots.id });
 
@@ -177,10 +178,12 @@ describe.skipIf(!url)("public syndication feed", () => {
     const articlePath = new URL(entry.link as string).pathname;
     const article = await request(app.getHttpServer()).get(articlePath).expect(200);
     expect(article.text).toContain('alt="A &quot;copper&quot; square"');
+    expect(article.text).toContain('style="max-width:32rem;margin:1.5rem 0 1.5rem auto"');
+    expect(rss.text).toContain("1.5rem 0 1.5rem auto");
     expect(article.text).toContain("Caption &lt;script&gt;unsafe&lt;/script&gt;");
     expect(article.text).not.toContain("<script>");
-    expect(article.text.indexOf("First paragraph")).toBeLessThan(article.text.indexOf("<figure>"));
-    expect(article.text.indexOf("<figure>")).toBeLessThan(article.text.indexOf("Second paragraph"));
+    expect(article.text.indexOf("First paragraph")).toBeLessThan(article.text.indexOf("<figure "));
+    expect(article.text.indexOf("<figure ")).toBeLessThan(article.text.indexOf("Second paragraph"));
     const imagePath = /src="([^"]+\/images\/[^/"]+)"/.exec(article.text)?.[1];
     if (!imagePath) throw new Error("Public article did not include its image");
     const publicImagePath = new URL(imagePath).pathname;
@@ -195,6 +198,7 @@ describe.skipIf(!url)("public syndication feed", () => {
     await db.delete(schema.contentImageSlots).where(eq(schema.contentImageSlots.id, slot[0].id));
     const unchanged = await request(app.getHttpServer()).get(articlePath).expect(200);
     expect(unchanged.text).toContain(publicImagePath);
+    expect(unchanged.text).toContain('style="max-width:32rem;margin:1.5rem 0 1.5rem auto"');
     await owner.agent.delete(`/api/media/${upload.body.id}`).expect(409);
     await owner.agent.delete(`/api/brands/${owner.brandId}/feed/items/${itemId}`).expect(200);
     await request(app.getHttpServer()).get(publicImagePath).expect(404);

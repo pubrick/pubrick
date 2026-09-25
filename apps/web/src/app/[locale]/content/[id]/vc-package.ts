@@ -42,7 +42,14 @@ export function vcArticleHtml(input: VcPackageInput): string {
 
 function figureHtml(image: ContentImageDto, index: number): string {
   const caption = image.caption ? `<figcaption>${escapeHtml(image.caption)}</figcaption>` : "";
-  return `<figure><img src="images/${String(index + 1).padStart(2, "0")}.jpg" alt="${escapeHtml(image.alt)}">${caption}</figure>`;
+  // Use fixed styles selected by the closed DTO enum; never interpolate an
+  // arbitrary persisted value into portable HTML attributes.
+  const margin = {
+    left: "1.5rem auto 1.5rem 0",
+    center: "1.5rem auto",
+    right: "1.5rem 0 1.5rem auto",
+  }[image.alignment];
+  return `<figure style="max-width:32rem;margin:${margin}"><img src="images/${String(index + 1).padStart(2, "0")}.jpg" alt="${escapeHtml(image.alt)}" style="max-width:100%;height:auto">${caption}</figure>`;
 }
 
 /** Assemble only after every authenticated image request succeeds. No partial package is returned. */
@@ -90,7 +97,7 @@ export async function buildVcPackage(
       : "The VC.ru text differs from the main article. Images appear after the article, not at an assumed position. Place them in VC.ru after reviewing the adapted text.",
     ...input.images.map(
       (image, index) =>
-        `images/${String(index + 1).padStart(2, "0")}.jpg — after paragraph ${image.afterParagraph + 1} in the main article; alt: ${image.alt}${image.caption ? `; caption: ${image.caption}` : ""}`,
+        `images/${String(index + 1).padStart(2, "0")}.jpg — after paragraph ${image.afterParagraph + 1} in the main article; alignment: ${image.alignment}; alt: ${image.alt}${image.caption ? `; caption: ${image.caption}` : ""}`,
     ),
     "",
   ].join("\n");
