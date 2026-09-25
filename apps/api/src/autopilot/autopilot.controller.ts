@@ -7,9 +7,15 @@ import {
   ParseUUIDPipe,
   Post,
   Put,
+  Query,
   UseGuards,
 } from "@nestjs/common";
-import { type AutopilotConfig, autopilotConfigSchema } from "@pubrick/shared";
+import {
+  type AutopilotConfig,
+  type AutopilotScanQuery,
+  autopilotConfigSchema,
+  autopilotScanQuerySchema,
+} from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
@@ -42,6 +48,15 @@ export class AutopilotController {
   @Get("history")
   history(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.autopilot.history(orgId, brandId);
+  }
+
+  @Get("scans")
+  scans(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(autopilotScanQuerySchema)) query: AutopilotScanQuery,
+  ) {
+    return this.autopilot.scanHistory(orgId, brandId, query);
   }
 
   @Get("diagnostics")

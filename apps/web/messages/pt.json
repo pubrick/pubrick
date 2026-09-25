@@ -1448,6 +1448,25 @@
     "quietStart": "Início do horário de silêncio",
     "quietEnd": "Fim do horário de silêncio",
     "quietHint": "O período pode atravessar a meia-noite. Use o mesmo horário no início e no fim para desativá-lo.",
+    "scanTitle": "Verificações agendadas",
+    "scanHint": "Cada checagem registra a decisão do agendador naquele momento. Um envio indica que a geração foi solicitada; abra a execução para ver o resultado. Apenas marcas ativadas entram no agendamento. O histórico é mantido por 14 dias.",
+    "scanDispatchDecision": "Enviado para gerar rascunho",
+    "scanFilter": "Decisão",
+    "scanFilterStatus": {
+      "all": "Todas",
+      "skipped": "Ignoradas",
+      "dispatched": "Enviadas",
+      "failed": "Falhas"
+    },
+    "scanLoading": "Carregando…",
+    "scanEmpty": "Ainda não há verificações agendadas.",
+    "scanLoadMore": "Carregar mais",
+    "scanError": "Não foi possível carregar as verificações. Tente novamente.",
+    "scanStatus": {
+      "skipped": "Ignorada",
+      "dispatched": "Enviado para geração",
+      "failed": "Verificação falhou"
+    },
     "history": "Execuções automáticas",
     "emptyHistory": "Ainda não há execuções automáticas. Aprove um tópico e ative a geração programada.",
     "runLink": "Execução em {date}",
@@ -1511,7 +1530,7 @@
     "emptyWaiting": "Não há tópicos aprovados sem data aguardando execução. Consulte o banco de tópicos.",
     "openTopics": "Abrir tópicos",
     "moreWaiting": "E mais {count} tópicos aguardando.",
-    "diagnosticsLimit": "Este é um retrato dos dados observados, não uma previsão da próxima decisão do agendador. Os motivos dos ciclos ignorados não são registrados."
+    "diagnosticsLimit": "Este é um retrato observado, não uma previsão da próxima decisão do agendador."
   },
   "Media": {
     "title": "Biblioteca de mídia",

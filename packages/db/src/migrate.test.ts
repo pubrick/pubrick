@@ -93,7 +93,7 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  *
  * Twelve of them are the publishing path, converted by 0014. Proposals,
  * publication assertions, public feeds, monitored news, guidance revisions,
- * calendar slots, and manual Autopilot attempts were born zoned in later migrations. They are deliberately
+ * calendar slots, and manual and scheduled Autopilot decisions were born zoned in later migrations. They are deliberately
  * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
@@ -111,6 +111,8 @@ const ZONED_COLUMNS = [
   "autopilot_manual_attempts.completed_at",
   "autopilot_manual_attempts.created_at",
   "autopilot_manual_attempts.started_at",
+  "autopilot_scan_events.finished_at",
+  "autopilot_scan_events.started_at",
   "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
@@ -416,6 +418,10 @@ const NON_ENUM_CHECKS = [
   "autopilot_manual_attempts_status_check",
   "autopilot_manual_attempts_decision_check",
   "autopilot_manual_attempts_terminal_check",
+  // 0078's scheduled admission events have a closed status/decision pair.
+  "autopilot_scan_events_status_check",
+  "autopilot_scan_events_decision_check",
+  "autopilot_scan_events_terminal_check",
   // 0076 adds explicit opt-in for publication reply sampling.
   "publication_comment_collection_configs_revision_check",
 ];

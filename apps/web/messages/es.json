@@ -1448,6 +1448,25 @@
     "quietStart": "Inicio del horario de descanso",
     "quietEnd": "Fin del horario de descanso",
     "quietHint": "El período puede cruzar la medianoche. Usa la misma hora de inicio y fin para desactivarlo.",
+    "scanTitle": "Comprobaciones programadas",
+    "scanHint": "Cada comprobación registra la decisión del planificador en ese momento. Un envío indica que se solicitó la generación; abre la ejecución para ver el resultado. Solo se comprueban las marcas activadas. El historial se conserva 14 días.",
+    "scanDispatchDecision": "Enviado para generar borrador",
+    "scanFilter": "Decisión",
+    "scanFilterStatus": {
+      "all": "Todas",
+      "skipped": "Omitidas",
+      "dispatched": "Enviadas",
+      "failed": "Fallidas"
+    },
+    "scanLoading": "Cargando…",
+    "scanEmpty": "Aún no hay comprobaciones programadas.",
+    "scanLoadMore": "Cargar más",
+    "scanError": "No se pudieron cargar las comprobaciones. Inténtalo de nuevo.",
+    "scanStatus": {
+      "skipped": "Omitida",
+      "dispatched": "Enviado a generación",
+      "failed": "Comprobación fallida"
+    },
     "history": "Trabajos automáticos",
     "emptyHistory": "Aún no hay trabajos automáticos. Aprueba un tema y activa la generación programada.",
     "runLink": "Trabajo del {date}",
@@ -1511,7 +1530,7 @@
     "emptyWaiting": "No hay temas aprobados sin fecha pendientes. Revisa el banco de temas.",
     "openTopics": "Abrir temas",
     "moreWaiting": "Y {count} temas pendientes más.",
-    "diagnosticsLimit": "Este es un estado observado, no una predicción de la siguiente decisión del programador. No se registran los motivos de los análisis omitidos."
+    "diagnosticsLimit": "Esta es una instantánea observada, no una predicción de la próxima decisión del planificador."
   },
   "Media": {
     "title": "Biblioteca multimedia",

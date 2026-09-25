@@ -19,6 +19,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutopilotDiagnostics } from "./diagnostics";
 import { AutopilotManualTrigger } from "./manual-trigger";
+import { AutopilotScheduledChecks } from "./scheduled-checks";
 
 type Channel = { id: string; name: string; platform: string };
 type Dispatch = {
@@ -340,6 +341,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
       )}
       <AutopilotDiagnostics brandId={id} />
       <AutopilotManualTrigger brandId={id} disabled={busy || dirty || !persistedConfig} />
+      <AutopilotScheduledChecks brandId={id} />
       <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>
         {history.length === 0 ? (
