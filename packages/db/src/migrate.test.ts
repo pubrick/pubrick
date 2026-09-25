@@ -923,7 +923,7 @@ async function seedFanOuts(
 describe.skipIf(!url)("runMigrations", () => {
   it("preserves a legacy encrypted Dzen token when adding manual channels", async () => {
     const fresh = await withFreshDatabase(url as string);
-    const before = await migrationsFolderBefore("0105_manual-publication-channels");
+    const before = await migrationsFolderBefore("0106_manual-publication-channels");
     try {
       const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
       let channelId: string;
