@@ -1233,6 +1233,7 @@
     "source_fetch_failed": "Não foi possível carregar essa página pública. Confira o link ou cole o texto.",
     "brand_import_no_google_key": "Adicione uma chave do Google AI em Configurações antes de importar o perfil.",
     "brand_import_limit_reached": "Três importações já foram solicitadas na última hora. Tente novamente mais tarde.",
+    "brand_import_stale": "Esta marca mudou enquanto você revisava as sugestões. Importe novamente antes de salvar.",
     "brand_import_failed": "Não foi possível gerar sugestões. Confira sua chave do Google AI e tente novamente.",
     "brand_import_unreadable": "O site tem pouco texto legível para gerar sugestões.",
     "source_response_too_large": "A página é grande demais para importar. Cole o texto relevante.",

@@ -131,6 +131,7 @@ describe.skipIf(!url)("brand profile import", () => {
       }),
     );
     expect(preview.body.suggestion).toEqual(suggestion);
+    expect(preview.body.expectedProfileHash).toMatch(/^[a-f0-9]{64}$/);
     expect((await agent.get(`/api/brands/${brand.body.id}`).expect(200)).body.name).toBe(
       "Old name",
     );
@@ -148,7 +149,12 @@ describe.skipIf(!url)("brand profile import", () => {
       );
     expect(ledger).toEqual([{ status: "ok", inputTokens: 40 }]);
 
-    const reviewed = { ...suggestion, name: "Edited name", topics: ["Choosing a roast"] };
+    const reviewed = {
+      ...suggestion,
+      expectedProfileHash: preview.body.expectedProfileHash,
+      name: "Edited name",
+      topics: ["Choosing a roast"],
+    };
     const applied = await agent
       .post(`/api/brands/${brand.body.id}/import/apply`)
       .send(reviewed)
@@ -158,10 +164,33 @@ describe.skipIf(!url)("brand profile import", () => {
     expect(topics.map((topic: { title: string }) => topic.title)).toEqual(["Choosing a roast"]);
     expect(topics[0].status).toBe("idea");
     expect(topics[0].origin).toBe("ai");
-    await agent.post(`/api/brands/${brand.body.id}/import/apply`).send(reviewed).expect(201);
+    await agent.post(`/api/brands/${brand.body.id}/import/apply`).send(reviewed).expect(409);
     expect((await agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body).toHaveLength(
       1,
     );
+  });
+
+  it("rejects a stale review without overwriting a newer profile or creating ideas", async () => {
+    const { agent } = await workspace();
+    const brand = await agent.post("/api/brands").send({ name: "North Star" }).expect(201);
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-secret" })
+      .expect(200);
+    const preview = await agent
+      .post(`/api/brands/${brand.body.id}/import/preview`)
+      .send({ url: "https://example.com", acceptAiCost: true })
+      .expect(201);
+    await agent.patch(`/api/brands/${brand.body.id}`).send({ name: "Manager edit" }).expect(200);
+    const result = await agent
+      .post(`/api/brands/${brand.body.id}/import/apply`)
+      .send({ ...suggestion, expectedProfileHash: preview.body.expectedProfileHash })
+      .expect(409);
+    expect(result.body.code).toBe("brand_import_stale");
+    expect((await agent.get(`/api/brands/${brand.body.id}`).expect(200)).body.name).toBe(
+      "Manager edit",
+    );
+    expect((await agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200)).body).toEqual([]);
   });
 
   it("keeps a conservative reservation when the provider fails before telemetry", async () => {
@@ -236,10 +265,12 @@ describe.skipIf(!url)("brand profile import", () => {
         .send({ url: "https://example.com", acceptAiCost: true })
         .expect(201);
     }
+    vi.mocked(guardedFetchText).mockClear();
     await agent
       .post(`/api/brands/${brand.body.id}/import/preview`)
       .send({ url: "https://example.com", acceptAiCost: true })
       .expect(429);
+    expect(guardedFetchText).not.toHaveBeenCalled();
     const rows = await db
       .select({ id: schema.usageLedger.id })
       .from(schema.usageLedger)

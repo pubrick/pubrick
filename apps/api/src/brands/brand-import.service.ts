@@ -9,7 +9,7 @@ import { badRequest, tooManyRequests } from "../api-error";
 import { db } from "../db";
 import { BrandImportCaller } from "./brand-import.caller";
 import { websiteMaterial } from "./brand-import.extract";
-import { BrandsRepository } from "./brands.repository";
+import { BrandsRepository, brandImportProfileHash } from "./brands.repository";
 
 const IMPORT_STEP = "brand_profile_import";
 const MAX_IMPORTS_PER_HOUR = 3;
@@ -24,7 +24,7 @@ export class BrandImportService {
   ) {}
 
   async preview(orgId: string, brandId: string, request: BrandImportRequest) {
-    await this.brands.get(orgId, brandId);
+    const brand = await this.brands.get(orgId, brandId);
     let credential: Awaited<ReturnType<AiCredentialsRepository["getDecrypted"]>>;
     try {
       credential = await this.credentials.getDecrypted(orgId, "google");
@@ -33,6 +33,21 @@ export class BrandImportService {
         throw badRequest("brand_import_no_google_key", "Add a Google AI key in Settings first");
       }
       throw error;
+    }
+    // Avoid website I/O for organizations already over the paid-call cap.
+    // The locked check below remains authoritative for concurrent requests.
+    const [{ count } = { count: 0 }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, IMPORT_STEP),
+          gt(schema.usageLedger.createdAt, sql`now() - interval '1 hour'`),
+        ),
+      );
+    if (count >= MAX_IMPORTS_PER_HOUR) {
+      throw tooManyRequests("brand_import_limit_reached", "Three imports per hour are allowed");
     }
     let html: string;
     try {
@@ -133,7 +148,11 @@ export class BrandImportService {
         },
       });
       if (meteringFailed) throw new Error("Usage recording failed");
-      return { sourceUrl: request.url, suggestion };
+      return {
+        sourceUrl: request.url,
+        expectedProfileHash: brandImportProfileHash(brand),
+        suggestion,
+      };
     } catch {
       // Never return unmetered model output or raw provider errors (which may
       // contain the BYOK key). The unknown reservation stays in the ledger.

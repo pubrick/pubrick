@@ -200,6 +200,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   brand_not_found: "brand_not_found",
   brand_import_no_google_key: "brand_import_no_google_key",
   brand_import_limit_reached: "brand_import_limit_reached",
+  brand_import_stale: "brand_import_stale",
   brand_import_failed: "brand_import_failed",
   brand_import_unreadable: "brand_import_unreadable",
   knowledge_not_found: "knowledge_not_found",
