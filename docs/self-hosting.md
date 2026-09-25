@@ -186,9 +186,11 @@ not the address is already registered, so the endpoint cannot be used to test
 which of your colleagues has an account.
 
 **Adding people.** Open **Settings** and find the **Workspace** card: it lists
-everyone in the organization, and **Invite** asks for an address. *Any* member
-can invite — Pubrick has no owner/admin distinction anywhere in its interface,
-so it does not pretend to have one here.
+everyone in the organization, and **Invite** asks for an address. An account
+with the ordinary **Member** role can invite another member. Owners and admins
+may also invite people as authors or editors, or grant elevated roles. Author
+and editor roles cannot invite. The API rejects attempts by ordinary members to
+assign any other role, including through a direct request outside Settings.
 
 Pubrick has no mailer, so it does not send the invitation for you. What you get
 back is a link to this instance, which you pass to the person yourself. It is

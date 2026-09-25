@@ -1,9 +1,11 @@
 import { schema } from "@pubrick/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, ownerAc } from "better-auth/plugins/organization/access";
+import { invitationRoleGate } from "./auth-invitation-role-gate";
 import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";
 import { signupGate } from "./auth-signup-gate";
@@ -19,23 +21,17 @@ import { findInitialOrganizationId } from "./org/initial-org";
  * `docker compose up` is the only one that can ever add a person, and everyone
  * it lets in is permanently unable to add anyone else.
  *
- * Pubrick has no role distinction anywhere else: no screen shows a role, none
- * changes one, and the org creator becomes `owner` purely because the plugin's
- * `creatorRole` says so. Keeping the plugin's default would therefore not be
- * "the safe option" — it would put an Invite control on the Settings screen
- * that most members can never use, with no screen in the product able to grant
- * them the role that would fix it. So `member` is given the invitation verbs
- * and nothing else: every member may invite, and may take back an invitation
- * (their own or anyone's — the pending list is shared, so an invitation nobody
- * can revoke would be worse than one anybody can).
+ * The ordinary `member` role may invite other members and take back pending
+ * invitations. Owners/admins may also invite elevated and editorial roles
+ * through the API. The invitationRoleGate enforces that distinction on the raw
+ * auth route before Better Auth can cancel or resend an existing link.
  *
- * What that costs: any member can widen the instance by one address. The
+ * What that costs: an ordinary member can widen the instance by one address. The
  * mitigations are that every pending invitation is visible to every member on
  * one screen and revocable there, that an invitation is single-use and expires,
  * and that this is a self-hosted product whose members are, by construction,
- * people the operator already let in. If a future release needs a real
- * administrator, this is the line that has to change back — together with a
- * screen that can grant the role.
+ * people the operator already let in. Role assignment must remain server-side
+ * regardless of which choices an interface exposes.
  */
 const ac = createAccessControl(defaultStatements);
 const memberAc = ac.newRole({
@@ -48,13 +44,30 @@ const memberAc = ac.newRole({
   ac: ["read"],
   invitation: ["create", "cancel"],
 });
+// Editorial permissions over brands and drafts are enforced by Pubrick's API
+// guards. Better Auth only needs to recognize these names for invitations and
+// role changes; neither role can manage organization membership or invitations.
+const authorAc = ac.newRole({
+  organization: [],
+  member: [],
+  team: [],
+  ac: ["read"],
+  invitation: [],
+});
+const editorAc = ac.newRole({
+  organization: [],
+  member: [],
+  team: [],
+  ac: ["read"],
+  invitation: [],
+});
 
 /** 48 hours, the plugin's own default — stated so `docs/self-hosting.md` cites code. */
 export const INVITATION_EXPIRES_IN_SECONDS = 48 * 60 * 60;
 
 const ORGANIZATION_OPTIONS = {
   ac,
-  roles: { owner: ownerAc, admin: adminAc, member: memberAc },
+  roles: { owner: ownerAc, admin: adminAc, member: memberAc, author: authorAc, editor: editorAc },
   invitationExpiresIn: INVITATION_EXPIRES_IN_SECONDS,
   // Stated, not inherited, and the default is the dangerous one HERE. The plugin
   // decides whether accepting an invitation requires a verified address by
@@ -124,7 +137,12 @@ export const auth = betterAuth({
   },
   // Registration posture, enforced before the sign-up endpoint runs so a refusal
   // cannot leak whether the address is already registered.
-  hooks: { before: signupGate },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      await signupGate(ctx);
+      await invitationRoleGate(ctx);
+    }),
+  },
   // originMismatchPlugin FIRST, and the order is the point: its `onRequest` runs
   // before better-auth's own origin check, which is the only way an operator whose
   // PUBLIC_ORIGIN does not match the address bar gets a sentence naming both

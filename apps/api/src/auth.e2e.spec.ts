@@ -1,7 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // From auth-policy, not from the gate: the gate imports ./db, whose env parsing runs
@@ -113,6 +113,238 @@ describe.skipIf(!url)("auth e2e", () => {
 
     const session = await second.get("/api/auth/get-session").expect(200);
     expect(session.body.session.activeOrganizationId ?? null).toBeNull();
+  });
+
+  describe("invitation role boundary", () => {
+    let owner: ReturnType<typeof request.agent>;
+    let member: ReturnType<typeof request.agent>;
+    let orgId: string;
+    const fresh = () => `role-${Date.now()}-${Math.floor(Math.random() * 1e9)}@example.com`;
+
+    beforeAll(async () => {
+      owner = request.agent(app.getHttpServer());
+      await owner
+        .post("/api/auth/sign-up/email")
+        .send({ email: fresh(), password: "password1234", name: "Owner" })
+        .expect(200);
+      const org = await owner
+        .post("/api/auth/organization/create")
+        .send({ name: "Role Boundary", slug: `role-boundary-${Date.now()}` })
+        .expect(200);
+      orgId = org.body.id as string;
+
+      const memberEmail = fresh();
+      const invitation = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+      member = request.agent(app.getHttpServer());
+      await member
+        .post("/api/auth/sign-up/email")
+        .send({ email: memberEmail, password: "password1234", name: "Member" })
+        .expect(200);
+      await member
+        .post("/api/auth/organization/accept-invitation")
+        .send({ invitationId: invitation.body.id })
+        .expect(200);
+      member = request.agent(app.getHttpServer());
+      await member
+        .post("/api/auth/sign-in/email")
+        .send({ email: memberEmail, password: "password1234" })
+        .expect(200);
+      expect(
+        (await member.get("/api/auth/get-session").expect(200)).body.session.activeOrganizationId,
+      ).toBe(orgId);
+    });
+
+    it("rejects a member's elevated role requests through the raw auth route", async () => {
+      for (const role of [
+        "admin",
+        "owner",
+        "author",
+        "editor",
+        "member,admin",
+        ["member", "admin"],
+        ["owner", "member"],
+      ]) {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role, organizationId: orgId })
+          .expect(403);
+        const { db } = await import("./db");
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      }
+      for (const organizationId of [undefined, ""]) {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId })
+          .expect(403);
+        const { db } = await import("./db");
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      }
+    });
+
+    it("keeps an existing invitation intact when a member attempts an elevated re-invite or resend", async () => {
+      const email = fresh();
+      const original = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: orgId })
+        .expect(200);
+      for (const resend of [false, true]) {
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId: orgId, resend })
+          .expect(403);
+      }
+      const { db } = await import("./db");
+      const rows = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, email));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: original.body.id, role: "member", status: "pending" });
+      expect(rows[0]?.expiresAt.toISOString()).toBe(original.body.expiresAt);
+    });
+
+    it("does not let a member extend an existing admin invitation by resending it as member", async () => {
+      const email = fresh();
+      const original = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "admin", organizationId: orgId })
+        .expect(200);
+      await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: orgId, resend: true })
+        .expect(403);
+      const { db } = await import("./db");
+      const rows = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, email));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: original.body.id, role: "admin", status: "pending" });
+      expect(rows[0]?.expiresAt.toISOString()).toBe(original.body.expiresAt);
+    });
+
+    it("does not mistake a whitespace-prefixed stored role for an effective admin permission", async () => {
+      const { db } = await import("./db");
+      const userId = (await member.get("/api/auth/get-session").expect(200)).body.user.id as string;
+      const membership = and(
+        eq(schema.member.organizationId, orgId),
+        eq(schema.member.userId, userId),
+      );
+      await db.update(schema.member).set({ role: "member, admin" }).where(membership);
+      try {
+        const email = fresh();
+        await member
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role: "admin", organizationId: orgId })
+          .expect(403);
+        expect(
+          await db.select().from(schema.invitation).where(eq(schema.invitation.email, email)),
+        ).toEqual([]);
+      } finally {
+        await db.update(schema.member).set({ role: "member" }).where(membership);
+      }
+    });
+
+    it("still lets a member invite an ordinary member and an owner invite an admin", async () => {
+      const memberEmail = fresh();
+      const ordinary = await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+      expect(ordinary.body.role).toBe("member");
+      const reissued = await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email: memberEmail, role: "member", organizationId: orgId })
+        .expect(200);
+      expect(reissued.body.id).not.toBe(ordinary.body.id);
+      const { db } = await import("./db");
+      const memberInvites = await db
+        .select({ id: schema.invitation.id, status: schema.invitation.status })
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, memberEmail));
+      expect(memberInvites).toEqual(
+        expect.arrayContaining([
+          { id: ordinary.body.id, status: "canceled" },
+          { id: reissued.body.id, status: "pending" },
+        ]),
+      );
+      const elevated = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email: fresh(), role: "admin", organizationId: orgId })
+        .expect(200);
+      expect(elevated.body.role).toBe("admin");
+    });
+
+    it("accepts author/editor invitations and lets only an owner change editorial roles", async () => {
+      const { db } = await import("./db");
+      let targetMemberId = "";
+      for (const role of ["author", "editor"]) {
+        const email = fresh();
+        const invitation = await owner
+          .post("/api/auth/organization/invite-member")
+          .send({ email, role, organizationId: orgId })
+          .expect(200);
+        expect(invitation.body.role).toBe(role);
+        const invitee = request.agent(app.getHttpServer());
+        await invitee
+          .post("/api/auth/sign-up/email")
+          .send({ email, password: "password1234", name: role })
+          .expect(200);
+        await invitee
+          .post("/api/auth/organization/accept-invitation")
+          .send({ invitationId: invitation.body.id })
+          .expect(200);
+        const userId = (await invitee.get("/api/auth/get-session").expect(200)).body.user
+          .id as string;
+        const [membership] = await db
+          .select({ id: schema.member.id, role: schema.member.role })
+          .from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+        expect(membership?.role).toBe(role);
+        const returning = request.agent(app.getHttpServer());
+        await returning
+          .post("/api/auth/sign-in/email")
+          .send({ email, password: "password1234" })
+          .expect(200);
+        const fullOrganization = await returning
+          .get("/api/auth/organization/get-full-organization")
+          .expect(200);
+        expect(fullOrganization.body.id).toBe(orgId);
+        expect(fullOrganization.body.members).toEqual(
+          expect.arrayContaining([expect.objectContaining({ userId, role })]),
+        );
+        await returning
+          .post("/api/auth/organization/invite-member")
+          .send({ email: fresh(), role: "member", organizationId: orgId })
+          .expect(403);
+        targetMemberId ||= membership?.id ?? "";
+      }
+
+      for (const role of ["editor", "author"]) {
+        await member
+          .post("/api/auth/organization/update-member-role")
+          .send({ memberId: targetMemberId, role, organizationId: orgId })
+          .expect(403);
+        await owner
+          .post("/api/auth/organization/update-member-role")
+          .send({ memberId: targetMemberId, role, organizationId: orgId })
+          .expect(200);
+        const [updated] = await db
+          .select({ role: schema.member.role })
+          .from(schema.member)
+          .where(eq(schema.member.id, targetMemberId));
+        expect(updated?.role).toBe(role);
+      }
+    });
   });
 
   /**
