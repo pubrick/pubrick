@@ -417,6 +417,12 @@ export class ContentController {
     return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
   }
 
+  @Post(":id/retract-approval")
+  @HttpCode(200)
+  retractApproval(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.retractApproval(orgId, id);
+  }
+
   @Post(":id/archive")
   @HttpCode(200)
   archive(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {

@@ -831,6 +831,38 @@ describe("reject (Step 4)", () => {
   });
 });
 
+describe("undo approval", () => {
+  it("returns an unsent scheduled post to editing without recording rejection", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "scheduled", scheduledAt: scheduleValue() })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/retract-approval") {
+        served.current = makeItem({ status: "draft", adaptations: [makeAdaptation()] });
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.retractApproval }));
+    await screen.findByText(en.Content.status.draft);
+    expect(calls).toContainEqual({
+      path: "/api/content/c1/retract-approval",
+      method: "POST",
+      body: undefined,
+    });
+    expect(calls.some((call) => call.path === "/api/content/c1/reject")).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.retractApproval }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("archive and restore", () => {
   it("archives a quiet draft and restores its editing controls", async () => {
     const served = {
