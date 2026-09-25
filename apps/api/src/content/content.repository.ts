@@ -2462,16 +2462,11 @@ export class ContentRepository {
         claims: schema.claimReviews.claims,
       })
       .from(schema.claimReviews)
-      .where(
-        and(
-          eq(schema.claimReviews.orgId, orgId),
-          eq(schema.claimReviews.contentItemId, id),
-          eq(schema.claimReviews.id, request.reviewId),
-        ),
-      )
+      .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+      .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
       .limit(1);
     const hash = createHash("sha256").update(item.body, "utf8").digest("hex");
-    if (review?.status !== "ready" || review.bodyHash !== hash) {
+    if (review?.id !== request.reviewId || review.status !== "ready" || review.bodyHash !== hash) {
       throw conflict(
         "claim_correction_stale",
         "This evidence review is no longer ready for the saved draft",
@@ -2522,7 +2517,7 @@ export class ContentRepository {
     const credential = await this.refineCredential(orgId, "claim_correction");
     const evidence = selected.evidence
       .filter((entry) => entry.snippet.trim().length > 0 && entry.url.length <= 2_048)
-      .slice(0, 5);
+      .slice(0, 3);
     if (evidence.length === 0)
       throw conflict("claim_correction_ineligible", "No usable citation remains for this claim");
     const outcome = await this.claimCorrector.run({
@@ -2535,7 +2530,7 @@ export class ContentRepository {
           start + selected.claim.length,
           start + selected.claim.length + 1_000,
         ),
-        evidence: evidence.slice(0, 3).map((entry) => ({
+        evidence: evidence.map((entry) => ({
           title: entry.title.slice(0, 200),
           url: entry.url,
           snippet: entry.snippet.slice(0, 500),
@@ -2569,22 +2564,19 @@ export class ContentRepository {
       }
       const [currentReview] = await tx
         .select({
+          id: schema.claimReviews.id,
           bodyHash: schema.claimReviews.bodyHash,
           status: schema.claimReviews.status,
           claims: schema.claimReviews.claims,
         })
         .from(schema.claimReviews)
-        .where(
-          and(
-            eq(schema.claimReviews.orgId, orgId),
-            eq(schema.claimReviews.contentItemId, id),
-            eq(schema.claimReviews.id, request.reviewId),
-          ),
-        )
+        .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+        .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
         .for("share")
         .limit(1);
       if (
-        currentReview?.status !== "ready" ||
+        currentReview?.id !== request.reviewId ||
+        currentReview.status !== "ready" ||
         currentReview.bodyHash !== hash ||
         JSON.stringify(currentReview.claims[request.claimIndex]) !== JSON.stringify(selected)
       ) {
@@ -2656,22 +2648,19 @@ export class ContentRepository {
       }
       const [review] = await tx
         .select({
+          id: schema.claimReviews.id,
           bodyHash: schema.claimReviews.bodyHash,
           status: schema.claimReviews.status,
           claims: schema.claimReviews.claims,
         })
         .from(schema.claimReviews)
-        .where(
-          and(
-            eq(schema.claimReviews.orgId, orgId),
-            eq(schema.claimReviews.contentItemId, id),
-            eq(schema.claimReviews.id, proposal.reviewId),
-          ),
-        )
+        .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+        .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
         .limit(1);
       const claim = review?.claims[proposal.claimIndex];
       if (
-        review?.status !== "ready" ||
+        review?.id !== proposal.reviewId ||
+        review.status !== "ready" ||
         review.bodyHash !== proposal.sourceBodyHash ||
         !claim ||
         claim.outcome !== "evidence_conflicts" ||

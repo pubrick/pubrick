@@ -21,6 +21,7 @@ describe.skipIf(!url)("explicit claim corrections", () => {
   let pool: ReturnType<typeof createDb>["pool"];
   const calls: unknown[] = [];
   let outcome: ClaimCorrectionOutcome;
+  let onCall: (() => Promise<void>) | null = null;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -33,6 +34,7 @@ describe.skipIf(!url)("explicit claim corrections", () => {
       .useValue({
         run: async (args: unknown) => {
           calls.push(args);
+          await onCall?.();
           return outcome;
         },
       })
@@ -49,6 +51,7 @@ describe.skipIf(!url)("explicit claim corrections", () => {
   });
   beforeEach(() => {
     calls.length = 0;
+    onCall = null;
     outcome = {
       ok: true,
       replacement,
@@ -133,6 +136,7 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     itemId: string,
     status: "ready" | "failed" = "ready",
     outcome: ClaimReviewOutcome = "evidence_conflicts",
+    createdAt?: Date,
   ) {
     const evidence = [
       {
@@ -148,6 +152,7 @@ describe.skipIf(!url)("explicit claim corrections", () => {
         contentItemId: itemId,
         bodyHash: createHash("sha256").update(source).digest("hex"),
         status,
+        createdAt,
         completedAt: new Date(),
         errorCode: status === "failed" ? "provider_unavailable" : null,
         claims: [{ claim, outcome, evidence }],
@@ -183,6 +188,39 @@ describe.skipIf(!url)("explicit claim corrections", () => {
           .expect(409)
       ).body.code,
     ).toBe("claim_correction_ineligible");
+    const repeated = `${source} ${claim}`;
+    await visitor.patch(`/api/content/${itemId}`).send({ body: repeated }).expect(200);
+    const [duplicateReview] = await db
+      .insert(schema.claimReviews)
+      .values({
+        orgId,
+        contentItemId: itemId,
+        bodyHash: createHash("sha256").update(repeated).digest("hex"),
+        status: "ready",
+        completedAt: new Date(),
+        claims: [
+          {
+            claim,
+            outcome: "evidence_conflicts",
+            evidence: [
+              {
+                title: "Annual report",
+                url: "https://example.com/report",
+                snippet: "No shipment number was disclosed.",
+              },
+            ],
+          },
+        ],
+      })
+      .returning({ id: schema.claimReviews.id });
+    expect(
+      (
+        await visitor
+          .post(path)
+          .send({ expectedBody: repeated, reviewId: duplicateReview?.id, claimIndex: 0 })
+          .expect(409)
+      ).body.code,
+    ).toBe("claim_correction_ineligible");
     expect(calls).toHaveLength(0);
   });
 
@@ -199,6 +237,13 @@ describe.skipIf(!url)("explicit claim corrections", () => {
     const proposed = await owner.visitor.post(path).send(payload).expect(201);
     expect(claimCorrectionProposalDtoSchema.parse(proposed.body)).toEqual(proposed.body);
     expect(proposed.body).toMatchObject({ sourceBody: source, claim, replacement, reviewId });
+    expect(proposed.body.evidence).toEqual([
+      {
+        title: "Annual report",
+        url: "https://example.com/report",
+        snippet: "No shipment number was disclosed.",
+      },
+    ]);
     expect(calls).toHaveLength(1);
     expect((await owner.visitor.get(`/api/content/${owner.itemId}`).expect(200)).body.body).toBe(
       source,
@@ -272,5 +317,51 @@ describe.skipIf(!url)("explicit claim corrections", () => {
       );
     expect(ledger).toEqual([{ step: CLAIM_CORRECTION_STEP }]);
     expect((await visitor.get(path).expect(200)).text).toBe("null");
+  });
+
+  it("treats a newer review as superseding the cited review before and after a paid call", async () => {
+    const { visitor, orgId, itemId } = await actor();
+    const original = await review(orgId, itemId);
+    const path = `/api/content/${itemId}/claim-correction`;
+    const payload = { expectedBody: source, reviewId: original, claimIndex: 0 };
+    onCall = async () => {
+      await review(orgId, itemId, "ready", "evidence_conflicts", new Date(Date.now() + 10_000));
+    };
+    expect((await visitor.post(path).send(payload).expect(409)).body.code).toBe(
+      "claim_correction_stale",
+    );
+    expect(calls).toHaveLength(1);
+    const ledger = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.usageLedger.step, CLAIM_CORRECTION_STEP),
+        ),
+      );
+    expect(ledger).toHaveLength(1);
+    onCall = null;
+    expect((await visitor.post(path).send(payload).expect(409)).body.code).toBe(
+      "claim_correction_stale",
+    );
+    expect(calls).toHaveLength(1);
+    expect((await visitor.get(path).expect(200)).text).toBe("null");
+  });
+
+  it("refuses acceptance when a newer review supersedes the staged source", async () => {
+    const { visitor, orgId, itemId } = await actor();
+    const original = await review(orgId, itemId);
+    const path = `/api/content/${itemId}/claim-correction`;
+    const proposed = await visitor
+      .post(path)
+      .send({ expectedBody: source, reviewId: original, claimIndex: 0 })
+      .expect(201);
+    await review(orgId, itemId, "ready", "evidence_conflicts", new Date(Date.now() + 10_000));
+    expect((await visitor.post(`${path}/${proposed.body.id}/accept`).expect(409)).body.code).toBe(
+      "claim_correction_stale",
+    );
+    expect((await visitor.get(`/api/content/${itemId}`).expect(200)).body.body).toBe(source);
+    expect((await visitor.get(path).expect(200)).body.id).toBe(proposed.body.id);
   });
 });
