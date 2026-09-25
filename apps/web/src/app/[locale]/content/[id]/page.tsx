@@ -1518,7 +1518,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       return (
         platform !== undefined &&
         !isManualPlatform(platform) &&
-        adaptation.deliveryOutcome !== "unknown"
+        adaptation.deliveryOutcome !== "unknown" &&
+        adaptation.deliveryOutcome !== "partial"
       );
     });
 
