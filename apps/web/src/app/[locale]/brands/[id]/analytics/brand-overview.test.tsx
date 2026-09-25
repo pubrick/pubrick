@@ -1,7 +1,9 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor } from "@/test/render";
 import en from "../../../../../../messages/en.json";
+import es from "../../../../../../messages/es.json";
 import { BrandOverview } from "./brand-overview";
 
 const brandId = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
@@ -35,6 +37,7 @@ const overview = (days: 7 | 30 | 90, total = 1) => ({
     estimatedCalls: 0,
     unpricedCalls: 1,
     unrecordedCalls: 0,
+    reviewUnrecordedCalls: 0,
     legacyRuns: 0,
   },
 });
@@ -82,5 +85,53 @@ describe("brand activity overview", () => {
     await userEvent.click(screen.getByRole("button", { name: en.Analytics.retry }));
     await waitFor(() => expect(screen.getByText("$0.00")).toBeInTheDocument());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a lower bound for a legacy run or a review with unrecorded calls", async () => {
+    const base = overview(30);
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        response({
+          ...base,
+          spend: { ...base.spend, knownUsd: 0.25, pricedCalls: 1, unpricedCalls: 0, legacyRuns: 1 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          ...overview(90),
+          spend: {
+            ...base.spend,
+            knownUsd: 0.5,
+            pricedCalls: 1,
+            unpricedCalls: 0,
+            reviewUnrecordedCalls: 2,
+          },
+        }),
+      );
+    const view = render(<BrandOverview brandId={brandId} days={30} />);
+    expect(await screen.findByText("≥ $0.25")).toBeInTheDocument();
+    view.rerender(<BrandOverview brandId={brandId} days={90} />);
+    expect(await screen.findByText("≥ $0.50")).toBeInTheDocument();
+  });
+
+  it("uses the translated refusal and sends a user without an active organization to onboarding", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        statusText: "Forbidden",
+        text: async () => JSON.stringify({ code: "forbidden", message: "API English" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        statusText: "Forbidden",
+        text: async () =>
+          JSON.stringify({ code: "no_active_organization", message: "API English" }),
+      } as Response);
+    const view = render(<BrandOverview brandId={brandId} days={30} />, { locale: "es" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(es.Errors.forbidden);
+    view.rerender(<BrandOverview brandId={brandId} days={90} />);
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/es/onboarding"));
   });
 });

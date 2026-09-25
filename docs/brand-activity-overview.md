@@ -14,14 +14,17 @@ query and join to organization and brand.
 | Published receipts | `publications.created_at` | One persisted receipt whose **current** status is `published` per live adaptation/channel/item chain, grouped by platform. A receipt can be created as `in_flight` and become published after this window; this count does not claim when delivery happened. Human-settled receipts are included and counted separately. Deleted channels can leave receipts without an attributable brand, which are excluded. This is not audience reach. |
 | Attributed AI calls | `usage_ledger.created_at` | Ledger rows linked to a surviving run, draft or channel; a run link takes precedence when multiple links exist. Each ledger row is counted once. Rows without a surviving brand link are excluded. |
 | Unrecorded run calls | Run `created_at` | Missing ledger writes counted on runs started in the window. Their physical call time was not stored, so the overview cannot place them more precisely. Runs predating loss tracking have a null counter and are reported separately. |
+| Unrecorded claim-review calls | `claim_reviews.created_at` | Missing ledger writes for reviews still linked to a draft of this brand. Their physical call time was not stored, so they are assigned to review creation. |
 
 Cost uses the shared ledger rule: a priced call has a non-null cost and a cost
 source other than `unknown`; estimated calls use the local price table. An
 unpriced call has counted tokens or an unknown provider outcome. A refused call
 with no counted tokens is not silently called paid. `knownUsd` is a sum over
 priced attributed rows, not a full bill. The UI displays `≥` when unpriced or
-unrecorded calls exist, `≈` for estimates, and "No priced calls" when there
-is no priced observation. Zero is shown only when a priced call records zero.
+unrecorded calls or runs predating loss tracking exist, `≈` for estimates,
+and "No priced calls" when there is no priced observation. Zero is shown only
+when a priced call records zero. Claim-review losses have their own count;
+reviews whose draft was deleted cannot be attributed to a brand.
 Standalone calls whose only attribution was deleted cannot be assigned to a
 brand. No rate, ROI, prompt score or platform engagement is inferred.
 

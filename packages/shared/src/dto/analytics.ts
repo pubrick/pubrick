@@ -108,6 +108,7 @@ export const brandOverviewDtoSchema = z.object({
     estimatedCalls: z.number().int().nonnegative(),
     unpricedCalls: z.number().int().nonnegative(),
     unrecordedCalls: z.number().int().nonnegative(),
+    reviewUnrecordedCalls: z.number().int().nonnegative(),
     legacyRuns: z.number().int().nonnegative(),
   }),
 });

@@ -270,6 +270,35 @@ describe.skipIf(!url)("publication analytics e2e", () => {
         createdAt: daysAgo(1),
       },
     ]);
+    await db.insert(schema.claimReviews).values([
+      {
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        bodyHash: "a".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(1),
+        createdAt: daysAgo(1),
+        unrecordedCalls: 3,
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: siblingItem.id,
+        bodyHash: "b".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(1),
+        createdAt: daysAgo(1),
+        unrecordedCalls: 4,
+      },
+      {
+        orgId: owner.orgId,
+        contentItemId: oldItem.id,
+        bodyHash: "c".repeat(64),
+        status: "ready",
+        completedAt: daysAgo(40),
+        createdAt: daysAgo(40),
+        unrecordedCalls: 5,
+      },
+    ]);
     const path = `/api/analytics/brands/${brand.body.id}/overview`;
     await outsider.agent.get(`${path}?days=30`).expect(404);
     await owner.agent.get(`${path}?days=365`).expect(400);
@@ -289,6 +318,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       estimatedCalls: 1,
       unpricedCalls: 1,
       unrecordedCalls: 2,
+      reviewUnrecordedCalls: 3,
       legacyRuns: 0,
     });
     const month = brandOverviewDtoSchema.parse(
@@ -302,6 +332,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
     expect(quarter.drafts.total).toBe(2);
     expect(quarter.decisions.approved).toBe(2);
     expect(quarter.publications.total).toBe(2);
+    expect(quarter.spend.reviewUnrecordedCalls).toBe(8);
     expect(
       (
         await owner.agent
