@@ -78,6 +78,14 @@ afterEach(() => {
 });
 
 describe("the key ring is validated at boot", () => {
+  it("validates the optional Google forward proxy without exposing its credential", async () => {
+    expect(await boot({ GOOGLE_API_PROXY: "" })).toBeNull();
+    expect(await boot({ GOOGLE_API_PROXY: "http://user:pass@proxy.example:8080" })).toBeNull();
+    const error = await boot({ GOOGLE_API_PROXY: "http://user:secret@proxy.example:8080/path" });
+    expect(refusal(error)).toContain("GOOGLE_API_PROXY must be an http(s) proxy URL");
+    expect(refusal(error)).not.toContain("secret");
+  });
+
   it("starts on a single key — every value that has ever been deployed", async () => {
     expect(await boot({ APP_ENCRYPTION_KEY: FRESH_KEYS[0] })).toBeNull();
   });

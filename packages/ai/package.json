@@ -24,6 +24,7 @@
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@pubrick/shared": "workspace:*",
     "ai": "^7.0.83",
+    "undici": "^7.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

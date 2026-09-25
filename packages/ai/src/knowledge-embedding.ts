@@ -1,5 +1,6 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { embed, embedMany } from "ai";
+import { googleProxyFetch } from "./google-transport.js";
 
 /** Fixed dimensions and model keep stored vectors comparable across runs. */
 export const KNOWLEDGE_EMBEDDING_MODEL = "gemini-embedding-001";
@@ -16,7 +17,9 @@ export async function embedKnowledgeBatch(apiKey: string, texts: string[]) {
   if (texts.length < 1 || texts.length > 10)
     throw new Error("Knowledge batch must contain 1–10 texts");
   const result = await embedMany({
-    model: createGoogleGenerativeAI({ apiKey }).embeddingModel(KNOWLEDGE_EMBEDDING_MODEL),
+    model: createGoogleGenerativeAI({ apiKey, fetch: googleProxyFetch }).embeddingModel(
+      KNOWLEDGE_EMBEDDING_MODEL,
+    ),
     values: texts,
     maxRetries: 0,
     maxParallelCalls: 1,
@@ -44,7 +47,9 @@ export async function embedKnowledgeText(
   taskType: KnowledgeEmbeddingTask,
 ) {
   const result = await embed({
-    model: createGoogleGenerativeAI({ apiKey }).embeddingModel(KNOWLEDGE_EMBEDDING_MODEL),
+    model: createGoogleGenerativeAI({ apiKey, fetch: googleProxyFetch }).embeddingModel(
+      KNOWLEDGE_EMBEDDING_MODEL,
+    ),
     value: text,
     maxRetries: 0,
     abortSignal: AbortSignal.timeout(30_000),

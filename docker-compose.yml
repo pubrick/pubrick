@@ -50,6 +50,7 @@ services:
       TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
+      GOOGLE_API_PROXY: "${GOOGLE_API_PROXY:-}"
       MEDIA_STORAGE_DIR: /data/media
     volumes:
       - media:/data/media
@@ -92,6 +93,7 @@ services:
       TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
+      GOOGLE_API_PROXY: "${GOOGLE_API_PROXY:-}"
       MEDIA_STORAGE_DIR: /data/media
     volumes:
       - media:/data/media

@@ -1,4 +1,6 @@
 /** One request per click. Never log a provider body: it can quote the BYOK key. */
+import { googleProxyFetch } from "./google-transport.js";
+
 export const IMAGE_MODEL = "gemini-3.1-flash-image";
 
 type ModalityCount = { modality?: string; tokenCount?: number };
@@ -45,7 +47,7 @@ export class GeminiImageCaller {
       if (source) {
         parts.push({ inlineData: { mimeType: "image/jpeg", data: source.toString("base64") } });
       }
-      const response = await fetch(
+      const response = await googleProxyFetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent`,
         {
           method: "POST",
