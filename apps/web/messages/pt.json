@@ -1571,7 +1571,7 @@
     "title": "Resultados de {brand}",
     "autoRepliesTitle": "Amostras automáticas de respostas do Telegram",
     "autoRepliesDescription": "A cada hora, coleta respostas às publicações públicas do Telegram desta marca após 6 horas. Usa a conta do Telegram conectada e não inicia análise nem cobranças de IA.",
-    "autoRepliesLimits": "Cada verificação horária visita até 10 marcas, 50 publicações por marca e 50 respostas legíveis por publicação. Só são verificadas publicações sem amostra anterior; a amostra não representa o total de comentários.",
+    "autoRepliesLimits": "Cada passagem horária visita até 10 marcas, 50 publicações por marca e 50 respostas legíveis por publicação. Só entram publicações sem amostra anterior; a amostra não representa o total de comentários.",
     "autoRepliesOn": "A coleta automática está ativada",
     "autoRepliesOff": "A coleta automática está desativada",
     "autoRepliesEnable": "Ativar coleta",
