@@ -197,6 +197,9 @@ export type PartialTelegramDelivery = {
   followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
 };
 
+const PARTIAL_TELEGRAM_EXHAUSTED_ERROR =
+  "Telegram accepted the cover, but its reply was not confirmed. Check the channel before sending again.";
+
 function partialColumns(partial: PartialTelegramDelivery) {
   return {
     partialPhotoId: partial.photoId,
@@ -1091,8 +1094,12 @@ export class PublishRepository {
           await tx
             .update(schema.publications)
             .set({
-              status: outcome,
-              error,
+              // A late failure cannot turn a checkpointed photo into a
+              // known-not-sent receipt, even when the adaptation fence lost.
+              status: sql<
+                "failed" | "unknown"
+              >`case when ${schema.publications.partialFollowupText} is not null then 'unknown' else ${partial ? "unknown" : outcome} end`,
+              error: sql<string>`case when ${schema.publications.partialFollowupText} is not null then ${PARTIAL_TELEGRAM_EXHAUSTED_ERROR} else ${error} end`,
               attempt: claim.attempt,
               ...(partial ? partialColumns(partial) : {}),
             })
@@ -1107,16 +1114,44 @@ export class PublishRepository {
         return false;
       }
 
+      // The DLQ has no in-memory PartialTelegramPublishError to pass along.
+      // Read the durable send claim under its row lock after fencing the
+      // adaptation, so a previously accepted photo always ends as unknown.
+      const [checkpoint] = await tx
+        .select({ followupText: schema.publications.partialFollowupText })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            claim
+              ? eq(schema.publications.id, claim.id)
+              : eq(schema.publications.adaptationId, adaptationId),
+            eq(schema.publications.status, "in_flight"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      const hasPartial = partial !== undefined || checkpoint?.followupText != null;
+      const finalOutcome = hasPartial ? "unknown" : outcome;
+      const finalError =
+        hasPartial && outcome === "failed" ? PARTIAL_TELEGRAM_EXHAUSTED_ERROR : error;
+      if (hasPartial && outcome === "failed") {
+        await tx
+          .update(schema.adaptations)
+          .set({ lastError: finalError, failureReason: "outcome_unknown" })
+          .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
+      }
+
       await resolveClaim(
         tx,
         orgId,
         adaptationId,
         {
           channelId: updated.channelId,
-          status: outcome,
+          status: finalOutcome,
           externalId: null,
           externalUrl: null,
-          error,
+          error: finalError,
           attempt: updated.attemptCount,
           partial,
         },
@@ -1127,7 +1162,7 @@ export class PublishRepository {
       await enqueueNotification(
         tx,
         orgId,
-        outcome === "unknown" ? "delivery_unknown" : "delivery_failed",
+        finalOutcome === "unknown" ? "delivery_unknown" : "delivery_failed",
         adaptationId,
         updated.contentItemId,
         updated.attemptCount,

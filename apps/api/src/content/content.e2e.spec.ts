@@ -7674,6 +7674,13 @@ describe.skipIf(!url)("content e2e", () => {
           .send({ body: "Changed after the photo went live" })
           .expect(409);
         expect(frozenChannel.body.code).toBe("partial_telegram_unresolved");
+        for (const kind of ["cover", "video"] as const) {
+          const frozenMedia = await agent
+            .patch(`/api/media/posts/${itemId}/${kind}`)
+            .send({ mediaId: null })
+            .expect(409);
+          expect(frozenMedia.body.code).toBe("partial_telegram_unresolved");
+        }
         const premature = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
         expect(premature.body.code).toBe("delivery_outcome_unknown");
         expect(await publishJobCount(adaptationId)).toBe(0);

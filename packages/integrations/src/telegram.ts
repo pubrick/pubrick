@@ -471,7 +471,9 @@ export const telegramPublisher: Publisher<TelegramCredentials> = {
             chat_id: credentials.chatId,
             text: parts.followup,
             link_preview_options: { is_disabled: true },
-            reply_parameters: { message_id: primaryId, allow_sending_without_reply: true },
+            // Fail closed if the photo disappeared: a standalone tail is not
+            // the reviewed cover post and must not count as a full delivery.
+            reply_parameters: { message_id: primaryId, allow_sending_without_reply: false },
           },
           options,
         );
