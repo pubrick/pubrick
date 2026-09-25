@@ -45,7 +45,8 @@ an existing request. With recent reviewer-blocked topics, the request needs a
 Google AI key, even if its suggestion-text provider is OpenRouter. It compares
 at most 20 recent blocked titles using at most three separately metered Google
 embedding calls in addition to the single suggestion-text call. A missing key,
-provider or ledger failure, blocked-set change, or queue redelivery cannot
+21 or more blocked titles in the last 90 days, provider or ledger failure,
+blocked-set change, or queue redelivery cannot
 admit unverified ideas. Each call is recorded before suggestions are saved.
 The generation spend threshold below covers generation runs; topic suggestion
 text and embedding calls are recorded separately in the organization usage

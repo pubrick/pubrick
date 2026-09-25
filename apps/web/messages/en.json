@@ -1590,7 +1590,7 @@
     "autoSuggestTopics": "Suggest topics daily",
     "autoSuggestTopicsHint": "After 09:00 in this brand's time zone, request up to three ideas at most once per local day using your configured AI key. Skips when three AI ideas await review or no key is set. Ideas need approval.",
     "semanticFilterBlockedTopics": "Filter blocked topic paraphrases",
-    "semanticFilterBlockedTopicsHint": "For daily suggestions, compare new titles with up to 20 recently blocked topics. When blockers exist, this needs a Google AI key and adds up to 3 paid Google embedding calls on top of the one suggestion text call. These calls are outside the generation spend cap; the ledger may not know their price. If the check cannot finish, no ideas are saved.",
+    "semanticFilterBlockedTopicsHint": "For daily suggestions, compare new titles with topics blocked in the last 90 days (up to 20). With 21 or more blocked topics, the daily request fails before generating ideas. When blockers exist, this needs a Google AI key and adds up to 3 paid Google embedding calls on top of the one suggestion text call. These calls are outside the generation spend cap; the ledger may not know their price. If the check cannot finish, no ideas are saved.",
     "autoPlanTopics": "Plan approved dated topics automatically",
     "autoPlanTopicsHint": "Each hour, place approved topics with a target date in the next 14 days onto the calendar at 10:00 local time. Uses the selected channels and respects the daily slot limit. Turning this off stops new placements; remove existing slots separately. Drafts still require human review before publication.",
     "planningDailyLimit": "Calendar slots per day",
