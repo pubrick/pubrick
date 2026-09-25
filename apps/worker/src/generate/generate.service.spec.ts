@@ -1018,6 +1018,85 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       return { victim, intruder };
     }
 
+    it("uses effective editorial rank for news eligibility in lexical and vector retrieval", async () => {
+      const down = await seed({ channels: 1 });
+      const up = await seed({ channels: 1 });
+      const [downSource, upSource] = await db
+        .insert(schema.newsSources)
+        .values([
+          {
+            orgId: down.orgId,
+            brandId: down.brandId,
+            name: "Downranked",
+            kind: "rss",
+            url: "https://example.com/down-feed",
+          },
+          {
+            orgId: up.orgId,
+            brandId: up.brandId,
+            name: "Upranked",
+            kind: "rss",
+            url: "https://example.com/up-feed",
+          },
+        ])
+        .returning({ id: schema.newsSources.id });
+      const [, upStory] = await db
+        .insert(schema.newsItems)
+        .values([
+          {
+            orgId: down.orgId,
+            brandId: down.brandId,
+            sourceId: downSource?.id as string,
+            title: "Autumn menu downranked",
+            summary: "Autumn menu changed.",
+            url: "https://example.com/down-story",
+            relevanceStatus: "scored",
+            relevanceScore: 0.6,
+            relevanceFeedbackDelta: -0.2,
+            relevanceReason: "Initially useful",
+            relevanceUrgency: "timely",
+            relevanceScoredAt: new Date(),
+            embedding: Array(768).fill(0.1),
+            embeddingModel: "gemini-embedding-001",
+            embeddingDimensions: 768,
+          },
+          {
+            orgId: up.orgId,
+            brandId: up.brandId,
+            sourceId: upSource?.id as string,
+            title: "Autumn menu upranked",
+            summary: "Autumn menu changed.",
+            url: "https://example.com/up-story",
+            relevanceStatus: "scored",
+            relevanceScore: 0.4,
+            relevanceFeedbackDelta: 0.2,
+            relevanceReason: "Initially low",
+            relevanceUrgency: "timely",
+            relevanceScoredAt: new Date(),
+            embedding: Array(768).fill(0.1),
+            embeddingModel: "gemini-embedding-001",
+            embeddingDimensions: 768,
+          },
+        ])
+        .returning({ id: schema.newsItems.id });
+      const repo = new Repository();
+      const query = Array(768).fill(0.1);
+      expect(await repo.hasRelatedNews(down.orgId, down.brandId)).toBe(false);
+      expect(await repo.hasIndexedRelatedNews(down.orgId, down.brandId)).toBe(false);
+      expect(await repo.lexicalRelatedNews(down.orgId, down.brandId, "Autumn menu")).toEqual([]);
+      expect(await repo.similarRelatedNews(down.orgId, down.brandId, query)).toEqual([]);
+      expect(await repo.hasRelatedNews(up.orgId, up.brandId)).toBe(true);
+      expect(await repo.hasIndexedRelatedNews(up.orgId, up.brandId)).toBe(true);
+      expect(
+        (await repo.lexicalRelatedNews(up.orgId, up.brandId, "Autumn menu")).map(
+          (story) => story.id,
+        ),
+      ).toEqual([upStory?.id]);
+      expect(
+        (await repo.similarRelatedNews(up.orgId, up.brandId, query)).map((story) => story.id),
+      ).toEqual([upStory?.id]);
+    });
+
     it("uses only recent scored public stories of this brand, without fetching their URLs", async () => {
       const { victim, intruder } = await twoOrgs();
       const [otherBrand] = await db

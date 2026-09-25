@@ -131,8 +131,9 @@ for an embedding call. Generating a query vector is checkpointed as a `knowledge
 step, so a resumed run does not pay for it again after a successful checkpoint.
 
 Retrieval covers brand knowledge notes and up to two related public watched
-stories. The story query requires the same organization and brand, a scored
-relevance of at least 0.5, no explicit irrelevant editor signal, and a date
+stories. The story query requires the same organization and brand, an effective
+relevance rank of at least 0.5 (AI score plus editor feedback), no explicit
+irrelevant editor signal, and a date
 within the last 30 days. Private Telegram sources are excluded. Compatible
 768-dimensional news vectors share the one metered query embedding already
 used by knowledge retrieval; text search works when indexing or the Google key
