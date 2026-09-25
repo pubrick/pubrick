@@ -70,6 +70,15 @@ describe("body newline normalisation", () => {
     expect(adaptationUpdateSchema.parse({ body: null }).body).toBeNull();
   });
 
+  it("accepts a metadata-only channel PATCH while refusing an empty one", () => {
+    expect(adaptationUpdateSchema.parse({ hashtags: ["news"] })).toEqual({ hashtags: ["news"] });
+    expect(adaptationUpdateSchema.parse({ cta: "Ask a question" })).toEqual({
+      cta: "Ask a question",
+    });
+    expect(adaptationUpdateSchema.safeParse({}).success).toBe(false);
+    expect(adaptationUpdateSchema.safeParse({ hashtags: [`bad\0tag`] }).success).toBe(false);
+  });
+
   it("bounds the length AFTER normalising, so a CRLF body is not refused for a dropped character", () => {
     // `MAX_BODY_LENGTH` is the length of what gets STORED. A body of
     // MAX_BODY_LENGTH + 1 characters that collapses to exactly the limit fits,

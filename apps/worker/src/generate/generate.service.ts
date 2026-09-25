@@ -30,10 +30,12 @@ import {
   briefRunInputSchema,
   COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
+  normalizeHashtags,
   PermanentError,
   type RunFailure,
   sourceRunInputSchema,
   supportsInlineImages,
+  withHashtags,
 } from "@pubrick/shared";
 import { z } from "zod";
 import {
@@ -549,22 +551,38 @@ export class GenerateService {
     });
     if (checked === STOPPED) return STOPPED;
 
-    const adaptations: Array<{ channelId: string; body: string }> = [];
+    const adaptations: Array<{
+      channelId: string;
+      body: string;
+      hashtags: string[];
+      cta: string | null;
+    }> = [];
     for (const channel of context.channels) {
       // Its checkpoint key is `adapter:<channelId>`, so a crash mid-fan-out
       // re-runs only the channels that had not finished.
       const adapted = await this.runStep(state, adapterFor(channel), { body: edited.body });
       if (adapted === STOPPED) return STOPPED;
+      const hashtags = normalizeHashtags(adapted.hashtags ?? []);
+      const linkedBody = applyLinkPolicy(
+        adapted.body,
+        linkPolicy,
+        channel.platform,
+        run.createdAt,
+        input.contentType ?? "social_post",
+        adaptationLimit(channel.platform),
+      );
+      const body = withHashtags(linkedBody, hashtags);
+      if (body.length > adaptationLimit(channel.platform)) {
+        throw withRunFailure(
+          new PermanentError(`the channel text with hashtags exceeds ${channel.platform}'s limit`),
+          "too_long_for_channel",
+        );
+      }
       adaptations.push({
         channelId: channel.id,
-        body: applyLinkPolicy(
-          adapted.body,
-          linkPolicy,
-          channel.platform,
-          run.createdAt,
-          input.contentType ?? "social_post",
-          adaptationLimit(channel.platform),
-        ),
+        body,
+        hashtags,
+        cta: adapted.cta ?? null,
       });
     }
 

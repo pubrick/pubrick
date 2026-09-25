@@ -815,6 +815,100 @@ describe.skipIf(!url)("content e2e", () => {
     expect(updated.body.body).toBe("Channel-specific");
   });
 
+  it("keeps structured hashtags, editorial CTA, preview text and restored versions aligned", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    const first = await agent
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({ body: "Channel copy", hashtags: [" #new product ", "launch"], cta: "Ask a question" })
+      .expect(200);
+    expect(first.body).toMatchObject({
+      body: "Channel copy\n\n#new_product #launch",
+      hashtags: ["new_product", "launch"],
+      cta: "Ask a question",
+    });
+
+    const second = await agent
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({ body: first.body.body, hashtags: ["launch"], cta: "" })
+      .expect(200);
+    expect(second.body).toMatchObject({
+      body: "Channel copy\n\n#launch",
+      hashtags: ["launch"],
+      cta: "",
+    });
+
+    const versions = await agent
+      .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+      .expect(200);
+    expect(versions.body[0]).toMatchObject({
+      body: "Channel copy\n\n#launch",
+      hashtags: ["launch"],
+      cta: "",
+    });
+    const older = versions.body.find((row: { body: string }) => row.body.includes("#new_product"));
+    expect(older).toMatchObject({ hashtags: ["new_product", "launch"], cta: "Ask a question" });
+    const restored = await agent
+      .post(`/api/content/${itemId}/versions/${older.id}/restore`)
+      .send({ expectedBody: second.body.body, expectedHashtags: ["launch"], expectedCta: "" })
+      .expect(200);
+    expect(restored.body.adaptations[0]).toMatchObject({
+      body: "Channel copy\n\n#new_product #launch",
+      hashtags: ["new_product", "launch"],
+      cta: "Ask a question",
+    });
+  });
+
+  it("bounds the canonical sent text including its hashtag suffix", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+    const path = `/api/content/${created.body.id}/adaptations/${adaptationId}`;
+    const suffix = "\n\n#tag";
+    const atLimit = await agent
+      .patch(path)
+      .send({ body: "x".repeat(MAX_BODY_LENGTH - suffix.length), hashtags: ["tag"] })
+      .expect(200);
+    expect(atLimit.body.body).toHaveLength(MAX_BODY_LENGTH);
+    await agent
+      .patch(path)
+      .send({ body: `${"x".repeat(MAX_BODY_LENGTH - suffix.length)}x`, hashtags: ["tag"] })
+      .expect(400);
+    const unchanged = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(unchanged.body.adaptations[0].body).toBe(atLimit.body.body);
+  });
+
+  it("changes tags on the locked current body without replacing a concurrent text edit", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    await agent
+      .patch(path)
+      .send({ body: "First", hashtags: ["one"] })
+      .expect(200);
+    await agent.patch(path).send({ body: "Second" }).expect(200);
+    const changed = await agent
+      .patch(path)
+      .send({ hashtags: ["two"] })
+      .expect(200);
+    expect(changed.body).toMatchObject({ body: "Second\n\n#two", hashtags: ["two"] });
+  });
+
   it("edits a rejected item and its override: rejecting hands the text back to the author", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
@@ -8073,6 +8167,37 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
       expect(versions.body[0]).toMatchObject({ body: first.body.proposal, origin: "ai" });
       await agent.post(`${path}/${first.body.id}/accept`).expect(404);
+    });
+
+    it("reattaches the managed tags exactly once after a channel re-adaptation", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["one", "two"], cta: "Ask a question" })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "A revised channel post.\n\n#one",
+        reason: "Shorter",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const accepted = await agent.post(`${path}/${staged.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0]).toMatchObject({
+        body: "A revised channel post.\n\n#one #two",
+        hashtags: ["one", "two"],
+        cta: "Ask a question",
+      });
+      const history = await agent
+        .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+        .expect(200);
+      expect(history.body[0]).toMatchObject({
+        body: "A revised channel post.\n\n#one #two",
+        hashtags: ["one", "two"],
+        cta: "Ask a question",
+        origin: "ai",
+      });
     });
 
     it("keeps a paid suggestion on failed retries and refuses stale acceptance", async () => {

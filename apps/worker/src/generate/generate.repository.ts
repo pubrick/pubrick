@@ -167,7 +167,12 @@ export type RunContext = {
 /** What one finished run writes: the master body plus one body per channel. */
 export type TerminalPayload = {
   body: string;
-  adaptations: ReadonlyArray<{ channelId: string; body: string }>;
+  adaptations: ReadonlyArray<{
+    channelId: string;
+    body: string;
+    hashtags?: string[];
+    cta?: string | null;
+  }>;
   linkPolicyWebsite?: string | null;
   coverMediaId?: string | null;
   inlineImages?: ReadonlyArray<{ mediaId: string; afterParagraph: number; alt: string }>;
@@ -1095,13 +1100,20 @@ export class GenerateRepository {
               contentItemId,
               channelId: adaptation.channelId,
               body: adaptation.body,
+              hashtags: adaptation.hashtags ?? [],
+              cta: adaptation.cta ?? null,
               status: "pending" as const,
               // Set explicitly: the column DEFAULTS to `human`, and the publish
               // gate reads it to decide whether this text needs a human's eyes.
               origin: "ai" as const,
             })),
           )
-          .returning({ id: schema.adaptations.id, body: schema.adaptations.body });
+          .returning({
+            id: schema.adaptations.id,
+            body: schema.adaptations.body,
+            hashtags: schema.adaptations.hashtags,
+            cta: schema.adaptations.cta,
+          });
 
         // The provenance reference, for the item and for every adaptation. All of
         // them share this transaction's `now()`, which is what lets the API's
@@ -1120,6 +1132,8 @@ export class GenerateRepository {
             contentItemId,
             adaptationId: adaptation.id,
             body: adaptation.body ?? payload.body,
+            hashtags: adaptation.hashtags,
+            cta: adaptation.cta,
             origin: "ai" as const,
             runId,
           })),

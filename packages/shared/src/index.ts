@@ -78,6 +78,13 @@ export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {
+  hashtagSuffix,
+  normalizeHashtags,
+  replaceHashtags,
+  stripHashtagSuffix,
+  withHashtags,
+} from "./hashtags.js";
+export {
   AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE,
   AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE,
   CLAIM_REVIEW_DLQ,

@@ -326,6 +326,8 @@ export const contentVersions = pgTable(
     adaptationId: uuid("adaptation_id").references(() => adaptations.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
     title: text("title"),
+    hashtags: text("hashtags").array().notNull().default([]),
+    cta: text("cta"),
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull(),
     /**
      * Whole body or refine fragment. Defaulted so every row written before this

@@ -452,10 +452,30 @@ export const contentUpdateSchema = z
   });
 export type ContentUpdate = z.infer<typeof contentUpdateSchema>;
 
-export const adaptationUpdateSchema = z.object({
-  /** `null` clears the override; this channel then ships the item's own body. */
-  body: bodyText.nullable(),
-});
+export const adaptationUpdateSchema = z
+  .object({
+    /** `null` clears the override; this channel then ships the item's own body. */
+    body: bodyText.nullable().optional(),
+    hashtags: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(80)
+          .refine((tag) => !hasNulByte(tag)),
+      )
+      .max(10)
+      .optional(),
+    cta: z
+      .string()
+      .max(500)
+      .refine((text) => !hasNulByte(text))
+      .nullable()
+      .optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "At least one channel field is required",
+  });
 export type AdaptationUpdate = z.infer<typeof adaptationUpdateSchema>;
 
 /**
@@ -696,6 +716,8 @@ export const adaptationDtoSchema = z.strictObject({
   channelId: z.string().uuid(),
   /** The per-channel override, or `null` when this channel ships the item's own body. */
   body: z.string().nullable(),
+  hashtags: z.array(z.string()),
+  cta: z.string().nullable(),
   status: z.enum(ADAPTATION_STATUSES),
   origin: z.enum(CONTENT_ORIGINS),
   scheduledAt: z.string().nullable(),
@@ -769,6 +791,8 @@ export const contentVersionDtoSchema = z.strictObject({
   id: z.string().uuid(),
   adaptationId: z.string().uuid().nullable(),
   body: z.string(),
+  hashtags: z.array(z.string()),
+  cta: z.string().nullable(),
   origin: z.enum(CONTENT_ORIGINS),
   createdAt: z.string(),
 });
@@ -783,6 +807,8 @@ export type ContentVersionListQuery = z.infer<typeof contentVersionListQuerySche
 export const contentVersionRestoreSchema = z.object({
   /** The text the reader saw; a newer save must not be silently overwritten. */
   expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+  expectedHashtags: z.array(z.string().max(80)).max(10).optional(),
+  expectedCta: z.string().max(500).nullable().optional(),
 });
 export type ContentVersionRestore = z.infer<typeof contentVersionRestoreSchema>;
 

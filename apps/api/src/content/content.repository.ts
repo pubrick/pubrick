@@ -32,6 +32,7 @@ import {
   MAX_REFINE_CALLS_PER_HOUR,
   nextItemStatus,
   normalizeForComparison,
+  normalizeHashtags,
   normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
   planRefineAccept,
@@ -40,7 +41,9 @@ import {
   type RefineRequest,
   type RefineVerb,
   type RunInput,
+  replaceHashtags,
   toLedgerCostUsd,
+  withHashtags,
 } from "@pubrick/shared";
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
@@ -549,6 +552,8 @@ const ADAPTATION_COLUMNS = {
   contentItemId: schema.adaptations.contentItemId,
   channelId: schema.adaptations.channelId,
   body: schema.adaptations.body,
+  hashtags: schema.adaptations.hashtags,
+  cta: schema.adaptations.cta,
   status: schema.adaptations.status,
   /**
    * Tracked per channel because the adaptation body is what actually reaches
@@ -1552,6 +1557,8 @@ export class ContentRepository {
         id: schema.contentVersions.id,
         adaptationId: schema.contentVersions.adaptationId,
         body: schema.contentVersions.body,
+        hashtags: schema.contentVersions.hashtags,
+        cta: schema.contentVersions.cta,
         origin: schema.contentVersions.origin,
         createdAt: schema.contentVersions.createdAt,
       })
@@ -1593,6 +1600,8 @@ export class ContentRepository {
       const [version] = await tx
         .select({
           body: schema.contentVersions.body,
+          hashtags: schema.contentVersions.hashtags,
+          cta: schema.contentVersions.cta,
           adaptationId: schema.contentVersions.adaptationId,
         })
         .from(schema.contentVersions)
@@ -1611,7 +1620,12 @@ export class ContentRepository {
         // An adaptation lock comes before the item lock throughout the product.
         // It also protects this version's FK target against a concurrent delete.
         const [adaptation] = await tx
-          .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+          .select({
+            status: schema.adaptations.status,
+            body: schema.adaptations.body,
+            hashtags: schema.adaptations.hashtags,
+            cta: schema.adaptations.cta,
+          })
           .from(schema.adaptations)
           .where(
             and(
@@ -1633,16 +1647,32 @@ export class ContentRepository {
         if (adaptation.body !== data.expectedBody) {
           throw conflict("version_changed", "This channel's text changed; reload before restoring");
         }
-        if (adaptation.body !== version.body) {
+        if (
+          (data.expectedHashtags !== undefined &&
+            JSON.stringify(adaptation.hashtags) !== JSON.stringify(data.expectedHashtags)) ||
+          (data.expectedCta !== undefined && adaptation.cta !== data.expectedCta)
+        ) {
+          throw conflict(
+            "version_changed",
+            "This channel's details changed; reload before restoring",
+          );
+        }
+        if (
+          adaptation.body !== version.body ||
+          JSON.stringify(adaptation.hashtags) !== JSON.stringify(version.hashtags) ||
+          adaptation.cta !== version.cta
+        ) {
           await tx
             .update(schema.adaptations)
-            .set({ body: version.body })
+            .set({ body: version.body, hashtags: version.hashtags, cta: version.cta })
             .where(eq(schema.adaptations.id, version.adaptationId));
           await this.recordHumanVersion(tx, {
             orgId,
             contentItemId: itemId,
             adaptationId: version.adaptationId,
             body: version.body,
+            hashtags: version.hashtags,
+            cta: version.cta,
             createdBy: userId,
           });
         }
@@ -1861,6 +1891,8 @@ export class ContentRepository {
       contentItemId: string;
       adaptationId: string | null;
       body: string;
+      hashtags?: string[];
+      cta?: string | null;
       createdBy: string;
     },
   ): Promise<void> {
@@ -3024,7 +3056,12 @@ export class ContentRepository {
   async acceptReadapt(orgId: string, itemId: string, adaptationId: string, proposalId: string) {
     await db.transaction(async (tx) => {
       const [adaptation] = await tx
-        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+        .select({
+          status: schema.adaptations.status,
+          body: schema.adaptations.body,
+          hashtags: schema.adaptations.hashtags,
+          cta: schema.adaptations.cta,
+        })
         .from(schema.adaptations)
         .where(
           and(
@@ -3067,16 +3104,25 @@ export class ContentRepository {
           "The source or channel text changed; ask for a new adaptation",
         );
       }
-      if (adaptation.body !== proposal.proposal) {
+      const proposedBody = withHashtags(proposal.proposal, adaptation.hashtags);
+      if (proposedBody.length > MAX_BODY_LENGTH) {
+        throw badRequest(
+          "invalid_request",
+          `Channel text with hashtags exceeds ${MAX_BODY_LENGTH} characters`,
+        );
+      }
+      if (adaptation.body !== proposedBody) {
         await tx
           .update(schema.adaptations)
-          .set({ body: proposal.proposal, origin: "ai" })
+          .set({ body: proposedBody, origin: "ai" })
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
         await tx.insert(schema.contentVersions).values({
           orgId,
           contentItemId: itemId,
           adaptationId,
-          body: proposal.proposal,
+          body: proposedBody,
+          hashtags: adaptation.hashtags,
+          cta: adaptation.cta,
           origin: "ai",
           scope: "full",
           createdBy: null,
@@ -3130,7 +3176,12 @@ export class ContentRepository {
       // text this save is compared against, read under the lock that makes the
       // comparison hold until the write lands.
       const locked = await tx
-        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+        .select({
+          status: schema.adaptations.status,
+          body: schema.adaptations.body,
+          hashtags: schema.adaptations.hashtags,
+          cta: schema.adaptations.cta,
+        })
         .from(schema.adaptations)
         .where(
           and(
@@ -3155,9 +3206,28 @@ export class ContentRepository {
         );
       }
 
+      const bodySource = data.body === undefined ? current.body : data.body;
+      const hashtags =
+        bodySource === null
+          ? []
+          : data.hashtags === undefined
+            ? current.hashtags
+            : normalizeHashtags(data.hashtags);
+      const cta = bodySource === null ? null : data.cta === undefined ? current.cta : data.cta;
+      const nextBody =
+        bodySource === null ? null : replaceHashtags(bodySource, current.hashtags, hashtags);
+      if (nextBody !== null && nextBody.length > MAX_BODY_LENGTH) {
+        throw badRequest(
+          "invalid_request",
+          `Channel text with hashtags exceeds ${MAX_BODY_LENGTH} characters`,
+        );
+      }
+      if (!nextBody?.trim() && (hashtags.length > 0 || cta)) {
+        throw badRequest("invalid_request", "Hashtags and calls to action require channel text");
+      }
       const rows = await tx
         .update(schema.adaptations)
-        .set({ body: data.body })
+        .set({ body: nextBody, hashtags, cta })
         .where(
           and(
             eq(schema.adaptations.orgId, orgId),
@@ -3169,13 +3239,20 @@ export class ContentRepository {
       const updated = rows[0];
       if (!updated) throw notFound("adaptation_not_found", "Adaptation not found");
 
-      const versionBody = humanVersionBody(current.body, data.body);
-      if (versionBody !== null) {
+      const versionBody = humanVersionBody(current.body, nextBody);
+      if (
+        nextBody !== null &&
+        (versionBody !== null ||
+          JSON.stringify(current.hashtags) !== JSON.stringify(hashtags) ||
+          current.cta !== cta)
+      ) {
         await this.recordHumanVersion(tx, {
           orgId,
           contentItemId,
           adaptationId,
-          body: versionBody,
+          body: versionBody ?? nextBody ?? "",
+          hashtags,
+          cta,
           createdBy: userId,
         });
       }

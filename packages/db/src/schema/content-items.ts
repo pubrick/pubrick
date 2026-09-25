@@ -159,6 +159,10 @@ export const adaptations = pgTable(
       .references(() => channels.id, { onDelete: "cascade" }),
     /** Per-channel override; falls back to the content item body when null. */
     body: text("body"),
+    /** Normalized channel tags; the canonical body includes their final suffix. */
+    hashtags: text("hashtags").array().notNull().default([]),
+    /** Editorial suggestion only; never appended to the sent body. */
+    cta: text("cta"),
     status: text("status", { enum: ADAPTATION_STATUSES }).notNull().default("pending"),
     /**
      * The adaptation body is what actually reaches the platform, so provenance
