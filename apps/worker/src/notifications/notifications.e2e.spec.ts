@@ -382,6 +382,41 @@ describe.skipIf(!url)("notification outbox", () => {
     expect(Number(result.rows[0]?.fall_hours)).toBe(25);
   });
 
+  it("sends a manual digest before the scheduled hour only once and ignores stale jobs", async () => {
+    responseMode = "ok";
+    await direct.db
+      .update(schema.notificationSettings)
+      .set({ enabled: true })
+      .where(eq(schema.notificationSettings.orgId, orgId));
+    const [brand] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId, name: "Manual brand" })
+      .returning({ id: schema.brands.id });
+    const brandId = brand?.id as string;
+    await direct.db.insert(schema.notificationDigestConfigs).values({
+      orgId,
+      brandId,
+      enabled: true,
+      timezone: "UTC",
+      localHour: (new Date().getUTCHours() + 1) % 24,
+    });
+    const localDate = new Date().toISOString().slice(0, 10);
+    const before = requests.length;
+    await Promise.all([
+      service.sendDigest({ orgId, brandId, localDate }),
+      service.sendDigest({ orgId, brandId, localDate }),
+    ]);
+    expect(requests.length).toBe(before + 1);
+    const snapshots = await direct.db
+      .select({ id: schema.notificationDigestSnapshots.id })
+      .from(schema.notificationDigestSnapshots)
+      .where(eq(schema.notificationDigestSnapshots.brandId, brandId));
+    expect(snapshots).toHaveLength(1);
+    await service.sendDigest({ orgId, brandId, localDate: "2020-01-01" });
+    await service.scanDigests();
+    expect(requests.length).toBe(before + 1);
+  });
+
   it("uses a truthful missing-title fallback and skips a draft that left review", async () => {
     await direct.db
       .update(schema.notificationSettings)

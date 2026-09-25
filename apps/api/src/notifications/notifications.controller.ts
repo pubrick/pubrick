@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Post, Put, Query, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from "@nestjs/common";
 import {
   type NotificationHistoryQuery,
   type NotificationSettingsUpdate,
@@ -42,5 +52,12 @@ export class NotificationsController {
   @HttpCode(200)
   test(@OrgId() orgId: string) {
     return this.notifications.test(orgId);
+  }
+
+  @Post("digests/:brandId/send")
+  @HttpCode(200)
+  @BrandScope({ kind: "brand", source: "param", key: "brandId", roles: "manager" })
+  sendDigest(@OrgId() orgId: string, @Param("brandId") brandId: string) {
+    return this.notifications.sendDigest(orgId, brandId);
   }
 }

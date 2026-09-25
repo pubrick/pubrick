@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDb, schema } from "@pubrick/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -9,6 +9,7 @@ describe.skipIf(!url)("notification settings repository", () => {
   let direct: ReturnType<typeof createDb>;
   let apiPool: ReturnType<typeof createDb>["pool"];
   let repo: InstanceType<typeof import("./notifications.repository").NotificationsRepository>;
+  let queue: InstanceType<typeof import("../queue/queue.service").QueueService>;
   const first = `notify-api-a-${Date.now()}`;
   const second = `notify-api-b-${Date.now()}`;
 
@@ -19,7 +20,10 @@ describe.skipIf(!url)("notification settings repository", () => {
     direct = createDb(url as string);
     apiPool = (await import("../db")).pool;
     const { NotificationsRepository } = await import("./notifications.repository");
-    repo = new NotificationsRepository();
+    const { QueueService } = await import("../queue/queue.service");
+    queue = new QueueService();
+    await queue.onModuleInit();
+    repo = new NotificationsRepository(queue);
     await direct.db.insert(schema.organization).values([
       { id: first, name: "First", slug: first, createdAt: new Date() },
       { id: second, name: "Second", slug: second, createdAt: new Date() },
@@ -27,6 +31,7 @@ describe.skipIf(!url)("notification settings repository", () => {
   });
 
   afterAll(async () => {
+    await queue?.onModuleDestroy();
     await direct?.db.delete(schema.organization).where(eq(schema.organization.id, first));
     await direct?.db.delete(schema.organization).where(eq(schema.organization.id, second));
     await direct?.pool.end();
@@ -136,5 +141,67 @@ describe.skipIf(!url)("notification settings repository", () => {
     await expect(repo.history(first, { cursor: foreign?.id as string })).rejects.toThrow(
       "Invalid notification history cursor",
     );
+  });
+  it("queues a brand digest once per local day, with no foreign or disabled admission", async () => {
+    const [owned] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: first, name: "Manual digest" })
+      .returning({ id: schema.brands.id });
+    const [foreign] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: second, name: "Foreign digest" })
+      .returning({ id: schema.brands.id });
+    const brandId = owned?.id as string;
+    await expect(repo.sendDigest(first, foreign?.id as string)).rejects.toThrow("Brand not found");
+    await expect(repo.sendDigest(first, brandId)).rejects.toThrow("Enable the brand digest");
+    await direct.db.insert(schema.notificationDigestConfigs).values({
+      orgId: first,
+      brandId,
+      enabled: true,
+      timezone: "UTC",
+      localHour: 9,
+    });
+    await direct.db
+      .update(schema.notificationSettings)
+      .set({ enabled: false })
+      .where(eq(schema.notificationSettings.orgId, first));
+    await expect(repo.sendDigest(first, brandId)).rejects.toThrow("Enable Telegram");
+    await repo.update(first, {
+      enabled: true,
+      draftReady: false,
+      deliveryProblem: true,
+      botToken: "123:secret",
+      chatId: "-10042",
+    });
+    const results = await Promise.all([
+      repo.sendDigest(first, brandId),
+      repo.sendDigest(first, brandId),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(["already_queued", "queued"]);
+    const jobs = await direct.db.execute(sql`
+      select id, data from pgboss.job
+      where name = 'notification-digest-manual' and data ->> 'brandId' = ${brandId}
+    `);
+    expect(jobs.rows).toHaveLength(1);
+    expect(jobs.rows[0]?.data).toMatchObject({ orgId: first, brandId });
+    await direct.db.execute(sql`
+      update pgboss.job set state = 'failed'
+      where name = 'notification-digest-manual' and data ->> 'brandId' = ${brandId}
+    `);
+    expect(await repo.sendDigest(first, brandId)).toEqual({ status: "queued" });
+    const retried = await direct.db.execute(sql`
+      select id from pgboss.job
+      where name = 'notification-digest-manual' and data ->> 'brandId' = ${brandId}
+    `);
+    expect(retried.rows).toHaveLength(2);
+    await direct.db.insert(schema.notificationDigestSnapshots).values({
+      orgId: first,
+      brandId,
+      localDate: new Date().toISOString().slice(0, 10),
+      timezone: "UTC",
+      summary: { generated: 0, failed: 0, review: 0, spendUsd: "0.00", unknownCost: false },
+      message: "frozen",
+    });
+    expect(await repo.sendDigest(first, brandId)).toEqual({ status: "already_sent" });
   });
 });

@@ -121,6 +121,7 @@ describe("notifications settings", () => {
     await user.type(screen.getByLabelText("IANA timezone for North"), "America/New_York");
     await user.clear(screen.getByLabelText("Local hour (0–23) for North"));
     await user.type(screen.getByLabelText("Local hour (0–23) for North"), "8");
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(
@@ -137,6 +138,32 @@ describe("notifications settings", () => {
       { brandId, enabled: true, timezone: "America/New_York", localHour: 8 },
     ]);
     expect(notificationSettingsUpdateSchema.parse(body)).toEqual(body);
+    expect(await screen.findByRole("button", { name: "Send now" })).toBeEnabled();
+  });
+
+  it("queues a saved brand digest from its one action and reports duplicate admission", async () => {
+    const brandId = "7b72825b-71e1-49fa-8764-2472c9d965f9";
+    request.mockImplementation(async (path, init) => {
+      if (path === "/api/notifications" && !init)
+        return {
+          enabled: true,
+          draftReady: false,
+          deliveryProblem: true,
+          hasCredentials: true,
+          digests: [{ brandId, brandName: "North", enabled: true, timezone: "UTC", localHour: 9 }],
+        };
+      if (path === "/api/notifications/events") return { events: [], nextCursor: null };
+      if (path === `/api/notifications/digests/${brandId}/send` && init?.method === "POST")
+        return { status: "already_queued" };
+      throw new Error("unexpected request");
+    });
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    await user.click(await screen.findByRole("button", { name: "Send now" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("already queued for today");
+    expect(request).toHaveBeenCalledWith(`/api/notifications/digests/${brandId}/send`, {
+      method: "POST",
+    });
   });
 
   it("keeps an incomplete destination on the form and focuses the invalid field", async () => {
