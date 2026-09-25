@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { PublishResult } from "@pubrick/integrations";
+import type { PublishResult, TelegramPartCheckpoint } from "@pubrick/integrations";
 import {
   type AdaptationStatus,
   type ContentStatus,
@@ -191,23 +191,46 @@ type ClaimOutcome = {
 };
 
 export type PartialTelegramDelivery = {
+  /** Omitted by legacy photo deliveries; all new multipart checkpoints name the kind. */
+  primaryKind?: "photo" | "message";
   photoId: string | null;
   photoUrl: string | null;
   followupText: string;
-  followupOutcome: "pending" | "not_sent" | "rejected" | "unknown";
+  followupOutcome: "pending" | "not_sent" | "rejected" | "unknown" | "confirmed";
 };
 
 const PARTIAL_TELEGRAM_EXHAUSTED_ERROR =
-  "Telegram accepted the cover, but its reply was not confirmed. Check the channel before sending again.";
+  "Telegram accepted part of this post, but the full delivery was not confirmed. Check the channel before sending again.";
 const CLAIM_EXHAUSTED_UNKNOWN_ERROR =
   "A send was in flight when retries ended. The platform may have published the post; check the channel before sending again.";
 
 function partialColumns(partial: PartialTelegramDelivery) {
   return {
+    partialPrimaryKind: partial.primaryKind ?? "photo",
     partialPhotoId: partial.photoId,
     partialPhotoUrl: partial.photoUrl,
     partialFollowupText: partial.followupText,
     partialFollowupOutcome: partial.followupOutcome,
+  };
+}
+
+/** A delayed error must not replace a newer, shorter accepted suffix. */
+function partialFailureColumns(partial: PartialTelegramDelivery) {
+  const sameOrAbsent = sql`${schema.publications.partialFollowupText} is null or ${schema.publications.partialFollowupText} = ${partial.followupText}`;
+  return {
+    partialPrimaryKind: sql<
+      "photo" | "message"
+    >`case when ${sameOrAbsent} then ${partial.primaryKind ?? "photo"} else ${schema.publications.partialPrimaryKind} end`,
+    partialPhotoId: sql<
+      string | null
+    >`case when ${sameOrAbsent} then ${partial.photoId} else ${schema.publications.partialPhotoId} end`,
+    partialPhotoUrl: sql<
+      string | null
+    >`case when ${sameOrAbsent} then ${partial.photoUrl} else ${schema.publications.partialPhotoUrl} end`,
+    partialFollowupText: sql<string>`case when ${sameOrAbsent} then ${partial.followupText} else ${schema.publications.partialFollowupText} end`,
+    partialFollowupOutcome: sql<
+      PartialTelegramDelivery["followupOutcome"]
+    >`case when ${sameOrAbsent} then ${partial.followupOutcome} else ${schema.publications.partialFollowupOutcome} end`,
   };
 }
 
@@ -276,9 +299,10 @@ async function resolveClaim(
       externalUrl: outcome.externalUrl,
       error: outcome.error,
       attempt: outcome.attempt,
-      ...(outcome.partial ? partialColumns(outcome.partial) : {}),
+      ...(outcome.partial ? partialFailureColumns(outcome.partial) : {}),
       ...(outcome.status === "published"
         ? {
+            partialPrimaryKind: null,
             partialPhotoId: null,
             partialPhotoUrl: null,
             partialFollowupText: null,
@@ -839,7 +863,7 @@ export class PublishRepository {
     }
   }
 
-  /** Checkpoint the accepted cover before any reply request can leave this process. */
+  /** Legacy photo/reply checkpoint, retained while old API instances may still be live. */
   async markTelegramPhotoAccepted(
     orgId: string,
     adaptationId: string,
@@ -853,7 +877,62 @@ export class PublishRepository {
         and(
           eq(schema.publications.orgId, orgId),
           eq(schema.publications.id, claim.id),
+          eq(schema.publications.adaptationId, adaptationId),
+          eq(schema.publications.attempt, claim.attempt),
           eq(schema.publications.status, "in_flight"),
+          sql`exists (
+            select 1 from adaptations a
+            where a.org_id = ${orgId} and a.id = ${adaptationId}
+              and a.status = 'publishing' and a.attempt_count = ${claim.attempt}
+          )`,
+        ),
+      )
+      .returning({ id: schema.publications.id });
+    return rows.length === 1;
+  }
+
+  /**
+   * Compare-and-swap the exact remaining suffix after each accepted message.
+   * The first write requires an empty claim; later writes require the previous
+   * suffix and primary identity. A delayed worker can never lengthen it again.
+   */
+  async markTelegramPartAccepted(
+    orgId: string,
+    adaptationId: string,
+    claim: SendClaim,
+    checkpoint: TelegramPartCheckpoint,
+  ): Promise<boolean> {
+    const { primaryKind, primary, previousRemaining, remaining } = checkpoint;
+    if (
+      previousRemaining !== null &&
+      (remaining.length >= previousRemaining.length || !previousRemaining.endsWith(remaining))
+    ) {
+      return false;
+    }
+    const rows = await db
+      .update(schema.publications)
+      .set({
+        partialPrimaryKind: primaryKind,
+        partialPhotoId: primary.externalId,
+        partialPhotoUrl: primary.externalUrl,
+        partialFollowupText: remaining,
+        partialFollowupOutcome: remaining === "" ? "confirmed" : "pending",
+      })
+      .where(
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.id, claim.id),
+          eq(schema.publications.adaptationId, adaptationId),
+          eq(schema.publications.attempt, claim.attempt),
+          eq(schema.publications.status, "in_flight"),
+          previousRemaining === null
+            ? isNull(schema.publications.partialFollowupText)
+            : and(
+                eq(schema.publications.partialFollowupText, previousRemaining),
+                eq(schema.publications.partialPrimaryKind, primaryKind),
+                sql`${schema.publications.partialPhotoId} is not distinct from ${primary.externalId}`,
+                sql`${schema.publications.partialPhotoUrl} is not distinct from ${primary.externalUrl}`,
+              ),
           sql`exists (
             select 1 from adaptations a
             where a.org_id = ${orgId} and a.id = ${adaptationId}
@@ -947,12 +1026,29 @@ export class PublishRepository {
     adaptationId: string,
     result: PublishResult,
     claim?: SendClaim,
-  ): Promise<void> {
-    await db.transaction(async (tx) => {
+  ): Promise<boolean> {
+    return db.transaction(async (tx) => {
       const rows = await tx
         .update(schema.adaptations)
         .set({ status: "published", lastError: null, failureReason: null, updatedAt: nowSql() })
-        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.id, adaptationId),
+            ...(claim
+              ? [
+                  eq(schema.adaptations.status, "publishing"),
+                  eq(schema.adaptations.attemptCount, claim.attempt),
+                  sql`exists (
+                    select 1 from publications p
+                    where p.org_id = ${orgId} and p.id = ${claim.id}
+                      and p.adaptation_id = ${adaptationId} and p.attempt = ${claim.attempt}
+                      and p.status = 'in_flight'
+                  )`,
+                ]
+              : []),
+          ),
+        )
         .returning({
           channelId: schema.adaptations.channelId,
           contentItemId: schema.adaptations.contentItemId,
@@ -960,8 +1056,8 @@ export class PublishRepository {
         });
       const updated = rows[0];
       if (!updated) {
-        if (claim) await this.resolveOrphanedClaim(tx, orgId, claim, result);
-        return;
+        if (claim) return this.resolveOrphanedClaim(tx, orgId, claim, result);
+        return false;
       }
 
       await resolveClaim(
@@ -980,6 +1076,7 @@ export class PublishRepository {
       );
 
       await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+      return true;
     });
   }
 
@@ -997,8 +1094,8 @@ export class PublishRepository {
     orgId: string,
     claim: SendClaim,
     result: PublishResult,
-  ): Promise<void> {
-    await tx
+  ): Promise<boolean> {
+    const rows = await tx
       .update(schema.publications)
       .set({
         status: "published",
@@ -1006,6 +1103,7 @@ export class PublishRepository {
         externalUrl: result.externalUrl,
         error: null,
         attempt: claim.attempt,
+        partialPrimaryKind: null,
         partialPhotoId: null,
         partialPhotoUrl: null,
         partialFollowupText: null,
@@ -1016,8 +1114,11 @@ export class PublishRepository {
           eq(schema.publications.orgId, orgId),
           eq(schema.publications.id, claim.id),
           eq(schema.publications.status, "in_flight"),
+          isNull(schema.publications.adaptationId),
         ),
-      );
+      )
+      .returning({ id: schema.publications.id });
+    return rows.length === 1;
   }
 
   /**
@@ -1117,14 +1218,14 @@ export class PublishRepository {
           await tx
             .update(schema.publications)
             .set({
-              // A late failure cannot turn a checkpointed photo into a
+              // A late failure cannot turn a checkpointed multipart send into a
               // known-not-sent receipt, even when the adaptation fence lost.
               status: sql<
                 "failed" | "unknown"
               >`case when ${schema.publications.partialFollowupText} is not null then 'unknown' else ${partial ? "unknown" : outcome} end`,
               error: sql<string>`case when ${schema.publications.partialFollowupText} is not null then ${PARTIAL_TELEGRAM_EXHAUSTED_ERROR} else ${error} end`,
               attempt: claim.attempt,
-              ...(partial ? partialColumns(partial) : {}),
+              ...(partial ? partialFailureColumns(partial) : {}),
             })
             .where(
               and(
@@ -1139,7 +1240,7 @@ export class PublishRepository {
 
       // A dead letter cannot know whether an in-flight claim reached the
       // platform. Read that durable claim under its row lock after fencing
-      // the adaptation. A photo checkpoint adds structured partial evidence;
+      // the adaptation. A Telegram part checkpoint adds structured partial evidence;
       // without it the outcome is still unknown, not a retryable failure.
       const [activeClaim] = await tx
         .select({ followupText: schema.publications.partialFollowupText })
