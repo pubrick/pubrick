@@ -20,8 +20,9 @@ Neither saving nor removing the key makes a billable search request.
 ## What a check does
 
 The request is tied to the exact saved article body. A background job asks the
-AI provider for a small set of time-sensitive factual claims, searches the web
-for each claim, and compares the claim only with the returned source snippets.
+AI provider for up to five factual or time-sensitive claims, searches the web
+for each claim, and compares the claim only with the returned result titles and
+snippets.
 The card shows the claim, an advisory outcome, and links to the result pages.
 It does not fetch those pages or alter the draft. An empty or failed search is
 never evidence that a claim is true.
