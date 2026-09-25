@@ -5,18 +5,22 @@ import {
   previewRoleTemplate,
   previewRoleTemplateInstruction,
   RoleTemplateError,
+  validateTemplateSnapshot,
 } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  CONTENT_STATUSES,
   PROMPT_ROLES,
   type PromptRole,
   type RoleTemplateActivation,
   type RoleTemplateHeadDto,
   type RoleTemplateHistoryDto,
+  type RoleTemplateOutcomeComparisonDto,
+  type RoleTemplateOutcomeRowDto,
   type RoleTemplatePreviewDto,
   type RoleTemplateRevisionDto,
 } from "@pubrick/shared";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, lt, sql } from "drizzle-orm";
 import { badRequest } from "../api-error";
 import { db } from "../db";
 
@@ -68,6 +72,28 @@ function headDto(
   };
 }
 
+function emptyOutcome(
+  selection:
+    | { kind: "default"; revisionId: null; version: null }
+    | {
+        kind: "revision";
+        revisionId: string;
+        version: number;
+      },
+): RoleTemplateOutcomeRowDto {
+  return {
+    ...selection,
+    runCount: 0,
+    succeededRuns: 0,
+    publishedRuns: 0,
+    currentItemStatuses: Object.fromEntries(
+      CONTENT_STATUSES.map((status) => [status, 0]),
+    ) as RoleTemplateOutcomeRowDto["currentItemStatuses"],
+    withoutCurrentItem: 0,
+    reviewActs: { approved: 0, rejected: 0 },
+  };
+}
+
 @Injectable()
 export class RoleTemplatesRepository {
   /** Source text is manager-only: the controller guards even read-only routes. */
@@ -114,6 +140,236 @@ export class RoleTemplatesRepository {
       rows: visible.map(revisionDto),
       nextCursor: rows.length > 100 ? (visible.at(-1)?.version ?? null) : null,
     };
+  }
+
+  /** Observations are grouped by the role source frozen on first run claim. */
+  async outcomes(
+    orgId: string,
+    brandId: string,
+    role: PromptRole,
+    days: 7 | 30 | 90,
+    cursor?: number,
+  ): Promise<RoleTemplateOutcomeComparisonDto> {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw new NotFoundException("Brand not found");
+    const [head] = await db
+      .select({ activeRevisionId: schema.roleTemplateHeads.activeRevisionId })
+      .from(schema.roleTemplateHeads)
+      .where(
+        and(eq(schema.roleTemplateHeads.orgId, orgId), eq(schema.roleTemplateHeads.role, role)),
+      )
+      .limit(1);
+    const revisions = await db
+      .select({
+        id: schema.roleTemplateRevisions.id,
+        version: schema.roleTemplateRevisions.version,
+        sourceSha256: schema.roleTemplateRevisions.sourceSha256,
+      })
+      .from(schema.roleTemplateRevisions)
+      .where(
+        and(
+          eq(schema.roleTemplateRevisions.orgId, orgId),
+          eq(schema.roleTemplateRevisions.role, role),
+          cursor === undefined ? undefined : lt(schema.roleTemplateRevisions.version, cursor),
+        ),
+      )
+      .orderBy(desc(schema.roleTemplateRevisions.version))
+      .limit(101);
+    const visible = revisions.slice(0, 100);
+    const defaultRow = emptyOutcome({ kind: "default", revisionId: null, version: null });
+    const rows = visible.map((revision) =>
+      emptyOutcome({ kind: "revision", revisionId: revision.id, version: revision.version }),
+    );
+    await this.fillOutcomes(orgId, brandId, role, days, defaultRow, rows, visible);
+    return {
+      brandId,
+      role,
+      days,
+      activeRevisionId: head?.activeRevisionId ?? null,
+      default: defaultRow,
+      rows,
+      nextCursor: revisions.length > 100 ? (visible.at(-1)?.version ?? null) : null,
+    };
+  }
+
+  async usage(
+    orgId: string,
+    brandId: string,
+    role: PromptRole,
+    revisionId: string,
+    days: 7 | 30 | 90,
+  ): Promise<RoleTemplateOutcomeRowDto> {
+    const [brand] = await db
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    if (!brand) throw new NotFoundException("Brand not found");
+    const [revision] = await db
+      .select({
+        id: schema.roleTemplateRevisions.id,
+        version: schema.roleTemplateRevisions.version,
+        sourceSha256: schema.roleTemplateRevisions.sourceSha256,
+      })
+      .from(schema.roleTemplateRevisions)
+      .where(
+        and(
+          eq(schema.roleTemplateRevisions.orgId, orgId),
+          eq(schema.roleTemplateRevisions.role, role),
+          eq(schema.roleTemplateRevisions.id, revisionId),
+        ),
+      )
+      .limit(1);
+    if (!revision) throw new NotFoundException("Role template revision not found");
+    const row = emptyOutcome({
+      kind: "revision",
+      revisionId: revision.id,
+      version: revision.version,
+    });
+    await this.fillOutcomes(orgId, brandId, role, days, null, [row], [revision]);
+    return row;
+  }
+
+  private async fillOutcomes(
+    orgId: string,
+    brandId: string,
+    role: PromptRole,
+    days: 7 | 30 | 90,
+    defaultRow: RoleTemplateOutcomeRowDto | null,
+    rows: RoleTemplateOutcomeRowDto[],
+    revisions: { id: string; version: number; sourceSha256: string }[],
+  ): Promise<void> {
+    const byId = new Map(rows.map((row) => [row.revisionId, row]));
+    const revisionById = new Map(revisions.map((revision) => [revision.id, revision]));
+    const window = sql`${schema.pipelineRuns.createdAt} >= now()::timestamp - (${days} * interval '1 day')`;
+    const hasReceipt = exists(
+      db
+        .select({ id: schema.publications.id })
+        .from(schema.adaptations)
+        .innerJoin(
+          schema.publications,
+          and(
+            eq(schema.publications.adaptationId, schema.adaptations.id),
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.status, "published"),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.adaptations.orgId, orgId),
+            eq(schema.adaptations.contentItemId, schema.pipelineRuns.contentItemId),
+          ),
+        ),
+    );
+    let afterId: string | undefined;
+    for (;;) {
+      const page = await db
+        .select({
+          id: schema.pipelineRuns.id,
+          runStatus: schema.pipelineRuns.status,
+          templateSnapshot: schema.pipelineRuns.templateSnapshot,
+          itemStatus: schema.contentItems.status,
+          hasReceipt,
+        })
+        .from(schema.pipelineRuns)
+        .leftJoin(
+          schema.contentItems,
+          and(
+            eq(schema.contentItems.id, schema.pipelineRuns.contentItemId),
+            eq(schema.contentItems.orgId, orgId),
+            eq(schema.contentItems.brandId, brandId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+            window,
+            afterId ? gt(schema.pipelineRuns.id, afterId) : undefined,
+          ),
+        )
+        .orderBy(asc(schema.pipelineRuns.id))
+        .limit(500);
+      for (const run of page) {
+        if (!run.templateSnapshot) continue;
+        let pinned: ReturnType<typeof validateTemplateSnapshot>;
+        try {
+          pinned = validateTemplateSnapshot(run.templateSnapshot);
+        } catch {
+          continue;
+        }
+        const selected = pinned.roles[role];
+        const row = selected.kind === "default" ? defaultRow : byId.get(selected.revisionId);
+        if (!row) continue;
+        if (selected.kind === "revision") {
+          const revision = revisionById.get(selected.revisionId);
+          if (
+            !revision ||
+            revision.version !== selected.version ||
+            revision.sourceSha256 !== selected.sourceSha256
+          )
+            continue;
+        }
+        row.runCount++;
+        if (run.runStatus === "succeeded") row.succeededRuns++;
+        if (run.hasReceipt) row.publishedRuns++;
+        if (run.itemStatus) row.currentItemStatuses[run.itemStatus]++;
+        else row.withoutCurrentItem++;
+      }
+      if (page.length < 500) break;
+      afterId = page.at(-1)?.id;
+    }
+
+    // Decision links were independently verified at the human act, and may
+    // survive later edits or deletion of the current draft.
+    const acts = await db
+      .select({
+        revisionId: schema.promptDecisionTemplateRevisions.revisionId,
+        version: schema.promptDecisionTemplateRevisions.version,
+        isDefault: schema.promptDecisionTemplateRevisions.isDefault,
+        verdict: schema.promptDecisions.verdict,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.promptDecisionTemplateRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionTemplateRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .innerJoin(
+        schema.pipelineRuns,
+        and(
+          eq(schema.pipelineRuns.id, schema.promptDecisions.runId),
+          eq(schema.pipelineRuns.orgId, orgId),
+          eq(schema.pipelineRuns.contentItemId, schema.promptDecisions.contentItemId),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.promptDecisionTemplateRevisions.orgId, orgId),
+          eq(schema.promptDecisionTemplateRevisions.role, role),
+          eq(schema.pipelineRuns.brandId, brandId),
+          window,
+        ),
+      )
+      .groupBy(
+        schema.promptDecisionTemplateRevisions.revisionId,
+        schema.promptDecisionTemplateRevisions.version,
+        schema.promptDecisionTemplateRevisions.isDefault,
+        schema.promptDecisions.verdict,
+      );
+    for (const act of acts) {
+      const row = act.isDefault ? defaultRow : byId.get(act.revisionId);
+      if (!row) continue;
+      if (!act.isDefault && row.version !== act.version) continue;
+      row.reviewActs[act.verdict] += act.count;
+    }
   }
 
   async revision(
