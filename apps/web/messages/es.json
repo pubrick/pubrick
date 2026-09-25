@@ -737,6 +737,22 @@
     "saveError": "No se pudo actualizar el feed."
   },
   "Publish": {
+    "costReceiptTitle": "Coste de IA de esta publicación",
+    "costReceiptLoading": "Cargando los costes de IA de esta publicación…",
+    "costReceiptAtLeast": "≥ {amount} ({count, plural, one {# llamada sin precio} other {# llamadas sin precio}})",
+    "costReceiptPossibleFloor": "≥ {amount} (contabilidad antigua incompleta)",
+    "costReceiptApproximate": "≈ {amount}",
+    "costReceiptEmpty": "No hay llamadas al modelo registradas para esta publicación.",
+    "costReceiptUnrecorded": "{count, plural, one {No se pudo guardar # llamada} other {No se pudieron guardar # llamadas}} en el registro. El total está incompleto.",
+    "costReceiptLegacy": "Una ejecución antigua no tiene recuento de llamadas perdidas. El total puede estar incompleto.",
+    "costReceiptTokens": "Entrada {input} · salida {output} tokens",
+    "costReceiptAttempt": "intento {count}",
+    "costReceiptUnknown": "Coste desconocido",
+    "costReceiptNoCharge": "Sin cargo registrado",
+    "costReceiptRecent": "Se muestran las últimas {shown} de {total} llamadas registradas.",
+    "costReceiptScope": "Incluye la generación de esta publicación y sus ediciones directas con IA. Excluye la planificación de temas y otras publicaciones. Importes en USD; las estimaciones y los costes desconocidos están marcados.",
+    "costReceiptError": "No se pudieron cargar los costes de IA de esta publicación.",
+    "costReceiptRetry": "Reintentar",
     "richEditor": {
       "label": "Borrador principal con formato",
       "formatting": "Formato de texto",

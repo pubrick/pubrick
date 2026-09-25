@@ -4,6 +4,7 @@ import { MediaModule } from "../media/media.module";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
+import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
@@ -26,6 +27,7 @@ import { RefineCaller } from "./refine.caller";
   controllers: [ContentController],
   providers: [
     ContentRepository,
+    ContentCostRepository,
     ContentImagesRepository,
     EditorialNotesRepository,
     RefineCaller,
