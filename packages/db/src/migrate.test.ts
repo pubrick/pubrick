@@ -4124,6 +4124,97 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("backfills only tenant-matched topic lineage from historical calendar and autopilot links", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0103_striped_ozymandias");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let calendarRunId!: string;
+      let autopilotRunId!: string;
+      let manualRunId!: string;
+      let mismatchedRunId!: string;
+      let calendarTopicId!: string;
+      let autopilotTopicId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_lineage_old', 'Lineage old', 'topic-lineage-old')",
+        );
+        const brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('topic_lineage_old', 'Original brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const otherBrandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('topic_lineage_old', 'Other brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        calendarTopicId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topics (org_id, brand_id, title, status) VALUES ('topic_lineage_old', $1, 'Planned', 'approved') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        autopilotTopicId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topics (org_id, brand_id, title, status) VALUES ('topic_lineage_old', $1, 'Automatic', 'approved') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        const foreignTopicId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO topics (org_id, brand_id, title, status) VALUES ('topic_lineage_old', $1, 'Foreign', 'approved') RETURNING id",
+            [otherBrandId],
+          )
+        ).rows[0]?.id as string;
+        const input = JSON.stringify({ kind: "brief", text: "Historical", channelIds: [] });
+        const runs = await pool.query<{ id: string }>(
+          "INSERT INTO pipeline_runs (org_id, brand_id, input) SELECT 'topic_lineage_old', $1, $2::jsonb FROM generate_series(1, 4) RETURNING id",
+          [brandId, input],
+        );
+        if (runs.rows.length !== 4) throw new Error("Historical run seed failed");
+        [calendarRunId, autopilotRunId, manualRunId, mismatchedRunId] = runs.rows.map(
+          (row) => row.id,
+        ) as [string, string, string, string];
+        for (const [runId, topicId, title] of [
+          [calendarRunId, calendarTopicId, "Planned"],
+          [mismatchedRunId, foreignTopicId, "Foreign"],
+        ]) {
+          await pool.query(
+            "INSERT INTO calendar_slots (org_id, brand_id, scheduled_at, brief, channel_ids, topic_id, topic_title, topic_description, topic_updated_at, topic_revision, run_id) SELECT 'topic_lineage_old', $1, now(), 'Historical', '[]'::jsonb, id, $3, description, updated_at, revision, $4 FROM topics WHERE id = $2",
+            [brandId, topicId, title, runId],
+          );
+        }
+        await pool.query(
+          "INSERT INTO autopilot_dispatches (org_id, brand_id, topic_id, run_id, local_date) VALUES ('topic_lineage_old', $1, $2, $3, '2026-01-01')",
+          [brandId, autopilotTopicId, autopilotRunId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const rows = await after.query<{ id: string; topic_id: string | null }>(
+          "SELECT id, topic_id FROM pipeline_runs WHERE id = ANY($1::uuid[])",
+          [[calendarRunId, autopilotRunId, manualRunId, mismatchedRunId]],
+        );
+        const lineage = new Map(rows.rows.map((row) => [row.id, row.topic_id]));
+        expect(lineage.get(calendarRunId)).toBe(calendarTopicId);
+        expect(lineage.get(autopilotRunId)).toBe(autopilotTopicId);
+        expect(lineage.get(manualRunId)).toBeNull();
+        expect(lineage.get(mismatchedRunId)).toBeNull();
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
   it("preserves existing image slots and feed snapshots with centered alignment", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0085_fixed_blob");
