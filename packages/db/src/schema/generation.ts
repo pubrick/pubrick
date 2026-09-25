@@ -30,6 +30,7 @@ import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { adaptations, contentItems } from "./content-items.js";
 import { enumCheck } from "./enum-check.js";
+import type { RoleTemplateRunSnapshot } from "./role-templates.js";
 
 /** One BYOK provider key per org. */
 export const aiCredentials = pgTable(
@@ -96,6 +97,8 @@ export const pipelineRuns = pgTable(
       jsonb("guidance_snapshot").$type<
         Partial<Record<PromptRole, { revisionId: string; version: number; text: string }>>
       >(),
+    /** Null means not pinned; claim-time template state is never backfilled. */
+    templateSnapshot: jsonb("template_snapshot").$type<RoleTemplateRunSnapshot>(),
     /**
      * Set on success. `set null` rather than cascade: a run is a record of what
      * was spent and when, and it must outlive the draft it produced.
@@ -196,6 +199,8 @@ export const usageLedger = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    /** Set on new paid reply calls; legacy unattributed spend remains null. */
+    brandId: uuid("brand_id"),
     /**
      * Null for calls made outside a run (the editor's refine verbs). `set null`
      * on delete, never cascade: the money was spent whatever happened to the run,
@@ -256,6 +261,7 @@ export const usageLedger = pgTable(
       .on(t.analysisAdmissionId)
       .where(sql`${t.analysisAdmissionId} is not null`),
     index("usage_ledger_org_id_idx").on(t.orgId),
+    index("usage_ledger_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt),
     // Brand history reads the newest org calls before checking live brand links.
     // Match ORDER BY created_at DESC, id DESC (PostgreSQL defaults to NULLS
     // FIRST for DESC, even though both columns are non-nullable).
@@ -333,6 +339,7 @@ export const contentVersions = pgTable(
     /** Null for a version of the master body; set for a per-channel adaptation. */
     adaptationId: uuid("adaptation_id").references(() => adaptations.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
+    richBody: jsonb("rich_body"),
     title: text("title"),
     hashtags: text("hashtags").array().notNull().default([]),
     cta: text("cta"),

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
+import { projectRichBody, richBodySchema } from "../rich-body.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
@@ -450,9 +451,30 @@ export const contentUpdateSchema = z
   .object({
     title: titleText.optional(),
     body: bodyText.optional(),
+    richBody: richBodySchema.nullable().optional(),
+    expectedBody: z.string().max(MAX_BODY_LENGTH).optional(),
+    expectedBodyRevision: z.number().int().min(0).optional(),
   })
-  .refine((data) => Object.keys(data).length > 0, {
-    message: "Provide at least one field to update",
+  .refine(
+    (data) => data.title !== undefined || data.body !== undefined || data.richBody !== undefined,
+    {
+      message: "Provide at least one field to update",
+    },
+  )
+  .superRefine((data, context) => {
+    if (data.richBody === undefined) return;
+    if (
+      data.body === undefined ||
+      data.expectedBody === undefined ||
+      data.expectedBodyRevision === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Rich editing requires body and both body expectations",
+      });
+    } else if (data.richBody && projectRichBody(data.richBody) !== data.body) {
+      context.addIssue({ code: "custom", message: "Body must match the rich document projection" });
+    }
   });
 export type ContentUpdate = z.infer<typeof contentUpdateSchema>;
 
@@ -843,6 +865,7 @@ export const contentVersionDtoSchema = z.strictObject({
   id: z.string().uuid(),
   adaptationId: z.string().uuid().nullable(),
   body: z.string(),
+  richBody: richBodySchema.nullable(),
   hashtags: z.array(z.string()),
   cta: z.string().nullable(),
   origin: z.enum(CONTENT_ORIGINS),
@@ -860,6 +883,7 @@ export const contentVersionRestoreSchema = z
   .object({
     /** The text the reader saw; a newer save must not be silently overwritten. */
     expectedBody: z.string().max(MAX_BODY_LENGTH).nullable(),
+    expectedBodyRevision: z.number().int().min(0).optional(),
     /** Channel restores supply both metadata expectations; master restores supply neither. */
     expectedHashtags: z.array(z.string().max(80)).max(10).optional(),
     expectedCta: z.string().max(500).nullable().optional(),
@@ -890,6 +914,9 @@ export const contentDetailDtoSchema = contentListItemDtoSchema
   .extend({
     adaptations: z.array(adaptationDtoSchema),
     body: z.string(),
+    richBody: richBodySchema.nullable(),
+    richBodyHtml: z.string().nullable(),
+    bodyRevision: z.number().int().min(0),
     linkPolicyWebsite: z.string().url().nullable(),
     archivedFromStatus: z.enum(CONTENT_STATUSES).nullable(),
     isSafeToDelete: z.boolean(),

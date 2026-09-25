@@ -511,8 +511,10 @@ describe("every enum CHECK reaches the database through a migration", () => {
     // Follow drops as well as enum additions. A later migration can replace an
     // enum pin with a different CHECK (for example, custom knowledge categories).
     // Scanning additions alone would mistake the historical enum for live SQL.
+    // Match an enum's leading column (including nullable enums), not an IN
+    // nested inside a wider state check such as a paid attempt's live fields.
     for (const match of sql.matchAll(
-      /\bDROP CONSTRAINT "([^"]+)"|\bCONSTRAINT "([^"]+)" CHECK \([^)]*\bin\s*\(([^)]*)\)/gi,
+      /\bDROP CONSTRAINT "([^"]+)"|\bCONSTRAINT "([^"]+)" CHECK \("[^"]+"\."[^"]+"(?: IS NULL OR "[^"]+"\."[^"]+")?\s+in\s*\(([^)]*)\)\)/gi,
     )) {
       const [, dropped, added, list] = match;
       if (dropped) {

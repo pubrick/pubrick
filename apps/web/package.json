@@ -11,6 +11,9 @@
   },
   "dependencies": {
     "@pubrick/shared": "workspace:*",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "better-auth": "^1.7.1",
     "csv-parse": "^6.2.1",
     "csv-stringify": "^6.8.3",

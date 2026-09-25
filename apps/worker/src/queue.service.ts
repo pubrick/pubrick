@@ -22,6 +22,9 @@ import {
   type ManualAutopilotJob,
   type ManualDigestJob,
   type ManualTopicPlanJob,
+  PAID_REPLY_ANALYSIS_OPTIONS,
+  PAID_REPLY_ANALYSIS_QUEUE,
+  type PaidReplyAnalysisJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -57,6 +60,8 @@ import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
 import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsService } from "./comments/comments.service";
+import { PaidReplyService } from "./comments/paid-reply.service";
+import { env } from "./env";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
 import { MetricsService } from "./metrics/metrics.service";
@@ -164,6 +169,7 @@ export class QueueService {
     @Optional() private readonly suggestionsScan?: SuggestionsScanService,
     @Optional() private readonly topicPlanner?: TopicPlannerService,
     @Optional() private readonly claimReview?: ClaimReviewService,
+    @Optional() private readonly paidReplies?: PaidReplyService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -181,6 +187,27 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    // Manual requests always need a consumer and recovery sweep. The optional
+    // rollout instant gates only automatic collection handoffs.
+    if (this.paidReplies && names === DEFAULT_QUEUE_NAMES) {
+      const start = env.PAID_REPLY_DISPATCH_AFTER ? new Date(env.PAID_REPLY_DISPATCH_AFTER) : null;
+      await boss.createQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
+      await boss.updateQueue(PAID_REPLY_ANALYSIS_QUEUE, { ...PAID_REPLY_ANALYSIS_OPTIONS });
+      await boss.work<PaidReplyAnalysisJob>(
+        PAID_REPLY_ANALYSIS_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.paidReplies?.handle(job.data);
+        },
+      );
+      await boss.createQueue("paid-reply-reconcile");
+      await boss.schedule("paid-reply-reconcile", "*/5 * * * *");
+      await boss.work("paid-reply-reconcile", { batchSize: 1 }, async () => {
+        if (start) await this.paidReplies?.reconcile(boss, start);
+        await this.paidReplies?.sweep(boss);
+      });
+    }
 
     if (this.claimReview && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue(CLAIM_REVIEW_DLQ);

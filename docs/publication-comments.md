@@ -22,15 +22,18 @@ it as an earlier sample.
 
 The same modal has a separate **AI analysis of replies** section. Opening it
 reads only the saved analysis; it never invokes a model. **Analyze sample**
-is an explicit, paid action using the workspace's Google AI key. The section
+is an explicit, queued paid action using the workspace's Google AI key. The section
 explains that it summarizes the newest 30 saved replies, up to 500 characters
 from each, never the publication's
 total comment count, and asks the reader to inspect the sample before acting.
 It shows sentiment, recurring themes, audience feedback, sample size, and the
-analysis time. A changed reply sample marks the previous analysis stale and
-offers another explicit analysis. Missing keys link to Settings. While an
-analysis is in progress, **Check analysis result** rereads saved state without
-starting another model call.
+analysis time. A changed reply sample keeps the previous aggregate under an
+**Earlier sample** label and offers another explicit analysis for the new
+version. Missing keys link to Settings. While an analysis is in progress,
+**Check analysis result** rereads saved state without starting another model
+call. An uncertain or failed attempt is not retried for the same sample
+version; collect a new sample if a new analysis is needed. See
+[Paid reply analysis](paid-reply-analysis.md).
 
 Only the organization-scoped analytics endpoints serve this data. The browser
 never calls Telegram or Google AI directly.
@@ -52,5 +55,6 @@ Turning the setting off fences queued work, including work already reading
 Telegram; turning it back on increments the fence so the old job stays revoked.
 The final save also checks that the publication still belongs to the same
 brand and channel and that no manual or automatic sample appeared during the
-Telegram read. Automatic collection never invokes Google AI. **Analyze sample**
-remains a separate, explicit paid action.
+Telegram read. Collection itself never invokes Google AI. A separately enabled,
+default-off paid setting can analyze eligible new samples after collection;
+**Analyze sample** remains available as an explicit paid action.

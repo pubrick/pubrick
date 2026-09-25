@@ -114,6 +114,7 @@ const ZONED_COLUMNS = [
   "autopilot_scan_events.finished_at",
   "autopilot_scan_events.started_at",
   "brand_feeds.created_at",
+  "brand_paid_reply_settings.updated_at",
   "brands.created_at",
   "brands.updated_at",
   "calendar_slots.created_at",
@@ -173,6 +174,16 @@ const ZONED_COLUMNS = [
   "notification_settings.updated_at",
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
+  "organization_paid_reply_settings.updated_at",
+  "paid_reply_analysis_attempts.completed_at",
+  "paid_reply_analysis_attempts.created_at",
+  "paid_reply_analysis_attempts.day_end_utc",
+  "paid_reply_analysis_attempts.day_start_utc",
+  "paid_reply_analysis_attempts.dispatch_started_at",
+  "paid_reply_analysis_handoffs.created_at",
+  "paid_reply_analysis_handoffs.updated_at",
+  "paid_reply_backfill_state.completed_at",
+  "paid_reply_backfill_state.started_at",
   "prompt_decision_revisions.decided_at",
   "prompt_decisions.created_at",
   "prompt_revisions.created_at",
@@ -187,6 +198,8 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "role_template_activation_gate.updated_at",
+  "role_template_revisions.created_at",
   "search_credentials.updated_at",
   "search_requests.completed_at",
   "search_requests.created_at",
@@ -380,6 +393,38 @@ const NON_ENUM_CHECKS = [
   "prompt_revisions_role_check",
   "prompt_revisions_version_positive_check",
   "prompt_revisions_guidance_limit_check",
+  // 0092: paid reply settings, attempts, and handoffs arrived after the
+  // historical seed. Their invariants are exercised by the paid reply tests.
+  "brand_paid_reply_settings_threshold_check",
+  "brand_paid_reply_settings_revisions_check",
+  "organization_paid_reply_settings_threshold_check",
+  "organization_paid_reply_settings_revision_check",
+  "organization_paid_reply_settings_timezone_check",
+  "paid_reply_analysis_attempts_target_kind_check",
+  "paid_reply_analysis_attempts_origin_check",
+  "paid_reply_analysis_attempts_status_check",
+  "paid_reply_analysis_attempts_live_fields_check",
+  "paid_reply_analysis_attempts_legacy_check",
+  "paid_reply_analysis_attempts_dispatch_check",
+  "paid_reply_analysis_attempts_revisions_check",
+  "paid_reply_analysis_handoffs_target_kind_check",
+  "paid_reply_analysis_handoffs_status_check",
+  "paid_reply_analysis_handoffs_revisions_check",
+  // 0094 and 0096 add a revision guard and a one-row backfill marker.
+  "content_items_body_revision_check",
+  "paid_reply_backfill_state_singleton_check",
+  "paid_reply_analysis_handoffs_reason_check",
+  // 0093: role-template heads are tenant/role-bound and activation starts off.
+  // The focused migration test below writes rows to exercise these guards.
+  "role_template_activation_gate_singleton_check",
+  "role_template_activation_gate_epoch_check",
+  "role_template_activation_gate_enabled_epoch_check",
+  "role_template_heads_role_check",
+  "role_template_heads_generation_check",
+  "role_template_revisions_role_check",
+  "role_template_revisions_version_check",
+  "role_template_revisions_source_check",
+  "role_template_revisions_sha_check",
   // The nullable calendar error enum is on a table that did not exist when
   // seedEveryTable wrote its pre-0009 rows, so the UPDATE loop cannot test it.
   // schema-invariants.test.ts verifies the schema declaration; this count
@@ -606,6 +651,10 @@ function expectNoRowRewritten(
           // an orphaned receipt may already have lost its item link.
           if (table === "content_items" && key === "is_safe_to_delete") {
             return afterRow[key] !== false;
+          }
+          // 0094 adds a metadata-only constant default for optimistic body edits.
+          if (table === "content_items" && key === "body_revision") {
+            return afterRow[key] !== 0;
           }
           // 0077 keeps existing channel text byte-for-byte while giving old
           // adaptations and their versions an explicitly empty tag list.
@@ -846,6 +895,536 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("adds immutable tenant-bound role templates without activating or rewriting existing runs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0093_medical_red_skull");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('tpl_a', 'A', 'tpl-a'), ('tpl_b', 'B', 'tpl-b')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('tpl_a', 'A brand') RETURNING id",
+        );
+        const run = await pool.query<{ id: string }>(
+          'INSERT INTO pipeline_runs (org_id, brand_id, input, steps, guidance_snapshot) VALUES (\'tpl_a\', $1, \'{"kind":"brief","text":"x","channelIds":[]}\'::jsonb, \'{"writer":{"status":"succeeded"}}\'::jsonb, \'{}\'::jsonb) RETURNING id',
+          [brand.rows[0]?.id],
+        );
+
+        await runMigrations(fresh.url);
+        const oldRun = await pool.query<{
+          template_snapshot: unknown;
+          guidance_snapshot: unknown;
+          steps: unknown;
+        }>("SELECT template_snapshot, guidance_snapshot, steps FROM pipeline_runs WHERE id = $1", [
+          run.rows[0]?.id,
+        ]);
+        expect(oldRun.rows[0]).toEqual({
+          template_snapshot: null,
+          guidance_snapshot: {},
+          steps: { writer: { status: "succeeded" } },
+        });
+        expect(
+          (
+            await pool.query(
+              "SELECT id, activation_enabled, release_epoch FROM role_template_activation_gate",
+            )
+          ).rows,
+        ).toEqual([{ id: 1, activation_enabled: false, release_epoch: 0 }]);
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('tpl_new', 'New', 'tpl-new')",
+        );
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_heads")).rows,
+        ).toEqual([{ n: 0 }]);
+
+        const revision = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('tpl_a', 'writer', 1, 'Write clearly.', $1) RETURNING id",
+          ["a".repeat(64)],
+        );
+        const revisionId = revision.rows[0]?.id;
+        for (const [role, version, source, sha] of [
+          ["wrong", 1, "Good", "a".repeat(64)],
+          ["editor", 0, "Good", "a".repeat(64)],
+          ["editor", 1, "", "a".repeat(64)],
+          ["editor", 1, "Good", "not-a-sha"],
+        ] as const) {
+          expect(
+            await refusal(
+              pool,
+              "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256) VALUES ('tpl_a', $1, $2, $3, $4)",
+              [role, version, source, sha],
+            ),
+          ).toBe(CHECK_VIOLATION);
+        }
+        await pool.query(
+          "INSERT INTO role_template_heads (org_id, role, active_revision_id, generation) VALUES ('tpl_a', 'writer', $1, 1)",
+          [revisionId],
+        );
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, generation) VALUES ('tpl_b', 'editor', -1)",
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, active_revision_id) VALUES ('tpl_b', 'writer', $1)",
+            [revisionId],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "INSERT INTO role_template_heads (org_id, role, active_revision_id) VALUES ('tpl_a', 'editor', $1)",
+            [revisionId],
+          ),
+        ).toBe(FOREIGN_KEY_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE role_template_revisions SET source = 'changed' WHERE id = $1",
+            [revisionId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "DELETE FROM role_template_revisions WHERE id = $1", [revisionId]),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('tpl_author', 'Author', 'tpl_author@example.com')",
+        );
+        const authored = await pool.query<{ id: string }>(
+          "INSERT INTO role_template_revisions (org_id, role, version, source, source_sha256, created_by) VALUES ('tpl_a', 'writer', 2, 'Keep this revision.', $1, 'tpl_author') RETURNING id",
+          ["b".repeat(64)],
+        );
+        expect(
+          await refusal(
+            pool,
+            "UPDATE role_template_revisions SET created_by = NULL WHERE id = $1",
+            [authored.rows[0]?.id],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query("DELETE FROM \"user\" WHERE id = 'tpl_author'");
+        expect(
+          (
+            await pool.query(
+              "SELECT created_by, source FROM role_template_revisions WHERE id = $1",
+              [authored.rows[0]?.id],
+            )
+          ).rows,
+        ).toEqual([{ created_by: null, source: "Keep this revision." }]);
+        expect(
+          await refusal(pool, "UPDATE role_template_activation_gate SET activation_enabled = true"),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "INSERT INTO role_template_activation_gate (id) VALUES (2)"),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(pool, "UPDATE role_template_activation_gate SET release_epoch = -1"),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "UPDATE role_template_activation_gate SET release_epoch = 1, activation_enabled = true",
+        );
+        await pool.query("DELETE FROM organization WHERE id = 'tpl_a'");
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_revisions")).rows,
+        ).toEqual([{ n: 0 }]);
+        expect(
+          (await pool.query("SELECT count(*)::int AS n FROM role_template_heads")).rows,
+        ).toEqual([{ n: 0 }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("backfills saved reply versions and consumes an old manual admission without opting in", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0092_bent_arclight");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId: string;
+      let admittedItem: string;
+      let untouchedItem: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('paid_old', 'Paid old', 'paid-old')",
+        );
+        // Cross the post-migration backfill page boundary on a populated table.
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) SELECT 'paid_batch_' || n, 'Batch ' || n, 'paid-batch-' || n FROM generate_series(1, 501) AS n",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('paid_old', 'Brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        const sourceId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_sources (org_id, brand_id, name, url) VALUES ('paid_old', $1, 'Feed', 'https://example.com/feed') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+        const insertItem = async (title: string) =>
+          (
+            await pool.query<{ id: string }>(
+              "INSERT INTO news_items (org_id, brand_id, source_id, title, url, comments_status, comments_checked_at) VALUES ('paid_old', $1, $2, $3, $4, 'available', now()) RETURNING id",
+              [brandId, sourceId, title, `https://example.com/${title}`],
+            )
+          ).rows[0]?.id as string;
+        admittedItem = await insertItem("admitted");
+        untouchedItem = await insertItem("untouched");
+        for (const itemId of [admittedItem, untouchedItem]) {
+          await pool.query(
+            "INSERT INTO news_comments (org_id, brand_id, item_id, telegram_message_id, body, published_at) VALUES ('paid_old', $1, $2, 1, 'Saved reply', now())",
+            [brandId, itemId],
+          );
+        }
+        await pool.query(
+          "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('paid_old', 'source_comment', $1, now(), now() + interval '2 minutes')",
+          [admittedItem],
+        );
+        await pool.query(
+          "UPDATE news_items SET comments_status = 'error', comments_error_code = 'provider_unavailable' WHERE id = $1",
+          [admittedItem],
+        );
+        await pool.query(
+          "INSERT INTO news_comment_analyses (item_id, org_id, brand_id, sample_checked_at, result, sample_size) VALUES ($1, 'paid_old', $2, now() - interval '1 day', '{}'::jsonb, 1)",
+          [admittedItem, brandId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const settings = await after.query<{
+          source_enabled: boolean;
+          publication_enabled: boolean;
+          timezone: string;
+        }>(
+          "SELECT b.source_enabled, b.publication_enabled, o.timezone FROM brand_paid_reply_settings b JOIN organization_paid_reply_settings o USING (org_id) WHERE b.brand_id = $1",
+          [brandId],
+        );
+        expect(settings.rows).toEqual([
+          { source_enabled: false, publication_enabled: false, timezone: "UTC" },
+        ]);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM organization_paid_reply_settings WHERE org_id LIKE 'paid_batch_%'",
+            )
+          ).rows,
+        ).toEqual([{ count: 501 }]);
+        const rows = await after.query<{
+          id: string;
+          comments_sample_version: string;
+          origin: string | null;
+          status: string | null;
+        }>(
+          "SELECT i.id, i.comments_sample_version, a.origin, a.status FROM news_items i LEFT JOIN paid_reply_analysis_attempts a ON a.target_id = i.id WHERE i.id IN ($1, $2) ORDER BY i.id",
+          [admittedItem, untouchedItem],
+        );
+        expect(rows.rows).toHaveLength(2);
+        expect(rows.rows.every((row) => typeof row.comments_sample_version === "string")).toBe(
+          true,
+        );
+        expect(rows.rows.find((row) => row.id === admittedItem)).toMatchObject({
+          origin: "legacy",
+          status: "legacy_consumed",
+        });
+        expect(
+          (
+            await after.query<{ sample_version: string }>(
+              "SELECT sample_version FROM news_comment_analyses WHERE item_id = $1",
+              [admittedItem],
+            )
+          ).rows[0]?.sample_version,
+        ).toBe(rows.rows.find((row) => row.id === admittedItem)?.comments_sample_version);
+        expect(rows.rows.find((row) => row.id === untouchedItem)).toMatchObject({
+          origin: null,
+          status: null,
+        });
+        const originalVersions = rows.rows.map((row) => [row.id, row.comments_sample_version]);
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ id: string; comments_sample_version: string }>(
+              "SELECT id, comments_sample_version FROM news_items WHERE id IN ($1, $2) ORDER BY id",
+              [admittedItem, untouchedItem],
+            )
+          ).rows.map((row) => [row.id, row.comments_sample_version]),
+        ).toEqual(originalVersions);
+        const recollected = await after.query<{ comments_sample_version: string }>(
+          "UPDATE news_items SET comments_sample_version = gen_random_uuid(), comments_checked_at = now() + interval '1 minute' WHERE id = $1 RETURNING comments_sample_version",
+          [admittedItem],
+        );
+        const newVersion = recollected.rows[0]?.comments_sample_version;
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM paid_reply_analysis_attempts WHERE target_id = $1 AND sample_version = $2",
+              [admittedItem, newVersion],
+            )
+          ).rows,
+        ).toEqual([{ count: 0 }]);
+        // Simulate an interrupted post-schema backfill. Its durable start fence
+        // still excludes a sample recollected after the first attempt began.
+        await after.query("UPDATE paid_reply_backfill_state SET completed_at = NULL WHERE id = 1");
+        await runMigrations(fresh.url);
+        expect(
+          (
+            await after.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM paid_reply_analysis_attempts WHERE target_id = $1 AND sample_version = $2",
+              [admittedItem, newVersion],
+            )
+          ).rows,
+        ).toEqual([{ count: 0 }]);
+        expect(
+          (
+            await after.query<{ completed: boolean }>(
+              "SELECT completed_at IS NOT NULL AS completed FROM paid_reply_backfill_state WHERE id = 1",
+            )
+          ).rows,
+        ).toEqual([{ completed: true }]);
+        expect(
+          (
+            await after.query<{ valid: boolean }>(
+              "SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = 'usage_ledger_org_brand_created_idx'::regclass",
+            )
+          ).rows,
+        ).toEqual([{ valid: true }]);
+        expect(
+          (
+            await after.query<{ validated: boolean }>(
+              "SELECT convalidated AS validated FROM pg_constraint WHERE conname = 'content_items_body_revision_check'",
+            )
+          ).rows,
+        ).toEqual([{ validated: true }]);
+        const consumed = rows.rows.find((row) => row.id === admittedItem);
+        expect(
+          await refusal(
+            after,
+            "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, origin, status, completed_at) VALUES ('paid_old', $1, 'source_comment', $2, $3, 'legacy', 'legacy_consumed', now())",
+            [brandId, admittedItem, consumed?.comments_sample_version],
+          ),
+        ).toBe("23505");
+        expect(
+          await refusal(
+            after,
+            "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, origin, status) VALUES ('paid_old', $1, 'source_comment', $2, gen_random_uuid(), 'manual', 'queued')",
+            [brandId, untouchedItem],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const admitted = await after.query<{ id: string }>(
+          "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('paid_old', 'source_comment', $1, now(), now() + interval '2 minutes') RETURNING id",
+          [untouchedItem],
+        );
+        const admissionId = admitted.rows[0]?.id;
+        const insertAttempt =
+          "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, admission_id, origin, status, prompt_digest, prompt_encrypted, sample_size, model_id, price_window, free_revision, paid_revision, org_settings_revision, brand_threshold_revision, admission_local_date, admission_timezone, day_start_utc, day_end_utc, reserved_max_usd) VALUES ('paid_old', $1, 'source_comment', $2, gen_random_uuid(), $3, $7, 'queued', 'digest', 'encrypted', $4, 'gemini-3.7-flash', '2026', 1, $6, 0, 0, '2026-09-25', 'UTC', '2026-09-25T00:00:00Z', '2026-09-26T00:00:00Z', $5)";
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            null,
+            "0.01",
+            1,
+            "manual",
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            1,
+            null,
+            1,
+            "manual",
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            1,
+            "0.01",
+            null,
+            "automatic",
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          (await after.query("SELECT id FROM paid_reply_analysis_handoffs")).rows,
+        ).toHaveLength(0);
+        expect(
+          await refusal(
+            after,
+            "UPDATE brand_paid_reply_settings SET source_revision = -1 WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await after.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('paid_new', 'Paid new', 'paid-new')",
+        );
+        expect(
+          (
+            await after.query(
+              "SELECT timezone FROM organization_paid_reply_settings WHERE org_id = 'paid_new'",
+            )
+          ).rows,
+        ).toEqual([{ timezone: "UTC" }]);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("purges frozen paid prompts on source, publication, and brand deletion without losing claims", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('purge_org', 'Purge', 'purge-org')",
+        );
+        const brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('purge_org', 'Brand') RETURNING id",
+          )
+        ).rows[0]?.id;
+        const sourceId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_sources (org_id, brand_id, name, url) VALUES ('purge_org', $1, 'Feed', 'https://example.com/feed') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const newsItemId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_items (org_id, brand_id, source_id, title, url) VALUES ('purge_org', $1, $2, 'Story', 'https://example.com/story') RETURNING id",
+            [brandId, sourceId],
+          )
+        ).rows[0]?.id;
+        const channelId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('purge_org', $1, 'telegram', 'Channel', 'blob') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const contentId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, body, status, origin) VALUES ('purge_org', $1, 'Body', 'draft', 'ai') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const adaptationId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO adaptations (org_id, content_item_id, channel_id, status, origin) VALUES ('purge_org', $1, $2, 'pending', 'ai') RETURNING id",
+            [contentId, channelId],
+          )
+        ).rows[0]?.id;
+        const publicationId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO publications (org_id, adaptation_id, channel_id, status) VALUES ('purge_org', $1, $2, 'failed') RETURNING id",
+            [adaptationId, channelId],
+          )
+        ).rows[0]?.id;
+        const detachedTargetId = (
+          await pool.query<{ id: string }>("SELECT gen_random_uuid() AS id")
+        ).rows[0]?.id;
+
+        const addAttempt = async (targetKind: string, targetId: string, status: string) => {
+          const admissionId = (
+            await pool.query<{ id: string }>(
+              "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('purge_org', $1, $2, now(), now() + interval '2 minutes') RETURNING id",
+              [targetKind, targetId],
+            )
+          ).rows[0]?.id;
+          return (
+            await pool.query<{ id: string }>(
+              `INSERT INTO paid_reply_analysis_attempts
+                (org_id, brand_id, target_kind, target_id, sample_version, admission_id,
+                 origin, status, prompt_digest, prompt_encrypted, sample_size, model_id,
+                 price_window, org_settings_revision, brand_threshold_revision,
+                 admission_local_date, admission_timezone, day_start_utc, day_end_utc,
+                 reserved_max_usd, dispatch_started_at, completed_at)
+               VALUES ('purge_org', $1, $2, $3, gen_random_uuid(), $4,
+                 'manual', $5, repeat('a', 64), 'encrypted-prompt', 1, 'gemini-3.7-flash',
+                 '2026', 0, 0, '2026-09-25', 'UTC', '2026-09-25T00:00:00Z',
+                 '2026-09-26T00:00:00Z', 0.01,
+                 CASE WHEN $5 = 'dispatching' THEN now() END,
+                 CASE WHEN $5 = 'ready' THEN now() END)
+               RETURNING id`,
+              [brandId, targetKind, targetId, admissionId, status],
+            )
+          ).rows[0]?.id as string;
+        };
+        const sourceAttemptId = await addAttempt("source_comment", newsItemId as string, "queued");
+        const publicationAttemptId = await addAttempt(
+          "publication_comment",
+          publicationId as string,
+          "dispatching",
+        );
+        const brandAttemptId = await addAttempt(
+          "source_comment",
+          detachedTargetId as string,
+          "ready",
+        );
+
+        await pool.query("DELETE FROM news_items WHERE id = $1", [newsItemId]);
+        await pool.query("DELETE FROM publications WHERE id = $1", [publicationId]);
+        const deleted = await pool.query<{
+          id: string;
+          status: string;
+          prompt_encrypted: string | null;
+          failure_code: string | null;
+          completed_at: Date | null;
+        }>(
+          "SELECT id, status, prompt_encrypted, failure_code, completed_at FROM paid_reply_analysis_attempts WHERE id IN ($1, $2) ORDER BY id",
+          [sourceAttemptId, publicationAttemptId],
+        );
+        expect(deleted.rows).toHaveLength(2);
+        expect(deleted.rows.find((row) => row.id === sourceAttemptId)?.status).toBe("canceled");
+        expect(deleted.rows.find((row) => row.id === publicationAttemptId)?.status).toBe("unknown");
+        expect(
+          deleted.rows.every(
+            (row) =>
+              row.prompt_encrypted === null &&
+              row.failure_code === "target_deleted" &&
+              row.completed_at instanceof Date,
+          ),
+        ).toBe(true);
+        await pool.query("DELETE FROM brands WHERE id = $1", [brandId]);
+        expect(
+          (
+            await pool.query(
+              "SELECT status, prompt_encrypted, prompt_digest FROM paid_reply_analysis_attempts WHERE id = $1",
+              [brandAttemptId],
+            )
+          ).rows,
+        ).toEqual([{ status: "ready", prompt_encrypted: null, prompt_digest: "a".repeat(64) }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
   beforeAll(readZonelessAsUtc);
 
   it("applies migrations and enables pgvector", async () => {
@@ -1694,7 +2273,12 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expect(rows.rows).toEqual(
-        seeded.map((row) => ({ ...row, outcome: null, analysis_admission_id: null })),
+        seeded.map((row) => ({
+          ...row,
+          outcome: null,
+          analysis_admission_id: null,
+          brand_id: null,
+        })),
       );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",

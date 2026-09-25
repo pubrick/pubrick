@@ -16,6 +16,11 @@ import { renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import SourcesPage from "./page";
 
+// Paid admission has its own contract tests; keep this page suite focused on free sources.
+vi.mock("@/components/paid-reply-brand-settings", () => ({
+  PaidReplyBrandSettings: () => null,
+}));
+
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const OTHER_BRAND_ID = "255e6b41-cf47-4e69-8a5a-af06827d82e8";
 const CHANNEL_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
@@ -1162,5 +1167,62 @@ describe("watched sources page", () => {
     expect(
       calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
     ).toBe(true);
+  });
+
+  it("shows an earlier aggregate beside a failed current sample without offering another paid call", async () => {
+    const item = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Story",
+      summary: "Summary",
+      url: "https://t.me/example_channel/42",
+      publishedAt: null,
+      commentsStatus: "error",
+      commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+      commentsErrorCode: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const analysis = {
+      status: "failed",
+      current: { status: "failed", sampleVersion: "new-version", collectionStatus: "error" },
+      earlierAnalysis: {
+        sampleVersion: "old-version",
+        sampleSize: 2,
+        analyzedAt: "2026-09-22T12:00:00.000Z",
+        result: {
+          summary: "Readers asked for a comparison.",
+          sentiment: { positive: 0, neutral: 1, negative: 0 },
+          themes: [{ label: "Comparison", mentions: 2 }],
+          feedback: ["Compare both options."],
+        },
+      },
+    };
+    const calls = install(
+      [item],
+      [{ id: SOURCE_ID, kind: "telegram", isActive: true, name: "Channel" }],
+      analysis,
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(await dialog.findByText(en.Sources.analysis_failed)).toBeInTheDocument();
+    expect(dialog.getByText(en.Sources.earlierAnalysis)).toBeInTheDocument();
+    expect(dialog.getByText("Readers asked for a comparison.")).toBeInTheDocument();
+    expect(dialog.queryByRole("button", { name: en.Sources.analyzeComments })).toBeNull();
+    const reads = calls.filter(
+      (call) => call.method === "GET" && call.url.includes("comment-analysis"),
+    ).length;
+    await user.click(dialog.getByRole("button", { name: en.Sources.checkAnalysisResult }));
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.method === "GET" && call.url.includes("comment-analysis"))
+          .length,
+      ).toBeGreaterThan(reads),
+    );
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
   });
 });

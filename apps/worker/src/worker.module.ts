@@ -6,6 +6,8 @@ import { ClaimReviewWorkerRepository } from "./claim-review/claim-review.reposit
 import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
+import { PaidReplyRepository } from "./comments/paid-reply.repository";
+import { PaidReplyService } from "./comments/paid-reply.service";
 import { GenerateRepository } from "./generate/generate.repository";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexRepository } from "./knowledge/knowledge-auto-index.repository";
@@ -48,6 +50,8 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     RelevanceService,
     CommentsRepository,
     CommentsService,
+    PaidReplyRepository,
+    PaidReplyService,
     SuggestionsRepository,
     SuggestionsScanService,
     SuggestionsService,

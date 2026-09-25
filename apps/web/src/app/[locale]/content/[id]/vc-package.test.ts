@@ -43,6 +43,26 @@ describe("VC.ru portable article package", () => {
     expect(html).toContain("The VC.ru adaptation differs from the main article.");
   });
 
+  it("uses sanitized server HTML and keeps image positions for the master article", () => {
+    const html = vcArticleHtml({
+      ...article,
+      body: "First\n\nSecond",
+      masterBody: "First\n\nSecond",
+      richBodyHtml: "<h2>First</h2>\n<p><strong>Second</strong></p>",
+    });
+    expect(html).toContain("<h2>First</h2>");
+    expect(html).toContain("<p><strong>Second</strong></p>");
+    expect(html.indexOf("<figure ")).toBeGreaterThan(html.indexOf("</h2>"));
+    expect(html.indexOf("<figure ")).toBeLessThan(html.indexOf("<strong>Second</strong>"));
+    const adapted = vcArticleHtml({
+      ...article,
+      body: "Adapted",
+      masterBody: "First\n\nSecond",
+      richBodyHtml: "<h2>First</h2>",
+    });
+    expect(adapted).not.toContain("<h2>First</h2>");
+  });
+
   it("keeps indentation and trailing whitespace in reviewed paragraphs", () => {
     const body = "  First line.  \n\tSecond line. \n\n  Next paragraph.\t";
     const html = vcArticleHtml({ ...article, body, masterBody: body });

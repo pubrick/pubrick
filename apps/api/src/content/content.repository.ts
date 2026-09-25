@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Injectable, Logger } from "@nestjs/common";
+import { ConflictException, Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
@@ -40,12 +40,16 @@ import {
   PROMPT_ROLES,
   type PromptRole,
   planRefineAccept,
+  projectRichBody,
   type RefineAcceptPlan,
   type RefineProposal,
   type RefineRequest,
   type RefineVerb,
+  type RichBody,
   type RunInput,
+  refusalBody,
   replaceHashtags,
+  richBodySchema,
   stripHashtagSuffix,
   toLedgerCostUsd,
   withHashtags,
@@ -64,6 +68,7 @@ import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
+import { safeRichHtmlBlocks } from "./rich-html";
 
 /**
  * EVERY COLUMN OF AN ITEM THE API READS — one allowlist, and `body` is in it.
@@ -106,6 +111,23 @@ const ITEM_COLUMNS = {
   body: schema.contentItems.body,
   qualityScore: schema.contentItems.qualityScore,
 };
+
+function validStoredRichBody(value: unknown, body: string): RichBody | null {
+  if (value == null) return null;
+  const parsed = richBodySchema.safeParse(value);
+  if (!parsed.success || projectRichBody(parsed.data) !== body) {
+    Logger.error("Invalid stored rich document; returning plain text", "ContentRepository");
+    return null;
+  }
+  return parsed.data;
+}
+
+function bodyRevisionConflict(revision: number): ConflictException {
+  return new ConflictException({
+    ...refusalBody(409, "version_changed", "This post changed; reload before saving"),
+    bodyRevision: revision,
+  });
+}
 
 /**
  * Item statuses in which the text is still the author's to change.
@@ -1443,6 +1465,8 @@ export class ContentRepository {
           linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
           archivedFromStatus: schema.contentItems.archivedFromStatus,
           isSafeToDelete: schema.contentItems.isSafeToDelete,
+          richBody: schema.contentItems.richBody,
+          bodyRevision: schema.contentItems.bodyRevision,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -1467,6 +1491,7 @@ export class ContentRepository {
      */
     const itemEvidence =
       collectAiEvidence(aiVersions, (row) => row.adaptationId).get(null) ?? NO_AI_EVIDENCE;
+    const richBody = validStoredRichBody(cover[0]?.richBody, item.body);
     return {
       ...item,
       coverMediaId: cover[0]?.coverMediaId ?? null,
@@ -1474,6 +1499,9 @@ export class ContentRepository {
       linkPolicyWebsite: cover[0]?.linkPolicyWebsite ?? null,
       archivedFromStatus: cover[0]?.archivedFromStatus ?? null,
       isSafeToDelete: cover[0]?.isSafeToDelete ?? false,
+      richBody,
+      richBodyHtml: richBody ? (safeRichHtmlBlocks(richBody, item.body)?.join("\n") ?? null) : null,
+      bodyRevision: cover[0]?.bodyRevision ?? 0,
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable
@@ -1594,6 +1622,7 @@ export class ContentRepository {
         id: schema.contentVersions.id,
         adaptationId: schema.contentVersions.adaptationId,
         body: schema.contentVersions.body,
+        richBody: schema.contentVersions.richBody,
         hashtags: schema.contentVersions.hashtags,
         cta: schema.contentVersions.cta,
         origin: schema.contentVersions.origin,
@@ -1620,7 +1649,10 @@ export class ContentRepository {
       .orderBy(desc(schema.contentVersions.createdAt), desc(schema.contentVersions.id))
       .limit(21);
     return {
-      rows: page.slice(0, 20),
+      rows: page.slice(0, 20).map((row) => ({
+        ...row,
+        richBody: validStoredRichBody(row.richBody, row.body),
+      })),
       nextCursor: page.length > 20 ? (page[19]?.id ?? null) : null,
     };
   }
@@ -1637,6 +1669,7 @@ export class ContentRepository {
       const [version] = await tx
         .select({
           body: schema.contentVersions.body,
+          richBody: schema.contentVersions.richBody,
           hashtags: schema.contentVersions.hashtags,
           cta: schema.contentVersions.cta,
           adaptationId: schema.contentVersions.adaptationId,
@@ -1720,17 +1753,31 @@ export class ContentRepository {
         if (item.body !== data.expectedBody) {
           throw conflict("version_changed", "This post changed; reload before restoring");
         }
-        if (item.body !== version.body) {
+        if (item.richBody !== null && data.expectedBodyRevision === undefined) {
+          throw bodyRevisionConflict(item.bodyRevision);
+        }
+        if (
+          data.expectedBodyRevision !== undefined &&
+          item.bodyRevision !== data.expectedBodyRevision
+        ) {
+          throw bodyRevisionConflict(item.bodyRevision);
+        }
+        const restoredRich = validStoredRichBody(version.richBody, version.body);
+        if (
+          item.body !== version.body ||
+          JSON.stringify(item.richBody) !== JSON.stringify(restoredRich)
+        ) {
           await assertImagesFitBody(tx, orgId, itemId, version.body);
           await tx
             .update(schema.contentItems)
-            .set({ body: version.body })
+            .set({ body: version.body, richBody: restoredRich })
             .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)));
           await this.recordHumanVersion(tx, {
             orgId,
             contentItemId: itemId,
             adaptationId: null,
             body: version.body,
+            richBody: restoredRich,
             createdBy: userId,
           });
         }
@@ -1858,9 +1905,14 @@ export class ContentRepository {
     tx: Tx,
     orgId: string,
     id: string,
-  ): Promise<{ body: string; status: ContentStatus }> {
+  ): Promise<{ body: string; status: ContentStatus; richBody: unknown; bodyRevision: number }> {
     const rows = await tx
-      .select({ status: schema.contentItems.status, body: schema.contentItems.body })
+      .select({
+        status: schema.contentItems.status,
+        body: schema.contentItems.body,
+        richBody: schema.contentItems.richBody,
+        bodyRevision: schema.contentItems.bodyRevision,
+      })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1)
@@ -1889,7 +1941,7 @@ export class ContentRepository {
         "Resolve the partial Telegram post before editing its reviewed text",
       );
     }
-    return { body: item.body, status: item.status };
+    return item;
   }
 
   /**
@@ -1950,6 +2002,7 @@ export class ContentRepository {
       contentItemId: string;
       adaptationId: string | null;
       body: string;
+      richBody?: unknown;
       hashtags?: string[];
       cta?: string | null;
       createdBy: string;
@@ -1961,20 +2014,30 @@ export class ContentRepository {
   async update(orgId: string, id: string, data: ContentUpdate, userId: string) {
     await db.transaction(async (tx) => {
       const current = await this.requireEditableItem(tx, orgId, id);
+      if (
+        data.richBody !== undefined &&
+        (data.expectedBody !== current.body || data.expectedBodyRevision !== current.bodyRevision)
+      ) {
+        throw bodyRevisionConflict(current.bodyRevision);
+      }
       if (data.body !== undefined && data.body !== current.body) {
         await assertImagesFitBody(tx, orgId, id, data.body);
       }
       await tx
         .update(schema.contentItems)
-        .set(data)
+        .set({ title: data.title, body: data.body, richBody: data.richBody })
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
       const versionBody = humanVersionBody(current.body, data.body);
-      if (versionBody !== null) {
+      const richChanged =
+        data.richBody !== undefined &&
+        JSON.stringify(current.richBody) !== JSON.stringify(data.richBody);
+      if (versionBody !== null || richChanged) {
         await this.recordHumanVersion(tx, {
           orgId,
           contentItemId: id,
           adaptationId: null,
-          body: versionBody,
+          body: data.body ?? current.body,
+          richBody: data.richBody === undefined ? null : data.richBody,
           createdBy: userId,
         });
       }

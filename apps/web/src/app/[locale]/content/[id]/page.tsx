@@ -4,17 +4,21 @@ import type {
   AdaptationProposal,
   ContentImagesState,
   DraftRevisionProposal,
+  RichBody,
 } from "@pubrick/shared";
 import {
+  contentUpdateSchema,
   isManualPlatform,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
   MIN_RESCHEDULE_LEAD_MS,
   normalizeHashtags,
   type PublishFailureReason,
+  projectRichBody,
   REFINE_VERBS,
   type RefineProposal,
   type RefineVerb,
+  richBodySchema,
   stripHashtagSuffix,
   telegramPhotoParts,
   withHashtags,
@@ -58,6 +62,8 @@ import { CoverRegenerate } from "./cover-regenerate";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
+import { RichMasterEditor } from "./rich-master-editor";
+import { hasRichApiSupport, richDocumentFromPlainText } from "./rich-master-flow";
 import { SourceStrip } from "./source-strip";
 import { buildVcPackage } from "./vc-package";
 import { VersionHistory } from "./version-history";
@@ -127,6 +133,10 @@ type ContentItem = {
   videoMediaId: string | null;
   title: string | null;
   body: string;
+  /** Added by the rich editor API; optional while an older API is deployed. */
+  richBody?: RichBody | null;
+  richBodyHtml?: string | null;
+  bodyRevision?: number;
   status: ContentStatus;
   archivedFromStatus: ContentStatus | null;
   isSafeToDelete: boolean;
@@ -267,6 +277,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [mediaVersion, setMediaVersion] = useState(0);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
+  const [richDraft, setRichDraft] = useState<RichBody | null>(null);
+  const [richMode, setRichMode] = useState(false);
+  const [richError, setRichError] = useState<string | null>(null);
+  const [richResetNotice, setRichResetNotice] = useState(false);
+  const [richEditorEpoch, setRichEditorEpoch] = useState(0);
+  const richBaseline = useRef<{ body: string; revision: number } | null>(null);
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [ctaDrafts, setCtaDrafts] = useState<Record<string, string>>({});
@@ -434,6 +450,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     if (seededFor.current !== item.id) {
       seededFor.current = item.id;
       setBodyDraft(item.body);
+      setRichDraft(item.richBody ?? null);
+      setRichMode(hasRichApiSupport(item) && item.richBody != null);
+      setRichError(null);
+      setRichResetNotice(false);
+      setRichEditorEpoch((epoch) => epoch + 1);
+      richBaseline.current = hasRichApiSupport(item)
+        ? { body: item.body, revision: item.bodyRevision as number }
+        : null;
       setOverrideDrafts(
         Object.fromEntries(
           item.adaptations.map((a) => [
@@ -531,6 +555,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * disagreeing.
    */
   const draftMoved = item !== null && bodyDraft !== item.body;
+  const richSupported = item !== null && hasRichApiSupport(item);
+  const richDirty =
+    richSupported &&
+    (richError !== null || JSON.stringify(richDraft) !== JSON.stringify(item.richBody ?? null));
   const proposal = item?.refineProposal ?? null;
   const refineBlockedReason =
     refineBusy !== null
@@ -539,7 +567,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ? te("content_archived")
         : item !== null && item.origin !== "ai"
           ? te("refine_needs_ai_draft")
-          : draftMoved
+          : draftMoved || richDirty
             ? t("refineUnsaved")
             : selection === null
               ? t("refineNoSelection")
@@ -676,15 +704,90 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   async function saveBody() {
     setActionError(null);
+    // An invalid TipTap update leaves the last valid document in state. Never
+    // persist that older document as though it were the editor's visible text.
+    if (richSupported && richError !== null) return;
     try {
-      await api(`/api/content/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ body: bodyDraft }),
-      });
+      // Switching to the plain preview does not discard an unsaved rich edit.
+      // A real plain-text edit clears richDraft in the textarea onChange below.
+      const pendingRichEdit =
+        richSupported &&
+        richDraft !== null &&
+        JSON.stringify(richDraft) !== JSON.stringify(item.richBody ?? null);
+      if (richSupported && richDraft && (richMode || pendingRichEdit)) {
+        const parsed = contentUpdateSchema.safeParse({
+          body: bodyDraft,
+          richBody: richDraft,
+          expectedBody: richBaseline.current?.body,
+          expectedBodyRevision: richBaseline.current?.revision,
+        });
+        if (!parsed.success || !parsed.data.richBody) {
+          setRichError(t("richEditor.invalid"));
+          return;
+        }
+        const saved = await api<ContentItem>(`/api/content/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(parsed.data),
+        });
+        setRichDraft(saved?.richBody ?? parsed.data.richBody);
+        setRichResetNotice(false);
+        if (saved && hasRichApiSupport(saved)) {
+          richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
+        }
+      } else {
+        const previousBody = item?.body;
+        const saved = await api<ContentItem>(`/api/content/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body: bodyDraft }),
+        });
+        if (saved && hasRichApiSupport(saved)) {
+          richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
+          setRichDraft(saved.richBody ?? null);
+          if (previousBody !== bodyDraft && item?.richBody) setRichResetNotice(true);
+        }
+        if (!saved && previousBody !== bodyDraft) setRichDraft(null);
+      }
       await reload();
     } catch (err) {
       handleError(err);
     }
+  }
+
+  function activateRichEditor() {
+    if (!item || !richSupported) return;
+    if (richMode) {
+      setRichMode(false);
+      setSelection(null);
+      return;
+    }
+    const document =
+      richDraft && projectRichBody(richDraft) === bodyDraft
+        ? richDraft
+        : bodyDraft === item.body && item.richBody
+          ? item.richBody
+          : richDocumentFromPlainText(bodyDraft);
+    if (!document) {
+      setActionError(t("richEditor.unavailable"));
+      return;
+    }
+    setRichDraft(document);
+    setRichMode(true);
+    setRichError(null);
+    setRichResetNotice(false);
+    setSelection(null);
+    setRichEditorEpoch((epoch) => epoch + 1);
+  }
+
+  function updateRichDraft(document: unknown) {
+    const parsed = richBodySchema.safeParse(document);
+    if (!parsed.success) {
+      setRichError(t("richEditor.invalid"));
+      return;
+    }
+    setRichDraft(parsed.data);
+    setBodyDraft(projectRichBody(parsed.data));
+    setRichError(null);
+    setSelection(null);
   }
 
   async function saveOverride(adaptationId: string) {
@@ -1069,6 +1172,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         title: latest.title || tc("untitled"),
         body: latestAdaptation.body ?? latest.body,
         masterBody: latest.body,
+        richBodyHtml:
+          latestAdaptation.body === null || latestAdaptation.body === latest.body
+            ? (latest.richBodyHtml ?? null)
+            : null,
         coverMediaId: latest.coverMediaId,
         images: state.images,
       });
@@ -1225,6 +1332,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       });
       applyToItem(() => merged);
       setBodyDraft(merged.body);
+      setRichDraft(null);
+      setRichMode(false);
+      if (item?.richBody) setRichResetNotice(true);
+      if (hasRichApiSupport(merged)) {
+        richBaseline.current = { body: merged.body, revision: merged.bodyRevision as number };
+      }
       setSelection(null);
     } catch (err) {
       await refineFailed(err);
@@ -1707,6 +1820,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             two would nest and the markup would be invalid.
           */}
           <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+            {richSupported && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={activateRichEditor}
+                disabled={isArchived}
+              >
+                {t(richMode ? "richEditor.plainMode" : "richEditor.formatMode")}
+              </Button>
+            )}
             {/*
               ALWAYS MOUNTED, hidden only when there is nothing to say. It is a
               live region (a round trip starts and ends without anything else
@@ -1760,21 +1883,52 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               </Button>
             )}
           </div>
-          <DimmedTextarea
-            id="body"
-            label={t("bodyLabel")}
-            value={bodyDraft}
-            onChange={setBodyDraft}
-            disabled={isArchived}
-            onSelectionChange={setSelection}
-            aiVersions={item.aiVersionBodies.item}
-            dimmed={lens}
-            maxLength={MAX_BODY_LENGTH}
-            showCount
-            rows={10}
-          />
+          {richMode && richDraft && richSupported && (
+            <RichMasterEditor
+              key={`${item.id}-${richEditorEpoch}`}
+              initialDocument={richDraft}
+              onChange={updateRichDraft}
+              readOnly={isArchived}
+            />
+          )}
+          {richError && (
+            <p role="alert" className="mt-2 text-sm text-danger">
+              {richError}
+            </p>
+          )}
+          {richResetNotice && (
+            <p role="status" className="mt-2 text-sm text-fg-secondary">
+              {t("richEditor.formatReset")}
+            </p>
+          )}
+          <div className={richMode ? "mt-4" : undefined}>
+            <DimmedTextarea
+              id="body"
+              label={richMode ? t("richEditor.channelPreview") : t("bodyLabel")}
+              value={bodyDraft}
+              onChange={(body) => {
+                setBodyDraft(body);
+                if (body !== bodyDraft) {
+                  setRichDraft(null);
+                  setRichError(null);
+                }
+              }}
+              readOnly={richMode}
+              disabled={isArchived}
+              onSelectionChange={setSelection}
+              aiVersions={item.aiVersionBodies.item}
+              dimmed={lens}
+              maxLength={MAX_BODY_LENGTH}
+              showCount
+              rows={richMode ? 6 : 10}
+            />
+          </div>
           <div className="mt-3">
-            <Button variant="secondary" onClick={saveBody} disabled={isArchived}>
+            <Button
+              variant="secondary"
+              onClick={saveBody}
+              disabled={isArchived || (richSupported && richError !== null)}
+            >
               {t("saveBody")}
             </Button>
           </div>
@@ -1782,9 +1936,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             itemId={id}
             currentBody={item.body}
             draftBody={bodyDraft}
+            currentBodyRevision={item.bodyRevision}
+            currentRichBody={item.richBody ?? null}
+            unsavedFormatting={richDirty}
             editable={["draft", "partially_published", "rejected", "failed"].includes(item.status)}
+            onRichRestored={(document, revision) => {
+              setRichDraft(document);
+              setRichMode(document !== null);
+              setRichError(null);
+              setRichResetNotice(false);
+              setRichEditorEpoch((epoch) => epoch + 1);
+              if (revision !== undefined) richBaseline.current = { body: item.body, revision };
+            }}
             onRestored={async (body) => {
               setBodyDraft(body);
+              if (richBaseline.current) richBaseline.current.body = body;
               await reload();
             }}
           />
@@ -2163,7 +2329,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           staged={item.draftRevisionProposal}
           onAccepted={async (updatedBody) => {
             setBodyDraft(updatedBody);
+            setRichDraft(null);
+            setRichMode(false);
+            if (item.richBody) setRichResetNotice(true);
             await reload();
+            const latest = await fetchItem();
+            if (hasRichApiSupport(latest)) {
+              richBaseline.current = { body: latest.body, revision: latest.bodyRevision as number };
+            }
           }}
         />
       )}

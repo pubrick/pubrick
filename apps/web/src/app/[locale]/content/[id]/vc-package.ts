@@ -6,6 +6,8 @@ type VcPackageInput = {
   title: string;
   body: string;
   masterBody: string;
+  /** Server-rendered and allowlist-sanitized master HTML; omitted for channel overrides. */
+  richBodyHtml?: string | null;
   coverMediaId?: string | null;
   images: ContentImageDto[];
 };
@@ -20,12 +22,23 @@ export function vcArticleHtml(input: VcPackageInput): string {
   // the reviewed block's actual leading/trailing whitespace in the HTML.
   const paragraphs = input.body.split(/\n\s*\n/).filter((paragraph) => paragraph.trim().length > 0);
   const positionsMatch = input.body === input.masterBody;
+  const richBlocks =
+    positionsMatch && input.richBodyHtml && typeof DOMParser !== "undefined"
+      ? Array.from(new DOMParser().parseFromString(input.richBodyHtml, "text/html").body.children)
+          .filter(
+            (element) =>
+              ["P", "H2", "H3", "UL", "OL"].includes(element.tagName) &&
+              (element.textContent?.trim().length ?? 0) > 0,
+          )
+          .map((element) => element.outerHTML)
+      : null;
+  const blocks =
+    richBlocks?.length === paragraphs.length ? richBlocks : paragraphs.map(paragraphHtml);
   const imageByPosition = new Map(
     input.images.map((image, index) => [image.afterParagraph, index]),
   );
-  const article = paragraphs
-    .map((paragraph, position) => {
-      const paragraphMarkup = paragraphHtml(paragraph);
+  const article = blocks
+    .map((paragraphMarkup, position) => {
       const imageIndex = positionsMatch ? imageByPosition.get(position) : undefined;
       if (imageIndex === undefined) return paragraphMarkup;
       const image = input.images[imageIndex];

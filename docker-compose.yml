@@ -86,6 +86,9 @@ services:
       # failure at boot. Worker-only — the web needs no bound to paint an
       # overdue row (see .env.example).
       PUBLISH_MAX_LATENESS_HOURS: "${PUBLISH_MAX_LATENESS_HOURS:-6}"
+      # Optional ISO instant. Without it, historical samples never start paid
+      # automatic analysis, even when a brand has enabled that separate consent.
+      PAID_REPLY_DISPATCH_AFTER: "${PAID_REPLY_DISPATCH_AFTER:-}"
       TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
       VK_API_BASE_URL: ${VK_API_BASE_URL:-https://api.vk.com/method}
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}

@@ -13,6 +13,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -50,6 +51,8 @@ export const contentItems = pgTable(
     coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
+    richBody: jsonb("rich_body"),
+    bodyRevision: integer("body_revision").notNull().default(0),
     /** Editor's optional self-rating, not a verified quality or approval verdict. */
     qualityScore: doublePrecision("quality_score"),
     /** Compare-and-swap token for whole-set inline image edits. */
@@ -84,6 +87,7 @@ export const contentItems = pgTable(
       .notNull(),
   },
   (t) => [
+    check("content_items_body_revision_check", sql`${t.bodyRevision} >= 0`),
     check(
       "content_items_quality_score_check",
       sql`${t.qualityScore} >= 0 AND ${t.qualityScore} <= 1`,

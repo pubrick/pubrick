@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 import { withRunFailure } from "../classify.js";
 import { defineStep } from "./prompt.js";
+import { builtInAdapterRoleLines } from "./role-manifest.js";
 import type { Step } from "./types.js";
 
 /** The platforms a channel can exist for. */
@@ -158,13 +159,7 @@ export function adapterFor(channel: StepChannel): Step<AdapterInput, AdaptationO
     name: `adapter:${id}`,
     schema,
     channelId: id,
-    role: [
-      `You rewrite an approved draft for one channel: ${name}, on ${platform}.`,
-      `The result must be at most ${limit} characters — characters, not words or tokens, counted including spaces, punctuation and any link.`,
-      "Fitting the limit matters more than keeping every detail: cut the least important point rather than going over, and never end mid-sentence to make room.",
-      "Keep the meaning, the facts and the voice of the draft. Do not add claims it does not make or add emoji unless the draft already uses them.",
-      "If useful, return up to 10 hashtags in the separate hashtags array, without # in the body. The body plus hashtag suffix must fit the channel limit. A call to action may be returned in cta as an editorial suggestion only; it is not sent unless a human writes it into the body.",
-    ],
+    role: builtInAdapterRoleLines({ name, platform }),
     material: (_ctx, input) => [{ label: "DRAFT", text: input.body }],
   });
 

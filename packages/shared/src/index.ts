@@ -58,6 +58,7 @@ export * from "./dto/knowledge.js";
 export * from "./dto/media.js";
 export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
+export * from "./dto/paid-replies.js";
 export {
   PROMPT_ROLES,
   type PromptDecisionHistoryDto,
@@ -73,6 +74,7 @@ export {
   promptRevisionUsageDtoSchema,
   promptRoleSchema,
 } from "./dto/prompts.js";
+export * from "./dto/role-templates.js";
 export * from "./dto/runs.js";
 export * from "./dto/search-credentials.js";
 export * from "./dto/source-extraction.js";
@@ -111,6 +113,9 @@ export {
   type ManualAutopilotJob,
   type ManualDigestJob,
   type ManualTopicPlanJob,
+  PAID_REPLY_ANALYSIS_OPTIONS,
+  PAID_REPLY_ANALYSIS_QUEUE,
+  type PaidReplyAnalysisJob,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
   PUBLISH_DLQ,
@@ -120,6 +125,7 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  paidReplyAnalysisJobOptions,
   RELEVANCE_BATCH_DLQ,
   RELEVANCE_BATCH_QUEUE,
   RELEVANCE_BATCH_QUEUE_OPTIONS,
@@ -176,5 +182,6 @@ export {
   type RefineAcceptArgs,
   type RefineAcceptPlan,
 } from "./refine-merge.js";
+export * from "./rich-body.js";
 export { TELEGRAM_PHOTO_CAPTION_LENGTH, telegramPhotoParts } from "./telegram-photo-parts.js";
 export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

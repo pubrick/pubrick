@@ -1,6 +1,7 @@
 import { CLAIMS_TO_VERIFY_LABEL } from "@pubrick/shared";
 import { z } from "zod";
 import { defineStep } from "./prompt.js";
+import { BUILT_IN_ROLE_LINES } from "./role-manifest.js";
 import type { Step } from "./types.js";
 
 /**
@@ -104,15 +105,7 @@ export function validateFactcheckSources(
 const factcheckStep = defineStep<FactcheckInput, FactcheckOutput>({
   name: "factcheck",
   schema: factcheckSchema,
-  role: [
-    `You read a draft and list the factual claims it makes, so that a person can verify them before it is published. The list is shown to that person under the heading "${CLAIMS_TO_VERIFY_LABEL}".`,
-    "You have no way to look anything up. Supplied excerpts are only material someone provided, not independent verification. Decide nothing about whether a claim is true. Never say or imply that a claim has been checked, and never add a claim the draft does not make.",
-    "Produce, for each claim:",
-    "- text: the claim in one sentence, as the draft states it.",
-    "- needsCheck: true when a reader could reasonably ask whether it is true — numbers, dates, prices, comparisons, superlatives, attributions, anything about the world outside the post. False for common knowledge and for plainly signalled opinion.",
-    "- sourceId and sourceQuote: optional pair. If a short exact excerpt from a supplied SOURCE block relates to the claim, copy its source ID and verbatim excerpt. Otherwise omit both. A URL alone is never a source, and an excerpt does not prove the claim.",
-    "If the draft makes no factual claims, return an empty list.",
-  ],
+  role: BUILT_IN_ROLE_LINES.factcheck,
   material: (_ctx, input) => [
     { label: "DRAFT", text: input.body },
     ...(input.sources ?? []).map((source) => ({ label: `SOURCE ${source.id}`, text: source.text })),

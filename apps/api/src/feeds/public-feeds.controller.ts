@@ -1,8 +1,10 @@
 import { Controller, Get, Header, Param, ParseUUIDPipe, Res } from "@nestjs/common";
+import { projectRichBody, richBodySchema } from "@pubrick/shared";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import type { Response } from "express";
 import { Feed } from "feed";
 import { escape as escapeHtml } from "html-escaper";
+import { safeRichHtmlBlocks } from "../content/rich-html";
 import { env } from "../env";
 import { MediaRepository } from "../media/media.repository";
 import { FeedsRepository } from "./feeds.repository";
@@ -30,12 +32,27 @@ function paragraphs(
   orgId?: string,
   token?: string,
   entryId?: string,
+  richBody?: unknown,
 ): string {
-  return text
-    .split(/\n\s*\n/)
-    .filter((paragraph) => paragraph.trim().length > 0)
-    .map((paragraph, index) => {
-      const copy = `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`;
+  const richBlocks = safeRichHtmlBlocks(richBody ?? null, text);
+  // Image slots count visible projected paragraphs, not raw rich JSON blocks.
+  const parsedRich = richBlocks ? richBodySchema.safeParse(richBody) : null;
+  const blocks =
+    (richBlocks && parsedRich?.success
+      ? richBlocks.filter((_, index) => {
+          const block = parsedRich.data.content[index];
+          return (
+            block !== undefined &&
+            projectRichBody({ type: "doc", content: [block] }).trim().length > 0
+          );
+        })
+      : null) ??
+    text
+      .split(/\n\s*\n/)
+      .filter((paragraph) => paragraph.trim().length > 0)
+      .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`);
+  return blocks
+    .map((copy, index) => {
       if (!orgId || !token || !entryId) return copy;
       const figures = images
         .filter((image) => image.afterParagraph === index)
@@ -104,7 +121,14 @@ export class PublicFeedsController {
         title: xmlSafe(entry.title),
         date: entry.publishedAt,
         description: xmlSafe(entry.body.slice(0, 280)),
-        content: paragraphs(xmlSafe(entry.body), entry.images, orgId, token, entry.id),
+        content: paragraphs(
+          xmlSafe(entry.body),
+          entry.images,
+          orgId,
+          token,
+          entry.id,
+          entry.richBody,
+        ),
       });
     }
     return feed.rss2();
@@ -123,7 +147,7 @@ export class PublicFeedsController {
     @Param("entryId", ParseUUIDPipe) entryId: string,
   ) {
     const article = await this.feeds.publicArticle(orgId, token, entryId);
-    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}figure img{display:block;max-width:100%;height:auto;border-radius:.4rem}figcaption{font-size:.9rem;color:#625e5a;margin-top:.4rem}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body, article.images, orgId, token, entryId)}</main></body></html>`;
+    return `<!doctype html><html lang="${escapeHtml(article.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(article.title)}</title><style>body{max-width:42rem;margin:3rem auto;padding:0 1.25rem;font:1.1rem/1.65 system-ui,sans-serif;color:#21201e}h1{line-height:1.2}small{color:#625e5a}figure img{display:block;max-width:100%;height:auto;border-radius:.4rem}figcaption{font-size:.9rem;color:#625e5a;margin-top:.4rem}</style></head><body><main><small>${escapeHtml(article.brandName)} · ${article.publishedAt.toISOString().slice(0, 10)}</small><h1>${escapeHtml(article.title)}</h1>${paragraphs(article.body, article.images, orgId, token, entryId, article.richBody)}</main></body></html>`;
   }
 
   @Get("articles/:entryId/images/:imageId")

@@ -230,6 +230,12 @@ export default function PromptsPage() {
       )}
       <Card className="mb-6">
         <p className="mb-4 text-sm text-fg-secondary">{t("intro")}</p>
+        <Link
+          href={`/${locale}/settings/prompts/templates`}
+          className="mb-4 inline-block text-sm text-accent underline"
+        >
+          {t("roleTemplatesLink")}
+        </Link>
         <form
           id={FORM_ID}
           onSubmit={(event) => {

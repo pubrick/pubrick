@@ -16,6 +16,7 @@ const version: ContentVersionDto = {
   id: "11111111-1111-4111-8111-111111111111",
   adaptationId: null,
   body: "An older saved draft.",
+  richBody: null,
   hashtags: [],
   cta: null,
   origin: "human",
@@ -30,6 +31,50 @@ beforeEach(() => {
 });
 
 describe("VersionHistory", () => {
+  it("restores formatting-only history with a body revision expectation", async () => {
+    const richBody = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [
+            { type: "text" as const, text: "Current text.", marks: [{ type: "bold" as const }] },
+          ],
+        },
+      ],
+    };
+    mockApiPage.mockResolvedValue({
+      rows: [{ ...version, body: "Current text.", richBody }],
+      nextCursor: null,
+    });
+    mockApi.mockResolvedValue({ bodyRevision: 5 });
+    const onRestored = vi.fn().mockResolvedValue(undefined);
+    const onRichRestored = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <VersionHistory
+        itemId="22222222-2222-4222-8222-222222222222"
+        currentBody="Current text."
+        draftBody="Current text."
+        currentBodyRevision={4}
+        currentRichBody={null}
+        editable
+        onRestored={onRestored}
+        onRichRestored={onRichRestored}
+      />,
+    );
+    await user.click(screen.getByText("Version history"));
+    await user.click(await screen.findByRole("button", { name: "Preview" }));
+    expect(screen.getByRole("button", { name: "Restore this text" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Restore this text" }));
+    expect(mockApi).toHaveBeenCalledWith(expect.stringContaining("/restore"), {
+      method: "POST",
+      body: JSON.stringify({ expectedBody: "Current text.", expectedBodyRevision: 4 }),
+    });
+    expect(onRichRestored).toHaveBeenCalledWith(richBody, 5);
+    expect(onRestored).toHaveBeenCalledWith("Current text.");
+  });
+
   it("loads on disclosure and restores a preview only after confirmation", async () => {
     const user = userEvent.setup();
     const onRestored = vi.fn().mockResolvedValue(undefined);

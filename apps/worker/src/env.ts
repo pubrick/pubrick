@@ -24,6 +24,11 @@ export const env = parseEnv({
     }
   }, "APP_ENCRYPTION_KEY must be one or more comma-separated base64 keys, each decoding to exactly 32 bytes, newest first"),
   TELEGRAM_API_BASE_URL: z.string().default("https://api.telegram.org"),
+  /** Unset keeps paid dispatch off; only handoffs created at/after this instant may run. */
+  PAID_REPLY_DISPATCH_AFTER: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.iso.datetime({ offset: true }).optional(),
+  ),
   WEB_ORIGIN: z.url().default("http://localhost:3000"),
   TELEGRAM_API_ID: z.preprocess(
     (value) => (value === "" ? undefined : value),

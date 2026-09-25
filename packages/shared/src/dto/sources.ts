@@ -293,13 +293,30 @@ export const commentAnalysisResultSchema = z.object({
 });
 export type CommentAnalysisResult = z.infer<typeof commentAnalysisResultSchema>;
 
-export const commentAnalysisDtoSchema = z.discriminatedUnion("status", [
+const commentAnalysisLegacyDtoSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("unavailable") }),
   z.object({ status: z.literal("not_collected") }),
   z.object({ status: z.literal("no_comments") }),
   z.object({ status: z.literal("no_key") }),
   z.object({ status: z.literal("limit_reached") }),
   z.object({ status: z.literal("in_progress") }),
+  z.object({ status: z.literal("queued") }),
+  z.object({ status: z.literal("analyzing") }),
+  z.object({
+    status: z.literal("blocked"),
+    reason: z
+      .enum([
+        "hourly_limit",
+        "brand_daily_threshold",
+        "org_daily_threshold",
+        "unknown_spend",
+        "setting_changed",
+        "request_too_large",
+        "unpriced_model",
+      ])
+      .optional(),
+  }),
+  z.object({ status: z.literal("unknown") }),
   z.object({ status: z.literal("timed_out") }),
   z.object({ status: z.literal("failed") }),
   z.object({ status: z.literal("not_analyzed") }),
@@ -311,4 +328,51 @@ export const commentAnalysisDtoSchema = z.discriminatedUnion("status", [
     analyzedAt: z.string(),
   }),
 ]);
+/** Current sample/check state and an older aggregate may coexist after a refresh. */
+export const commentAnalysisDtoSchema = commentAnalysisLegacyDtoSchema.and(
+  z.object({
+    current: z
+      .object({
+        status: z.enum([
+          "unavailable",
+          "not_collected",
+          "no_comments",
+          "no_key",
+          "limit_reached",
+          "in_progress",
+          "queued",
+          "analyzing",
+          "blocked",
+          "unknown",
+          "timed_out",
+          "failed",
+          "not_analyzed",
+          "stale",
+          "ready",
+        ]),
+        sampleVersion: z.string().nullable(),
+        collectionStatus: z.string().nullable().optional(),
+        reason: z
+          .enum([
+            "hourly_limit",
+            "brand_daily_threshold",
+            "org_daily_threshold",
+            "unknown_spend",
+            "setting_changed",
+            "request_too_large",
+            "unpriced_model",
+          ])
+          .optional(),
+      })
+      .optional(),
+    earlierAnalysis: z
+      .object({
+        sampleVersion: z.string().nullable(),
+        result: commentAnalysisResultSchema,
+        sampleSize: z.number().int().min(1),
+        analyzedAt: z.string(),
+      })
+      .optional(),
+  }),
+);
 export type CommentAnalysisDto = z.infer<typeof commentAnalysisDtoSchema>;

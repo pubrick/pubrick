@@ -338,6 +338,30 @@ Migrations apply on boot; back up the `pgdata` and `media` volumes before major
 upgrades. Keep them together: post cover references live in Postgres and image
 bytes live in `media` (see [Media library](media-library.md)).
 
+### Enable role-template activation after the worker upgrade
+
+The role-template editor can save and preview drafts immediately after the
+upgrade. Activating a revision is held behind a database gate so an older worker
+cannot start a generation run with instructions that it cannot pin. For a
+single-host Compose install, finish `docker compose up -d --build`, confirm the
+old worker container has stopped and the new worker is running, then enable the
+gate once in PostgreSQL:
+
+```sql
+UPDATE role_template_activation_gate
+SET release_epoch = release_epoch + 1, activation_enabled = true,
+    updated_at = now()
+WHERE id = 1 AND activation_enabled = false;
+```
+
+On a multi-host installation, first drain every older worker and confirm the
+new worker build supports complete role snapshots before running that statement.
+Already-started generation runs retain their built-in instruction baseline;
+newly claimed runs use the active template revisions. If an old worker is still
+handling generation jobs, leave the gate closed. See
+[Versioned role templates](specs/0003-versioned-role-templates.md) for the
+snapshot and activation contract.
+
 The topic format upgrade (migration 0081) adds three `NOT VALID` checks for
 topic formats and editorial SEO keywords. They reject invalid new writes as
 soon as the upgrade commits. Existing rows receive safe defaults, so the
@@ -382,6 +406,7 @@ each one in full.
 | 2026-09-04 | `POSTGRES_PORT` | no | localhost-only mapping for Postgres (default `5432`) |
 | 2026-09-23 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | no | required together when reading Telegram channel sources ([setup](telegram-sources.md)) |
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
+| 2026-09-25 | `PAID_REPLY_DISPATCH_AFTER` | no | optional ISO instant with a timezone offset; only automatic reply-analysis handoffs collected at or after this instant may start a paid Gemini call. Unset means no automatic paid dispatch. Existing manual Analyze remains available. Brand-level paid switches and daily admission thresholds must also be configured. |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot
 miss them. The seven optional ones are the ones worth reading: an `.env` written

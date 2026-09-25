@@ -72,6 +72,14 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
     });
 
     if (method === "GET" && path === "/api/ai-credentials") return handlers.credentials ?? [];
+    if (method === "GET" && path === "/api/paid-replies/organization")
+      return {
+        timezone: "UTC",
+        dailyThresholdUsd: 5,
+        revision: 0,
+        admittedCostUsd: 0,
+        blockedReason: null,
+      };
     if (method === "GET" && path === "/api/ai-credentials/spend")
       return handlers.spend ?? ({ kind: "exact", usd: 0 } satisfies CostSummary);
     if (method === "PUT" && path === "/api/ai-credentials") return googleKey;

@@ -156,6 +156,8 @@ export const newsItems = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }),
     commentsStatus: text("comments_status", { enum: NEWS_COMMENT_STATUSES }),
     commentsCheckedAt: timestamp("comments_checked_at", { withTimezone: true }),
+    /** Identity of the persisted reply rows; refresh errors keep this value. */
+    commentsSampleVersion: uuid("comments_sample_version"),
     commentsErrorCode: text("comments_error_code"),
     editorSignal: text("editor_signal", { enum: NEWS_FEEDBACK_SIGNALS }),
     dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
@@ -274,6 +276,7 @@ export const newsCommentAnalyses = pgTable(
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
     sampleCheckedAt: timestamp("sample_checked_at", { withTimezone: true }).notNull(),
+    sampleVersion: uuid("sample_version"),
     result: jsonb("result").notNull(),
     sampleSize: integer("sample_size").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

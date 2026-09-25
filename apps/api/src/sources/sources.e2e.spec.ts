@@ -7,8 +7,7 @@ import { encryptJson, privateTelegramSourceCreateSchema } from "@pubrick/shared"
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommentAnalysisCaller } from "./comment-analysis.caller";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@pubrick/telegram", () => ({ resolveJoinedPrivateChannel: vi.fn() }));
 
@@ -16,12 +15,12 @@ const url = process.env.TEST_DATABASE_URL;
 
 describe.skipIf(!url)("watched sources e2e", () => {
   let app: INestApplication;
-  const analysisRun = vi.fn();
 
   beforeEach(() => {
     vi.mocked(resolveJoinedPrivateChannel).mockReset();
-    analysisRun.mockReset();
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url;
@@ -30,10 +29,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
     process.env.TELEGRAM_API_ID = "12345";
     process.env.TELEGRAM_API_HASH = "test-hash";
     const { AppModule } = await import("../app.module");
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(CommentAnalysisCaller)
-      .useValue({ run: analysisRun })
-      .compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
@@ -43,6 +39,22 @@ describe.skipIf(!url)("watched sources e2e", () => {
   afterAll(async () => {
     await app.close();
   });
+
+  function mockCountTokens() {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const endpoint = String(input);
+      if (!endpoint.endsWith(":countTokens"))
+        throw new Error(`Unexpected external request: ${endpoint}`);
+      expect(init?.method).toBe("POST");
+      expect(
+        JSON.parse(String(init?.body)).generateContentRequest.generationConfig.maxOutputTokens,
+      ).toBe(1024);
+      return new Response(JSON.stringify({ totalTokens: 200 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+  }
 
   async function orgAgent(): Promise<{ agent: request.Agent; orgId: string }> {
     const agent = request.agent(app.getHttpServer());
@@ -710,7 +722,12 @@ describe.skipIf(!url)("watched sources e2e", () => {
         .from(schema.usageLedger)
         .where(eq(schema.usageLedger.orgId, orgId)),
     ).toEqual(before);
-    expect(analysisRun).not.toHaveBeenCalled();
+    expect(
+      await db
+        .select({ id: schema.paidReplyAnalysisAttempts.id })
+        .from(schema.paidReplyAnalysisAttempts)
+        .where(eq(schema.paidReplyAnalysisAttempts.orgId, orgId)),
+    ).toHaveLength(0);
   });
 
   it("searches literal title and summary text before the news limit within a source and brand", async () => {
@@ -1092,10 +1109,15 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .from(schema.usageLedger)
       .where(eq(schema.usageLedger.orgId, orgId));
     expect(usageAfter).toEqual(usageBefore);
-    expect(analysisRun).not.toHaveBeenCalled();
+    expect(
+      await db
+        .select({ id: schema.paidReplyAnalysisAttempts.id })
+        .from(schema.paidReplyAnalysisAttempts)
+        .where(eq(schema.paidReplyAnalysisAttempts.orgId, orgId)),
+    ).toHaveLength(0);
   });
 
-  it("analyzes an organization-scoped saved sample, records spend, and marks later samples stale", async () => {
+  it("queues one owned frozen sample and shows an earlier aggregate after a new sample", async () => {
     const { agent, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Discussion brand" }).expect(201);
@@ -1109,6 +1131,8 @@ describe.skipIf(!url)("watched sources e2e", () => {
       })
       .expect(201);
     const { db } = await import("../db");
+    const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const sampleVersion = randomUUID();
     const [item] = await db
       .insert(schema.newsItems)
       .values({
@@ -1121,95 +1145,107 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .returning({ id: schema.newsItems.id });
     if (!item) throw new Error("story fixture missing");
     const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
-    expect((await agent.get(route).expect(200)).body).toEqual({ status: "not_collected" });
+    expect((await agent.get(route).expect(200)).body).toMatchObject({
+      status: "not_collected",
+      current: { sampleVersion: null },
+    });
     await other.get(route).expect(404);
     await other.post(route).expect(404);
     await db
       .update(schema.newsItems)
       .set({
         commentsStatus: "available",
-        commentsCheckedAt: new Date("2026-09-23T10:00:00Z"),
+        commentsCheckedAt: checkedAt,
+        commentsSampleVersion: sampleVersion,
       })
       .where(eq(schema.newsItems.id, item.id));
-    expect((await agent.get(route).expect(200)).body).toEqual({ status: "no_comments" });
+    expect((await agent.get(route).expect(200)).body).toMatchObject({ status: "no_comments" });
     await db.insert(schema.newsComments).values({
       orgId,
       brandId: brand.body.id,
       itemId: item.id,
       telegramMessageId: 10,
       body: "Please explain the pricing for smaller teams.",
-      publishedAt: new Date("2026-09-23T09:00:00Z"),
+      publishedAt: checkedAt,
     });
-    expect((await agent.get(route).expect(200)).body).toEqual({ status: "no_key" });
-    expect((await agent.post(route).expect(201)).body).toEqual({ status: "no_key" });
-    expect(analysisRun).not.toHaveBeenCalled();
+    expect((await agent.get(route).expect(200)).body).toMatchObject({ status: "no_key" });
+    expect((await agent.post(route).expect(201)).body).toMatchObject({ status: "no_key" });
+    expect(
+      await db
+        .select()
+        .from(schema.paidReplyAnalysisAttempts)
+        .where(eq(schema.paidReplyAnalysisAttempts.orgId, orgId)),
+    ).toHaveLength(0);
     await agent
       .put("/api/ai-credentials")
-      .send({
-        provider: "google",
-        apiKey: "test-key-never-used",
-      })
+      .send({ provider: "google", apiKey: "test-key-never-used" })
       .expect(200);
-    expect((await agent.get(route).expect(200)).body).toEqual({ status: "not_analyzed" });
-    analysisRun.mockImplementationOnce(
-      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
-        await args.onUsage({
-          provider: "google",
-          modelId: "gemini-test",
-          attempt: 1,
-          inputTokens: 20,
-          outputTokens: 10,
-          cachedInputTokens: 0,
-          reasoningTokens: 0,
-          costUsd: 0.00001,
-          costSource: "price_table",
-          responseMs: 20,
-          status: "ok",
-          outcome: "completed",
-        });
-        return {
-          ok: true,
-          result: {
-            summary: "Readers want clearer prices for small teams.",
-            sentiment: { positive: 0, neutral: 1, negative: 0 },
-            themes: [{ label: "Pricing", mentions: 1 }],
-            feedback: ["Clarify the small-team pricing."],
-          },
-          usage: [],
-        };
-      },
-    );
-    const analyzed = (await agent.post(route).expect(201)).body;
-    expect(analyzed).toMatchObject({
-      status: "ready",
-      sampleSize: 1,
-      result: { themes: [{ label: "Pricing", mentions: 1 }] },
+    expect((await agent.get(route).expect(200)).body).toMatchObject({ status: "not_analyzed" });
+    const countTokens = mockCountTokens();
+    const queued = (await agent.post(route).expect(201)).body;
+    expect(queued).toMatchObject({
+      status: "in_progress",
+      current: { sampleVersion, collectionStatus: "available" },
     });
-    expect(JSON.stringify(analyzed)).not.toContain("test-key-never-used");
-    expect(analysisRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        credential: expect.objectContaining({ provider: "google" }),
-        comments: ["Please explain the pricing for smaller teams."],
-      }),
-    );
-    const ledger = await db
+    expect(JSON.stringify(queued)).not.toContain("test-key-never-used");
+    expect((await agent.post(route).expect(201)).body).toMatchObject({ status: "in_progress" });
+    expect(countTokens).toHaveBeenCalledTimes(1);
+    const attempts = await db
       .select()
-      .from(schema.usageLedger)
+      .from(schema.paidReplyAnalysisAttempts)
       .where(
-        and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.step, "comment_analysis")),
+        and(
+          eq(schema.paidReplyAnalysisAttempts.orgId, orgId),
+          eq(schema.paidReplyAnalysisAttempts.targetId, item.id),
+        ),
       );
-    expect(ledger).toHaveLength(1);
-    expect(ledger[0]).toMatchObject({ keyOwnership: "byok", inputTokens: 20 });
-    expect((await agent.post(route).expect(201)).body.status).toBe("ready");
-    expect(analysisRun).toHaveBeenCalledTimes(1);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      status: "queued",
+      origin: "manual",
+      sampleVersion,
+      sampleSize: 1,
+    });
+    expect(attempts[0]?.promptEncrypted).toBeTruthy();
+    expect(
+      await db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId)),
+    ).toHaveLength(0);
+    const result = {
+      summary: "Readers want clearer prices for small teams.",
+      sentiment: { positive: 0, neutral: 1, negative: 0 },
+      themes: [{ label: "Pricing", mentions: 1 }],
+      feedback: ["Clarify the small-team pricing."],
+    };
+    await db.insert(schema.newsCommentAnalyses).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      sampleVersion,
+      sampleCheckedAt: checkedAt,
+      sampleSize: 1,
+      result,
+    });
+    expect((await agent.get(route).expect(200)).body).toMatchObject({
+      status: "ready",
+      result,
+      sampleSize: 1,
+    });
+    const newVersion = randomUUID();
     await db
       .update(schema.newsItems)
-      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .set({
+        commentsSampleVersion: newVersion,
+        commentsCheckedAt: new Date("2026-09-23T11:00:00Z"),
+      })
       .where(eq(schema.newsItems.id, item.id));
-    expect((await agent.get(route).expect(200)).body).toEqual({ status: "stale" });
+    expect((await agent.get(route).expect(200)).body).toMatchObject({
+      status: "stale",
+      current: { sampleVersion: newVersion },
+      earlierAnalysis: { sampleVersion, result, sampleSize: 1 },
+    });
   });
 
-  it("admits one concurrent analysis per sample and counts source and publication requests together", async () => {
+  it("keeps one attempt for concurrent manual requests and shares the rolling allowance", async () => {
     const { agent, orgId } = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Metered brand" }).expect(201);
     const source = await agent
@@ -1223,6 +1259,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .expect(201);
     const { db } = await import("../db");
     const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const sampleVersion = randomUUID();
     const [item] = await db
       .insert(schema.newsItems)
       .values({
@@ -1233,6 +1270,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
         url: "https://t.me/metered/7",
         commentsStatus: "available",
         commentsCheckedAt: checkedAt,
+        commentsSampleVersion: sampleVersion,
       })
       .returning({ id: schema.newsItems.id });
     if (!item) throw new Error("story fixture missing");
@@ -1248,40 +1286,37 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .put("/api/ai-credentials")
       .send({ provider: "google", apiKey: "test-key-never-used" })
       .expect(200);
+    const countTokens = mockCountTokens();
     const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
-    let started!: () => void;
-    let release!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    analysisRun.mockImplementationOnce(async () => {
-      started();
-      await gate;
-      return {
-        ok: true,
-        result: {
-          summary: "Pricing question.",
-          sentiment: { positive: 0, neutral: 1, negative: 0 },
-          themes: [{ label: "Price", mentions: 1 }],
-          feedback: [],
-        },
-        usage: [],
-      };
-    });
-    const first = agent.post(route).then((response) => response);
-    await entered;
-    expect((await agent.post(route).expect(201)).body).toEqual({ status: "in_progress" });
-    expect(analysisRun).toHaveBeenCalledTimes(1);
-    release();
-    expect((await first).body.status).toBe("ready");
+    const [first, second] = await Promise.all([agent.post(route), agent.post(route)]);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.status).toBe("in_progress");
+    expect(second.body.status).toBe("in_progress");
+    expect(countTokens.mock.calls.every(([input]) => String(input).endsWith(":countTokens"))).toBe(
+      true,
+    );
+    const attempts = await db
+      .select()
+      .from(schema.paidReplyAnalysisAttempts)
+      .where(
+        and(
+          eq(schema.paidReplyAnalysisAttempts.orgId, orgId),
+          eq(schema.paidReplyAnalysisAttempts.targetId, item.id),
+        ),
+      );
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ sampleVersion, status: "queued" });
+    expect(
+      await db
+        .select()
+        .from(schema.analysisAdmissions)
+        .where(eq(schema.analysisAdmissions.orgId, orgId)),
+    ).toHaveLength(1);
+    expect(
+      await db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId)),
+    ).toHaveLength(0);
 
-    await db
-      .update(schema.newsItems)
-      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
-      .where(eq(schema.newsItems.id, item.id));
     const { admitAnalysis, recordAnalysisUsage } = await import("../analysis-admission");
     const extra = await Promise.all(
       Array.from({ length: 9 }, (_, index) =>
@@ -1294,8 +1329,28 @@ describe.skipIf(!url)("watched sources e2e", () => {
       ),
     );
     expect(extra.every((admission) => admission.status === "admitted")).toBe(true);
-    expect((await agent.post(route).expect(201)).body).toEqual({ status: "limit_reached" });
-    expect(analysisRun).toHaveBeenCalledTimes(1);
+    await db
+      .update(schema.newsItems)
+      .set({
+        commentsSampleVersion: randomUUID(),
+        commentsCheckedAt: new Date("2026-09-23T11:00:00Z"),
+      })
+      .where(eq(schema.newsItems.id, item.id));
+    expect((await agent.post(route).expect(201)).body).toMatchObject({
+      status: "blocked",
+      reason: "hourly_limit",
+    });
+    expect(
+      await db
+        .select()
+        .from(schema.paidReplyAnalysisAttempts)
+        .where(
+          and(
+            eq(schema.paidReplyAnalysisAttempts.orgId, orgId),
+            eq(schema.paidReplyAnalysisAttempts.targetId, item.id),
+          ),
+        ),
+    ).toHaveLength(1);
 
     const lossMarker = extra[0];
     if (lossMarker?.status !== "admitted") throw new Error("expected admission fixture");
@@ -1363,7 +1418,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
     ).toBe("limit_reached");
   });
 
-  it("does not save a paid analysis after its source comment sample changes", async () => {
+  it("does not admit a source sample replaced while countTokens is in flight", async () => {
     const { agent, orgId } = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Moving discussion" }).expect(201);
     const source = await agent
@@ -1387,6 +1442,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
         url: "https://t.me/moving_discussion/7",
         commentsStatus: "available",
         commentsCheckedAt: checkedAt,
+        commentsSampleVersion: randomUUID(),
       })
       .returning({ id: schema.newsItems.id });
     if (!item) throw new Error("story fixture missing");
@@ -1402,65 +1458,46 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .put("/api/ai-credentials")
       .send({ provider: "google", apiKey: "test-key-never-used" })
       .expect(200);
-    let started!: () => void;
+    let entered!: () => void;
     let release!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      started = resolve;
+    const countStarted = new Promise<void>((resolve) => {
+      entered = resolve;
     });
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    analysisRun.mockImplementationOnce(
-      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
-        started();
-        await gate;
-        await args.onUsage({
-          provider: "google",
-          modelId: "gemini-test",
-          attempt: 1,
-          inputTokens: 20,
-          outputTokens: 10,
-          cachedInputTokens: 0,
-          reasoningTokens: 0,
-          costUsd: 0.00001,
-          costSource: "price_table",
-          responseMs: 20,
-          status: "ok",
-          outcome: "completed",
-        });
-        return {
-          ok: true,
-          result: {
-            summary: "Old question.",
-            sentiment: { positive: 0, neutral: 1, negative: 0 },
-            themes: [{ label: "Old", mentions: 1 }],
-            feedback: [],
-          },
-          usage: [],
-        };
-      },
-    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (!String(input).endsWith(":countTokens")) throw new Error("Unexpected generation request");
+      entered();
+      await gate;
+      return new Response(JSON.stringify({ totalTokens: 200 }), { status: 200 });
+    });
     const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
     const pending = agent.post(route).then((response) => response);
-    await entered;
+    await countStarted;
     await db
       .update(schema.newsItems)
-      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .set({
+        commentsSampleVersion: randomUUID(),
+        commentsCheckedAt: new Date("2026-09-23T11:00:00Z"),
+      })
       .where(eq(schema.newsItems.id, item.id));
     release();
-    expect((await pending).body).toEqual({ status: "stale" });
-    const saved = await db
-      .select({ itemId: schema.newsCommentAnalyses.itemId })
-      .from(schema.newsCommentAnalyses)
-      .where(eq(schema.newsCommentAnalyses.itemId, item.id));
-    expect(saved).toHaveLength(0);
-    const ledger = await db
-      .select({ analysisAdmissionId: schema.usageLedger.analysisAdmissionId })
-      .from(schema.usageLedger)
-      .where(
-        and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.step, "comment_analysis")),
-      );
-    expect(ledger).toHaveLength(1);
-    expect(ledger[0]?.analysisAdmissionId).toBeTruthy();
+    expect((await pending).body).toMatchObject({ status: "stale" });
+    expect(
+      await db
+        .select()
+        .from(schema.paidReplyAnalysisAttempts)
+        .where(eq(schema.paidReplyAnalysisAttempts.orgId, orgId)),
+    ).toHaveLength(0);
+    expect(
+      await db
+        .select()
+        .from(schema.analysisAdmissions)
+        .where(eq(schema.analysisAdmissions.orgId, orgId)),
+    ).toHaveLength(0);
+    expect(
+      await db.select().from(schema.usageLedger).where(eq(schema.usageLedger.orgId, orgId)),
+    ).toHaveLength(0);
   });
 });

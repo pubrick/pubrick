@@ -17,9 +17,11 @@ import { KnowledgeModule } from "./knowledge/knowledge.module";
 import { MediaModule } from "./media/media.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { OrgModule } from "./org/org.module";
+import { PaidRepliesModule } from "./paid-replies/paid-replies.module";
 import { PromptsModule } from "./prompts/prompts.module";
 import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
+import { RoleTemplatesModule } from "./role-templates/role-templates.module";
 import { RunsModule } from "./runs/runs.module";
 import { SearchCredentialsModule } from "./search-credentials/search-credentials.module";
 import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
@@ -46,10 +48,12 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     ContentModule,
     FeedsModule,
     OrgModule,
+    PaidRepliesModule,
     PromptsModule,
     PublicApiModule,
     AiCredentialsModule,
     RunsModule,
+    RoleTemplatesModule,
     SearchCredentialsModule,
     SourceExtractionModule,
     SourcesModule,

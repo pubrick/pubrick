@@ -1,5 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
-import type { AiCredential } from "@pubrick/ai";
+import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { readVkPostMetrics } from "@pubrick/integrations";
 import {
@@ -14,15 +13,14 @@ import {
   type PublicationCommentsDto,
   type PublicationMetricsDto,
 } from "@pubrick/shared";
-import { and, desc, eq, gt, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
-import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, notFound } from "../api-error";
 import { ChannelsRepository } from "../channels/channels.repository";
 import { db } from "../db";
 import { env } from "../env";
+import { requestManualPaidReplyAnalysis } from "../paid-replies/manual-analysis";
 import { QueueService } from "../queue/queue.service";
-import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
 
 const MAX_POSTS = 100;
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -56,7 +54,6 @@ export class AnalyticsRepository {
     private readonly channels: ChannelsRepository,
     private readonly queue: QueueService,
     private readonly aiCredentials: AiCredentialsRepository,
-    private readonly commentAnalysisCaller: CommentAnalysisCaller,
   ) {}
 
   private async requireBrand(orgId: string, brandId: string) {
@@ -629,6 +626,7 @@ export class AnalyticsRepository {
         status: schema.publicationCommentSamples.status,
         checkedAt: schema.publicationCommentSamples.checkedAt,
         requestedAt: schema.publicationCommentSamples.requestedAt,
+        sampleVersion: schema.publicationCommentSamples.sampleVersion,
       })
       .from(schema.publicationCommentSamples)
       .where(
@@ -654,19 +652,24 @@ export class AnalyticsRepository {
     return { sample, comments };
   }
 
-  async commentAnalysis(orgId: string, brandId: string, publicationId: string) {
+  private async commentAnalysisCurrent(orgId: string, brandId: string, publicationId: string) {
     const publication = await this.liveTelegramPublication(orgId, brandId, publicationId);
     if (!isPublicTelegramPostUrl(publication.externalUrl, publication.externalId)) {
       return { status: "unavailable" as const };
     }
     const { sample, comments } = await this.analysisSample(orgId, brandId, publicationId);
-    if (sample?.status === "unavailable") return { status: "unavailable" as const };
-    if (!sample?.checkedAt) return { status: "not_collected" as const };
+    if (!sample?.checkedAt)
+      return {
+        status:
+          sample?.status === "unavailable" ? ("unavailable" as const) : ("not_collected" as const),
+      };
     if (comments.length === 0) return { status: "no_comments" as const };
+    if (!sample.sampleVersion) return { status: "not_collected" as const };
     const [analysis] = await db
       .select({
         result: schema.publicationCommentAnalyses.result,
         sampleCheckedAt: schema.publicationCommentAnalyses.sampleCheckedAt,
+        sampleVersion: schema.publicationCommentAnalyses.sampleVersion,
         sampleSize: schema.publicationCommentAnalyses.sampleSize,
         createdAt: schema.publicationCommentAnalyses.createdAt,
       })
@@ -679,7 +682,7 @@ export class AnalyticsRepository {
         ),
       )
       .limit(1);
-    if (analysis?.sampleCheckedAt.getTime() === sample.checkedAt.getTime()) {
+    if (analysis?.sampleVersion === sample.sampleVersion) {
       const parsed = commentAnalysisResultSchema.safeParse(analysis.result);
       if (parsed.success) {
         return {
@@ -690,21 +693,29 @@ export class AnalyticsRepository {
         };
       }
     }
-    const [active] = await db
-      .select({ id: schema.analysisAdmissions.id })
-      .from(schema.analysisAdmissions)
+    if (sample.status === "unavailable") return { status: "unavailable" as const };
+    const [attempt] = await db
+      .select({ status: schema.paidReplyAnalysisAttempts.status })
+      .from(schema.paidReplyAnalysisAttempts)
       .where(
         and(
-          eq(schema.analysisAdmissions.orgId, orgId),
-          eq(schema.analysisAdmissions.targetKind, "publication_comment"),
-          eq(schema.analysisAdmissions.targetId, publicationId),
-          eq(schema.analysisAdmissions.sampleCheckedAt, sample.checkedAt),
-          isNull(schema.analysisAdmissions.completedAt),
-          gt(schema.analysisAdmissions.leaseUntil, sql`now()`),
+          eq(schema.paidReplyAnalysisAttempts.orgId, orgId),
+          eq(schema.paidReplyAnalysisAttempts.targetKind, "publication_comment"),
+          eq(schema.paidReplyAnalysisAttempts.targetId, publicationId),
+          eq(schema.paidReplyAnalysisAttempts.sampleVersion, sample.sampleVersion),
         ),
       )
       .limit(1);
-    if (active) return { status: "in_progress" as const };
+    if (attempt?.status === "queued" || attempt?.status === "dispatching")
+      return { status: "in_progress" as const };
+    if (attempt?.status === "unknown") return { status: "unknown" as const };
+    if (
+      attempt?.status === "failed" ||
+      attempt?.status === "canceled" ||
+      attempt?.status === "stale" ||
+      attempt?.status === "legacy_consumed"
+    )
+      return { status: "failed" as const };
     const [key] = await db
       .select({ orgId: schema.aiCredentials.orgId })
       .from(schema.aiCredentials)
@@ -716,6 +727,49 @@ export class AnalyticsRepository {
     return { status: analysis ? ("stale" as const) : ("not_analyzed" as const) };
   }
 
+  async commentAnalysis(orgId: string, brandId: string, publicationId: string) {
+    const current = await this.commentAnalysisCurrent(orgId, brandId, publicationId);
+    const { sample } = await this.analysisSample(orgId, brandId, publicationId);
+    const [saved] = await db
+      .select({
+        result: schema.publicationCommentAnalyses.result,
+        sampleVersion: schema.publicationCommentAnalyses.sampleVersion,
+        sampleSize: schema.publicationCommentAnalyses.sampleSize,
+        createdAt: schema.publicationCommentAnalyses.createdAt,
+      })
+      .from(schema.publicationCommentAnalyses)
+      .where(
+        and(
+          eq(schema.publicationCommentAnalyses.orgId, orgId),
+          eq(schema.publicationCommentAnalyses.brandId, brandId),
+          eq(schema.publicationCommentAnalyses.publicationId, publicationId),
+        ),
+      )
+      .limit(1);
+    const earlier =
+      saved && saved.sampleVersion !== sample?.sampleVersion
+        ? commentAnalysisResultSchema.safeParse(saved.result)
+        : null;
+    return {
+      ...current,
+      current: {
+        status: current.status,
+        sampleVersion: sample?.sampleVersion ?? null,
+        collectionStatus: sample?.status ?? "not_collected",
+      },
+      ...(saved && earlier?.success
+        ? {
+            earlierAnalysis: {
+              sampleVersion: saved.sampleVersion,
+              result: earlier.data,
+              sampleSize: saved.sampleSize,
+              analyzedAt: saved.createdAt.toISOString(),
+            },
+          }
+        : {}),
+    };
+  }
+
   async analyzeComments(orgId: string, brandId: string, publicationId: string) {
     const current = await this.commentAnalysis(orgId, brandId, publicationId);
     if (current.status !== "not_analyzed" && current.status !== "stale") return current;
@@ -724,67 +778,22 @@ export class AnalyticsRepository {
     if (sample?.status === "pending") return { status: "not_collected" as const };
     if (!sample?.checkedAt) return { status: "not_collected" as const };
     if (comments.length === 0) return { status: "no_comments" as const };
-    const checkedAt = sample.checkedAt;
-
-    let credential: AiCredential;
-    try {
-      credential = await this.aiCredentials.getDecrypted(orgId, "google");
-    } catch (error) {
-      if (error instanceof NotFoundException) return { status: "no_key" as const };
-      throw error;
-    }
-    const admission = await admitAnalysis({
+    if (!sample.sampleVersion) return { status: "not_collected" as const };
+    const status = await requestManualPaidReplyAnalysis({
       orgId,
+      brandId,
       targetKind: "publication_comment",
       targetId: publicationId,
-      sampleCheckedAt: checkedAt,
-    });
-    if (admission.status !== "admitted") return admission;
-    try {
-      const afterAdmission = await this.commentAnalysis(orgId, brandId, publicationId);
-      if (afterAdmission.status === "ready") return afterAdmission;
-      const latest = await this.analysisSample(orgId, brandId, publicationId);
-      if (
-        !latest.sample?.checkedAt ||
-        latest.sample.checkedAt.getTime() !== checkedAt.getTime() ||
-        latest.sample.requestedAt.getTime() !== sample.requestedAt.getTime()
-      ) {
-        return { status: "stale" as const };
-      }
-      const outcome = await this.commentAnalysisCaller.run({
-        credential,
-        title: publication.title ?? "Telegram post",
-        comments: comments.map((row) => row.body),
-        onUsage: (record) =>
-          recordAnalysisUsage({
-            admissionId: admission.id,
-            orgId,
-            targetKind: "publication_comment",
-            record,
-          }),
-      });
-      if (!outcome.ok) return { status: outcome.failure };
-      const saved = await db.transaction(async (tx) => {
-        const [organization] = await tx
-          .select({ id: schema.organization.id })
-          .from(schema.organization)
-          .where(eq(schema.organization.id, orgId))
-          .limit(1)
-          .for("key share");
-        if (!organization) return false;
-        const [brand] = await tx
-          .select({ id: schema.brands.id })
-          .from(schema.brands)
-          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-          .limit(1)
-          .for("key share");
-        if (!brand) return false;
+      sampleVersion: sample.sampleVersion,
+      sampleCheckedAt: sample.checkedAt,
+      title: publication.title ?? "Telegram post",
+      comments: comments.map((row) => row.body),
+      credentials: this.aiCredentials,
+      queue: this.queue,
+      lockAndValidateTarget: async (tx) => {
         await this.lockLiveTelegramPublication(tx, orgId, brandId, publication);
-        const [currentSample] = await tx
-          .select({
-            checkedAt: schema.publicationCommentSamples.checkedAt,
-            requestedAt: schema.publicationCommentSamples.requestedAt,
-          })
+        const [locked] = await tx
+          .select({ sampleVersion: schema.publicationCommentSamples.sampleVersion })
           .from(schema.publicationCommentSamples)
           .where(
             and(
@@ -793,41 +802,13 @@ export class AnalyticsRepository {
               eq(schema.publicationCommentSamples.publicationId, publicationId),
             ),
           )
-          .limit(1)
-          .for("update");
-        if (
-          !currentSample?.checkedAt ||
-          currentSample.checkedAt.getTime() !== checkedAt.getTime() ||
-          currentSample.requestedAt.getTime() !== sample.requestedAt.getTime()
-        ) {
-          return false;
-        }
-        await tx
-          .insert(schema.publicationCommentAnalyses)
-          .values({
-            orgId,
-            brandId,
-            publicationId,
-            sampleCheckedAt: checkedAt,
-            sampleSize: comments.length,
-            result: outcome.result,
-          })
-          .onConflictDoUpdate({
-            target: schema.publicationCommentAnalyses.publicationId,
-            set: {
-              sampleCheckedAt: checkedAt,
-              sampleSize: comments.length,
-              result: outcome.result,
-              createdAt: new Date(),
-            },
-          });
-        return true;
-      });
-      if (!saved) return { status: "stale" as const };
-    } finally {
-      await finishAnalysisAdmission(admission.id, orgId);
-    }
-    return this.commentAnalysis(orgId, brandId, publicationId);
+          .for("share");
+        return locked?.sampleVersion === sample.sampleVersion;
+      },
+    });
+    return status.status === "in_progress"
+      ? this.commentAnalysis(orgId, brandId, publicationId)
+      : status;
   }
 
   async refreshComments(orgId: string, brandId: string, publicationId: string) {

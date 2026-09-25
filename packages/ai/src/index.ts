@@ -31,6 +31,17 @@ export {
   KNOWLEDGE_EMBEDDING_MODEL,
   type KnowledgeEmbeddingTask,
 } from "./knowledge-embedding.js";
+export {
+  buildPaidReplyRequest,
+  countPaidReplyTokens,
+  generatePaidReply,
+  PAID_REPLY_MAX_OUTPUT_TOKENS,
+  PAID_REPLY_MAX_REQUEST_BYTES,
+  PAID_REPLY_MODEL_ID,
+  type PaidReplyGeneration,
+  type PaidReplyRequest,
+  pricePaidReplyReservation,
+} from "./paid-reply-request.js";
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,
@@ -40,6 +51,19 @@ export {
   probeThinkingOptions,
   resolveModel,
 } from "./provider.js";
+export {
+  builtInRoleTemplateSource,
+  composeRoleTemplateInstruction,
+  previewRoleTemplate,
+  previewRoleTemplateInstruction,
+  ROLE_TEMPLATE_LIMITS,
+  RoleTemplateError,
+  type RoleTemplateErrorCode,
+  type RoleTemplateRender,
+  type RoleTemplateValues,
+  type RoleTemplateVariable,
+  renderRoleTemplate,
+} from "./role-template.js";
 export {
   type AdaptationOutput,
   type AdapterInput,

@@ -112,6 +112,8 @@ export type GenerateStructuredArgs<T> = ModelCallOptions & {
    * model from a credential, so it already knows.
    */
   provider: AiProvider;
+  /** Provider output ceiling, including hidden reasoning tokens on Gemini. */
+  maxOutputTokens?: number;
   schema: FlexibleSchema<T>;
   /**
    * The system half of the prompt: role, brand voice, output rules.
@@ -275,6 +277,7 @@ async function attempt<T>(
       output: Output.object({ schema: args.schema }),
       instructions: args.instructions,
       prompt,
+      ...(args.maxOutputTokens === undefined ? {} : { maxOutputTokens: args.maxOutputTokens }),
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
       ...(args.providerOptions === undefined ? {} : { providerOptions: args.providerOptions }),
       // The in-flight half of the same rule: a signal that fires after dispatch

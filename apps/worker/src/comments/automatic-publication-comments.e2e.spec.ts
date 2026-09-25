@@ -188,7 +188,45 @@ describe.skipIf(!url)("automatic Telegram publication reply samples", () => {
         .from(schema.publicationComments)
         .where(eq(schema.publicationComments.orgId, f.orgId)),
     ).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(schema.paidReplyAnalysisHandoffs)
+        .where(eq(schema.paidReplyAnalysisHandoffs.targetId, id)),
+    ).toHaveLength(0);
     expect(await repo.eligiblePublicationAuto(job(f, id))).toBeNull();
+  });
+
+  it("commits one opted-in paid handoff with the free publication sample", async () => {
+    const f = await fixture();
+    const id = await publication(f, 45);
+    await db
+      .update(schema.brandPaidReplySettings)
+      .set({ publicationEnabled: true, publicationRevision: 1 })
+      .where(eq(schema.brandPaidReplySettings.brandId, f.brandId));
+    await repo.savePublicationAuto(job(f, id), "https://t.me/public_channel/45", sample);
+    await repo.savePublicationAuto(job(f, id), "https://t.me/public_channel/45", sample);
+    const [saved] = await db
+      .select({ version: schema.publicationCommentSamples.sampleVersion })
+      .from(schema.publicationCommentSamples)
+      .where(eq(schema.publicationCommentSamples.publicationId, id));
+    const handoffs = await db
+      .select()
+      .from(schema.paidReplyAnalysisHandoffs)
+      .where(eq(schema.paidReplyAnalysisHandoffs.targetId, id));
+    expect(saved?.version).toBeTruthy();
+    expect(handoffs).toMatchObject([
+      {
+        orgId: f.orgId,
+        brandId: f.brandId,
+        targetKind: "publication_comment",
+        targetId: id,
+        sampleVersion: saved?.version,
+        freeRevision: 1,
+        paidRevision: 1,
+        status: "pending",
+      },
+    ]);
   });
 
   it("caps a busy brand at 50 publications and rejects a foreign or detached receipt", async () => {
