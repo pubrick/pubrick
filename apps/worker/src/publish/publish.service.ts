@@ -340,12 +340,11 @@ export class PublishService {
     const fence: AttemptFence = { status: "publishing", attemptCount: attempt };
 
     // The claim on the SEND, written before the platform is called. Losing it
-    // means a previous attempt wrote one and never came back to resolve it, and
-    // the ONLY thing that can leave a claim behind is an attempt that stopped
-    // running between the claim and its outcome — killed mid-send, unable to
-    // reach the database afterwards, failed by a graceful stop or by the
-    // heartbeat supervisor while its request was in flight. Every one of those
-    // may have posted. This is the guard that makes findings (b) and (c)
+    // means either a previous attempt left an unresolved claim or this handler
+    // lost its attempt fence to a newer approval. The fenced unknown write
+    // below is a no-op for that newer attempt. A claim left behind came from
+    // an attempt that stopped before recording its outcome, and may have
+    // posted. This is the guard that makes findings (b) and (c)
     // terminal instead of duplicating: the redelivery pg-boss was always going
     // to make now finds evidence where it used to find nothing.
     // The claim is kept as a VALUE, not as a fact: every later write of it
@@ -353,7 +352,7 @@ export class PublishService {
     // below from deleting a successor's claim, and what lets a delivery still be
     // recorded when the adaptation the claim pointed at has been deleted
     // underneath it (see `SendClaim`).
-    const claim = await this.repo.claimSend(job.orgId, job.adaptationId);
+    const claim = await this.repo.claimSend(job.orgId, job.adaptationId, attempt);
     if (!claim) {
       await this.recordUnknownOutcome(
         job.orgId,

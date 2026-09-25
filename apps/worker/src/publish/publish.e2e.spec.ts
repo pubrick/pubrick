@@ -733,7 +733,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
     // The state a killed attempt leaves behind, written through the real
     // repository: the attempt claimed, sent, and never came back.
     expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
-    expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+    expect(await repo.claimSend(orgId, adaptationId, 1)).not.toBeNull();
 
     const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
     if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
@@ -1148,7 +1148,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       const chatId = `-100${Date.now()}${seq}`;
       const { adaptationId } = await seedQueuedAdaptation(chatId);
       expect(await repo.markPublishing(orgId, adaptationId, null)).toBe(1);
-      if (claim) expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+      if (claim) expect(await repo.claimSend(orgId, adaptationId, 1)).not.toBeNull();
       await db
         .update(schema.adaptations)
         .set({ updatedAt: sql`now() - make_interval(secs => ${secondsAgo})` })
@@ -1459,7 +1459,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       if (priorFailure) {
         const attemptCount = await repo.markPublishing(orgId, adaptationId, null);
         expect(attemptCount).not.toBeNull();
-        const priorClaim = await repo.claimSend(orgId, adaptationId);
+        const priorClaim = await repo.claimSend(orgId, adaptationId, attemptCount as number);
         expect(priorClaim).not.toBeNull();
         expect(
           await repo.markFailed(
@@ -1474,8 +1474,9 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
         ).toBe(true);
       }
       if (claim) {
-        expect(await repo.markPublishing(orgId, adaptationId, null)).not.toBeNull();
-        expect(await repo.claimSend(orgId, adaptationId)).not.toBeNull();
+        const attemptCount = await repo.markPublishing(orgId, adaptationId, null);
+        expect(attemptCount).not.toBeNull();
+        expect(await repo.claimSend(orgId, adaptationId, attemptCount as number)).not.toBeNull();
       }
       await db
         .update(schema.adaptations)
