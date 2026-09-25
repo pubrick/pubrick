@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { type CommentAnalysisResult, commentAnalysisResultSchema } from "@pubrick/shared";
 import { z } from "zod";
+import { googleProxyFetch } from "./google-transport.js";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { UsageRecord } from "./usage.js";
 
@@ -133,7 +134,7 @@ function assertFrozenRequest(request: PaidReplyRequest): object {
 export async function countPaidReplyTokens(
   request: PaidReplyRequest,
   apiKey: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = googleProxyFetch,
 ): Promise<{ counted: number; allowance: number }> {
   if (!apiKey.trim()) throw new Error("paid_reply_preflight_unavailable");
   const body = assertFrozenRequest(request);
@@ -183,7 +184,7 @@ export async function generatePaidReply(
   request: PaidReplyRequest,
   apiKey: string,
   onUsage: (record: UsageRecord) => Promise<void>,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = googleProxyFetch,
 ): Promise<PaidReplyGeneration> {
   if (!apiKey.trim()) throw new Error("paid_reply_dispatch_unavailable");
   assertFrozenRequest(request);

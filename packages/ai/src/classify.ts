@@ -201,9 +201,13 @@ const TIMED_OUT =
 export function redactSecrets(message: string, secret?: string): string {
   const withoutLiteral =
     secret !== undefined && secret.trim() !== "" ? message.split(secret).join("***") : message;
+  // A forward proxy can quote its own URL in a 407/error body. It may contain
+  // userinfo and must never be copied into a run log or persisted failure.
+  const proxy = process.env.GOOGLE_API_PROXY?.trim();
+  const withoutProxy = proxy ? withoutLiteral.split(proxy).join("[Google proxy]") : withoutLiteral;
 
   return (
-    withoutLiteral
+    withoutProxy
       // `?key=…` / `&key=…` — Google puts the API key here, and its own error
       // bodies quote the request URL back at us.
       .replace(/([?&]key=)[^&\s"'`]+/gi, "$1***")

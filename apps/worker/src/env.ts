@@ -1,3 +1,4 @@
+import { googleProxyEnvSchema } from "@pubrick/ai";
 import {
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
@@ -43,6 +44,7 @@ export const env = parseEnv({
   ),
   VK_API_BASE_URL: z.string().default("https://api.vk.com/method"),
   MAX_API_BASE_URL: z.string().default("https://platform-api2.max.ru"),
+  GOOGLE_API_PROXY: googleProxyEnvSchema,
   /**
    * HOW LATE A SCHEDULED POST MAY STILL GO OUT, in hours. Beyond it the
    * delivery is `failed` with `failure_reason = 'schedule_missed'` having sent

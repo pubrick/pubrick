@@ -1,3 +1,4 @@
+import { googleProxyEnvSchema } from "@pubrick/ai";
 import { parseEnv, parseKeyRing } from "@pubrick/shared";
 import { z } from "zod";
 import { assertNoPublishedSecrets, parseSignupMode, parseTrustedProxies } from "./auth-policy";
@@ -63,6 +64,7 @@ export const env = parseEnv({
   TELEGRAM_API_HASH: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional()),
   VK_API_BASE_URL: z.string().default("https://api.vk.com/method"),
   MAX_API_BASE_URL: z.string().default("https://platform-api2.max.ru"),
+  GOOGLE_API_PROXY: googleProxyEnvSchema,
 });
 
 // A secret whose value is printed in this repository is not a secret. Refusing at boot
