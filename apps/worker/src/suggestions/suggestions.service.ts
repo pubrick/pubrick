@@ -273,7 +273,11 @@ export class SuggestionsService {
           return;
         }
         for (const vector of batch.embeddings) {
-          if (!vector) {
+          // The embedding helper validates dimensions and finite components,
+          // but an all-zero vector has no cosine direction. Treat it as a
+          // failed paid check, never as evidence that a blocker is unrelated.
+          const norm = vector ? Math.hypot(...vector) : 0;
+          if (!vector || !Number.isFinite(norm) || norm === 0) {
             await this.repo.failed(
               job.orgId,
               job.brandId,
