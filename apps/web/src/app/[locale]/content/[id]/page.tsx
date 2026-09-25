@@ -1972,6 +1972,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         savedBody={item.body}
         draftBody={bodyDraft}
         editable={["draft", "rejected", "failed"].includes(item.status)}
+        hasRichFormatting={item.richBody !== null}
         unsavedFormatting={richDirty}
         onAccepted={async (updatedBody) => {
           setBodyDraft(updatedBody);

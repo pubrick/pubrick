@@ -21,6 +21,7 @@ type Props = {
   savedBody: string;
   draftBody: string;
   editable: boolean;
+  hasRichFormatting?: boolean;
   unsavedFormatting?: boolean;
   onAccepted?: (body: string) => Promise<void>;
 };
@@ -30,6 +31,7 @@ export function ClaimEvidence({
   savedBody,
   draftBody,
   editable,
+  hasRichFormatting = false,
   unsavedFormatting = false,
   onAccepted,
 }: Props) {
@@ -264,6 +266,9 @@ export function ClaimEvidence({
           </div>
         </div>
         <p className="mt-3 text-sm text-fg-secondary">{proposal.reason}</p>
+        {hasRichFormatting && (
+          <p className="mt-3 text-sm text-fg-secondary">{t("formattingReset")}</p>
+        )}
         {proposal.evidence.length > 0 && (
           <div className="mt-3">
             <p className="text-sm font-medium text-fg">{t("sourceResults")}</p>

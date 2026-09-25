@@ -1168,6 +1168,7 @@
     "proposalCostHint": "This uses one billable AI model call. The draft changes only if you accept the suggestion.",
     "proposalTitle": "Suggested correction",
     "proposalHint": "Compare the exact claim and suggested replacement. Search snippets are not proof; open the linked pages before deciding.",
+    "formattingReset": "Accepting this suggestion replaces the master text and clears its formatting. Earlier formatted versions remain in history.",
     "proposalReady": "Suggestion ready. Review it before accepting.",
     "proposalError": "The suggestion could not be loaded or changed. Try again.",
     "proposalStale": "This suggestion belongs to an older draft or claim review. Discard it and check the current text again.",

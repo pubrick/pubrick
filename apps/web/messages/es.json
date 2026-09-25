@@ -1168,6 +1168,7 @@
     "proposalCostHint": "Esto utiliza una llamada de pago al modelo de IA. El borrador solo cambia si aceptas la sugerencia.",
     "proposalTitle": "Corrección sugerida",
     "proposalHint": "Compara la afirmación exacta y la sustitución sugerida. Los fragmentos de búsqueda no son pruebas; abre las páginas enlazadas antes de decidir.",
+    "formattingReset": "Al aceptar esta sugerencia, se sustituye el texto principal y se elimina su formato. Las versiones anteriores con formato siguen en el historial.",
     "proposalReady": "Sugerencia lista. Revísala antes de aceptarla.",
     "proposalError": "No se pudo cargar ni cambiar la sugerencia. Inténtalo de nuevo.",
     "proposalStale": "Esta sugerencia corresponde a un borrador o revisión anterior. Descártala y consulta de nuevo el texto actual.",

@@ -1168,6 +1168,7 @@
     "proposalCostHint": "Isto utiliza uma chamada paga ao modelo de IA. O rascunho só muda se aceitar a sugestão.",
     "proposalTitle": "Correção sugerida",
     "proposalHint": "Compare a afirmação exata e a substituição sugerida. Os excertos da pesquisa não são prova; abra as páginas ligadas antes de decidir.",
+    "formattingReset": "Aceitar esta sugestão substitui o texto principal e remove a formatação. As versões anteriores com formatação continuam no histórico.",
     "proposalReady": "Sugestão pronta. Reveja-a antes de aceitar.",
     "proposalError": "Não foi possível carregar ou alterar a sugestão. Tente novamente.",
     "proposalStale": "Esta sugestão pertence a um rascunho ou revisão anterior. Descarte-a e consulte novamente o texto atual.",

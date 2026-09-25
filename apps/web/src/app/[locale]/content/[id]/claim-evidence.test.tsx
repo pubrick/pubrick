@@ -395,4 +395,26 @@ describe("claim evidence", () => {
       screen.queryByRole("region", { name: en.ClaimEvidence.proposalTitle }),
     ).not.toBeInTheDocument();
   });
+
+  it("warns before Accept when the master draft has rich formatting", async () => {
+    const conflicting = review({
+      claims: [{ claim: body, outcome: "evidence_conflicts", evidence: correction().evidence }],
+    });
+    request.mockImplementation(async (path) =>
+      path === correctionEndpoint ? correction() : conflicting,
+    );
+    const { rerender } = await renderAsync(
+      <ClaimEvidence
+        itemId={itemId}
+        savedBody={body}
+        draftBody={body}
+        editable
+        hasRichFormatting
+      />,
+    );
+    expect(await screen.findByText(en.ClaimEvidence.formattingReset)).toBeVisible();
+    expect(screen.getByRole("button", { name: en.ClaimEvidence.accept })).toBeEnabled();
+    rerender(<ClaimEvidence itemId={itemId} savedBody={body} draftBody={body} editable />);
+    expect(screen.queryByText(en.ClaimEvidence.formattingReset)).not.toBeInTheDocument();
+  });
 });
