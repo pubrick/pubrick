@@ -77,6 +77,8 @@ export const brandImportSuggestionSchema = z.strictObject({
 });
 export type BrandImportSuggestion = z.infer<typeof brandImportSuggestionSchema>;
 
-/** Only these reviewed fields can be applied. In particular, linkPolicy is absent. */
-export const brandImportApplySchema = brandImportSuggestionSchema;
+/** A reviewed preview is valid only while the profile it was based on stays unchanged. */
+export const brandImportApplySchema = brandImportSuggestionSchema.extend({
+  expectedProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
 export type BrandImportApply = z.infer<typeof brandImportApplySchema>;

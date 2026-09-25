@@ -1233,6 +1233,7 @@
     "source_fetch_failed": "Could not fetch that public page. Check the link or paste its text.",
     "brand_import_no_google_key": "Add a Google AI key in Settings before importing a brand profile.",
     "brand_import_limit_reached": "Three brand imports have been requested in the last hour. Try again later.",
+    "brand_import_stale": "This brand changed while you reviewed the suggestions. Run the import again before saving.",
     "brand_import_failed": "Suggestions could not be generated. Check your Google AI key and try again.",
     "brand_import_unreadable": "That website has too little readable text for suggestions.",
     "source_response_too_large": "That page is too large to import. Paste the relevant text instead.",

@@ -10,7 +10,7 @@ import {
   isOutstandingAdaptation,
 } from "@pubrick/shared";
 import { and, eq, inArray, or } from "drizzle-orm";
-import { notFound } from "../api-error";
+import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { mediaPath } from "../media/media.repository";
 import { QueueService } from "../queue/queue.service";
@@ -28,6 +28,25 @@ const PUBLIC_COLUMNS = {
   createdAt: schema.brands.createdAt,
   updatedAt: schema.brands.updatedAt,
 };
+
+type ImportProfile = Pick<
+  typeof schema.brands.$inferSelect,
+  "name" | "description" | "voice" | "audience" | "contentLanguage"
+>;
+
+export function brandImportProfileHash(profile: ImportProfile): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        profile.name,
+        profile.description,
+        profile.voice,
+        profile.audience,
+        profile.contentLanguage,
+      ]),
+    )
+    .digest("hex");
+}
 
 /**
  * `isOutstandingAdaptation` (`@pubrick/shared`) is applied in memory, not as a
@@ -66,8 +85,9 @@ export class BrandsRepository {
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
       .limit(1);
-    if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
-    return rows[0];
+    const brand = rows[0];
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    return brand;
   }
 
   async create(orgId: string, data: BrandCreate) {
@@ -91,12 +111,21 @@ export class BrandsRepository {
   /** One explicit review action saves the profile and selected ideas together. */
   async applyImport(orgId: string, id: string, reviewed: BrandImportApply) {
     return db.transaction(async (tx) => {
-      const current = await tx
-        .select({ id: schema.brands.id })
+      const [current] = await tx
+        .select({
+          name: schema.brands.name,
+          description: schema.brands.description,
+          voice: schema.brands.voice,
+          audience: schema.brands.audience,
+          contentLanguage: schema.brands.contentLanguage,
+        })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
         .for("update");
-      if (!current.length) throw notFound("brand_not_found", "Brand not found");
+      if (!current) throw notFound("brand_not_found", "Brand not found");
+      if (brandImportProfileHash(current) !== reviewed.expectedProfileHash) {
+        throw conflict("brand_import_stale", "Brand profile changed; review a new import preview");
+      }
       const [brand] = await tx
         .update(schema.brands)
         .set({

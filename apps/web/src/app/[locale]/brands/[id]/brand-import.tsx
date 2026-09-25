@@ -13,7 +13,11 @@ import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "@/lib/api";
 
-type Preview = { sourceUrl: string; suggestion: BrandImportSuggestion };
+type Preview = {
+  sourceUrl: string;
+  expectedProfileHash: string;
+  suggestion: BrandImportSuggestion;
+};
 
 export function BrandImport({ brandId, onApplied }: { brandId: string; onApplied: () => void }) {
   const t = useTranslations("Brands");
@@ -43,6 +47,7 @@ export function BrandImport({ brandId, onApplied }: { brandId: string; onApplied
 
   async function fetchPreview(event: React.FormEvent) {
     event.preventDefault();
+    if (busyRef.current) return;
     setError(null);
     const body = { url: url.trim(), acceptAiCost: consent };
     const parsed = brandImportRequestSchema.safeParse(body);
@@ -71,10 +76,11 @@ export function BrandImport({ brandId, onApplied }: { brandId: string; onApplied
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (!draft) return;
+    if (busyRef.current || !draft || !preview) return;
     setError(null);
     const body = {
       ...draft,
+      expectedProfileHash: preview.expectedProfileHash,
       topics: draft.topics.filter((_, index) => selectedTopics[index]),
     };
     const parsed = brandImportApplySchema.safeParse(body);

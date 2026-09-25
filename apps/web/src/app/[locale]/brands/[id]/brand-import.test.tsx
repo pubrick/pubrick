@@ -1,4 +1,5 @@
 import { brandImportApplySchema, brandImportRequestSchema, refusalBody } from "@pubrick/shared";
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@/test/render";
@@ -7,6 +8,7 @@ import es from "../../../../../messages/es.json";
 import { BrandImport } from "./brand-import";
 
 const brandId = "11111111-1111-4111-8111-111111111111";
+const expectedProfileHash = "a".repeat(64);
 const suggestion = {
   name: "Acme",
   description: "Makes coffee",
@@ -37,7 +39,7 @@ describe("brand profile import", () => {
         const body = JSON.parse(String(init.body));
         calls.push({ url, body });
         return url.endsWith("/preview")
-          ? response(201, { sourceUrl: "https://example.com", suggestion })
+          ? response(201, { sourceUrl: "https://example.com", expectedProfileHash, suggestion })
           : response(201, { id: brandId });
       }),
     );
@@ -69,7 +71,7 @@ describe("brand profile import", () => {
     await user.click(within(dialog).getByRole("button", { name: en.Brands.voiceSave }));
     expect(calls[1]).toEqual({
       url: `/api/brands/${brandId}/import/apply`,
-      body: { ...suggestion, name: "Edited Acme", topics: ["Roasting"] },
+      body: { ...suggestion, expectedProfileHash, name: "Edited Acme", topics: ["Roasting"] },
     });
     expect(brandImportApplySchema.parse(calls[1]?.body)).toEqual(calls[1]?.body);
     expect(applied).toHaveBeenCalledOnce();
@@ -86,10 +88,8 @@ describe("brand profile import", () => {
     const pending = new Promise<Response>((resolve) => {
       release = resolve;
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => pending),
-    );
+    const fetch = vi.fn(() => pending);
+    vi.stubGlobal("fetch", fetch);
     render(<BrandImport brandId={brandId} onApplied={vi.fn()} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: en.Brands.importOpen }));
@@ -99,10 +99,14 @@ describe("brand profile import", () => {
       "https://example.com",
     );
     await user.click(within(dialog).getByRole("checkbox", { name: en.Brands.importCostConsent }));
+    const form = dialog.querySelector("#brand-import-preview");
+    if (!form) throw new Error("Import preview form not found");
     await user.click(within(dialog).getByRole("button", { name: en.Brands.importPreview }));
+    fireEvent.submit(form);
+    expect(fetch).toHaveBeenCalledTimes(1);
     await user.keyboard("{Escape}");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    release(response(201, { sourceUrl: "https://example.com", suggestion }));
+    release(response(201, { sourceUrl: "https://example.com", expectedProfileHash, suggestion }));
     expect(await within(dialog).findByRole("textbox", { name: en.Brands.nameLabel })).toHaveValue(
       "Acme",
     );

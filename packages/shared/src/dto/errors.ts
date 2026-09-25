@@ -399,6 +399,7 @@ export const API_ERROR_CODES = [
   "brand_not_found",
   "brand_import_no_google_key",
   "brand_import_limit_reached",
+  "brand_import_stale",
   "brand_import_failed",
   "brand_import_unreadable",
   "knowledge_not_found",
