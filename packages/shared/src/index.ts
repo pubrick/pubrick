@@ -58,6 +58,7 @@ export * from "./dto/knowledge.js";
 export * from "./dto/media.js";
 export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
+export * from "./dto/paid-replies.js";
 export {
   PROMPT_ROLES,
   type PromptDecisionHistoryDto,
@@ -111,6 +112,9 @@ export {
   type ManualAutopilotJob,
   type ManualDigestJob,
   type ManualTopicPlanJob,
+  PAID_REPLY_ANALYSIS_OPTIONS,
+  PAID_REPLY_ANALYSIS_QUEUE,
+  type PaidReplyAnalysisJob,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
   PUBLISH_DLQ,
@@ -120,6 +124,7 @@ export {
   PUBLISH_QUEUE_OPTIONS,
   PUBLISH_SUPERVISE_INTERVAL_SECONDS,
   type PublishJob,
+  paidReplyAnalysisJobOptions,
   RELEVANCE_BATCH_DLQ,
   RELEVANCE_BATCH_QUEUE,
   RELEVANCE_BATCH_QUEUE_OPTIONS,

@@ -86,6 +86,13 @@ export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
 export const AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE = "telegram-comments-auto-scan";
 export const AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE = "telegram-publication-comments-auto-scan";
+/** A job names the unique paid attempt; no prompt or author content travels in pg-boss. */
+export const PAID_REPLY_ANALYSIS_QUEUE = "paid-reply-analysis";
+export type PaidReplyAnalysisJob = { orgId: string; attemptId: string };
+export const PAID_REPLY_ANALYSIS_OPTIONS = { retryLimit: 0, expireInSeconds: 180 } as const;
+export function paidReplyAnalysisJobOptions(attemptId: string, orgId: string) {
+  return { singletonKey: attemptId, singletonSeconds: 3600, group: { id: orgId } } as const;
+}
 /** Opt-in, bounded VK publication metric refresh. No credentials in job data. */
 export const VK_METRICS_QUEUE = "vk-metrics";
 export const VK_METRICS_SCAN_QUEUE = "vk-metrics-scan";
