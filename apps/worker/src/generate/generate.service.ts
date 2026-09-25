@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
   type AiCredential,
-  adaptationLimit,
   adapterFor,
   callOutcomeOf,
   EDITOR,
@@ -673,7 +672,11 @@ export class GenerateService {
     for (const channel of context.channels) {
       // Its checkpoint key is `adapter:<channelId>`, so a crash mid-fan-out
       // re-runs only the channels that had not finished.
-      const adapted = await this.runStep(state, adapterFor(channel), { body: edited.body });
+      // The receipt was pinned at first claim. A resumed legacy Telegram run
+      // still has 4096 here even after newly admitted runs moved to 12000.
+      const adapted = await this.runStep(state, adapterFor(channel, channel.limit), {
+        body: edited.body,
+      });
       if (adapted === STOPPED) return STOPPED;
       const hashtags = normalizeHashtags(adapted.hashtags ?? []);
       const linkedBody = applyLinkPolicy(
@@ -682,10 +685,10 @@ export class GenerateService {
         channel.platform,
         run.createdAt,
         input.contentType ?? "social_post",
-        adaptationLimit(channel.platform),
+        channel.limit,
       );
       const body = withHashtags(linkedBody, hashtags);
-      if (body.length > adaptationLimit(channel.platform)) {
+      if (body.length > channel.limit) {
         throw withRunFailure(
           new PermanentError(`the channel text with hashtags exceeds ${channel.platform}'s limit`),
           "too_long_for_channel",
